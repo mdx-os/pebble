@@ -1,0 +1,46 @@
+name: Pebble
+options:
+  bundleIdPrefix: com.mdxos.pebble
+  deploymentTarget:
+    iOS: "26.0"
+    macOS: "26.0"
+configFiles:
+  Debug: Config/Brand.xcconfig
+  Release: Config/Brand.xcconfig
+packages:
+  PebbleKit:
+    path: Packages/PebbleKit
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: 0.1.0
+    CURRENT_PROJECT_VERSION: 1
+targets:
+  Pebble:
+    type: application
+    supportedDestinations: [iOS, macOS]
+    sources:
+      - App/Sources
+    dependencies:
+      - package: PebbleKit
+        products: [PebbleCore, PebbleUI]
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: $(BRAND_NAME)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        PebbleBrandName: $(BRAND_NAME)
+        LSApplicationCategoryType: public.app-category.productivity
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mdxos.pebble
+        PRODUCT_NAME: $(BRAND_NAME)
+        PRODUCT_MODULE_NAME: Pebble
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic
+        "CODE_SIGN_IDENTITY[sdk=macosx*]": "-"
+        ENABLE_HARDENED_RUNTIME: YES
