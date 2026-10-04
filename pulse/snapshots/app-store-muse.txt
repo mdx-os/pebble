@@ -1,0 +1,99 @@
+source: app-store-muse
+title: Muse on the App Store
+kind: appStore
+url: https://apps.apple.com/us/app/muse-from-meta/id6760173601
+
+name: Muse from Meta
+screenshots:
+- PurpleSource211/v4/3a/54/3a/3a543a28-f9d9-1e02-e70e-55125b7f5338/Screen01.jpg
+- PurpleSource221/v4/2b/ec/e2/2bece25c-42ea-656d-2f04-fae742083113/Screen02.jpg
+- PurpleSource221/v4/fe/39/64/fe396451-2091-d3bf-8f25-35b75e429ddd/Screen03.jpg
+- PurpleSource211/v4/e9/3b/11/e93b1135-688e-de79-edf4-ab6343def7f8/Screen04.jpg
+- PurpleSource221/v4/53/57/00/5357003a-1608-eeba-b7a9-45743a9d31d0/Screen05.jpg
+- PurpleSource211/v4/45/06/79/4506796e-c9b4-0955-aa9a-3e2c0dd6f94a/Screen06.jpg
+- PurpleSource211/v4/a7/0f/62/a70f62aa-6a68-f165-42be-6bc4ca9cd201/Screen07.jpg
+
+version: 9.1
+released: 2026-10-01
+notes: Muse now works with more of your favorite apps, so your personal agent can do more for you.
+
+version: 9.0
+released: 2026-09-26
+notes: Muse now works with more of your favorite apps, so your personal agent can do more for you.
+
+version: 8.1
+released: 2026-09-23
+notes: Get things done with your muse. • Muse navigates websites, fills out forms, and books appointments on your behalf. • Link your email, calendar, Instagram, health and finance apps, and your muse gets smarter with every connection. • Set a goal and Muse builds the plan, tracks progress, and does the work. • Nothing gets spent, sent, or shared without your approval. • Muse keeps working after you close the app, so nothing falls through the cracks.
+
+version: 8.0
+released: 2026-09-20
+notes: Get things done with your muse. • Muse navigates websites, fills out forms, and books appointments on your behalf. • Link your email, calendar, Instagram, health and finance apps, and your muse gets smarter with every connection. • Set a goal and Muse builds the plan, tracks progress, and does the work. • Nothing gets spent, sent, or shared without your approval. • Muse keeps working after you close the app, so nothing falls through the cracks.
+
+version: 7.1
+released: 2026-09-17
+notes: Overall app improvements and bug fixes.
+
+version: 7.0
+released: 2026-09-12
+notes: Overall app improvements and bug fixes.
+
+version: 4.6
+released: 2026-09-10
+notes: Overall app improvements.
+
+version: 4.5
+released: 2026-09-08
+notes: App improvements.
+
+version: 4.4
+released: 2026-09-08
+notes: Improvements to overall app performance.
+
+version: 4.3
+released: 2026-09-06
+notes: Improvements to overall app performance.
+
+version: 4.2
+released: 2026-09-05
+notes: Improvements to overall app performance.
+
+version: 4.1
+released: 2026-09-04
+notes: Improvements to overall app performance.
+
+version: 4.0.0
+released: 2026-09-03
+notes: Improvements to overall app performance.
+
+description:
+Muse is your personal AI agent that gets things done, always working on what matters to you. It manages email, books dinners, tracks budgets, and finds deals, with your approval.
+
+PERSONAL PRODUCTIVITY
+Muse takes the the busywork off your plate. It manages scheduling conflicts, books reservations, sets reminders, and follows up with people, so birthdays, plans, and deadlines don't slip. Stay on top of your calendar, email, and daily tasks without carrying it all in your head.
+
+SAVE MONEY
+Muse helps you understand where your money is going. It tracks expenses, audits subscriptions, flags charges you forgot about, cancels what you don't need, and helps you hit a savings goal, checking with you before it cancels or spends. Get financial insights without the spreadsheet.
+
+HEALTH & FITNESS
+Muse is your AI fitness coach. It builds a custom workout or meal plan from data you choose to share, tracks calories and nutrition, monitors sleep and wellness, and adjusts your training day by day. Whether it's running, eating better, or building a habit, Muse coaches you through it.
+
+SHOPPING & DEALS
+Muse compares prices, tracks price drops, and alerts you the moment something you want goes on sale. AI-powered shopping that can actually buy on your behalf, with your OK.
+
+CONNECT YOUR APPS
+You decide what Muse can access. Link your email, calendar, Instagram, Facebook, health and fitness data, and finances. Approve actions before they happen. Muse gets smarter with every connection.
+
+SHARE A TASK, START TO FINISH
+Hand Muse a whole job and it sees it through: the research, the comparisons, the back-and-forth, the bookings. Sell your car for more, negotiate a bill down, or plan and book a whole trip. A better result than you'd have managed alone.
+
+ALWAYS WORKING FOR YOU
+Muse keeps things moving after you close the app. It monitors, follows up, and sends a notification when something needs your attention, so nothing falls through the cracks.
+
+IN YOUR CONTROL
+Approve actions before they happen. Muse keeps a full activity log, and lets you revoke any connector anytime. 
+
+UNIQUELY YOURS
+Name it, shape how it talks, and make it your own.
+
+SMART, BUT STILL LEARNING
+Muse may be inaccurate or take unexpected actions, so check in to keep it on track and intervene as needed.

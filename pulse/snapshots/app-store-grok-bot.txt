@@ -1,0 +1,117 @@
+source: app-store-grok-bot
+title: Grok Bot on the App Store
+kind: appStore
+url: https://apps.apple.com/us/app/grok-bot/id6794501026
+
+name: Grok Bot
+screenshots:
+- PurpleSource211/v4/af/a1/91/afa19108-8d6b-e6f3-a169-5b5636d3c918/00_team-of-always-on-agents.png
+- PurpleSource211/v4/f9/b6/ec/f9b6ece9-2a9c-d73f-8761-07c90545ee9d/01_work-with-many-agents.png
+- PurpleSource221/v4/75/5a/0b/755a0ba7-3bb7-1805-33f5-85b18b8664b5/02_signs-in-to-tools.png
+- PurpleSource221/v4/3f/25/8b/3f258b9b-2164-167e-eff2-603cfd0918c1/03_works-everywhere-you-do.png
+- PurpleSource221/v4/96/1a/15/961a15d0-61fa-1208-e795-14a7a7b47c97/04_comes-back-finished.png
+
+version: 1.13.1
+released: 2026-10-01
+notes: - Bug fixes and improvements
+
+version: 1.13.0
+released: 2026-09-29
+notes: - Reactions are more lively and easier to reach. - Smarter haptics and smoother photo viewing.
+
+version: 1.12.0
+released: 2026-09-24
+notes: - Improved the performance of launching voice chat.
+
+version: 1.11.1
+released: 2026-09-18
+notes: - Fixed the voice chat audio routing issue. - Improved the performance of audio processing in voice chat.
+
+version: 1.11.0
+released: 2026-09-17
+notes: - Added the ability to tap a photo you've attached to preview it full screen before sending. - Added saved drafts: unsent message text is kept per chat when you leave and come back. - Improved how several photos in one message are shown: two photos stack, three or more fan out with a count you can tap to see them all in a grid, and a full-screen photo now shows a loading or "couldn't load" state instead of staying black. - Improved first sign-in time.
+
+version: 1.10.0
+released: 2026-09-15
+notes: - Improved performance on long chat - Fixed markdown table rendering - Fixed image carousel bug - Fixed chat attach menu positioning bug
+
+version: 1.8.0
+released: 2026-09-09
+notes: - Added select-and-copy on message text - Added a confirm step when sharing a bot as a template - Added a notification-sound setting - Opening a notification now switches to the matching account first
+
+version: 1.6.0
+released: 2026-09-03
+notes: - iPad Support. - LaTeX and diagram rendering in bot replies. - Improved image viewer. - Improved voice dictation support. - Performance improvements.
+
+version: 1.4.0
+released: 2026-08-27
+notes: • The home list loads faster, long conversations use less memory, and chat scrolls more smoothly. • A diagram in a bot's reply now draws as a picture instead of showing its raw code. • Long-press a bot on the home list to duplicate it. • Support for attaching HEIC images.
+
+version: 1.3.2
+released: 2026-08-25
+notes: Bug fixes and improvements
+
+version: 1.3.1
+released: 2026-08-22
+notes: Bug fixes and improvements
+
+version: 1.3
+released: 2026-08-21
+notes: - Fixed blank launch screen bug that prevents users from using the app - Fixed large files/audio attachments - Redesigned dictation so recording and sending are clearer - Made plugin integrations return straight into the app - Improved chat, notifications, and computer reconnect - Added a Haptics setting - Added sharing support from other apps
+
+version: 1.2
+released: 2026-08-17
+notes: Bug fixes and improvements
+
+version: 1.1
+released: 2026-08-13
+notes: - Made first-run setup faster and clearer - Polished chat scrolling, message transitions, and the home screen - Simplified creating and managing bots - Added more control for remote computers - Clarified plans, account linking, and usage - Added Send Feedback in Settings, with a few Settings cleanups - Fixed broken tables in chat, computer reconnect issues, chats going stale in the background, text jumping back after send, and other minor bugs
+
+version: 1.0
+released: 2026-08-11
+notes: 
+
+description:
+Meet Grok Bot, AI teammates and AI coworkers you can hand real work to. Grok Bots sign in, work across your tools and websites, and keep going even after you close your laptop. 
+
+Message an AI agent from iPhone or desktop like a coworker, and it takes projects from start to finish instead of leaving you with another chat draft.
+
+GROK BOT WORKS WHERE YOU WORK
+Log Grok Bot in once. It uses your apps and websites just like you would, including tools that are harder to navigate: vendor portals, ad managers, CRMs, inboxes, and older ops tools. Your AI agent finishes work in the same places you already work, so automation is not a separate system you babysit. Hand off sales outbound, inbox triage, recruiting, expenses, or account follow-ups, and the work lands where a human coworker would put it.
+
+MESSAGE BOTS LIKE TEAMMATES
+Give tasks to Grok Bots like you would an AI coworker, on desktop or iOS. They keep context on how you work, remember preferences across handoffs, and get smarter over time. Text from your phone or pick up the same thread on desktop. Each AI agent finishes multi-step workflows end to end and only comes back when your approval is needed.
+
+WORK WITH MANY BOTS AT ONCE
+Create a Bot, give it a task, and add another AI agent when the work grows. One owns a project, one runs outbound, one keeps systems moving. They work in parallel, collaborate where it makes sense, and keep working 24/7. Put a few Bots in the same thread and they pass work between themselves. Stand up a specialist AI coworker for each lane, then promote one to coordinate when you need a single update.
+
+SHOW A BOT HOW IT'S DONE
+Ask an AI agent to follow along as you complete a workflow once. It saves the steps as a routine and runs it on its own next time. Show it how you want email drafted, candidates sourced, or invoices pulled, and corrections stick. Your AI coworker learns your judgment instead of starting from zero.
+
+Grok Bot helps you:
+▶ Hand off real work to an AI agent across the tools and websites you already use
+▶ Automate multi-step workflows without living in a chat window
+▶ Message an AI coworker from iPhone or desktop
+▶ Run many AI agents in parallel on different jobs
+▶ Show a workflow once so it runs as a routine next time
+▶ Stay in the loop only when something needs your yes
+
+WORK YOU CAN HAND OFF
+· Sales Outbound: research, outreach drafts, CRM updates, queue only until you approve
+· Talent Scout: source candidates, skip anyone in your ATS, draft LinkedIn in your voice
+· Inbox Manager: triage email, flag what's urgent, draft replies, never send without you
+· Expense Manager: pull receipts, code expenses, chase missing items across portals
+· Invoice Collector: log into vendor portals, download invoices, park for review
+· Account Health: digests, risk flags, and next-step drafts so accounts stay warm
+· Bug Reproduction: recreate issues and hand eng a clean write-up
+· Competitive Intelligence: overnight watch for launches and stale messaging
+
+MEET YOUR FIRST BOT
+Teammates you can trust to get work done.
+
+---
+
+Terms of Service: https://cursor.com/terms-of-service
+Grok Bot Terms: https://cursor.com/terms/grok-bot
+Privacy Policy: https://cursor.com/privacy
+© 2026 Anysphere, Inc.

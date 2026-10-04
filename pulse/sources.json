@@ -1,0 +1,64 @@
+{
+  "sources": [
+    {
+      "id": "app-store-muse",
+      "title": "Muse on the App Store",
+      "kind": "appStore",
+      "cadence": "daily",
+      "url": "https://apps.apple.com/us/app/muse-from-meta/id6760173601"
+    },
+    {
+      "id": "app-store-grok-bot",
+      "title": "Grok Bot on the App Store",
+      "kind": "appStore",
+      "cadence": "daily",
+      "url": "https://apps.apple.com/us/app/grok-bot/id6794501026"
+    },
+    {
+      "id": "releasebot-openai",
+      "title": "OpenAI on Releasebot",
+      "kind": "releaseFeed",
+      "cadence": "daily",
+      "url": "https://releasebot.io/updates/openai"
+    },
+    {
+      "id": "releasebot-xai",
+      "title": "xAI on Releasebot",
+      "kind": "releaseFeed",
+      "cadence": "daily",
+      "url": "https://releasebot.io/updates/xai"
+    },
+    {
+      "id": "chatgpt-whats-new",
+      "title": "ChatGPT what's new",
+      "kind": "firstParty",
+      "cadence": "daily",
+      "url": "https://learn.chatgpt.com/docs/whats-new",
+      "fetchURL": "https://learn.chatgpt.com/docs/whats-new.md"
+    },
+    {
+      "id": "grok-bot-docs",
+      "title": "Grok Bot docs",
+      "kind": "firstParty",
+      "cadence": "daily",
+      "url": "https://docs.x.ai/grok-bot/get-started",
+      "fetchURL": "https://docs.x.ai/grok-bot/get-started.md"
+    },
+    {
+      "id": "meta-newsroom-muse",
+      "title": "Meta newsroom",
+      "kind": "firstParty",
+      "cadence": "daily",
+      "url": "https://about.fb.com/news/2026/09/introducing-muse-personal-ai-agent/"
+    },
+    {
+      "id": "x-search-agents",
+      "title": "X posts on personal agents",
+      "kind": "xSearch",
+      "cadence": "daily",
+      "handles": ["bot", "OpenAI", "MetaNewsroom"],
+      "query": "launches, reviews, complaints, and developer chatter about personal agents",
+      "postCap": 10
+    }
+  ]
+}

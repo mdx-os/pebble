@@ -18,6 +18,7 @@ open a PR, and a UI change needs before-and-after screenshots from
 - `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`
 - `make generate`: regenerate `Pebble.xcodeproj` after editing `project.yml`
 - `make secrets-check`: gitleaks over git history
+- `make pulse`: fetch pulse sources, snapshot them, write a digest
 
 ## Layout and layers
 
@@ -25,6 +26,7 @@ open a PR, and a UI change needs before-and-after screenshots from
 - `Packages/PebbleKit/`: shared code in layers. A layer imports only layers
   below it; `Package.swift` enforces this.
   - `PebbleCore`: plain types. No SwiftUI, no networking.
+  - `PebblePulse`: fetch pulse sources, snapshot them, and diff. No SwiftUI.
   - `PebbleUI`: SwiftUI views shared by every platform.
 - New code goes in a package, not in `App/`. New layers get added to
   `Package.swift` with their place in the order written down.

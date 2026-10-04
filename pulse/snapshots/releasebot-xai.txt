@@ -1,0 +1,293 @@
+source: releasebot-xai
+title: xAI on Releasebot
+kind: releaseFeed
+url: https://releasebot.io/updates/xai
+
+count: 15
+
+
+
+## grok-voice-transcribe-1.0 end of life
+product: xAI
+summary: xAI routes grok-voice-transcribe-1.0 to grok-voice-transcribe-2.0 with higher accuracy at the same price.
+grok-voice-transcribe-1.0 is deprecated and reaches end of life on October 2, 2026. All requests to that slug are routed to grok-voice-transcribe-2.0 at the same price, with higher accuracy. See the Speech to Text docs.
+Sep 30, 2026
+Oct 2, 2026
+Grok Build
+by
+xAI
+
+## Grok Build 1.0.46
+product: Grok Build
+summary: Grok Build improves MCP inspection, prompt and permission handling, faster session startup, smarter context compaction, and smoother media and file navigation across terminals and network filesystems.
+grok inspect and the MCP doctor report MCP server sources correctly
+Tool search activity folds as "Ran N tool searches" instead of claiming MCP tool results
+Client rules supplied at session start are preserved when the system prompt is rebuilt later
+Permission rules with relative paths apply even when the working directory contains symlinks
+The context-compacted line shows the token count from right after compaction, instead of the count at the end of a long turn
+Pressing Enter on a video card no longer tries to play it in a terminal that cannot show video or that lacks ffmpeg
+Video cards open the file in the default player on Enter when the terminal has no inline playback, and no longer get stuck extracting posters without ffmpeg
+list_dir on network or virtual filesystems skips slow subtree counts and prints a notice
+Session startup is faster when loading skills from large directories, and shows what it is doing instead of a generic spinner
+Show more
+All of your release notes in one feed
+Join Releasebot and get updates from xAI and hundreds of other software products.
+Create account Get updates with: RSS Email CLI MCP API Slack n8n
+Sep 29, 2026
+Oct 2, 2026
+Grok Build
+by
+xAI
+
+## Grok Build 1.0.45
+product: Grok Build
+summary: Grok Build adds custom subagent selection, fresh token reloading for MCP servers, a model notice banner, and clearer wait status.
+Custom agents from plugins or your config can be chosen directly with spawn_subagent
+MCP servers can use a token file that is re-read on every request, so rotating credentials stay fresh
+A selected model can show a colored notice banner above the prompt
+Subagent wait status shows "Waiting for N subagents…" when the parent turn is blocked
+Sep 28, 2026
+Sep 30, 2026
+Grok Build
+by
+xAI
+
+## Grok Build 1.0.44
+product: Grok Build
+summary: Grok Build adds macOS sandbox enforcement, a new context-window slash command, context window choices in model selection, safer parallel tool calls, improved shortcuts search, easier plan comment deletion, and a Windows paste crash fix.
+Sandbox enforcement on macOS uses the system Seatbelt (sandbox-exec) backend
+New /context-window slash command lets you pick a context window size for the current session when the model offers choices
+/model selection offers context window choices (when the model supports them) before the effort level
+Plan comments can be deleted by clicking the [✗] button that appears on hover
+Shortcuts panel search finds entries when you type any of the words in the label, keys, description or help text
+Pasting on Windows no longer crashes from overlapping clipboard operations
+Parallel tool calls that edit the same file run safely in sequence; unrelated tools stay concurrent
+Show more
+Sep 28, 2026
+Sep 29, 2026
+xAI
+
+## Team Bots: AI coworkers that learn from your team
+product: xAI
+summary: xAI launches Team Bots, shared Grok Bots that give teams the same context, tools, and memory across Slack and connected apps. Public beta on Teams and Enterprise plans includes pre-built bots for sales, product, marketing, and data workflows.
+Give a Grok Bot the files, apps, and expertise it needs, then share it so your whole team can work from the same context.
+Today we’re launching Team Bots, Grok Bots that work and learn alongside your team. Give one access to the files, apps, and expertise it needs, then share it so everyone can work from the same context.
+At SpaceXAI, Team Bots brief account teams each morning, coordinate engineering projects, and answer data questions across the company. Here’s how they work, how we use them, and how to build one for your own workflow.
+Team Bots bring context, tools, and memory together
+You build a Team Bot around a role or workflow your team shares. Everyone gets access to the same Bot and its expertise, while still being able to work with it individually.
+Every Team Bot brings together four things that help it do its job:
+Context gives it the relevant files, instructions, and skills, from brand guides to internal documentation.
+Plugins let it work in applications such as Salesforce, Notion, and GitHub. They can be connected by each person or configured for the whole team.
+Credentials let it securely access third-party APIs that do not have a plugin.
+Memories help it retain what it learns and improve at its role over time.
+Although the Bot is shared, each person’s conversations with it remain private. The Bot keeps separate context and memories for each user while drawing on the skills shared across the team.
+Teams can also collaborate with a Team Bot in Slack. Each Team Bot has its own handle, so you can invite it to a channel where everyone can ask questions, contribute context, and see its responses.
+Team Bots take on work across SpaceXAI
+At SpaceXAI, we’re using Team Bots in some of our most context-heavy workflows. Here are four examples from Sales and Customer Success, Product and Engineering, Marketing, and Data Analytics.
+Sales and Customer Success
+At SpaceXAI, every major sales account has a dedicated Team Bot. Each Bot is shared by the account executive, customer success manager, solutions architect, and sales leader.
+Every night, the Bot reviews company news, recent Gong calls, Notion docs, and relevant Slack threads. Each morning, it posts a briefing in the account’s Slack channel with what changed and what each person should do next, including drafts tailored to their role.
+Throughout the day, account teams use the Bot in Slack to assess strategy, check its thinking against account data, and plan next steps. The Bot remembers the decisions teams make and builds rich context over time. As people rotate on and off the account, it becomes the system of record and can quickly bring new team members up to speed.
+Harper, an insurance company serving small businesses, built a Team Bot to identify customers with lapsed policies and help them reinstate their coverage, reducing manual work for its team and recovering substantial savings for customers.
+“We initially had to manually check every customer through three platforms, get their balance details, and send them personalized emails. We built a Team Bot in 24 hours to automate this, saving our customers over $120,000 from hundreds of policies. This is now an ongoing engine for us, saving us time and our customers' money.”
+Dakotah Rice, CEO, Harper
+Customer Bot
+A shared bot for one customer account. It keeps the AE, CSM, SA, and Sales Leader on the same page, posts a weekday morning brief, and drafts each person's next move.
+Product and Engineering
+Our Engineering Team Bot works from a project’s Slack channel and connects to Notion, Linear, Hex, Datadog, and Cursor. It follows product decisions, triages bug reports, creates tickets, and launches Cloud Agents to handle well-defined fixes.
+We taught the Bot our shipping process through skills. It knows how to handle PR reviews, when to ask the team for help, and what evidence a change needs before it is complete. It coordinates the work across tools and agents, then reports progress and blockers in Slack.
+We used this setup while building Team Bots. The Bot steered a Cursor Project that orchestrated hundreds of Cloud Agents, helping a five-person team ship more than 100 PRs a day and launch Team Bots in a few weeks.
+EPD Teammate
+The coordinator for your EPD team's project or feature. It keeps up with the project's Slack channels, files clear bugs in Linear, and runs Cursor cloud agents that return green, verified PRs, so the whole team stays in sync.
+Marketing
+Large marketing teams spend considerable time keeping their brand, messaging, and voice consistent. We built Marketing Bot to make that work easier.
+We gave the Bot access to our brand guidelines, blog posts, and social copy. Whenever someone shares a draft for approval in Slack, it reviews the work against our voice and latest messaging. Regional teams can get feedback and keep moving in their own time zones without waiting for an approval cycle at HQ.
+For website and SEO changes, Marketing Bot carries the work from review to launch. Once a content update passes review, the Bot makes the change and posts a preview link in Slack for final sign-off. Anyone on the marketing team can ship website updates without filing a ticket or waiting on engineering, and every change goes through the same brand and SEO checks.
+“We’re building toward Team Bots for every marketing function. These Bots help us dig into market and customer intel, show up in AI answers, review launches, and tell us what’s working.”
+Angela Ferrante, Head of Marketing, Amplitude
+Marketing Bot
+Keeps your marketing team on-brand. Reviews any artifact against your brand guidelines and latest messaging, and takes approved website and SEO changes from review to preview and sign-off, so every region can ship on its own schedule.
+Data Analytics
+Our data analytics team receives dozens of requests each day for one-off analyses. It built Data Bot so anyone at SpaceXAI can get answers without waiting for an analyst or setting up warehouse access.
+Data Bot uses shared, read-only credentials to query approved tables in Databricks. It also connects to Datadog, Hex, and Statsig to investigate questions and present the results.
+The data analytics team had already spent two years building a library of skills for working with more than 45,000 tables. It gave that existing library to Data Bot, including instructions for finding the right data, analyzing feature usage for fraud, following SpaceXAI’s chart standards, and safely updating company-wide dashboards. Data Bot also remembers corrections to its queries, so what it learns from one person improves the answers it gives everyone.
+Data Bot
+Answers your team's one-off data questions from your warehouse with read-only queries, clear metric definitions, and charts. It remembers every correction and confirmation, so answers get better for everyone over time.
+Get started with Team Bots
+Team Bots is available today in public beta on Teams and Enterprise plans. Take your favorite Grok Bots and share them with your team. To get started, try one of our pre-built Team Bots for sales, product management, marketing, or data analytics.
+Try Team Bots today
+Download for Windows
+Contact sales
+Show more
+Similar to xAI with recent updates:
+Perplexity release notes
+31 release notes · Latest Sep 21, 2026
+OpenAI release notes
+1085 release notes · Latest Oct 2, 2026
+Anthropic release notes
+852 release notes · Latest Oct 2, 2026
+Cursor release notes
+137 release notes · Latest Sep 23, 2026
+OpenClaw release notes
+370 release notes · Latest Oct 3, 2026
+Obsidian release notes
+117 release notes · Latest Oct 1, 2026
+Sep 27, 2026
+Sep 30, 2026
+Grok Build
+by
+xAI
+
+## Grok Build 1.0.43
+product: Grok Build
+summary: Grok Build fixes minimal mode MCP tool prompts and notifies users when prompts go unanswered.
+MCP tool prompts appear correctly in minimal mode and users are notified when a prompt goes unanswered
+Sep 26, 2026
+Sep 30, 2026
+Grok Build
+by
+xAI
+
+## Grok Build 1.0.42
+product: Grok Build
+summary: Grok Build adds smoother CLI and session handling with cleaner interrupts, smarter worktree creation, corrected history and resize behavior, and fixes for pasted or inline images. It also improves plugin hooks and auto-update detection, plus WinGet install output on Windows.
+Footer and /usage display the model actually served on smart-auto turns
+New grok worktree create command creates a managed worktree without launching an interactive session
+Bracketed pastes that did not come from the clipboard no longer attach leftover images (for example from IME commits)
+grok -p exits cleanly when interrupted and performs session cleanup instead of being killed
+Pressing Ctrl+C twice while writing a plan comment cancels the comment instead of getting stuck
+grok --minimal reprints history correctly after terminal resize and keeps the prompt/status rows anchored
+Restoring a stashed draft places the cursor at the end so continued typing appends correctly
+grok update on WinGet installs prints the winget upgrade command and exits without writing files
+Inline images are re-uploaded after a full repaint so they no longer appear blank
+Plugin hooks run on a fresh session without requiring an explicit reload
+Plugin auto-update detection works when marketplace URLs differ only by .git suffix or host case
+Show more
+Sep 25, 2026
+Sep 28, 2026
+xAI
+
+## safety_identifier request field
+product: xAI
+summary: xAI adds safety_identifier across Chat Completions, Responses API, Batch API, and gRPC to attribute policy violations to end users.
+You can now send safety_identifier , an opaque end-user identifier assigned by your application, on Chat Completions, the Responses API, deferred chat completions, the Batch API, and the gRPC GetCompletionsRequest . It lets SpaceXAI attribute a policy violation to one of your end users rather than to your API key. The legacy user field is still accepted. See the Security FAQ.
+Sep 22, 2026
+Sep 29, 2026
+Grok Build
+by
+xAI
+
+## Grok Build 1.0.41
+product: Grok Build
+summary: Grok Build adds subagent model inheritance settings, smoother agent and session handling, command palette access from the welcome screen, clearer crash markers, better undo and focus behavior, and fixes for config overrides, edit blocks, interjections, and effort selection.
+Subagent model inheritance setting added to /settings, persisted in config.toml
+Subagent fullscreen view no longer shows a stray [Dashboard] button in the header
+Agent frontmatter mcpServers headers and URLs override config.toml and survive reloads or agent switches
+Ctrl+P opens the command palette immediately from the welcome screen
+Sessions interrupted by a crash show a clear marker instead of silently dropping the turn
+Ctrl+Z right after stashing a prompt restores it
+Collapsed edit blocks setting collapses edits even when expanded by default is pinned
+Interjections receive a visible reply before the agent resumes prior tasks
+Saving a queued-prompt edit returns focus to the composer
+Partial subagent config tables that only set limits or models no longer disable subagents
+Effort level selection accepts menu labels in addition to IDs
+Show more
+Sep 21, 2026
+Sep 21, 2026
+Modified by Releasebot:
+Sep 28, 2026
+xAI
+
+## Grok 4.7
+product: xAI
+summary: xAI adds Grok 4.7 to the xAI API for coding, agentic tasks, and knowledge work, with a 500k context window, image and text inputs, flexible reasoning effort, and US regional endpoint support. Grok 4.7 Fast is also available in Cursor and Grok Build.
+Grok 4.7, SpaceXAI's frontier model for coding, agentic tasks, and knowledge work, is now available on the xAI API as grok-4.7. It has a 500k context window, text and image inputs with text-only output, and no text output limit. Pricing is $2 / $0.50 / $6 per 1M tokens (input / cached input / output) below 200k prompt tokens, and $4 / $1 / $12 above. Reasoning effort supports low, medium, high (default), and xhigh. On the Responses API, grok-4.7 always returns reasoning.encrypted_content, even when include does not list it. It is also served on the US regional endpoint. Grok 4.7 Fast is the same model and costs 2x the standard token rates, or 1.5x for long-context requests. It's available only in Cursor and Grok Build, not on the public xAI API, and is billed through your plan there. See the Grok 4.7 overview and the announcement.
+Show more
+Sep 21, 2026
+Sep 21, 2026
+xAI
+
+## Introducing Grok 4.7
+product: xAI
+summary: xAI launches Grok 4.7, its most capable model for coding and knowledge work, with faster performance, stronger self-checking, and improved safety safeguards. It is available today in Cursor, Grok Build, the Grok API, and other platforms.
+SpaceXAI's most powerful model for coding and knowledge work. Twice as fast, at half the price of comparable models.
+Grok 4.7 is our most capable model for coding and knowledge work. It works longer on difficult tasks, checks its own work more carefully, and comes with our best-calibrated safeguards to date. Served at the same price and speed as Grok 4.6, it is highly competitive in its class.
+On CursorBench 4.0, which stresses longer-running coding tasks, Grok 4.7 is at the frontier in price-performance.
+Model Improvements
+Grok 4.7 uses a new, larger base model compared to Grok 4.6. It was trained with a longer reinforcement learning run on a harder mix of tasks, weighted toward problems that take many hours to complete. The model is better at verifying its own work and managing longer context. We also trained Grok 4.7 to natively understand the Grok Bot harness, making it better at conversational tasks and general knowledge work.
+Grok 4.7 is better at creating documents and presentations. In GDPval and AA Briefcase, AI is asked to work on tasks done by professionals such as lawyers, nurses, and financial analysts. Grok 4.7 improves upon Grok 4.6 on both benchmarks and performs comparably to other frontier models.
+Safety & Cybersecurity
+Grok 4.7 was built with an entirely new safeguard stack. It is the strongest model we’ve tested on refusals and jailbreak resistance. In dual-use domains like cybersecurity and biological work, it leads on both utility for benign tasks and safe refusal on dangerous ones, topping LatchBio’s biosafety benchmark at 62.4%.
+Grok 4.7 balances strong cyber defense capabilities with low refusal rates for legitimate use. It shows the highest safety on HackerBench v0.3, our benchmark for risky and malicious cyber tasks, allowing only 3.3% of risky dual-use prompts through while rarely blocking legitimate security work. We’ve also started giving select cybersecurity partners invite-only access to Grok 4.7’s red-team capabilities for defense research.
+Pricing and availability
+Grok 4.7 is available today in Cursor and Grok Build. It is also available through the Grok API, third-party coding harnesses, and model routers and cloud platforms.
+The model is priced starting at $2 per million input tokens and $6 per million output tokens. We also serve a fast variant with twice the output speed at twice the price.
+Show more
+Sep 20, 2026
+Sep 23, 2026
+Grok Build
+by
+xAI
+
+## Grok Build 1.0.40
+product: Grok Build
+summary: Grok Build releases Grok 4.7.
+Grok 4.7 has arrived!
+Sep 20, 2026
+Sep 23, 2026
+Grok Build
+by
+xAI
+
+## Grok Build 1.0.39
+product: Grok Build
+summary: Grok Build adds smoother agent workflows with locked parent-model choice, simpler subagent spawning, better compaction and image retention, clearer idle timeout messages, and fixes for worktree, memory capture, and transcript labeling.
+Subagents can always use the parent model, with that choice locked in when the session starts
+Earlier image attachments survive multiple compactions
+Subagent spawning no longer requires choosing a type
+The agent keeps helper scripts, logs, and PR drafts in the system temp directory instead of the repository
+Model effort menus pick up live effort levels, and config aliases inherit them
+MCP tools that receive the wrong JSON shape are automatically fixed when the mismatch is unambiguous
+Local worktree capture no longer refuses repositories that contain uninitialized submodules
+Memory captures no longer include opaque model reasoning blobs
+Idle timeouts show a clear message instead of raw internal text
+Images attached to the last user prompt survive compaction
+Custom agent profiles persist correctly across session resume and reload
+Subagent labels appear as "Subagent" instead of "General" in transcripts and the tasks pane
+Show more
+Sep 19, 2026
+Sep 23, 2026
+Grok Build
+by
+xAI
+
+## Grok Build 1.0.38
+product: Grok Build
+summary: Grok Build fixes transcript cutoffs, image handling, stuck overlays, and permission prompt wrapping.
+Long agent replies in prompt-suggestion transcripts are no longer cut off mid-sentence
+Pasted images survive yank/undo/history recall and the user is notified when any cannot be sent
+Subagent overlays no longer stay stuck showing "Cancelling" after the child turn ends
+Long quoted arguments in permission prompts wrap instead of clipping
+Sep 18, 2026
+Sep 23, 2026
+Grok Build
+by
+xAI
+
+## Grok Build 1.0.37
+product: Grok Build
+summary: Grok Build fixes flowcharts, context legend percentages, queue copy, model effort defaults, and Bash permission handling.
+Mermaid flowcharts with complex labels or large sizes render and open correctly
+/context legend shows accurate percentages that always add up to 100%
+Pressing y on a queue row copies the prompt text to the clipboard
+/model effort picker defaults to the recommended effort level
+Bash commands using quoted filename variables respect configured permission rules instead of always prompting
+Load more updates
+Curated by the Releasebot team
+Releasebot is an aggregator of official release notes from
+hundreds of software vendors and thousands of sources.
+Our editorial process involves the manual review and audit of
+release notes procured with the help of automated systems.
+About us
+Our methodology
+About Methodology <a href="/advertise" class="hove

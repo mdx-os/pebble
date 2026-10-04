@@ -1,6 +1,6 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test build screenshots brand-check secrets-check clean
+.PHONY: verify generate test build screenshots brand-check secrets-check pulse clean
 
 ## verify: everything CI runs. Run this before every PR.
 verify: brand-check test build screenshots
@@ -29,6 +29,10 @@ brand-check:
 ## secrets-check: scan git history for leaked secrets
 secrets-check:
 	gitleaks git --no-banner --redact .
+
+## pulse: fetch sources, update pulse/snapshots, write build/pulse/digest.md
+pulse:
+	swift run --package-path Packages/PebbleKit pebble-pulse --sources pulse/sources.json --snapshots pulse/snapshots --digest build/pulse/digest.md
 
 clean:
 	rm -rf build Pebble.xcodeproj Packages/PebbleKit/.build
