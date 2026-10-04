@@ -11,8 +11,9 @@ public struct PulseInvocation: Sendable, Equatable {
     pebble-pulse [--sources pulse/sources.json] [--snapshots pulse/snapshots] [--digest build/pulse/digest.md]
 
     Saves each source as text under the snapshots directory and writes a digest
-    of what changed. X search runs only when XAI_API_KEY is set, and it refuses
-    to keep a result that fetched more posts than the source cap.
+    of what changed. Steal cards are drafted on this device from those changes
+    only. X search runs only when XAI_API_KEY is set, and it refuses to keep a
+    result that fetched more posts than the source cap.
     """
 
     public static func parse(_ arguments: [String]) throws -> PulseInvocation {
@@ -80,6 +81,7 @@ public enum PulseCommand {
                 apiKey: (key?.isEmpty == false) ? key : nil,
                 transport: transport ?? URLSessionHTTPSender()
             )
+            let choice = CardDrafters.make(environment: environment, transport: transport)
             let runner = PulseRunner(
                 fetcher: fetcher ?? URLSessionPageFetcher(),
                 search: search,
@@ -87,7 +89,8 @@ public enum PulseCommand {
                 snapshotPrefix: invocation.snapshots.hasSuffix("/")
                     ? String(invocation.snapshots.dropLast())
                     : invocation.snapshots,
-                now: now
+                now: now,
+                drafter: choice.drafter
             )
             let digest = await runner.run(sources: list.sources)
             try FileManager.default.createDirectory(
@@ -97,7 +100,7 @@ public enum PulseCommand {
             try Data(digest.markdown().utf8).write(to: digestURL, options: .atomic)
             let counts = count(digest)
             print(
-                "pulse: \(counts.new) new, \(counts.changed) changed, \(counts.unchanged) unchanged, \(counts.skipped) skipped, \(counts.failed) failed"
+                "pulse: \(counts.new) new, \(counts.changed) changed, \(counts.unchanged) unchanged, \(counts.skipped) skipped, \(counts.failed) failed, \(digest.cards.count) cards via \(choice.name)"
             )
             print("digest: \(invocation.digest)")
             return 0

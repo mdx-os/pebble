@@ -1,6 +1,6 @@
 import Foundation
 
-/// The file the morning run writes. Cards may be empty until a later step fills them.
+/// The file the morning run writes. Cards are drafted from `modelInput` only.
 public struct PulseDigest: Sendable, Equatable, Codable {
     public struct Entry: Sendable, Equatable, Codable {
         public enum Status: String, Sendable, Equatable, Codable {

@@ -12,6 +12,7 @@ public struct PulseRunner: Sendable {
     public var snapshotPrefix: String
     public var now: Date
     public var cadence: PulseSource.Cadence
+    public var drafter: any CardDrafting
 
     public init(
         fetcher: any PageFetching,
@@ -19,7 +20,8 @@ public struct PulseRunner: Sendable {
         store: SnapshotStore,
         snapshotPrefix: String,
         now: Date,
-        cadence: PulseSource.Cadence = .daily
+        cadence: PulseSource.Cadence = .daily,
+        drafter: any CardDrafting = HeuristicCardDrafter()
     ) {
         self.fetcher = fetcher
         self.search = search
@@ -27,13 +29,16 @@ public struct PulseRunner: Sendable {
         self.snapshotPrefix = snapshotPrefix
         self.now = now
         self.cadence = cadence
+        self.drafter = drafter
     }
 
-    public func run(sources: [PulseSource], cards: [StealCard] = []) async -> PulseDigest {
+    public func run(sources: [PulseSource]) async -> PulseDigest {
         var entries: [PulseDigest.Entry] = []
         for source in sources where source.cadence == cadence {
             entries.append(await run(source))
         }
+        let input = PulseDigest(generatedAt: now, entries: entries, cards: []).modelInput
+        let cards = await drafter.draft(modelInput: input)
         return PulseDigest(generatedAt: now, entries: entries, cards: cards)
     }
 

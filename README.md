@@ -29,10 +29,12 @@ is generated, not committed.
 
 `make pulse` checks the sources in `pulse/sources.json`, saves each one as text
 under `pulse/snapshots/`, and writes `build/pulse/digest.md`. Only a real
-change is kept for a later reading step. The digest lists steal cards when
-they exist. Each card has what changed, the source, the complaint it solves,
-the pattern to copy, the effort, and how it fits privacy, local-first, and
-open weights.
+change is drafted into a steal card. Each card has what changed, the source,
+the complaint it solves, the pattern to copy, the effort, and how it fits
+privacy, local-first, and open weights. A privacy score of 0 means adapt or
+reject. Drafting runs on the device and needs no model key. Set
+`PULSE_CARD_DRAFTER=http` and `PULSE_CARD_DRAFTER_URL` to send that same text
+to an endpoint you choose.
 
 X search runs only when `XAI_API_KEY` is set. It is capped at the `postCap` in
 the source list, and the code refuses any cap above 25 posts. With no key, the
