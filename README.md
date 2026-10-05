@@ -26,6 +26,9 @@ make screenshots  # writes build/screenshots/{iphone,ipad,mac}.png
 `make generate` creates `Pebble.xcodeproj` from `project.yml`. The project file
 is generated, not committed.
 
+When `make pulse` finds a real change, it also writes `build/pulse/notify.md`
+and `build/pulse/summary.json`. A quiet run removes them.
+
 ## Layout
 
 ```

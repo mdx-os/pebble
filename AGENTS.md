@@ -7,15 +7,17 @@ a line here would have prevented.
 
 ## The one rule
 
-Prove your work against the real thing. `make verify` must pass before you
+Prove your work against the real artifact. `make verify` must pass before you
 open a PR, and a UI change needs before-and-after screenshots from
-`make screenshots`. "It compiles" is not proof.
+`make screenshots`. "It compiles" is not proof, and a green CI run is not
+enough. The second time the same mistake shows up, make it a permanent gate
+in lint, a skill, or CI.
 
 ## Commands
 
 - `make verify`: everything CI runs (brand check, tests, builds, screenshots)
 - `make test`: package unit tests (Swift Testing)
-- `make pulse`: fetch the competitor watch, write `pulse/snapshots/`, digest real changes to `pulse/digest.json`
+- `make pulse`: fetch the competitor watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
 - `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`
 - `make generate`: regenerate `Pebble.xcodeproj` after editing `project.yml`
 - `make secrets-check`: gitleaks over git history

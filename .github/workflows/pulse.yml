@@ -31,3 +31,14 @@ jobs:
             pulse/digest.json
             pulse/snapshots
           if-no-files-found: warn
+
+      # Present only when this run found a real change. A quiet run leaves no notice.
+      - name: Upload the notification
+        if: hashFiles('build/pulse/notify.md') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulse-notify
+          path: |
+            build/pulse/notify.md
+            build/pulse/summary.json
+          if-no-files-found: ignore
