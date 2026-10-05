@@ -29,7 +29,8 @@ in lint, a skill, or CI.
   below it; `Package.swift` enforces this.
   - `PebbleCore`: plain types. No SwiftUI, no networking.
   - `PebblePulse`: competitor watch fetching and snapshots. Imports PebbleCore.
-  - `PebbleUI`: SwiftUI views shared by every platform. Imports PebbleCore.
+  - `PebbleModel`: model adapter. `ModelClient` and the on-device placeholder. Imports PebbleCore. MLX and Ollama adapters plug in here.
+  - `PebbleUI`: SwiftUI views shared by every platform. Imports PebbleCore and PebbleModel.
 - New code goes in a package, not in `App/`. New layers get added to
   `Package.swift` with their place in the order written down.
 

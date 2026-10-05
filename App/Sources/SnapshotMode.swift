@@ -1,6 +1,7 @@
 #if os(macOS)
 import AppKit
 import PebbleCore
+import PebbleModel
 import PebbleUI
 import SwiftUI
 
@@ -15,7 +16,7 @@ enum SnapshotMode {
 
     static func runIfRequested(brand: Brand) {
         guard let path = UserDefaults.standard.string(forKey: "snapshotPath") else { return }
-        let view = WelcomeView(brand: brand)
+        let view = ChatView(brand: brand, model: LocalStubModel())
             .frame(width: size.width, height: size.height)
             .background(Color(nsColor: .windowBackgroundColor))
         let renderer = ImageRenderer(content: view)

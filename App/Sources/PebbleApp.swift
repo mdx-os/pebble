@@ -1,4 +1,5 @@
 import PebbleCore
+import PebbleModel
 import PebbleUI
 import SwiftUI
 
@@ -18,7 +19,7 @@ struct PebbleApp: App {
 
     var body: some Scene {
         WindowGroup {
-            WelcomeView(brand: brand)
+            ChatView(brand: brand, model: LocalStubModel())
         }
     }
 }
