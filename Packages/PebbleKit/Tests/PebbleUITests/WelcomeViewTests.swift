@@ -1,3 +1,4 @@
+#if canImport(SwiftUI)
 import PebbleCore
 import PebbleUI
 import SwiftUI
@@ -26,3 +27,4 @@ struct WelcomeViewTests {
         #expect(image.width == Int(size.width * renderer.scale))
     }
 }
+#endif

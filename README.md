@@ -19,6 +19,7 @@ Requirements: macOS 26 or later, Xcode 26, and [XcodeGen](https://github.com/yon
 ```sh
 make verify       # brand check, tests, builds, and screenshots on iPhone, iPad and Mac
 make test         # unit tests only
+make pulse        # fetch public sources, snapshot them, write pulse/digest.json
 make screenshots  # writes build/screenshots/{iphone,ipad,mac}.png
 ```
 
@@ -32,14 +33,16 @@ App/                  the app target (one target for Mac, iPhone and iPad)
 Config/Brand.xcconfig the product name, set once
 Packages/PebbleKit/   shared code, in layers
   PebbleCore            plain types, no UI
+  PebblePulse           competitor watch fetching and snapshots
   PebbleUI              SwiftUI views
+pulse/                source list and snapshots
 scripts/              build helpers
 ```
 
 ## Roadmap
 
 1. A repo that proves itself: one command builds, tests and screenshots every platform. (now)
-2. A daily pulse on what's new in AI and in other personal agents.
+2. A daily pulse on what's new in AI and in other personal agents. Fetching and a digest of real changes are in place. Drafting idea cards comes next.
 3. Mia talks: a named agent running a local open model.
 4. A daily briefing, ideas and activity inside the app.
 5. Mia improves Mia: small, verified changes every day.
