@@ -17,8 +17,9 @@ public struct StarterJob: Identifiable, Sendable, Equatable {
 
 /// Words for the first conversation.
 ///
-/// The agent's name comes from `Brand`. A person may choose another name
-/// later. This name is the agent, not someone in their contacts.
+/// The product name lives on `Brand`. The name in the chat is the agent's
+/// display name, chosen on this device. That name is the agent, not a person
+/// in the user's contacts.
 public enum FirstConversation {
     public static let openingID = UUID(uuidString: "A1000000-0000-4000-8000-000000000001")!
 
@@ -28,14 +29,17 @@ public enum FirstConversation {
     public static let thinking = "One moment."
     public static let couldNotAnswer = "I couldn't answer that just now. Try once more."
 
-    public static func opening(for brand: Brand) -> String {
-        "Hi, I'm \(brand.name). Pick a place to start, or tell me what's on your mind."
-    }
+    public static let nameInvitation = "You get to name me."
+    public static let giveNameTitle = "Give me a name"
+    public static let changeNameTitle = "Call me something else"
+    public static let namePlaceholder = "A name for me"
+    public static let confirmNameTitle = "That's my name"
+    public static let cancelNameTitle = "Never mind"
+    public static let needsAName = "I need a name to go by."
+    public static let nameTooLong = "That's a little long for a name."
 
-    public static func initial(for brand: Brand) -> String {
-        let trimmed = brand.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let first = trimmed.first else { return "?" }
-        return String(first).uppercased()
+    public static func opening(named name: String) -> String {
+        "Hi, I'm \(name). Pick a place to start, or tell me what's on your mind."
     }
 
     public static let jobs: [StarterJob] = [

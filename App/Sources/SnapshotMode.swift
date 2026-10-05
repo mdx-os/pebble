@@ -16,7 +16,7 @@ enum SnapshotMode {
 
     static func runIfRequested(brand: Brand) {
         guard let path = UserDefaults.standard.string(forKey: "snapshotPath") else { return }
-        let view = ChatView(brand: brand, model: LocalStubModel())
+        let view = ChatView(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore())
             .frame(width: size.width, height: size.height)
             .background(Color(nsColor: .windowBackgroundColor))
         let renderer = ImageRenderer(content: view)

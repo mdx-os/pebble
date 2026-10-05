@@ -4,12 +4,14 @@ import Testing
 struct FirstConversationTests {
     let brand = Brand(name: "Nova")
 
-    @Test func openingNamesTheAgent() {
-        #expect(FirstConversation.opening(for: brand) == "Hi, I'm Nova. Pick a place to start, or tell me what's on your mind.")
+    @Test func openingUsesTheNameItIsGiven() {
+        #expect(FirstConversation.opening(named: "Nova") == "Hi, I'm Nova. Pick a place to start, or tell me what's on your mind.")
     }
 
-    @Test func initialIsTheFirstLetter() {
-        #expect(FirstConversation.initial(for: Brand(name: "nova")) == "N")
+    @Test func openingCanUseADifferentNameThanTheProduct() {
+        let greeting = FirstConversation.opening(named: "Pip")
+        #expect(greeting.contains("Pip"))
+        #expect(!greeting.contains(brand.name))
     }
 
     @Test func offersThreeStarterJobs() {

@@ -1,5 +1,6 @@
 // The product's public name. This is the only place it is set.
-// The app's display name, its built product name, and every screen read it
-// from here (through Info.plist), so a rename is a one-line change.
+// The app's display name and its built product name read it from here
+// (through Info.plist). The name a person gives their agent is stored on
+// the device and is separate.
 // Code, packages, the repo and bundle IDs use the codename "pebble" instead.
 BRAND_NAME = Mia

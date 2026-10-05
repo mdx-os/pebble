@@ -28,6 +28,6 @@ let package = Package(
         .testTarget(name: "PebbleCoreTests", dependencies: ["PebbleCore"]),
         .testTarget(name: "PebblePulseTests", dependencies: ["PebblePulse", "PebbleCore"]),
         .testTarget(name: "PebbleModelTests", dependencies: ["PebbleModel", "PebbleCore"]),
-        .testTarget(name: "PebbleUITests", dependencies: ["PebbleUI", "PebbleCore"]),
+        .testTarget(name: "PebbleUITests", dependencies: ["PebbleUI", "PebbleModel", "PebbleCore"]),
     ]
 )
