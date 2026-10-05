@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify on Mac, iPhone and iPad
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install tools
+        run: brew install xcodegen gitleaks
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Secrets check
+        run: make secrets-check
+
+      - name: Verify
+        run: make verify
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: build/screenshots
+          if-no-files-found: warn
