@@ -31,11 +31,12 @@ public struct PulseRunner: Sendable {
                 sections.append(section)
             }
         }
+        let modelInput = ModelInput.assemble(sections)
         return PulseDigest(
             generatedAt: now,
             observations: observations,
-            modelInput: ModelInput.assemble(sections),
-            ideaCards: []
+            modelInput: modelInput,
+            ideaCards: IdeaDraft.cards(from: modelInput)
         )
     }
 

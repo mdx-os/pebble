@@ -5,7 +5,7 @@ import Foundation
 /// `modelInput` contains only sources whose text changed after normalization.
 /// Ratings and relative dates are removed before that comparison, so a page
 /// that merely got older does not show up here.
-/// `ideaCards` stays empty until a later step drafts them from `modelInput`.
+/// `ideaCards` are drafted from `modelInput` alone.
 public struct PulseDigest: Codable, Sendable, Equatable {
     public var generatedAt: Date
     public var observations: [SourceObservation]
