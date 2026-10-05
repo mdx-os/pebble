@@ -4,7 +4,8 @@ import Foundation
 ///
 /// It is set once, in `Config/Brand.xcconfig`, and reaches the app through the
 /// `PebbleBrandName` Info.plist key. Code never spells the name itself, so a
-/// rename is a config change.
+/// product rename is a config change. The name a person gives their agent is
+/// an `AgentName` stored on the device, not this value.
 public struct Brand: Sendable, Equatable {
     public static let infoKey = "PebbleBrandName"
 

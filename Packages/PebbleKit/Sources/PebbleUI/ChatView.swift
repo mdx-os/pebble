@@ -6,9 +6,16 @@ import SwiftUI
 /// The first screen: the agent has a face, a name, and a conversation.
 public struct ChatView: View {
     @StateObject private var controller: ChatController
+    @FocusState private var nameFieldFocused: Bool
 
-    public init(brand: Brand, model: any ModelClient = LocalStubModel()) {
-        _controller = StateObject(wrappedValue: ChatController(brand: brand, model: model))
+    public init(
+        brand: Brand,
+        model: any ModelClient = LocalStubModel(),
+        names: any AgentNameStoring = UserDefaultsAgentNameStore()
+    ) {
+        _controller = StateObject(
+            wrappedValue: ChatController(brand: brand, model: model, names: names)
+        )
     }
 
     public var body: some View {
@@ -47,15 +54,71 @@ public struct ChatView: View {
 
     private var header: some View {
         VStack(spacing: 8) {
-            AvatarView(initial: FirstConversation.initial(for: controller.brand))
-            Text(controller.brand.name)
+            AvatarView(initial: controller.displayName.initial)
+            Text(controller.displayName.text)
                 .font(.title.weight(.semibold))
+                .multilineTextAlignment(.center)
             Text(FirstConversation.presence)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+            if controller.showsNameInvitation {
+                Text(FirstConversation.nameInvitation)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            renameControl
         }
         .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private var renameControl: some View {
+        if controller.isChoosingName {
+            VStack(spacing: 8) {
+                TextField(
+                    FirstConversation.namePlaceholder,
+                    text: Binding(
+                        get: { controller.nameDraft },
+                        set: { controller.setNameDraft($0) }
+                    )
+                )
+                .textFieldStyle(.plain)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+                .frame(maxWidth: 280)
+                .focused($nameFieldFocused)
+                .onAppear { nameFieldFocused = true }
+                .onSubmit { controller.commitName() }
+                if let nameHint = controller.nameHint {
+                    Text(nameHint)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                HStack(spacing: 8) {
+                    Button(FirstConversation.cancelNameTitle) {
+                        controller.cancelRename()
+                    }
+                    .buttonStyle(.bordered)
+                    Button(FirstConversation.confirmNameTitle) {
+                        controller.commitName()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.orange)
+                    .disabled(controller.nameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        } else {
+            Button(controller.renameTitle) {
+                controller.beginRename()
+            }
+            .buttonStyle(.bordered)
+            .tint(.orange)
+        }
     }
 
     private var transcript: some View {
@@ -135,15 +198,56 @@ public struct ChatView: View {
 final class ChatController: ObservableObject {
     let brand: Brand
     private let model: any ModelClient
+    private let names: any AgentNameStoring
+    @Published private(set) var naming: AgentRenameState
     @Published var conversation: Conversation
     @Published var draft = ""
     @Published var isReplying = false
     @Published var failure: String?
 
-    init(brand: Brand, model: any ModelClient) {
+    init(brand: Brand, model: any ModelClient, names: any AgentNameStoring) {
         self.brand = brand
         self.model = model
-        conversation = .firstRun(for: brand)
+        self.names = names
+        let profile = AgentProfile(brand: brand, stored: names.loadDisplayName())
+        naming = AgentRenameState(profile: profile)
+        conversation = .firstRun(named: profile.displayName.text)
+    }
+
+    var displayName: AgentName { naming.profile.displayName }
+    var renameTitle: String { naming.renameTitle }
+    var isChoosingName: Bool { naming.isOpen }
+    var showsNameInvitation: Bool { naming.showsInvitation }
+    var nameDraft: String { naming.draft }
+    var nameHint: String? { naming.hint }
+
+    func beginRename() {
+        var next = naming
+        next.begin()
+        naming = next
+    }
+
+    func cancelRename() {
+        var next = naming
+        next.cancel()
+        naming = next
+    }
+
+    func setNameDraft(_ text: String) {
+        var next = naming
+        next.setDraft(text)
+        naming = next
+    }
+
+    func commitName() {
+        var next = naming
+        guard let name = next.confirm() else {
+            naming = next
+            return
+        }
+        naming = next
+        names.saveDisplayName(name.text)
+        conversation = conversation.renamingAgent(to: name)
     }
 
     func submit(_ text: String) {
@@ -190,7 +294,7 @@ struct AvatarView: View {
 }
 
 #Preview {
-    ChatView(brand: Brand(name: "Preview"))
+    ChatView(brand: Brand(name: "Preview"), names: InMemoryAgentNameStore())
 }
 #else
 public enum PebbleUISupport {

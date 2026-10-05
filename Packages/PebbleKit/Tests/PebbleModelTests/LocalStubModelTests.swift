@@ -41,7 +41,7 @@ struct LocalStubModelTests {
 
     @Test func aStarterJobRoundTripUsesTheStub() async throws {
         let job = try #require(FirstConversation.jobs.first { $0.id == "remember" })
-        let next = try await Conversation.firstRun(for: Brand(name: "Nova")).sending(job.prompt, with: model)
+        let next = try await Conversation.firstRun(named: "Nova").sending(job.prompt, with: model)
         #expect(next.turns.last?.speaker == .agent)
         #expect(next.turns.last?.text == "Tell me the detail in your own words. I'll say it back so you can check I heard it. It stays on this device.")
     }

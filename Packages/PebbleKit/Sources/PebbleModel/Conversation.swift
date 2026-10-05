@@ -18,14 +18,29 @@ public struct Conversation: Sendable, Equatable {
         self.turns = turns
     }
 
-    public static func firstRun(for brand: Brand) -> Conversation {
+    public static func firstRun(named name: String) -> Conversation {
         Conversation(turns: [
             ChatTurn(
                 id: FirstConversation.openingID,
                 speaker: .agent,
-                text: FirstConversation.opening(for: brand)
+                text: FirstConversation.opening(named: name)
             ),
         ])
+    }
+
+    /// Rewrites the opening line when the person has not spoken yet.
+    /// Lines already said stay as they were.
+    public func renamingAgent(to name: AgentName) -> Conversation {
+        guard isWaitingForPerson else { return self }
+        let turns = self.turns.map { turn in
+            guard turn.id == FirstConversation.openingID, turn.speaker == .agent else { return turn }
+            return ChatTurn(
+                id: turn.id,
+                speaker: .agent,
+                text: FirstConversation.opening(named: name.text)
+            )
+        }
+        return Conversation(turns: turns)
     }
 
     public var isWaitingForPerson: Bool {
