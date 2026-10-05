@@ -149,7 +149,9 @@ struct PulseRunnerTests {
         ])
         let first = try await PulseRunner(pages: pages, now: day(2026, 10, 5)).run(sources: [source], snapshots: directory)
         #expect(first.observations.map(\.outcome) == [.changed])
-        #expect(first.ideaCards.isEmpty)
+        #expect(first.ideaCards.count == 1)
+        #expect(first.ideaCards[0].summary.contains("Fixed the morning brief."))
+        #expect(!first.ideaCards[0].summary.contains("Ratings"))
         #expect(first.modelInput.contains("Fixed the morning brief."))
         #expect(!first.modelInput.contains("Ratings"))
         #expect(!first.modelInput.contains("ago"))
@@ -158,6 +160,7 @@ struct PulseRunnerTests {
         let second = try await PulseRunner(pages: pages, now: day(2026, 10, 6)).run(sources: [source], snapshots: directory)
         #expect(second.observations.map(\.outcome) == [.unchanged])
         #expect(second.modelInput.isEmpty)
+        #expect(second.ideaCards.isEmpty)
     }
 
     @Test func aRealEditReachesModelInput() async throws {
@@ -177,7 +180,11 @@ struct PulseRunnerTests {
         #expect(digest.observations.map(\.outcome) == [.changed])
         #expect(digest.modelInput.contains("source: notes"))
         #expect(digest.modelInput.contains("+You can hand a task to a second pass."))
-        #expect(digest.ideaCards.isEmpty)
+        #expect(digest.ideaCards.count == 1)
+        #expect(digest.ideaCards[0].summary.contains("second pass"))
+        #expect(digest.ideaCards[0].sourceName == "Notes")
+        #expect(digest.ideaCards[0].effort == .small)
+        #expect(!digest.ideaCards[0].fit.blocksOnPrivacy)
     }
 
     @Test func missingKeySkipsXSearch() async throws {
