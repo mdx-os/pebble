@@ -1,0 +1,33 @@
+name: Pulse
+
+on:
+  workflow_dispatch:
+  # Morning runs stay commented out until a later change commits snapshots.
+  # schedule:
+  #   - cron: "15 13 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  pulse:
+    name: Competitor watch
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Fetch sources and write a digest
+        env:
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+        run: make pulse
+
+      - name: Upload digest and snapshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulse-digest
+          path: |
+            pulse/digest.json
+            pulse/snapshots
+          if-no-files-found: warn

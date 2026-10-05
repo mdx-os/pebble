@@ -1,5 +1,7 @@
 import PebbleCore
+#if canImport(SwiftUI)
 import SwiftUI
+// Linux hosts have no SwiftUI. The views below are what Mac and iPhone build.
 
 /// The first screen: the agent introduces itself.
 public struct WelcomeView: View {
@@ -60,3 +62,8 @@ struct AvatarView: View {
 #Preview {
     WelcomeView(brand: Brand(name: "Preview"))
 }
+#else
+public enum PebbleUISupport {
+    public static let available = false
+}
+#endif

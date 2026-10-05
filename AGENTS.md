@@ -15,6 +15,7 @@ open a PR, and a UI change needs before-and-after screenshots from
 
 - `make verify`: everything CI runs (brand check, tests, builds, screenshots)
 - `make test`: package unit tests (Swift Testing)
+- `make pulse`: fetch the competitor watch, write `pulse/snapshots/`, digest real changes to `pulse/digest.json`
 - `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`
 - `make generate`: regenerate `Pebble.xcodeproj` after editing `project.yml`
 - `make secrets-check`: gitleaks over git history
@@ -25,7 +26,8 @@ open a PR, and a UI change needs before-and-after screenshots from
 - `Packages/PebbleKit/`: shared code in layers. A layer imports only layers
   below it; `Package.swift` enforces this.
   - `PebbleCore`: plain types. No SwiftUI, no networking.
-  - `PebbleUI`: SwiftUI views shared by every platform.
+  - `PebblePulse`: competitor watch fetching and snapshots. Imports PebbleCore.
+  - `PebbleUI`: SwiftUI views shared by every platform. Imports PebbleCore.
 - New code goes in a package, not in `App/`. New layers get added to
   `Package.swift` with their place in the order written down.
 

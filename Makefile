@@ -1,6 +1,6 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test build screenshots brand-check secrets-check clean
+.PHONY: verify generate test build screenshots brand-check secrets-check pulse clean
 
 ## verify: everything CI runs. Run this before every PR.
 verify: brand-check test build screenshots
@@ -12,6 +12,10 @@ generate:
 ## test: unit tests for the shared packages
 test:
 	swift test --package-path Packages/PebbleKit --quiet
+
+## pulse: fetch the competitor watch, snapshot it, write a digest of real changes
+pulse:
+	swift run --package-path Packages/PebbleKit pulse -- --root "$(CURDIR)"
 
 ## build: compile the app for macOS and the iOS Simulator
 build: generate
