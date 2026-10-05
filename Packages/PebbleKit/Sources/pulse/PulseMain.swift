@@ -40,6 +40,9 @@ struct PulseMain {
         print("pulse: \(digest.observations.count) sources, \(changed) changed, \(unchanged) unchanged, \(skipped) skipped, \(failed) failed")
         print("model input: \(digest.modelInput.count) characters")
         print("digest: \(digestURL.path)")
+        if let notice = try PulseNotice.write(digest, to: root.appendingPathComponent("build/pulse")) {
+            print("notice: \(notice.path)")
+        }
         for observation in digest.observations where observation.outcome == .failed || observation.outcome == .skipped {
             let detail = observation.detail.map { " (\($0))" } ?? ""
             complain("pulse: \(observation.id) \(observation.outcome.rawValue)\(detail)")
