@@ -23,7 +23,7 @@ targets:
       - App/Sources
     dependencies:
       - package: PebbleKit
-        products: [PebbleCore, PebbleUI]
+        products: [PebbleCore, PebbleModel, PebbleUI]
     info:
       path: App/Info.plist
       properties:
