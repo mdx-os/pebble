@@ -15,7 +15,7 @@ in lint, a skill, or CI.
 
 ## Commands
 
-- `make verify`: everything CI runs (brand check, tests, builds, screenshots)
+- `make verify`: brand check, tests, builds, and screenshots. CI runs this in the verify job, and runs `make secrets-check` as its own step.
 - `make test`: package unit tests (Swift Testing)
 - `make pulse`: fetch the competitor watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
 - `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`
@@ -56,6 +56,7 @@ in lint, a skill, or CI.
 - No em dashes or en dashes in commits, PR bodies or UI copy.
 - No co-authored-by footers unless the founder asks.
 - Squash merge.
+- Push after every verified unit of work.
 
 ## Never
 
@@ -64,3 +65,38 @@ in lint, a skill, or CI.
 - Run untrusted PR code on a self-hosted runner. PR checks use GitHub's runners.
 - Copy code from MDx without reading it first; MDx carries enterprise
   assumptions and internal names that do not belong here.
+
+## Enforcement
+
+What checks each rule today. The kind is CI job, type, lint, test, or docs.
+Docs means nothing fails when the rule is broken, so a repeat miss can move
+to a stronger kind. The verify CI job runs `make verify` (brand check, tests,
+builds, screenshots). A separate CI step runs `make secrets-check`.
+
+| Rule | Enforcement |
+| --- | --- |
+| `make verify` passes on a pull request | CI job |
+| Run `make verify` before opening the PR. A compile or a green CI run is not enough | docs |
+| A UI change includes before-and-after screenshots from `make screenshots` | docs |
+| The second time a mistake shows up, make it a lint, a skill, or a CI gate | docs |
+| `App/` stays one thin target for Mac, iPhone and iPad | docs |
+| A layer imports only layers below it, as listed in `Package.swift` | type |
+| `PebbleCore` stays plain types: no SwiftUI and no networking | docs |
+| New code goes in a package, not in `App/` | docs |
+| A new layer is added to `Package.swift` with its place in the order written down | docs |
+| The product name lives only in `Config/Brand.xcconfig`. Code reads `Brand` and never spells it (`make brand-check`) | lint |
+| Code, modules, bundle IDs and the repo use the codename `pebble` | docs |
+| Each user may name their own agent. That name is not a contact (`AgentNameTests`) | test |
+| Warm first: plain human words in the UI, no system jargon | docs |
+| Personal content stays on the device unless the person agrees it can leave | docs |
+| Local open-weight models are the default. Cloud models run only when the person chooses | docs |
+| Every action the agent can take is a capability with a permission and a log entry | docs |
+| Small PRs, one verifiable change each, one writer per branch | docs |
+| Title like `[area] Clear outcome`. Body: why, what changed, how it was verified | docs |
+| No em dashes or en dashes in commits, PR bodies or UI copy | docs |
+| No co-authored-by footers unless the founder asks | docs |
+| Squash merge | docs |
+| Push after every verified unit of work | docs |
+| Do not commit secrets, API keys or signing material (`make secrets-check`) | CI job |
+| Do not run untrusted PR code on a self-hosted runner. PR checks use GitHub's runners | docs |
+| Read MDx code before copying it. Leave enterprise assumptions and internal names out | docs |
