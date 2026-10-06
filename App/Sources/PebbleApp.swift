@@ -19,7 +19,7 @@ struct PebbleApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ChatView(brand: brand, model: LocalStubModel(), names: UserDefaultsAgentNameStore())
+            ChatView(brand: brand, model: OnDeviceModel.client(), names: UserDefaultsAgentNameStore())
         }
     }
 }
