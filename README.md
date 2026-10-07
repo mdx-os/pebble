@@ -51,18 +51,25 @@ The chat asks a `ModelClient` for each reply. The default is `LocalStubModel`,
 an on-device placeholder with fixed warm replies. Tests, screenshots, and CI
 use that default, so they do not download a model and they do not need a GPU.
 
-`OnDeviceModel.client()` returns the placeholder unless a local directory is
-configured. On a Mac, iPhone, or iPad, set the environment variable
-`PEBBLE_MLX_MODEL` to the absolute path of an MLX model directory already on
-the device, or set the UserDefaults key `pebble.mlx.modelDirectory` for this
-app. The directory needs the usual MLX files (`config.json`, weights, and
-tokenizer files). The app loads that folder on device and does not fetch
-weights. A blank, relative, or remote value keeps the placeholder.
+`OnDeviceModel.client()` returns the placeholder unless a local folder is
+configured and usable. Developers launching the app from Xcode can set the
+environment variable `PEBBLE_MLX_MODEL`. Nothing in the app writes the
+UserDefaults key `pebble.mlx.modelDirectory` yet. If that key is already set,
+the app reads it when the environment variable is unset. The environment
+variable wins when both are set.
+
+The value can be an absolute path, a path that starts with `~`, or a `file://`
+URL with no host. The folder must be a directory that contains `config.json`,
+`tokenizer.json`, and at least one `.safetensors` file. The app loads that
+folder on device and does not fetch weights. A blank value, a relative path,
+a remote address, a file URL with a host, a missing or unusable folder, or
+weights that are too large for the memory on this device keeps the placeholder.
 
 `MLXChatModel` implements `reply(to:)` and is passed to `ChatView` the same
-way as `LocalStubModel`. Ollama is not plugged in yet. When it is, it should
-send the transcript to an Ollama server the person is already running on this
-machine, at `127.0.0.1` port `11434`, and that request stays in `PebbleModel`.
+way as `LocalStubModel`. The app creates one client and uses it for every
+window. Ollama is not plugged in yet. When it is, it should send the transcript
+to an Ollama server the person is already running on this machine, at
+`127.0.0.1` port `11434`, and that request stays in `PebbleModel`.
 
 `PebbleCore` does not do networking. A cloud model stays off until the person
 chooses one.

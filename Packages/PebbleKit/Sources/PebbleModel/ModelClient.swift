@@ -4,8 +4,8 @@ import PebbleCore
 /// The boundary between the chat and a model.
 ///
 /// `ChatView` asks a `ModelClient` for each reply. `OnDeviceModel.client()`
-/// returns `LocalStubModel` unless a local MLX directory is configured, so
-/// Mac, iPhone, iPad, tests, and screenshots run without downloading weights.
+/// returns `LocalStubModel` unless a usable local MLX directory is configured,
+/// so Mac, iPhone, iPad, tests, and screenshots run without downloading weights.
 ///
 /// A real adapter is a `Sendable` type in this layer that implements
 /// `reply(to:)`. Pass it into `ChatView` the same way the app passes

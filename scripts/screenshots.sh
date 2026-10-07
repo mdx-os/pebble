@@ -29,6 +29,7 @@ built_app() {
 echo "screenshots: building for iOS Simulator"
 xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble \
   -destination 'generic/platform=iOS Simulator' -derivedDataPath "$derived" \
+  -onlyUsePackageVersionsFromResolvedFile \
   CODE_SIGNING_ALLOWED=NO
 ios_app="$(built_app Debug-iphonesimulator)"
 
@@ -50,7 +51,8 @@ done
 
 echo "screenshots: building for macOS"
 xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble \
-  -destination 'platform=macOS,arch=arm64' -derivedDataPath "$derived"
+  -destination 'platform=macOS,arch=arm64' -derivedDataPath "$derived" \
+  -onlyUsePackageVersionsFromResolvedFile
 mac_app="$(built_app Debug)"
 exe="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$mac_app/Contents/Info.plist")"
 "$mac_app/Contents/MacOS/$exe" -snapshotPath "$PWD/$out/mac.png"
