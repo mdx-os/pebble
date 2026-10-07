@@ -39,14 +39,14 @@ struct OnDeviceModelTests {
         let defaults = try freshDefaults()
         let kind = OnDeviceModel.kind(environment: [OnDeviceModel.environmentKey: folder.path], defaults: defaults)
         let client = OnDeviceModel.client(environment: [OnDeviceModel.environmentKey: folder.path], defaults: defaults)
-        #expect(kind == .mlx(directory: folder))
+        expectMLX(kind, directory: folder)
         #expect(client is MLXChatModel)
     }
 
     @Test func fileURLSelectsTheSameDirectory() throws {
         let folder = try modelFolder()
         defer { remove(folder) }
-        #expect(OnDeviceModel.kind(configuredPath: folder.absoluteString) == .mlx(directory: folder))
+        expectMLX(OnDeviceModel.kind(configuredPath: folder.absoluteString), directory: folder)
     }
 
     @Test func fileURLWithAHostUsesTheStub() throws {
@@ -62,7 +62,8 @@ struct OnDeviceModelTests {
             .resolvingSymlinksInPath()
         try writeModelFiles(in: folder, weightBytes: 16)
         defer { remove(folder) }
-        #expect(OnDeviceModel.kind(configuredPath: "~/\(name)") == .mlx(directory: folder))
+        let resolved = folder.resolvingSymlinksInPath()
+        expectMLX(OnDeviceModel.kind(configuredPath: "~/\(name)"), directory: resolved)
     }
 
     @Test func unknownHomeShortcutUsesTheStub() {
@@ -77,14 +78,14 @@ struct OnDeviceModelTests {
             .appendingPathComponent("pebble-link-\(UUID().uuidString)")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: folder)
         defer { remove(link) }
-        #expect(OnDeviceModel.kind(configuredPath: link.path) == .mlx(directory: folder))
+        expectMLX(OnDeviceModel.kind(configuredPath: link.path), directory: folder)
     }
 
     @Test func oversizedWeightsUseTheStub() throws {
         let folder = try modelFolder(weightBytes: 100)
         defer { remove(folder) }
         #expect(OnDeviceModel.kind(configuredPath: folder.path, weightBudget: 99) == .stub)
-        #expect(OnDeviceModel.kind(configuredPath: folder.path, weightBudget: 100) == .mlx(directory: folder))
+        expectMLX(OnDeviceModel.kind(configuredPath: folder.path, weightBudget: 100), directory: folder)
     }
 
     @Test func environmentWinsOverDefaults() throws {
@@ -100,7 +101,7 @@ struct OnDeviceModelTests {
             environment: [OnDeviceModel.environmentKey: fromEnvironment.path],
             defaults: defaults
         )
-        #expect(kind == .mlx(directory: fromEnvironment))
+        expectMLX(kind, directory: fromEnvironment)
     }
 
     @Test func unusableEnvironmentDoesNotFallThroughToDefaults() throws {
@@ -122,7 +123,7 @@ struct OnDeviceModelTests {
         defer { remove(folder) }
         let defaults = try freshDefaults()
         defaults.set(folder.path, forKey: OnDeviceModel.defaultsKey)
-        #expect(OnDeviceModel.kind(environment: [:], defaults: defaults) == .mlx(directory: folder))
+        expectMLX(OnDeviceModel.kind(environment: [:], defaults: defaults), directory: folder)
     }
 
     @Test func transcriptStartsWithTheOnDeviceInstruction() {
@@ -189,12 +190,30 @@ struct OnDeviceModelTests {
         }
     }
 
+    /// Compares the selected folder by its resolved path.
+    ///
+    /// File URL equality also compares the directory slash, and resolving a
+    /// path before the folder exists drops that slash.
+    private func expectMLX(
+        _ kind: OnDeviceModelKind,
+        directory folder: URL,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) {
+        guard case .mlx(let directory) = kind else {
+            Issue.record("Expected the on-device model.", sourceLocation: sourceLocation)
+            return
+        }
+        let selected = directory.resolvingSymlinksInPath().standardizedFileURL.path
+        let expected = folder.resolvingSymlinksInPath().standardizedFileURL.path
+        #expect(selected == expected, sourceLocation: sourceLocation)
+    }
+
     private func modelFolder(weightBytes: Int = 16) throws -> URL {
         let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent("pebble-model-\(UUID().uuidString)", isDirectory: true)
-            .resolvingSymlinksInPath()
         try writeModelFiles(in: folder, weightBytes: weightBytes)
-        return folder
+        // Resolve after the directory exists so the URL matches kind(), including the directory slash.
+        return folder.resolvingSymlinksInPath()
     }
 
     private func writeModelFiles(in folder: URL, weightBytes: Int) throws {
