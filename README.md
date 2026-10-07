@@ -10,7 +10,8 @@ touching code.
 
 Status: the app opens a first conversation on Mac, iPhone, and iPad. You can
 name your agent on the device. Replies come from an on-device placeholder
-until a local model adapter is plugged in. See [the roadmap](#roadmap).
+unless you point the app at an MLX model directory that is already on the
+device. See [the roadmap](#roadmap).
 
 ## Build it
 
@@ -38,7 +39,7 @@ Config/Brand.xcconfig the product name, set once
 Packages/PebbleKit/   shared code, in layers
   PebbleCore            plain types, no UI, no networking
   PebblePulse           competitor watch fetching and snapshots
-  PebbleModel           model adapter and the on-device placeholder
+  PebbleModel           model adapter, the on-device placeholder, and MLX
   PebbleUI              SwiftUI views
 pulse/                source list and snapshots
 scripts/              build helpers
@@ -47,18 +48,28 @@ scripts/              build helpers
 ## The model
 
 The chat asks a `ModelClient` for each reply. The default is `LocalStubModel`,
-an on-device placeholder with fixed warm replies. The app, the tests, and the
-screenshots use it, so nobody has to download a model.
+an on-device placeholder with fixed warm replies. Tests, screenshots, and CI
+use that default, so they do not download a model and they do not need a GPU.
 
-A real adapter is another `Sendable` type in `PebbleModel` that implements
-`reply(to:)`. Pass it to `ChatView` the same way the app passes
-`LocalStubModel`.
+`OnDeviceModel.client()` returns the placeholder unless a local folder is
+configured and usable. Developers launching the app from Xcode can set the
+environment variable `PEBBLE_MLX_MODEL`. Nothing in the app writes the
+UserDefaults key `pebble.mlx.modelDirectory` yet. If that key is already set,
+the app reads it when the environment variable is unset. The environment
+variable wins when both are set.
 
-- MLX: load an open-weight model on the device and generate from the
-  transcript. Keep the weights on the device. This path does not use the network.
-- Ollama: send the transcript to an Ollama server the person is already
-  running on this machine, at `127.0.0.1` port `11434`. That request stays in
-  `PebbleModel`.
+The value can be an absolute path, a path that starts with `~`, or a `file://`
+URL with no host. The folder must be a directory that contains `config.json`,
+`tokenizer.json`, and at least one `.safetensors` file. The app loads that
+folder on device and does not fetch weights. A blank value, a relative path,
+a remote address, a file URL with a host, a missing or unusable folder, or
+weights that are too large for the memory on this device keeps the placeholder.
+
+`MLXChatModel` implements `reply(to:)` and is passed to `ChatView` the same
+way as `LocalStubModel`. The app creates one client and uses it for every
+window. Ollama is not plugged in yet. When it is, it should send the transcript
+to an Ollama server the person is already running on this machine, at
+`127.0.0.1` port `11434`, and that request stays in `PebbleModel`.
 
 `PebbleCore` does not do networking. A cloud model stays off until the person
 chooses one.
@@ -73,7 +84,7 @@ first conversation. It is not someone in your contacts.
 
 1. A repo that proves itself: one command builds, tests and screenshots every platform.
 2. A daily pulse on what's new in AI and in other personal agents. Fetching, a digest of real changes, and idea cards drafted from that digest are in place.
-3. Mia talks: a named agent with a face and a first conversation. You can rename the agent on the device. The chat calls a local model adapter. The default is an on-device placeholder until MLX or Ollama is plugged in. (now)
+3. Mia talks: a named agent with a face and a first conversation. You can rename the agent on the device. The chat calls a local model adapter. The default is an on-device placeholder. MLX answers when a model directory on the device is configured. Ollama is not plugged in yet. (now)
 4. A daily briefing, ideas and activity inside the app.
 5. Mia improves Mia: small, verified changes every day.
 

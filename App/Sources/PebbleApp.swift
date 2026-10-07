@@ -6,6 +6,7 @@ import SwiftUI
 @main
 struct PebbleApp: App {
     private let brand: Brand
+    private let model: any ModelClient
 
     init() {
         guard let brand = Brand(infoDictionary: Bundle.main.infoDictionary) else {
@@ -15,11 +16,12 @@ struct PebbleApp: App {
         #if os(macOS)
         SnapshotMode.runIfRequested(brand: brand)
         #endif
+        self.model = OnDeviceModel.client()
     }
 
     var body: some Scene {
         WindowGroup {
-            ChatView(brand: brand, model: LocalStubModel(), names: UserDefaultsAgentNameStore())
+            ChatView(brand: brand, model: model, names: UserDefaultsAgentNameStore())
         }
     }
 }
