@@ -116,7 +116,7 @@ public enum OnDeviceModel {
     public static func defaultWeightBudget() -> UInt64 {
         let available: UInt64
         #if os(iOS)
-        available = os_proc_available_memory()
+        available = UInt64(os_proc_available_memory())
         #else
         available = ProcessInfo.processInfo.physicalMemory
         #endif
