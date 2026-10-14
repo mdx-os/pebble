@@ -1,0 +1,52 @@
+name: Fast lane
+
+# Auto-merge (squash) for low-risk PRs: every changed file is docs or tests,
+# the PR has the `fast-lane` label, and required checks pass. Anything else
+# stays gated for Mandeep. The path rules live in scripts/risk-lane.sh.
+#
+# This runs the base branch copy of the workflow and script, never PR code.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: fast-lane-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  lane:
+    name: Risk lane
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Check changed paths
+        id: lane
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[] | .filename, (.previous_filename // empty)' > files.txt
+          result=$(sh scripts/risk-lane.sh < files.txt)
+          echo "$result"
+          echo "lane=${result%%:*}" >> "$GITHUB_OUTPUT"
+
+      - name: Enable auto-merge
+        if: steps.lane.outputs.lane == 'fast' && contains(github.event.pull_request.labels.*.name, 'fast-lane')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --auto --squash
+
+      - name: Keep gated
+        if: steps.lane.outputs.lane != 'fast' || !contains(github.event.pull_request.labels.*.name, 'fast-lane')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --disable-auto || true
