@@ -102,6 +102,19 @@ struct AskFirstTests {
         #expect(rule.decide(renamed, approval: approval) == .stop)
     }
 
+    @Test func detailsWithHiddenCharactersAreNeverAsked() {
+        let rule = AskFirst.isolated()
+        let tricky = ProposedAction(kind: .send, recipient: sam, details: "Pay \u{202E}001$ to me")
+        #expect(rule.ask(tricky) == nil)
+        let plain = ProposedAction(kind: .send, recipient: sam, details: "Line one\nLine two")
+        #expect(rule.ask(plain) != nil)
+    }
+
+    @Test func aNameCannotPoseAsAnAddress() {
+        let r = Recipient(id: "x", displayName: "Mom at mom@family.ca", handle: "x@evil.net")
+        #expect(!r.displayName.contains("@"))
+    }
+
     @Test func longHandlesAreNeverShortened() {
         let tail = "accounts.risebakery.ca.billing-secure-example.net"
         let r = Recipient(id: "x", displayName: "Rise", handle: tail)
@@ -168,13 +181,17 @@ struct AskFirstGateTests {
         let sources = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Sources")
-        let allowed: Set<String> = ["AskFirst.swift", "ConfirmationSheet.swift"]
+        let allowed: Set<String> = ["PebbleCore/AskFirst.swift", "PebbleUI/ConfirmationSheet.swift"]
         let files = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil)?
             .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" } ?? []
         #expect(!files.isEmpty)
-        for file in files where !allowed.contains(file.lastPathComponent) {
+        let pattern = try NSRegularExpression(pattern: "\\.\\s*approve\\b")
+        for file in files {
+            let relative = String(file.path.dropFirst(sources.path.count + 1))
+            if allowed.contains(relative) { continue }
             let text = try String(contentsOf: file, encoding: .utf8)
-            #expect(!text.contains(".approve()"), "approve() called from \(file.lastPathComponent)")
+            let hits = pattern.numberOfMatches(in: text, range: NSRange(text.startIndex..., in: text))
+            #expect(hits == 0, "approve called from \(relative)")
         }
     }
 }
