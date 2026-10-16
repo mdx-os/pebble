@@ -7,7 +7,7 @@ public enum CareCheck {
 
     /// The next reply after a care reply. Stays with the person, never
     /// switches to the starter menu.
-    public static let followUp = "I'm still here with you. Please reach out now: call or text 988, or your local emergency number, or someone you trust. You can keep talking to me too."
+    public static let followUp = "I'm still here with you. Please reach out now: call or text 988, or your local emergency number, or someone you trust. When you're ready for something else, say plan my morning, talk something through, or remember a detail."
 
     private static let phrases = [
         "kill myself", "kms", "suicide", "suicidal", "end my life", "end it all",
@@ -17,7 +17,8 @@ public enum CareCheck {
         "wish i was dead", "wish i were dead", "no reason to live", "can't go on",
         "cant go on", "want to end it", "self harming",
         "don't want to live", "dont want to live", "take my life", "take my own life",
-        "end my own life", "hang myself", "overdose", "kill me", "wanting to die",
+        "end my own life", "hang myself", "overdose", "overdosed", "wanting to die",
+        "unalive", "unalive myself",
     ]
 
     /// A small, fixed check that favors caring too often over missing it.
@@ -35,9 +36,12 @@ public enum CareCheck {
         if needsCare(last.text) { return reply }
         let lastAgent = transcript.last(where: { $0.speaker == .agent })?.text
         guard let lastAgent, isCare(lastAgent) else { return nil }
-        let trimmed = last.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let picksStarter = FirstConversation.jobs.contains {
-            $0.prompt.compare(trimmed, options: [.caseInsensitive]) == .orderedSame
+        // "plan my morning" or "Help me plan my morning." both pick a starter.
+        let said = normalized(last.text)
+        let picksStarter = FirstConversation.jobs.contains { job in
+            let prompt = normalized(job.prompt)
+            let core = prompt.replacingOccurrences(of: " help me ", with: " ")
+            return said == prompt || said == core
         }
         return picksStarter ? nil : followUp
     }

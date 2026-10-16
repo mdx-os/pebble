@@ -15,6 +15,7 @@ public struct LocalStubModel: ModelClient {
     }
 
     /// Synchronous so previews and tests can build a transcript instantly.
+    /// Skips `CareCheck`; real chats go through `Conversation.appendingReply`.
     package static func answer(to transcript: [ChatTurn]) throws -> String {
         let people = transcript.filter { $0.speaker == .person }
         guard let last = people.last else { throw ModelClientError.noPersonTurn }

@@ -104,6 +104,9 @@ struct LocalStubModelTests {
         let job = try #require(FirstConversation.jobs.first { $0.id == "morning" })
         let chosen = try await third.sending(job.prompt, with: model)
         #expect(chosen.turns.last?.text != CareCheck.followUp)
+        let spoken = try await third.sending("plan my morning", with: model)
+        #expect(spoken.turns.last?.text != CareCheck.followUp)
+        #expect(CareCheck.followUp.contains("plan my morning"))
     }
 
     @Test func aModelNeverSeesWordsOfCrisisOnLaterTurns() async throws {
@@ -128,7 +131,7 @@ struct LocalStubModelTests {
         #expect(!seen.texts.contains(CareCheck.followUp))
     }
 
-    @Test(arguments: ["I'm dying to try that bakery", "Work is piling up", "plan my diet", "I want to diet"])
+    @Test(arguments: ["I'm dying to try that bakery", "Work is piling up", "plan my diet", "I want to diet", "this commute will kill me"])
     func ordinaryWordsDoNotTriggerCare(text: String) {
         #expect(!CareCheck.needsCare(text))
     }
@@ -182,13 +185,17 @@ struct LocalStubModelTests {
         }
     }
 
-    @Test func onlyAnOnDeviceModelMayPromisePrivacy() throws {
+    @Test func onlyAnOnDeviceModelMayPromisePrivacy() async throws {
         struct Remote: ModelClient {
             func reply(to transcript: [ChatTurn]) async throws -> String { "" }
         }
         #expect(LocalStubModel().runsOnDevice)
         #expect(!Remote().runsOnDevice)
         let local = Conversation.firstRun(named: "Nova", onDevice: true)
+        let promised = try local.appendingPerson("hi")
+        await #expect(throws: ConversationError.leavesDevice) {
+            _ = try await promised.appendingReply(from: Remote())
+        }
         let remote = Conversation.firstRun(named: "Nova", onDevice: false)
         #expect(local.turns.first?.text.contains("stays here") == true)
         #expect(remote.turns.first?.text.contains("stays here") == false)

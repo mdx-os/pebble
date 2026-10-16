@@ -8,6 +8,8 @@ public enum ConversationError: Error, Equatable, Sendable {
     case emptyReply
     /// A reply was asked for before the person had spoken.
     case missingPerson
+    /// The opening promised words stay on this device, but the model does not run here.
+    case leavesDevice
 }
 
 /// The turns so far, and how a new line is added.
@@ -62,6 +64,7 @@ public struct Conversation: Sendable, Equatable {
     /// Asks `model` to answer the turns so far and appends that reply.
     public func appendingReply(from model: any ModelClient, id: UUID = UUID()) async throws -> Conversation {
         guard turns.last?.speaker == .person else { throw ConversationError.missingPerson }
+        if onDevice && !model.runsOnDevice { throw ConversationError.leavesDevice }
         let reply: String
         if let care = CareCheck.reply(after: turns) {
             reply = care
