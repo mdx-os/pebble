@@ -130,7 +130,9 @@ public protocol OnboardingStoring: Sendable {
     /// True once the first run has been finished or skipped through.
     func hasFinished() -> Bool
     func markFinished()
-    /// Forget every first run choice, as if the app were new.
+    /// Forget the proactivity choice and the finished flag. The name lives
+    /// in `AgentNameStoring`; use `OnboardingFlow.reset(store:names:)` to
+    /// start over completely.
     func reset()
 }
 
@@ -152,7 +154,9 @@ public struct UserDefaultsOnboardingStore: OnboardingStoring, @unchecked Sendabl
             .flatMap { $0.isOffered ? $0 : nil } ?? .startingPoint
     }
 
+    /// Only choices the app honors are ever stored.
     public func saveProactivity(_ choice: Proactivity) {
+        guard choice.isOffered else { return }
         defaults.set(choice.rawValue, forKey: Proactivity.storageKey)
     }
 
@@ -177,7 +181,10 @@ public final class InMemoryOnboardingStore: OnboardingStoring, @unchecked Sendab
     }
 
     public func loadProactivity() -> Proactivity { lock.lock(); defer { lock.unlock() }; return proactivity }
-    public func saveProactivity(_ choice: Proactivity) { lock.lock(); proactivity = choice; lock.unlock() }
+    public func saveProactivity(_ choice: Proactivity) {
+        guard choice.isOffered else { return }
+        lock.lock(); proactivity = choice; lock.unlock()
+    }
     public func hasFinished() -> Bool { lock.lock(); defer { lock.unlock() }; return finished }
     public func markFinished() { lock.lock(); finished = true; lock.unlock() }
     public func reset() { lock.lock(); finished = false; proactivity = .startingPoint; lock.unlock() }
@@ -191,6 +198,13 @@ extension OnboardingFlow {
         if let name { names.saveDisplayName(name.text) }
         store.saveProactivity(proactivity)
         store.markFinished()
+    }
+
+    /// Start over as if the app were new: the name, the proactivity choice
+    /// and the finished flag are all forgotten.
+    public static func reset(store: OnboardingStoring, names: AgentNameStoring) {
+        names.clearDisplayName()
+        store.reset()
     }
 
     /// True when the first run should show. Someone who already named their
