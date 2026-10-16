@@ -8,7 +8,7 @@ public struct MemoryNote: Identifiable, Codable, Sendable, Equatable {
     /// Where the note came from, shown next to it so the person can judge it.
     public let source: MemorySource
 
-    public init(id: UUID = UUID(), text: String, savedAt: Date = Date(), source: MemorySource = .toldMe) {
+    public init(id: UUID = UUID(), text: String, savedAt: Date = Date(), source: MemorySource) {
         self.id = id
         self.text = text
         self.savedAt = savedAt
@@ -22,12 +22,22 @@ public struct MemoryNote: Identifiable, Codable, Sendable, Equatable {
         id = try c.decode(UUID.self, forKey: .id)
         text = try c.decode(String.self, forKey: .text)
         savedAt = try c.decode(Date.self, forKey: .savedAt)
-        // Notes saved before sources existed were all typed by the person.
-        source = try c.decodeIfPresent(MemorySource.self, forKey: .source) ?? .toldMe
+        if !c.contains(.source) {
+            // Notes saved before sources existed were all typed by the person.
+            source = .toldMe
+        } else {
+            // A source this version can't read falls back to the least trusted label.
+            source = (try? c.decode(MemorySource.self, forKey: .source)) ?? .inferred
+        }
     }
 }
 
 /// Where a memory came from.
+///
+/// On disk this is `{"kind":"toldMe"}`, `{"kind":"fromApp","app":"Calendar"}`
+/// or `{"kind":"inferred"}`. `MemorySourceTests` pins that format. An unknown
+/// kind reads as `inferred`, the least trusted label, rather than breaking
+/// the file.
 public enum MemorySource: Codable, Sendable, Equatable, Hashable {
     /// The person said or typed it.
     case toldMe
@@ -37,6 +47,28 @@ public enum MemorySource: Codable, Sendable, Equatable, Hashable {
     case inferred
 
     public static let maxAppNameLength = 30
+
+    private enum CodingKeys: String, CodingKey { case kind, app }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        switch try c.decodeIfPresent(String.self, forKey: .kind) {
+        case "toldMe": self = .toldMe
+        case "fromApp": self = .fromApp(try c.decodeIfPresent(String.self, forKey: .app) ?? "")
+        default: self = .inferred
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .toldMe: try c.encode("toldMe", forKey: .kind)
+        case .fromApp(let app):
+            try c.encode("fromApp", forKey: .kind)
+            try c.encode(app, forKey: .app)
+        case .inferred: try c.encode("inferred", forKey: .kind)
+        }
+    }
 
     /// The label shown next to the note.
     public var label: String {
@@ -221,10 +253,9 @@ public final class MemoryStore: @unchecked Sendable {
         defer { lock.unlock() }
         var all = try load()
         guard let index = all.firstIndex(where: { $0.id == id }) else { return .notFound }
-        // Once the person changes the words, they are theirs. Saving the same
-        // words keeps where the note came from.
+        // Editing keeps where the note came from.
         let old = all[index]
-        let note = MemoryNote(id: id, text: text, savedAt: old.savedAt, source: text == old.text ? old.source : .toldMe)
+        let note = MemoryNote(id: id, text: text, savedAt: old.savedAt, source: old.source)
         all[index] = note
         try save(all)
         return .saved(note)
