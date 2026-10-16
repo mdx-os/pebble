@@ -191,14 +191,26 @@ public final class AskFirst: @unchecked Sendable {
     /// it; the agent has to ask again with what is true now.
     public static let defaultWindow: TimeInterval = 5 * 60
 
-    private let lock = NSLock()
-    /// Open questions and when each was asked.
-    private var pending: [UUID: Date] = [:]
-    private let window: TimeInterval
-    private let now: @Sendable () -> Date
+    /// When a question was asked and, once the person said yes in time,
+    /// when they said it.
+    private struct Open {
+        let askedAt: ContinuousClock.Instant
+        var yesAt: ContinuousClock.Instant?
+    }
 
-    private init(window: TimeInterval = AskFirst.defaultWindow, now: @escaping @Sendable () -> Date = Date.init) {
-        self.window = window
+    private let lock = NSLock()
+    private var pending: [UUID: Open] = [:]
+    private let window: Duration
+    /// A monotonic clock that keeps counting while the device sleeps.
+    /// Changing the date and time in Settings can't move it, so it can't
+    /// bring a timed out question back.
+    private let now: @Sendable () -> ContinuousClock.Instant
+
+    private init(
+        window: TimeInterval = AskFirst.defaultWindow,
+        now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
+    ) {
+        self.window = .milliseconds(Int64((window * 1000).rounded()))
         self.now = now
     }
 
@@ -206,7 +218,7 @@ public final class AskFirst: @unchecked Sendable {
     /// a clock to move time forward.
     package static func isolated(
         window: TimeInterval = AskFirst.defaultWindow,
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
     ) -> AskFirst {
         AskFirst(window: window, now: now)
     }
@@ -223,8 +235,8 @@ public final class AskFirst: @unchecked Sendable {
         let request = ConfirmationRequest(action: action)
         lock.lock()
         let time = now()
-        pending = pending.filter { isOpen(askedAt: $0.value) }
-        pending[request.id] = time
+        pending = pending.filter { isOpen($0.value) || isFreshYes($0.value) }
+        pending[request.id] = Open(askedAt: time)
         lock.unlock()
         return request
     }
@@ -262,29 +274,78 @@ public final class AskFirst: @unchecked Sendable {
     public func isClosed(_ request: ConfirmationRequest) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard let asked = pending[request.id] else { return true }
-        if !isOpen(askedAt: asked) {
-            pending[request.id] = nil
+        guard let open = pending[request.id] else { return true }
+        if !isOpen(open) {
+            if !isFreshYes(open) { pending[request.id] = nil }
             return true
         }
         return false
     }
 
+    /// What the sheet gets when the person taps yes.
+    package enum Yes: Equatable {
+        case approved(Approval)
+        case timedOut
+    }
+
+    /// The person tapped yes. Inside the window this records the time of the
+    /// yes, so the action can still go ahead if it is checked a moment
+    /// later. After the window it approves nothing and says so.
+    package func sayYes(to request: ConfirmationRequest) -> Yes {
+        lock.lock()
+        defer { lock.unlock() }
+        guard var open = pending[request.id] else { return .timedOut }
+        // A second tap on yes changes nothing; the first one stands.
+        if open.yesAt != nil {
+            return isFreshYes(open) ? .approved(request.approve()) : .timedOut
+        }
+        guard isOpen(open) else {
+            pending[request.id] = nil
+            return .timedOut
+        }
+        open.yesAt = now()
+        pending[request.id] = open
+        return .approved(request.approve())
+    }
+
     /// Decide whether an action may happen now. A `.proceed` spends the approval.
     public func decide(_ action: ProposedAction, approval: Approval?) -> Outcome {
+        verdict(action, approval: approval) == .proceed ? .proceed : .stop
+    }
+
+    /// Like `decide`, but says when the stop was a timeout, so the caller can
+    /// tell the person instead of failing quietly.
+    public enum Verdict: Sendable, Equatable {
+        case proceed
+        case stop
+        case timedOut
+    }
+
+    /// A `.proceed` spends the approval. A yes given inside the window counts
+    /// even if this check runs a little later; a yes after it never does.
+    public func verdict(_ action: ProposedAction, approval: Approval?) -> Verdict {
         guard let approval, approval.action == action, action.recipient.handle != nil else { return .stop }
         if action.kind == .purchase, action.price == nil { return .stop }
         lock.lock()
         defer { lock.unlock() }
-        guard let asked = pending.removeValue(forKey: approval.id) else { return .stop }
-        guard isOpen(askedAt: asked) else { return .stop }
-        return .proceed
+        guard let open = pending.removeValue(forKey: approval.id) else { return .stop }
+        if open.yesAt != nil {
+            return isFreshYes(open) ? .proceed : .timedOut
+        }
+        return isOpen(open) ? .proceed : .timedOut
     }
 
-    /// The one test for whether a question is still open. Clocks can move
-    /// backwards, so a question that seems asked in the future is closed too.
-    private func isOpen(askedAt asked: Date) -> Bool {
-        let age = now().timeIntervalSince(asked)
-        return age >= 0 && age <= window
+    /// A yes given inside the window, still recent enough to act on. A yes
+    /// is never a standing permission: it lapses one window after it was given.
+    private func isFreshYes(_ open: Open) -> Bool {
+        guard let yesAt = open.yesAt else { return false }
+        let since = now() - yesAt
+        return yesAt - open.askedAt <= window && since >= .zero && since <= window
+    }
+
+    /// The one test for whether a question is still open.
+    private func isOpen(_ open: Open) -> Bool {
+        let age = now() - open.askedAt
+        return age >= .zero && age <= window
     }
 }

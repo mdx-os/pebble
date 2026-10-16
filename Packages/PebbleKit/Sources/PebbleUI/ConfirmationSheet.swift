@@ -6,15 +6,125 @@ import SwiftUI
 ///
 /// This is the only place an `Approval` is made. "Yes" approves exactly what
 /// is on screen, once.
-public struct ConfirmationSheet: View {
+/// Everything the confirmation sheet shows and does, kept apart from the
+/// view so tests can drive it and read what is on screen.
+@MainActor
+final class ConfirmationState: ObservableObject {
+    enum Screen: Equatable {
+        /// Yes and Not now, with the promise underneath.
+        case asking
+        /// The question timed out: the timed out words and a Close button.
+        case timedOut
+        /// Answered; buttons are disabled while the sheet goes away.
+        case answered
+    }
+
+    /// What a tap did.
+    enum TapResult: Equatable { case approved, timedOut, closed, ignored }
+
+    /// A tap aimed at Yes that lands just after it turns into Close must not
+    /// dismiss the sheet before the person has read why.
+    static let closeGrace: Duration = .milliseconds(800)
+
+    @Published private(set) var screen: Screen = .asking
+    /// Changes each time the person must hear something new.
+    @Published private(set) var spoken: String?
+
     let request: ConfirmationRequest
+    private let rule: AskFirst
+    private let now: () -> ContinuousClock.Instant
+    private let onApprove: (Approval) -> Void
+    private let onDecline: () -> Void
+    private var timedOutAt: ContinuousClock.Instant?
+
+    init(
+        request: ConfirmationRequest,
+        rule: AskFirst,
+        now: @escaping () -> ContinuousClock.Instant = { ContinuousClock.now },
+        onApprove: @escaping (Approval) -> Void,
+        onDecline: @escaping () -> Void
+    ) {
+        self.request = request
+        self.rule = rule
+        self.now = now
+        self.onApprove = onApprove
+        self.onDecline = onDecline
+    }
+
+    var footnote: String { ConfirmationSheet.footnote(expired: screen == .timedOut) }
+    var primaryTitle: String { screen == .timedOut ? ConfirmationWords.closeTitle : ProposedAction.yesTitle }
+    var showsNotNow: Bool { screen != .timedOut }
+
+    /// The primary button: Yes while asking, Close after a timeout.
+    @discardableResult
+    func tapPrimary() -> TapResult {
+        switch screen {
+        case .asking: return tapYes()
+        case .timedOut: return close(fromKeyboard: false)
+        case .answered: return .ignored
+        }
+    }
+
+    /// Escape or Not now. Works before and after a timeout.
+    @discardableResult
+    func cancel() -> TapResult {
+        switch screen {
+        case .asking:
+            screen = .answered
+            rule.withdraw(request)
+            onDecline()
+            return .closed
+        case .timedOut: return close(fromKeyboard: true)
+        case .answered: return .ignored
+        }
+    }
+
+    /// Called every second while the sheet is open.
+    func tick() {
+        if screen == .asking, rule.isClosed(request) { timeOut() }
+    }
+
+    /// The sheet went away without an answer.
+    func disappeared() {
+        if screen != .answered { rule.withdraw(request) }
+    }
+
+    private func tapYes() -> TapResult {
+        switch rule.sayYes(to: request) {
+        case .approved(let approval):
+            screen = .answered
+            onApprove(approval)
+            return .approved
+        case .timedOut:
+            timeOut()
+            return .timedOut
+        }
+    }
+
+    private func close(fromKeyboard: Bool) -> TapResult {
+        if !fromKeyboard, let timedOutAt, now() - timedOutAt < Self.closeGrace { return .ignored }
+        screen = .answered
+        rule.withdraw(request)
+        onDecline()
+        return .closed
+    }
+
+    private func timeOut() {
+        screen = .timedOut
+        timedOutAt = now()
+        spoken = ConfirmationWords.expired
+    }
+}
+
+/// The question asked before the agent sends, buys or shares anything.
+///
+/// This is the only place an `Approval` is made. "Yes" approves exactly what
+/// is on screen, once.
+public struct ConfirmationSheet: View {
     let look: AgentLook
-    let rule: AskFirst
-    let onApprove: (Approval) -> Void
-    let onDecline: () -> Void
+    @StateObject private var state: ConfirmationState
     @Environment(\.colorScheme) private var scheme
-    /// Set on the first tap, so a second tap on either button does nothing.
-    @State private var answered = false
+    @AccessibilityFocusState private var footnoteFocused: Bool
 
     public init(
         request: ConfirmationRequest,
@@ -23,35 +133,10 @@ public struct ConfirmationSheet: View {
         onApprove: @escaping (Approval) -> Void,
         onDecline: @escaping () -> Void
     ) {
-        self.request = request
         self.look = look
-        self.rule = rule
-        self.onApprove = onApprove
-        self.onDecline = onDecline
-    }
-
-    @State private var expired = false
-
-    /// What a tap on yes did.
-    enum TapResult: Equatable { case approved, timedOut, ignored }
-
-    /// A yes after the question timed out approves nothing. The sheet stays
-    /// up with the timed out words so the person sees why.
-    @discardableResult
-    func approve() -> TapResult {
-        guard !answered, !expired else { return .ignored }
-        if rule.isClosed(request) {
-            markExpired()
-            return .timedOut
-        }
-        answered = true
-        onApprove(request.approve())
-        return .approved
-    }
-
-    private func markExpired() {
-        expired = true
-        AccessibilityNotification.Announcement(ConfirmationWords.expired).post()
+        _state = StateObject(wrappedValue: ConfirmationState(
+            request: request, rule: rule, onApprove: onApprove, onDecline: onDecline
+        ))
     }
 
     /// The footnote under the details.
@@ -59,14 +144,7 @@ public struct ConfirmationSheet: View {
         expired ? ConfirmationWords.expired : ConfirmationWords.promise
     }
 
-    func decline() {
-        guard !answered else { return }
-        answered = true
-        rule.withdraw(request)
-        onDecline()
-    }
-
-    private var action: ProposedAction { request.action }
+    private var action: ProposedAction { state.request.action }
 
     private var symbol: String {
         switch action.kind {
@@ -86,15 +164,22 @@ public struct ConfirmationSheet: View {
         .interactiveDismissDisabled()
         .onDisappear {
             // A question that goes away unanswered can never be approved later.
-            if !answered { rule.withdraw(request) }
+            state.disappeared()
+        }
+        .onChange(of: state.spoken) { _, line in
+            // Read the timeout first, and move VoiceOver to it, before the
+            // person meets the Close button.
+            guard let line else { return }
+            footnoteFocused = true
+            AccessibilityNotification.Announcement(line).post()
         }
         .task {
             // Notice a timeout while the sheet sits open, not only on tap.
-            // Stops the moment the sheet goes away, so it never spins or
-            // announces a timeout the person didn't have.
-            while !answered && !expired && !Task.isCancelled {
+            // Stops the moment the sheet goes away.
+            state.tick()
+            while state.screen == .asking && !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
-                if !answered && !Task.isCancelled && rule.isClosed(request) { markExpired() }
+                if !Task.isCancelled { state.tick() }
             }
         }
     }
@@ -136,23 +221,27 @@ public struct ConfirmationSheet: View {
             }
             .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
-            Text(Self.footnote(expired: expired))
+            Text(state.footnote)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .accessibilityFocused($footnoteFocused)
             VStack(spacing: 6) {
-                if expired {
-                    Button(ConfirmationWords.closeTitle) { decline() }
-                        .buttonStyle(PrimaryButtonStyle())
-                } else {
-                Button(ProposedAction.yesTitle) { approve() }
+                Button(state.primaryTitle) { state.tapPrimary() }
                     .buttonStyle(PrimaryButtonStyle())
-                Button(ProposedAction.noTitle) { decline() }
-                    .buttonStyle(QuietButtonStyle())
-                    .keyboardShortcut(.cancelAction)
+                if state.showsNotNow {
+                    Button(ProposedAction.noTitle) { state.cancel() }
+                        .buttonStyle(QuietButtonStyle())
                 }
             }
-            .disabled(answered)
+            .disabled(state.screen == .answered)
+            .background {
+                // Escape always closes, before and after a timeout.
+                Button("") { state.cancel() }
+                    .keyboardShortcut(.cancelAction)
+                    .opacity(0)
+                    .accessibilityHidden(true)
+            }
         }
         .padding(Theme.gutter)
         .frame(maxWidth: 480)
