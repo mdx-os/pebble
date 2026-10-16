@@ -32,15 +32,19 @@ public struct Recipient: Sendable, Equatable, Hashable {
     public init(id: String, displayName: String, handle: String? = nil) {
         self.id = id
         self.displayName = Self.tidyName(displayName) ?? "someone"
-        // Handles are never shortened: the end of an address is often the part that matters.
-        self.handle = handle.flatMap { Self.tidy($0, limit: Self.maxHandleLength, truncate: false) }
+        // Handles are shown exactly or not at all: never shortened, never
+        // cleaned. Hidden characters or odd spacing make the handle nil, and
+        // then nothing is asked.
+        self.handle = handle.flatMap { raw in
+            let clean = Self.tidy(raw, limit: Self.maxHandleLength, truncate: false)
+            return clean == raw ? clean : nil
+        }
     }
 
-    /// Name plus handle, so two people with one name read differently.
-    public var shownAs: String {
-        guard let handle else { return displayName }
-        return "\(displayName) at \(handle)"
-    }
+    /// What the question names: the exact handle when there is one. The
+    /// display name is free text, so it is shown on its own line, never in
+    /// the same sentence as the handle or price where it could pose as them.
+    public var shownAs: String { handle ?? displayName }
 
     private static func tidyName(_ text: String) -> String? {
         // A name must not pose as an address: drop "@" so only the handle carries one.
@@ -127,7 +131,7 @@ public struct ProposedAction: Sendable, Equatable, Hashable {
         case .send: return "Send this to \(who)?"
         case .purchase:
             guard let price else { return "Buy this from \(who)?" }
-            return "Buy this from \(who) for \(price.formatted(locale: locale))?"
+            return "Pay \(price.formatted(locale: locale)) to \(who)?"
         case .sharePersonalInfo: return "Share this with \(who)?"
         }
     }
