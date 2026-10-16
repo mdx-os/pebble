@@ -16,9 +16,12 @@ struct ConfirmationExpiryTests {
         var declined = 0
         let sheet = ConfirmationSheet(request: request, rule: rule, onApprove: { _ in approved += 1 }, onDecline: { declined += 1 })
         clock.t += AskFirst.defaultWindow + 1
-        sheet.approve()
+        #expect(sheet.approve() == .timedOut)
         #expect(approved == 0)
-        #expect(declined == 1)
+        // The sheet stays up and tells the person; nothing is dismissed for them.
+        #expect(declined == 0)
+        #expect(ConfirmationSheet.footnote(expired: true) == ConfirmationWords.expired)
+        #expect(ConfirmationSheet.footnote(expired: false) == ConfirmationWords.promise)
     }
 }
 #endif

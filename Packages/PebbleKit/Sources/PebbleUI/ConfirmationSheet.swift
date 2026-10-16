@@ -32,16 +32,31 @@ public struct ConfirmationSheet: View {
 
     @State private var expired = false
 
-    func approve() {
-        guard !answered else { return }
-        answered = true
-        // A yes after the question timed out does nothing but say so.
+    /// What a tap on yes did.
+    enum TapResult: Equatable { case approved, timedOut, ignored }
+
+    /// A yes after the question timed out approves nothing. The sheet stays
+    /// up with the timed out words so the person sees why.
+    @discardableResult
+    func approve() -> TapResult {
+        guard !answered, !expired else { return .ignored }
         if rule.isClosed(request) {
-            expired = true
-            onDecline()
-            return
+            markExpired()
+            return .timedOut
         }
+        answered = true
         onApprove(request.approve())
+        return .approved
+    }
+
+    private func markExpired() {
+        expired = true
+        AccessibilityNotification.Announcement(ConfirmationWords.expired).post()
+    }
+
+    /// The footnote under the details.
+    static func footnote(expired: Bool) -> String {
+        expired ? ConfirmationWords.expired : ConfirmationWords.promise
     }
 
     func decline() {
@@ -72,6 +87,13 @@ public struct ConfirmationSheet: View {
         .onDisappear {
             // A question that goes away unanswered can never be approved later.
             if !answered { rule.withdraw(request) }
+        }
+        .task {
+            // Notice a timeout while the sheet sits open, not only on tap.
+            while !answered && !expired {
+                try? await Task.sleep(for: .seconds(1))
+                if !answered && rule.isClosed(request) { markExpired() }
+            }
         }
     }
 
@@ -112,16 +134,21 @@ public struct ConfirmationSheet: View {
             }
             .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
-            Text(expired ? ConfirmationWords.expired : ConfirmationWords.promise)
+            Text(Self.footnote(expired: expired))
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             VStack(spacing: 6) {
+                if expired {
+                    Button(ConfirmationWords.closeTitle) { decline() }
+                        .buttonStyle(PrimaryButtonStyle())
+                } else {
                 Button(ProposedAction.yesTitle) { approve() }
                     .buttonStyle(PrimaryButtonStyle())
                 Button(ProposedAction.noTitle) { decline() }
                     .buttonStyle(QuietButtonStyle())
                     .keyboardShortcut(.cancelAction)
+                }
             }
             .disabled(answered)
         }

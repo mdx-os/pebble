@@ -54,6 +54,14 @@ struct AskFirstExpiryTests {
         #expect(rule.decide(note, approval: approval) == .stop)
     }
 
+    @Test func isClosedAgreesWithDecideWhenTheClockJumpsBack() throws {
+        let clock = TestClock()
+        let rule = AskFirst.isolated(now: clock.now)
+        let request = try #require(rule.ask(note))
+        clock.advance(-60)
+        #expect(rule.isClosed(request))
+    }
+
     @Test func askingAgainGivesAFreshWindow() throws {
         let clock = TestClock()
         let rule = AskFirst.isolated(now: clock.now)

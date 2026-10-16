@@ -223,7 +223,7 @@ public final class AskFirst: @unchecked Sendable {
         let request = ConfirmationRequest(action: action)
         lock.lock()
         let time = now()
-        pending = pending.filter { time.timeIntervalSince($0.value) <= window }
+        pending = pending.filter { isOpen(askedAt: $0.value) }
         pending[request.id] = time
         lock.unlock()
         return request
@@ -263,7 +263,7 @@ public final class AskFirst: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard let asked = pending[request.id] else { return true }
-        if now().timeIntervalSince(asked) > window {
+        if !isOpen(askedAt: asked) {
             pending[request.id] = nil
             return true
         }
@@ -277,9 +277,14 @@ public final class AskFirst: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard let asked = pending.removeValue(forKey: approval.id) else { return .stop }
-        // Clocks can move backwards; a question from the future is not trusted either.
-        let age = now().timeIntervalSince(asked)
-        guard age >= 0, age <= window else { return .stop }
+        guard isOpen(askedAt: asked) else { return .stop }
         return .proceed
+    }
+
+    /// The one test for whether a question is still open. Clocks can move
+    /// backwards, so a question that seems asked in the future is closed too.
+    private func isOpen(askedAt asked: Date) -> Bool {
+        let age = now().timeIntervalSince(asked)
+        return age >= 0 && age <= window
     }
 }

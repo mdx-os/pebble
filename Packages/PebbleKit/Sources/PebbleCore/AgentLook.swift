@@ -53,5 +53,6 @@ public enum ConfirmationWords {
     public static let whereLabel = "Where"
     public static let priceLabel = "Price"
     public static let expired = "That question timed out, so I didn't do it. Ask me again when you're ready."
+    public static let closeTitle = "Close"
     public static let promise = "I only do this once, exactly as shown. Anything different and I'll ask again."
 }
