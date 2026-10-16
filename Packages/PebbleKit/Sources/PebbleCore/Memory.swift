@@ -30,6 +30,8 @@ public enum MemoryWords {
     public static let forgetEverythingQuestion = "Forget everything I remember?"
     public static let forgetEverythingDetail = "This removes every note from this device. It can't be undone."
     public static let privacyNote = "Kept only on this device. Removing a note erases it."
+    public static let unreadable = "I can't read what I saved. You can clear it with Forget everything."
+    public static let couldNotForget = "I couldn't erase that just now. Try once more."
 }
 
 /// Notes the agent keeps, stored only on this device.
@@ -47,9 +49,20 @@ public final class MemoryStore: @unchecked Sendable {
 
     public static let maxLength = 500
 
-    /// The file is there but can't be read as notes. Writes refuse rather
+    /// The file is there but its words can't be decoded. Writes refuse rather
     /// than replace notes that may still be recoverable.
     public struct Unreadable: Error, Equatable {}
+
+    /// The file is there but can't be opened right now, for example while an
+    /// iPhone is locked. Try again later; this is not damage.
+    public struct Unavailable: Error, Equatable {}
+
+    /// What the memory screen should show.
+    public enum Contents: Equatable, Sendable {
+        case notes([MemoryNote])
+        case unreadable
+        case unavailable
+    }
 
     public let fileURL: URL
     private let lock = NSLock()
@@ -58,22 +71,61 @@ public final class MemoryStore: @unchecked Sendable {
         self.fileURL = fileURL
     }
 
-    /// The default place on this device, inside Application Support.
+    private static let sharedLock = NSLock()
+    nonisolated(unsafe) private static var shared: MemoryStore?
+
+    /// The one store on this device, inside Application Support and left out
+    /// of iCloud, Finder and Time Machine backups. Every caller gets the same
+    /// instance so writes never interleave.
     public static func onDevice(fileManager: FileManager = .default) throws -> MemoryStore {
+        sharedLock.lock()
+        defer { sharedLock.unlock() }
+        if let shared { return shared }
         let base = try fileManager.url(
             for: .applicationSupportDirectory, in: .userDomainMask,
             appropriateFor: nil, create: true
         )
-        let folder = base.appendingPathComponent("pebble", isDirectory: true)
+        var folder = base.appendingPathComponent("pebble", isDirectory: true)
+            .appendingPathComponent("memory", isDirectory: true)
         try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
-        return MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
+        try excludeFromBackup(&folder)
+        let store = MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
+        shared = store
+        return store
     }
 
-    /// Every note, oldest first. Empty when the file can't be read.
+    /// Marks a folder so backups skip it. Notes stay on this device only.
+    public static func excludeFromBackup(_ folder: inout URL) throws {
+        #if canImport(Darwin)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try folder.setResourceValues(values)
+        #endif
+    }
+
+    /// Every note, oldest first. Empty when the file can't be read; use
+    /// `contents()` to tell an empty memory from an unreadable one.
     public func notes() -> [MemoryNote] {
+        if case .notes(let all) = contents() { return all }
+        return []
+    }
+
+    /// Every note, or why they can't be shown right now.
+    public func contents() -> Contents {
         lock.lock()
         defer { lock.unlock() }
-        return (try? load()) ?? []
+        do {
+            return .notes(try load())
+        } catch is Unavailable {
+            return .unavailable
+        } catch {
+            return .unreadable
+        }
+    }
+
+    /// True when there is anything on disk to forget, readable or not.
+    public var hasStoredFile: Bool {
+        FileManager.default.fileExists(atPath: fileURL.path)
     }
 
     @discardableResult
@@ -128,19 +180,28 @@ public final class MemoryStore: @unchecked Sendable {
     }
 
     /// Remove every note and the file that held them, even an unreadable one.
+    /// Also removes any leftover copy from an interrupted save, which sits
+    /// next to the file under a name that starts with the file's name or a dot.
     public func forgetEverything() throws {
         lock.lock()
         defer { lock.unlock() }
         try removeFile()
+        let manager = FileManager.default
+        let folder = fileURL.deletingLastPathComponent()
+        let name = fileURL.lastPathComponent
+        let stem = fileURL.deletingPathExtension().lastPathComponent
+        for entry in (try? manager.contentsOfDirectory(atPath: folder.path)) ?? []
+        where entry != name && (entry.hasPrefix(stem) || entry.hasPrefix(".dat") || entry.hasPrefix("." + name)) {
+            try manager.removeItem(at: folder.appendingPathComponent(entry))
+        }
     }
 
     // MARK: Storage
 
     private func load() throws -> [MemoryNote] {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return [] }
-        guard let data = try? Data(contentsOf: fileURL),
-              let all = try? JSONDecoder().decode([MemoryNote].self, from: data)
-        else { throw Unreadable() }
+        guard let data = try? Data(contentsOf: fileURL) else { throw Unavailable() }
+        guard let all = try? JSONDecoder().decode([MemoryNote].self, from: data) else { throw Unreadable() }
         return all
     }
 
