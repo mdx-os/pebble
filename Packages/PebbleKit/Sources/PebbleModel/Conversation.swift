@@ -61,8 +61,13 @@ public struct Conversation: Sendable, Equatable {
 
     /// Asks `model` to answer the turns so far and appends that reply.
     public func appendingReply(from model: any ModelClient, id: UUID = UUID()) async throws -> Conversation {
-        guard let last = turns.last, last.speaker == .person else { throw ConversationError.missingPerson }
-        let reply = CareCheck.needsCare(last.text) ? CareCheck.reply : try await model.reply(to: turns)
+        guard turns.last?.speaker == .person else { throw ConversationError.missingPerson }
+        let reply: String
+        if let care = CareCheck.reply(after: turns) {
+            reply = care
+        } else {
+            reply = try await model.reply(to: CareCheck.redacted(turns))
+        }
         let cleaned = reply.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { throw ConversationError.emptyReply }
         var next = self

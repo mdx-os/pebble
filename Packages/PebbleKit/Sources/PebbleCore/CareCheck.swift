@@ -5,6 +5,10 @@ import Foundation
 public enum CareCheck {
     public static let reply = "I'm really glad you told me. I'm a small helper and I can't keep you safe on my own. If you might act on this, please call or text 988 now, or your local emergency number, and reach someone you trust."
 
+    /// The next reply after a care reply. Stays with the person, never
+    /// switches to the starter menu.
+    public static let followUp = "I'm still here with you. Please reach out now: call or text 988, or your local emergency number, or someone you trust. You can keep talking to me too."
+
     private static let phrases = [
         "kill myself", "kms", "suicide", "suicidal", "end my life", "end it all",
         "hurt myself", "self harm", "want to die", "not worth living",
@@ -12,6 +16,8 @@ public enum CareCheck {
         "killing myself", "hurting myself", "cutting myself", "wanna die",
         "wish i was dead", "wish i were dead", "no reason to live", "can't go on",
         "cant go on", "want to end it", "self harming",
+        "don't want to live", "dont want to live", "take my life", "take my own life",
+        "end my own life", "hang myself", "overdose", "kill me", "wanting to die",
     ]
 
     /// A small, fixed check that favors caring too often over missing it.
@@ -19,6 +25,27 @@ public enum CareCheck {
     public static func needsCare(_ text: String) -> Bool {
         let words = normalized(text)
         return phrases.contains { words.contains(normalized($0)) }
+    }
+
+    /// True when the reply to give is about care: the message itself, or the
+    /// next one after a care reply.
+    public static func reply(after transcript: [ChatTurn]) -> String? {
+        guard let last = transcript.last, last.speaker == .person else { return nil }
+        if needsCare(last.text) { return reply }
+        let lastAgent = transcript.last(where: { $0.speaker == .agent })?.text
+        if lastAgent == reply { return followUp }
+        return nil
+    }
+
+    /// The transcript with care exchanges taken out, so words of crisis are
+    /// never passed to a model, even on later turns.
+    public static func redacted(_ transcript: [ChatTurn]) -> [ChatTurn] {
+        transcript.filter { turn in
+            switch turn.speaker {
+            case .person: return !needsCare(turn.text)
+            case .agent: return turn.text != reply && turn.text != followUp
+            }
+        }
     }
 
     private static func normalized(_ text: String) -> String {

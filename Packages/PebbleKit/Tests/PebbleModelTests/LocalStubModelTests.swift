@@ -75,6 +75,9 @@ struct LocalStubModelTests {
         "I wish I was dead",
         "I can\u{2019}t go on",
         "I don\u{02BC}t want to be here",
+        "I don\u{2019}t want to live",
+        "thinking of an overdose",
+        "I want to take my own life",
     ])
     func wordsOfCrisisGetCareBeforeAnyModel(text: String) async throws {
         #expect(CareCheck.needsCare(text))
@@ -87,6 +90,35 @@ struct LocalStubModelTests {
         let next = try await Conversation.firstRun(named: "Nova").sending(text, with: NeverAsked())
         #expect(next.turns.last?.text == CareCheck.reply)
         #expect(CareCheck.reply.contains("988"))
+    }
+
+    @Test func theMessageAfterACareReplyStaysWithThePerson() async throws {
+        let convo = try await Conversation.firstRun(named: "Nova").sending("I want to end my life", with: model)
+        let next = try await convo.sending("yes", with: model)
+        let reply = try #require(next.turns.last?.text)
+        #expect(reply == CareCheck.followUp)
+        #expect(!reply.contains("morning plans"))
+        #expect(reply.contains("988"))
+    }
+
+    @Test func aModelNeverSeesWordsOfCrisisOnLaterTurns() async throws {
+        final class Seen: @unchecked Sendable { var texts: [String] = [] }
+        struct Recorder: ModelClient {
+            let seen: Seen
+            func reply(to transcript: [ChatTurn]) async throws -> String {
+                seen.texts += transcript.map(\.text)
+                return "ok"
+            }
+        }
+        let seen = Seen()
+        var convo = try await Conversation.firstRun(named: "Nova").sending("I want to kill myself", with: Recorder(seen: seen))
+        convo = try await convo.sending("I'm ok now", with: Recorder(seen: seen))
+        convo = try await convo.sending("what should I cook", with: Recorder(seen: seen))
+        #expect(convo.turns.last?.text == "ok")
+        #expect(!seen.texts.isEmpty)
+        #expect(!seen.texts.contains { CareCheck.needsCare($0) })
+        #expect(!seen.texts.contains(CareCheck.reply))
+        #expect(!seen.texts.contains(CareCheck.followUp))
     }
 
     @Test(arguments: ["I'm dying to try that bakery", "Work is piling up", "plan my diet", "I want to diet"])

@@ -33,6 +33,8 @@ public struct ChatView: View {
         conversation: Conversation?,
         onFirstMessageSent: @escaping () -> Void = {}
     ) {
+        assert(conversation.map { !$0.onDevice || model.runsOnDevice } ?? true,
+               "An opening that promises privacy needs an on-device model")
         _controller = StateObject(wrappedValue: {
             let controller = ChatController(brand: brand, model: model, names: names)
             if let conversation { controller.conversation = conversation }

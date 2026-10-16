@@ -15,7 +15,7 @@ public struct LocalStubModel: ModelClient {
     }
 
     /// Synchronous so previews and tests can build a transcript instantly.
-    public static func answer(to transcript: [ChatTurn]) throws -> String {
+    package static func answer(to transcript: [ChatTurn]) throws -> String {
         let people = transcript.filter { $0.speaker == .person }
         guard let last = people.last else { throw ModelClientError.noPersonTurn }
         if let job = job(matching: last.text) {
@@ -49,7 +49,8 @@ public struct LocalStubModel: ModelClient {
     }
 
     /// Splits what the person listed into steps and gives each a start time.
-    /// Times are a simple 8:00 start in 30 minute steps; a real model can do better.
+    /// Times are a simple 8:00 start in 30 minute steps with no AM or PM;
+    /// a real model should use the person's locale.
     package static func morningPlan(from text: String) -> String {
         let all = planItems(from: text)
         let steps = Array(all.prefix(maxPlanItems))
@@ -77,7 +78,6 @@ public struct LocalStubModel: ModelClient {
         let items = parts
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { $0.contains(where: { $0.isLetter || $0.isNumber }) }
-            .filter { !$0.isEmpty }
             .map(capitalizedFirst)
         return items
     }
