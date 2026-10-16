@@ -18,7 +18,7 @@ public enum CareCheck {
     /// Matches whole words, so "diet" never reads as "die".
     public static func needsCare(_ text: String) -> Bool {
         let words = normalized(text)
-        return phrases.contains { words.contains(" \(normalized($0)) ") }
+        return phrases.contains { words.contains(normalized($0)) }
     }
 
     private static func normalized(_ text: String) -> String {
