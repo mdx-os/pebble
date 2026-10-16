@@ -108,6 +108,13 @@ struct AskFirstTests {
         #expect(rule.ask(tricky) == nil)
         let plain = ProposedAction(kind: .send, recipient: sam, details: "Line one\nLine two")
         #expect(rule.ask(plain) != nil)
+        for hidden in ["hi\u{FE01}\u{FE02}", "hi\u{E0100}", "hi\u{3164}", "hi\u{2800}", "hi\u{115F}"] {
+            #expect(rule.ask(ProposedAction(kind: .send, recipient: sam, details: hidden)) == nil, "\(hidden.unicodeScalars.map { $0.value })")
+        }
+        for fine in ["See you \u{2764}\u{FE0F}", "Family \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}", "Caf\u{00E9} at 9"] {
+            #expect(rule.ask(ProposedAction(kind: .send, recipient: sam, details: fine)) != nil)
+        }
+        #expect(Recipient(id: "h", displayName: "x", handle: "evil\u{FE0F}.com").handle == nil)
     }
 
     @Test(arguments: ["Sam at 416 555 0101", "Mom at family.ca", "mom\u{FF20}family.ca", "the bakery for $1.00"])
