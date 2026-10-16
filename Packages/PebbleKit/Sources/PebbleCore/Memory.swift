@@ -31,6 +31,9 @@ public enum MemoryWords {
     public static let forgetEverythingDetail = "This removes every note from this device. It can't be undone."
     public static let privacyNote = "Kept only on this device. Removing a note erases it."
     public static let unreadable = "I can't read what I saved. You can clear it with Forget everything."
+    public static let unavailable = "I can't open my notes right now. Unlock your device and try again."
+    public static let forgetOneQuestion = "Forget this note?"
+    public static let editPlaceholder = "What should I remember instead?"
     public static let couldNotForget = "I couldn't erase that just now. Try once more."
 }
 

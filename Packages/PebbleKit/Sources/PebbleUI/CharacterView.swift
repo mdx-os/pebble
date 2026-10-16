@@ -2,7 +2,7 @@ import PebbleCore
 #if canImport(SwiftUI)
 import SwiftUI
 
-/// The agent's character: a soft glowing pebble with a friendly face.
+/// The agent's character: a soft glowing stone with a friendly face.
 ///
 /// It breathes slowly and blinks now and then. With Reduce Motion on it
 /// holds still.
@@ -53,8 +53,9 @@ public struct CharacterView: View {
     }
 
     private var face: some View {
-        TimelineView(.periodic(from: .now, by: 4.2)) { context in
-            let blink = !reduceMotion && Int(context.date.timeIntervalSinceReferenceDate / 4.2) % 2 == 0
+        TimelineView(.animation(minimumInterval: 0.08, paused: reduceMotion)) { context in
+            let phase = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 4.2)
+            let blink = !reduceMotion && phase < 0.16
             VStack(spacing: size * 0.08) {
                 HStack(spacing: size * 0.22) {
                     eye(closed: blink)

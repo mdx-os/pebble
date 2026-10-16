@@ -1,7 +1,7 @@
 import Foundation
 import PebbleCore
 import PebbleModel
-#if canImport(SwiftUI)
+#if canImport(SwiftUI) && DEBUG
 import SwiftUI
 
 /// Fixed screens with sample content, used for screenshots and previews.
@@ -13,7 +13,8 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
 
     @MainActor
     public func view(brand: Brand) -> some View {
-        let looks = UserDefaults(suiteName: "pebble.showcase") ?? .standard
+        // A throwaway suite so the showcase never touches real choices.
+        let looks = UserDefaults(suiteName: "pebble.showcase")!
         looks.removePersistentDomain(forName: "pebble.showcase")
         return Group {
             switch self {
@@ -31,13 +32,15 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
             case .confirm:
                 ZStack {
                     Backdrop()
+                    let rule = AskFirst.isolated()
                     ConfirmationSheet(
-                        request: ConfirmationRequest(action: ProposedAction(
+                        request: rule.ask(ProposedAction(
                             kind: .purchase,
-                            recipient: Recipient(id: "merchant:sample-bakery", displayName: "Rise Bakery"),
+                            recipient: Recipient(id: "merchant:sample-bakery", displayName: "Rise Bakery", handle: "risebakery.ca"),
                             details: "Sourdough loaf and two croissants, pickup at 9",
                             price: Price(minorUnits: 1450, currency: "CAD")
                         )),
+                        rule: rule,
                         onApprove: { _ in }, onDecline: {}
                     )
                 }

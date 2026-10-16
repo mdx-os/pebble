@@ -40,7 +40,7 @@ public enum FirstRunWords {
     public static let lookDetail = "Choose a look that feels right."
     public static let ideasDetail = "Tap one, or just start talking."
     public static let justChatTitle = "I'll start on my own"
-    public static let stepLabel = "Step"
+    public static func step(_ number: Int, of total: Int) -> String { "Step \(number) of \(total)" }
     public static func greeting(named name: String) -> String { "Nice to meet you. I'm \(name)." }
 }
 

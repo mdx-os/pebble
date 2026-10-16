@@ -9,19 +9,22 @@ public struct ChatView: View {
     @FocusState private var nameFieldFocused: Bool
     private let look: AgentLook?
     private let firstMessage: String?
+    private let onFirstMessageSent: () -> Void
 
     public init(
         brand: Brand,
         model: any ModelClient = LocalStubModel(),
         names: any AgentNameStoring = UserDefaultsAgentNameStore(),
         look: AgentLook? = nil,
-        firstMessage: String? = nil
+        firstMessage: String? = nil,
+        onFirstMessageSent: @escaping () -> Void = {}
     ) {
         _controller = StateObject(
             wrappedValue: ChatController(brand: brand, model: model, names: names)
         )
         self.look = look
         self.firstMessage = firstMessage
+        self.onFirstMessageSent = onFirstMessageSent
     }
 
     public var body: some View {
@@ -59,6 +62,7 @@ public struct ChatView: View {
         .task {
             if let firstMessage, controller.conversation.isWaitingForPerson {
                 controller.submit(firstMessage)
+                onFirstMessageSent()
             }
         }
     }

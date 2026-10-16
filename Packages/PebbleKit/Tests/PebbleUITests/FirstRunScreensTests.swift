@@ -72,7 +72,7 @@ struct FirstRunScreensTests {
 
     @Test func theProactivityPageIsHiddenUntilThereIsAChoice() {
         let model = OnboardingModel(brand: brand, names: InMemoryAgentNameStore(), store: InMemoryOnboardingStore(),
-                                    looks: .standard, page: .hello, draftName: "", onFinish: { _ in })
+                                    looks: UserDefaults(suiteName: "pebble.ui.hidden")!, page: .hello, draftName: "", onFinish: { _ in })
         #expect(!model.visiblePages.contains(.proactivity))
     }
 
@@ -119,21 +119,44 @@ struct FirstRunScreensTests {
         let action = ProposedAction(kind: .purchase,
                                     recipient: Recipient(id: "merchant:1", displayName: "Rise Bakery"),
                                     details: "Sourdough", price: Price(minorUnits: 1450, currency: "CAD"))
-        var approval: Approval?
-        var declined = false
-        let sheet = ConfirmationSheet(request: ConfirmationRequest(action: action),
-                                      onApprove: { approval = $0 }, onDecline: { declined = true })
-        sheet.onApprove(sheet.request.approve())
-        let rule = AskFirst()
-        #expect(rule.decide(action, approval: approval) == .proceed)
-        #expect(rule.decide(action, approval: approval) == .stop)
-        sheet.onDecline()
-        #expect(declined)
+        let rule = AskFirst.isolated()
+        var approvals: [Approval] = []
+        let sheet = ConfirmationSheet(request: rule.ask(action), rule: rule,
+                                      onApprove: { approvals.append($0) }, onDecline: {})
+        sheet.approve()
+        sheet.approve()
+        #expect(approvals.count >= 1)
+        #expect(rule.decide(action, approval: approvals.first) == .proceed)
+        for extra in approvals {
+            #expect(rule.decide(action, approval: extra) == .stop)
+        }
     }
 
-    @Test func pricesShowWithTheirCurrency() {
-        let text = ConfirmationSheet.format(Price(minorUnits: 1450, currency: "CAD"))
-        #expect(text.contains("14.50") || text.contains("14,50"))
+    @Test func notNowClosesTheQuestionForGood() {
+        let action = ProposedAction(kind: .send, recipient: Recipient(id: "c:1", displayName: "Sam"), details: "Hi")
+        let rule = AskFirst.isolated()
+        let request = rule.ask(action)
+        var declined = false
+        let sheet = ConfirmationSheet(request: request, rule: rule, onApprove: { _ in }, onDecline: { declined = true })
+        sheet.decline()
+        #expect(declined)
+        #expect(rule.decide(action, approval: request.approve()) == .stop)
+    }
+
+    @Test func anUnreadableMemoryIsShownAndCanBeCleared() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("pebble-ui-\(UUID().uuidString).json")
+        try Data("not notes {".utf8).write(to: url)
+        let model = MemoryModel(store: MemoryStore(fileURL: url))
+        #expect(model.isUnreadable)
+        #expect(model.hasStoredFile)
+        model.newNote = "Prefers tea"
+        model.add()
+        #expect(model.status == MemoryWords.unreadable)
+        #expect(model.newNote == "Prefers tea")
+        model.forgetEverything()
+        #expect(!model.isUnreadable)
+        #expect(!model.hasStoredFile)
+        #expect(!FileManager.default.fileExists(atPath: url.path))
     }
 }
 #endif

@@ -64,7 +64,7 @@ public struct OnboardingView: View {
             }
         }
         .accessibilityElement()
-        .accessibilityLabel("\(FirstRunWords.stepLabel) \(index + 1) of \(pages.count)")
+        .accessibilityLabel(FirstRunWords.step(index + 1, of: pages.count))
     }
 
     @ViewBuilder
@@ -84,11 +84,13 @@ public struct OnboardingView: View {
                 .font(.system(.largeTitle, design: .rounded).weight(.bold))
                 .multilineTextAlignment(.center)
                 .accessibilityAddTraits(.isHeader)
-            Text(detail)
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
+            if !detail.isEmpty {
+                Text(detail)
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.top, 20)
     }
@@ -335,7 +337,7 @@ final class OnboardingModel: ObservableObject {
 
     private func finish(with line: String?) {
         look.save(to: looks)
-        flow.save(to: store)
+        flow.save(to: store, names: names)
         onFinish(line)
     }
 }

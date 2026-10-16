@@ -21,9 +21,14 @@ public struct MemoryView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     header
                     addField
-                    if model.notes.isEmpty {
+                    if model.isUnreadable {
+                        problem(MemoryWords.unreadable)
+                    } else if model.isUnavailable {
+                        problem(MemoryWords.unavailable)
+                    } else if model.notes.isEmpty {
                         empty
-                    } else {
+                    }
+                    if !model.notes.isEmpty {
                         VStack(spacing: 10) {
                             ForEach(model.notes) { note in
                                 MemoryRow(
@@ -33,7 +38,7 @@ public struct MemoryView: View {
                                     onEdit: { model.beginEdit(note) },
                                     onSave: { model.saveEdit() },
                                     onCancel: { model.cancelEdit() },
-                                    onForget: { model.forget(note) }
+                                    onForget: { model.pendingForget = note }
                                 )
                                 .transition(reduceMotion ? .opacity : .asymmetric(
                                     insertion: .scale(scale: 0.96).combined(with: .opacity),
@@ -41,6 +46,8 @@ public struct MemoryView: View {
                                 ))
                             }
                         }
+                    }
+                    if model.hasStoredFile {
                         Button(role: .destructive) { model.askForgetEverything = true } label: {
                             Text(MemoryWords.forgetEverythingTitle)
                                 .font(.subheadline.weight(.semibold))
@@ -74,6 +81,29 @@ public struct MemoryView: View {
         } message: {
             Text(MemoryWords.forgetEverythingDetail)
         }
+        .confirmationDialog(
+            MemoryWords.forgetOneQuestion,
+            isPresented: Binding(get: { model.pendingForget != nil }, set: { if !$0 { model.pendingForget = nil } }),
+            titleVisibility: .visible,
+            presenting: model.pendingForget
+        ) { note in
+            Button(MemoryWords.forgetTitle, role: .destructive) { model.forget(note) }
+            Button(MemoryWords.cancelTitle, role: .cancel) {}
+        } message: { note in
+            Text(note.text)
+        }
+        .onChange(of: model.status) { _, status in
+            if let status { AccessibilityNotification.Announcement(status).post() }
+        }
+    }
+
+    private func problem(_ text: String) -> some View {
+        Label(text, systemImage: "exclamationmark.circle")
+            .font(.body)
+            .foregroundStyle(.secondary)
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
     }
 
     private var header: some View {
@@ -140,7 +170,7 @@ struct MemoryRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if isEditing {
-                TextField(MemoryWords.addPlaceholder, text: $draft, axis: .vertical)
+                TextField(MemoryWords.editPlaceholder, text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.body)
                     .lineLimit(1...6)
@@ -190,7 +220,11 @@ struct MemoryRow: View {
 @MainActor
 final class MemoryModel: ObservableObject {
     let store: MemoryStore
-    @Published private(set) var notes: [MemoryNote]
+    @Published private(set) var notes: [MemoryNote] = []
+    @Published private(set) var isUnreadable = false
+    @Published private(set) var isUnavailable = false
+    @Published private(set) var hasStoredFile = false
+    @Published var pendingForget: MemoryNote?
     @Published var newNote = ""
     @Published var editingID: UUID?
     @Published var editDraft = ""
@@ -199,7 +233,19 @@ final class MemoryModel: ObservableObject {
 
     init(store: MemoryStore) {
         self.store = store
-        notes = store.notes()
+        refresh()
+    }
+
+    func refresh() {
+        switch store.contents() {
+        case .notes(let all):
+            notes = all; isUnreadable = false; isUnavailable = false
+        case .unreadable:
+            notes = []; isUnreadable = true; isUnavailable = false
+        case .unavailable:
+            notes = []; isUnreadable = false; isUnavailable = true
+        }
+        hasStoredFile = store.hasStoredFile
     }
 
     func add() {
@@ -222,26 +268,39 @@ final class MemoryModel: ObservableObject {
     }
 
     func forget(_ note: MemoryNote) {
-        if (try? store.forget(note.id)) == true {
-            status = MemoryWords.forgotten
+        pendingForget = nil
+        do {
+            status = try store.forget(note.id) ? MemoryWords.forgotten : nil
+        } catch {
+            status = MemoryWords.couldNotForget
         }
-        notes = store.notes()
+        refresh()
     }
 
     func forgetEverything() {
-        try? store.forgetEverything()
-        notes = store.notes()
-        status = MemoryWords.forgotten
+        do {
+            try store.forgetEverything()
+            status = MemoryWords.forgotten
+        } catch {
+            status = MemoryWords.couldNotForget
+        }
+        refresh()
     }
 
     private func report(_ decision: @autoclosure () throws -> MemoryStore.Decision, onSaved: () -> Void) {
-        switch (try? decision()) {
-        case .saved: status = nil; onSaved()
-        case .needsWords: status = MemoryWords.needsWords
-        case .tooLong: status = MemoryWords.tooLong
-        case .notFound, .none: status = nil
+        do {
+            switch try decision() {
+            case .saved: status = nil; onSaved()
+            case .needsWords: status = MemoryWords.needsWords
+            case .tooLong: status = MemoryWords.tooLong
+            case .notFound: status = nil
+            }
+        } catch is MemoryStore.Unavailable {
+            status = MemoryWords.unavailable
+        } catch {
+            status = MemoryWords.unreadable
         }
-        notes = store.notes()
+        refresh()
     }
 }
 #endif

@@ -9,20 +9,38 @@ import SwiftUI
 public struct ConfirmationSheet: View {
     let request: ConfirmationRequest
     let look: AgentLook
+    let rule: AskFirst
     let onApprove: (Approval) -> Void
     let onDecline: () -> Void
     @Environment(\.colorScheme) private var scheme
+    /// Set on the first tap, so a second tap on either button does nothing.
+    @State private var answered = false
 
     public init(
         request: ConfirmationRequest,
         look: AgentLook = .startingPoint,
+        rule: AskFirst = .shared,
         onApprove: @escaping (Approval) -> Void,
         onDecline: @escaping () -> Void
     ) {
         self.request = request
         self.look = look
+        self.rule = rule
         self.onApprove = onApprove
         self.onDecline = onDecline
+    }
+
+    func approve() {
+        guard !answered else { return }
+        answered = true
+        onApprove(request.approve())
+    }
+
+    func decline() {
+        guard !answered else { return }
+        answered = true
+        rule.withdraw(request)
+        onDecline()
     }
 
     private var action: ProposedAction { request.action }
@@ -36,6 +54,16 @@ public struct ConfirmationSheet: View {
     }
 
     public var body: some View {
+        ScrollView {
+            content
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .interactiveDismissDisabled()
+    }
+
+    private var content: some View {
         VStack(spacing: 20) {
             ZStack(alignment: .bottomTrailing) {
                 CharacterView(look: look, size: 64)
@@ -58,12 +86,12 @@ public struct ConfirmationSheet: View {
                     .accessibilityAddTraits(.isHeader)
             }
             VStack(spacing: 0) {
-                row(action.kind == .purchase ? ConfirmationWords.fromLabel : ConfirmationWords.toLabel, action.recipient.displayName)
+                row(action.kind == .purchase ? ConfirmationWords.fromLabel : ConfirmationWords.toLabel, action.recipient.shownAs)
                 Divider().overlay(Theme.hairline(scheme))
                 row(ConfirmationWords.whatLabel, action.details)
                 if let price = action.price {
                     Divider().overlay(Theme.hairline(scheme))
-                    row(ConfirmationWords.priceLabel, Self.format(price))
+                    row(ConfirmationWords.priceLabel, price.formatted())
                 }
             }
             .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
@@ -73,17 +101,17 @@ public struct ConfirmationSheet: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             VStack(spacing: 6) {
-                Button(ProposedAction.yesTitle) { onApprove(request.approve()) }
+                Button(ProposedAction.yesTitle) { approve() }
                     .buttonStyle(PrimaryButtonStyle())
-                Button(ProposedAction.noTitle, action: onDecline)
+                Button(ProposedAction.noTitle) { decline() }
                     .buttonStyle(QuietButtonStyle())
                     .keyboardShortcut(.cancelAction)
             }
+            .disabled(answered)
         }
         .padding(Theme.gutter)
         .frame(maxWidth: 480)
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
+        .frame(maxWidth: .infinity)
     }
 
     private func row(_ label: String, _ value: String) -> some View {
@@ -94,6 +122,7 @@ public struct ConfirmationSheet: View {
                 .frame(width: 56, alignment: .leading)
             Text(value)
                 .font(.body.weight(.medium))
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 16)
@@ -101,9 +130,5 @@ public struct ConfirmationSheet: View {
         .accessibilityElement(children: .combine)
     }
 
-    static func format(_ price: Price) -> String {
-        let amount = Decimal(price.minorUnits) / 100
-        return amount.formatted(.currency(code: price.currency))
-    }
 }
 #endif

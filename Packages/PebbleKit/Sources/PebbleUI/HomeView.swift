@@ -31,14 +31,15 @@ public struct HomeView: View {
         self.onboarding = onboarding
         self.memory = memory
         self.looks = looks
-        _finished = State(initialValue: onboarding.hasFinished())
+        _finished = State(initialValue: !OnboardingFlow.isNeeded(store: onboarding, names: names))
     }
 
     public var body: some View {
         Group {
             if finished {
                 NavigationStack {
-                    ChatView(brand: brand, model: model, names: names, look: AgentLook.load(from: looks), firstMessage: firstMessage)
+                    ChatView(brand: brand, model: model, names: names, look: AgentLook.load(from: looks), firstMessage: firstMessage,
+                             onFirstMessageSent: { firstMessage = nil })
                         .background(Backdrop())
                         .toolbar {
                             if memory != nil {
