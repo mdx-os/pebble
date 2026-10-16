@@ -187,7 +187,8 @@ struct MemoryRow: View {
                 Text(note.text)
                     .font(.body)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 16) {
+                HStack(spacing: 10) {
+                    SourceLabel(source: note.source)
                     Text(note.savedAt, format: .dateTime.month(.abbreviated).day())
                         .font(.caption)
                         .foregroundStyle(.tertiary)
@@ -214,6 +215,27 @@ struct MemoryRow: View {
         .accessibilityElement(children: .contain)
         .accessibilityAction(named: MemoryWords.editTitle, onEdit)
         .accessibilityAction(named: MemoryWords.forgetTitle, onForget)
+    }
+}
+
+/// A small label saying where a note came from. Guesses are tinted so they
+/// stand out as something to check.
+struct SourceLabel: View {
+    let source: MemorySource
+
+    var body: some View {
+        Label(source.label, systemImage: source.symbol)
+            .font(.caption.weight(.medium))
+            .foregroundStyle(source == .inferred ? Theme.accent : .secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                (source == .inferred ? Theme.accent : Color.secondary).opacity(0.12),
+                in: Capsule()
+            )
+            .lineLimit(1)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(source.label)
     }
 }
 
