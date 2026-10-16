@@ -8,24 +8,29 @@ public enum ConversationError: Error, Equatable, Sendable {
     case emptyReply
     /// A reply was asked for before the person had spoken.
     case missingPerson
+    /// The opening promised words stay on this device, but the model does not run here.
+    case leavesDevice
 }
 
 /// The turns so far, and how a new line is added.
 public struct Conversation: Sendable, Equatable {
     public private(set) var turns: [ChatTurn]
+    /// Whether the opening may promise that words stay on this device.
+    public let onDevice: Bool
 
-    public init(turns: [ChatTurn]) {
+    public init(turns: [ChatTurn], onDevice: Bool = false) {
         self.turns = turns
+        self.onDevice = onDevice
     }
 
-    public static func firstRun(named name: String) -> Conversation {
+    public static func firstRun(named name: String, onDevice: Bool = false) -> Conversation {
         Conversation(turns: [
             ChatTurn(
                 id: FirstConversation.openingID,
                 speaker: .agent,
-                text: FirstConversation.opening(named: name)
+                text: FirstConversation.opening(named: name, onDevice: onDevice)
             ),
-        ])
+        ], onDevice: onDevice)
     }
 
     /// Rewrites the opening line when the person has not spoken yet.
@@ -37,10 +42,10 @@ public struct Conversation: Sendable, Equatable {
             return ChatTurn(
                 id: turn.id,
                 speaker: .agent,
-                text: FirstConversation.opening(named: name.text)
+                text: FirstConversation.opening(named: name.text, onDevice: onDevice)
             )
         }
-        return Conversation(turns: turns)
+        return Conversation(turns: turns, onDevice: onDevice)
     }
 
     public var isWaitingForPerson: Bool {
@@ -59,7 +64,13 @@ public struct Conversation: Sendable, Equatable {
     /// Asks `model` to answer the turns so far and appends that reply.
     public func appendingReply(from model: any ModelClient, id: UUID = UUID()) async throws -> Conversation {
         guard turns.last?.speaker == .person else { throw ConversationError.missingPerson }
-        let reply = try await model.reply(to: turns)
+        if onDevice && !model.runsOnDevice { throw ConversationError.leavesDevice }
+        let reply: String
+        if let care = CareCheck.reply(after: turns) {
+            reply = care
+        } else {
+            reply = try await model.reply(to: CareCheck.redacted(turns))
+        }
         let cleaned = reply.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { throw ConversationError.emptyReply }
         var next = self

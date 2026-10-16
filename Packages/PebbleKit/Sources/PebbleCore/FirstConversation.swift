@@ -38,8 +38,11 @@ public enum FirstConversation {
     public static let needsAName = "I need a name to go by."
     public static let nameTooLong = "That's a little long for a name."
 
-    public static func opening(named name: String) -> String {
-        "Hi, I'm \(name). Pick a place to start, or tell me what's on your mind."
+    /// Only promise that words stay here when the model really runs here.
+    public static func opening(named name: String, onDevice: Bool = false) -> String {
+        onDevice
+            ? "Hi, I'm \(name). I run on this device, so what you tell me stays here. Pick a place to start, or tell me what's on your mind."
+            : "Hi, I'm \(name). Pick a place to start, or tell me what's on your mind."
     }
 
     public static let jobs: [StarterJob] = [

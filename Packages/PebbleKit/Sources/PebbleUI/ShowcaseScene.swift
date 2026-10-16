@@ -7,7 +7,7 @@ import SwiftUI
 /// Fixed screens with sample content, used for screenshots and previews.
 /// Nothing here reads or writes the person's real data.
 public enum ShowcaseScene: String, CaseIterable, Sendable {
-    case hello, name, look, ideas, memory, confirm, confirmTimedOut
+    case hello, name, look, ideas, memory, confirm, confirmTimedOut, firstChat
 
     public static let launchKey = "pebbleScreen"
 
@@ -27,6 +27,13 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     startAt: page,
                     draftName: self == .name || self == .look || self == .ideas ? "Pip" : ""
                 ) { _ in }
+            case .firstChat:
+                ZStack {
+                    Backdrop()
+                    ChatView(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
+                             look: AgentLook.load(from: looks), firstMessage: nil,
+                             conversation: Self.sampleFirstChat())
+                }
             case .memory:
                 MemoryView(store: Self.sampleMemory())
             case .confirm, .confirmTimedOut:
@@ -45,6 +52,18 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                 }
             }
         }
+    }
+
+    /// The morning starter played through the on-device model.
+    static func sampleFirstChat() -> Conversation {
+        var turns = Conversation.firstRun(named: "Pip", onDevice: true).turns
+        let prompt = FirstConversation.jobs.first { $0.id == "morning" }?.prompt ?? ""
+        for said in [prompt, "school drop off, gym, answer Priya, groceries"] {
+            turns.append(ChatTurn(id: UUID(), speaker: .person, text: said))
+            let reply = (try? LocalStubModel.answer(to: turns)) ?? LocalStubModel.fallback
+            turns.append(ChatTurn(id: UUID(), speaker: .agent, text: reply))
+        }
+        return Conversation(turns: turns, onDevice: true)
     }
 
     private var page: OnboardingView.Page {

@@ -7,6 +7,7 @@ import SwiftUI
 public struct ChatView: View {
     @StateObject private var controller: ChatController
     @FocusState private var nameFieldFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let look: AgentLook?
     private let firstMessage: String?
     private let onFirstMessageSent: () -> Void
@@ -19,9 +20,28 @@ public struct ChatView: View {
         firstMessage: String? = nil,
         onFirstMessageSent: @escaping () -> Void = {}
     ) {
-        _controller = StateObject(
-            wrappedValue: ChatController(brand: brand, model: model, names: names)
-        )
+        self.init(brand: brand, model: model, names: names, look: look, firstMessage: firstMessage,
+                  conversation: nil, onFirstMessageSent: onFirstMessageSent)
+    }
+
+    package init(
+        brand: Brand,
+        model: any ModelClient,
+        names: any AgentNameStoring,
+        look: AgentLook?,
+        firstMessage: String?,
+        conversation: Conversation?,
+        onFirstMessageSent: @escaping () -> Void = {}
+    ) {
+        _controller = StateObject(wrappedValue: {
+            let controller = ChatController(brand: brand, model: model, names: names)
+            // A given conversation is used only when its privacy promise
+            // matches the model; otherwise the honest opening stands.
+            if let conversation, conversation.onDevice == model.runsOnDevice {
+                controller.conversation = conversation
+            }
+            return controller
+        }())
         self.look = look
         self.firstMessage = firstMessage
         self.onFirstMessageSent = onFirstMessageSent
@@ -32,6 +52,7 @@ public struct ChatView: View {
             header
                 .padding(.top, 28)
                 .padding(.bottom, 20)
+            ScrollViewReader { scroller in
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     transcript
@@ -51,6 +72,19 @@ public struct ChatView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.bottom, 12)
+            }
+            .onAppear {
+                // Wait one pass so layout is done before jumping to the end.
+                DispatchQueue.main.async {
+                    Self.scrollToLatest(controller.conversation, with: scroller, animated: false)
+                }
+            }
+            .onChange(of: controller.conversation.turns.count) {
+                Self.scrollToLatest(controller.conversation, with: scroller, animated: !reduceMotion)
+                if let line = Self.announcement(for: controller.conversation) {
+                    AccessibilityNotification.Announcement(line).post()
+                }
+            }
             }
             composer
                 .padding(.vertical, 16)
@@ -140,10 +174,29 @@ public struct ChatView: View {
         }
     }
 
+    /// New replies land below the fold on small screens, so follow them.
+    private static func scrollToLatest(_ conversation: Conversation, with scroller: ScrollViewProxy, animated: Bool) {
+        guard let last = conversation.turns.last?.id else { return }
+        if animated {
+            withAnimation(.easeOut(duration: 0.25)) { scroller.scrollTo(last, anchor: .bottom) }
+        } else {
+            scroller.scrollTo(last, anchor: .bottom)
+        }
+    }
+
+    /// New lines from the agent are read out, since they may land offscreen.
+    static func announcement(for conversation: Conversation) -> String? {
+        guard let last = conversation.turns.last, last.speaker == .agent, !conversation.isWaitingForPerson else {
+            return nil
+        }
+        return last.text
+    }
+
     private var transcript: some View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(controller.conversation.turns) { turn in
                 bubble(turn)
+                    .id(turn.id)
             }
         }
     }
@@ -230,7 +283,9 @@ final class ChatController: ObservableObject {
         self.names = names
         let profile = AgentProfile(brand: brand, stored: names.loadDisplayName())
         naming = AgentRenameState(profile: profile)
-        conversation = .firstRun(named: profile.displayName.text)
+        // The privacy line is decided once here. If the model can ever be
+        // swapped, rebuild the opening so it never promises too much.
+        conversation = .firstRun(named: profile.displayName.text, onDevice: model.runsOnDevice)
     }
 
     var displayName: AgentName { naming.profile.displayName }
