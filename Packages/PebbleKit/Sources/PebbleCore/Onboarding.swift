@@ -1,6 +1,9 @@
 import Foundation
 
 /// How often the agent speaks up on its own.
+///
+/// Proactivity only ever means speaking up. It never means acting: sending,
+/// buying or sharing always goes through `AskFirst`.
 public enum Proactivity: String, CaseIterable, Codable, Sendable {
     /// Only answers when spoken to.
     case quiet
@@ -14,6 +17,12 @@ public enum Proactivity: String, CaseIterable, Codable, Sendable {
 
     public static let storageKey = "pebble.agent.proactivity"
 
+    /// Choices the app can honor today. A choice joins this list only when
+    /// something actually behaves that way.
+    public static let offered: [Proactivity] = [.quiet]
+
+    public var isOffered: Bool { Self.offered.contains(self) }
+
     public var title: String {
         switch self {
         case .quiet: "Wait until I ask"
@@ -26,7 +35,7 @@ public enum Proactivity: String, CaseIterable, Codable, Sendable {
         switch self {
         case .quiet: "I'll only talk when you start."
         case .checkIn: "Once in a while I'll bring you something useful."
-        case .suggest: "When I notice something that could help, I'll say so."
+        case .suggest: "When something you've shared gives me an idea, I'll say so."
         }
     }
 }
@@ -66,6 +75,9 @@ public struct OnboardingFlow: Sendable {
         proactivity = .startingPoint
     }
 
+    /// The proactivity step appears only when there is a real choice to make.
+    static var afterName: OnboardingStep { Proactivity.offered.count > 1 ? .proactivity : .starters }
+
     /// Ideas shown on the starters step. Never empty.
     public var starters: [StarterJob] { FirstConversation.jobs }
 
@@ -77,7 +89,7 @@ public struct OnboardingFlow: Sendable {
         case .accepted(let chosen):
             name = chosen
             hint = nil
-            step = .proactivity
+            step = Self.afterName
             return true
         case .needsAName:
             hint = FirstConversation.needsAName
@@ -88,7 +100,7 @@ public struct OnboardingFlow: Sendable {
     }
 
     public mutating func chooseProactivity(_ choice: Proactivity) {
-        guard step == .proactivity else { return }
+        guard step == .proactivity, choice.isOffered else { return }
         proactivity = choice
         step = .starters
     }
@@ -97,7 +109,7 @@ public struct OnboardingFlow: Sendable {
     public mutating func skip() {
         hint = nil
         switch step {
-        case .name: step = .proactivity
+        case .name: step = Self.afterName
         case .proactivity: step = .starters
         case .starters, .done: step = .done
         }
@@ -111,19 +123,63 @@ public struct OnboardingFlow: Sendable {
     }
 }
 
-/// Saves the proactivity choice on this device.
-public struct ProactivityStore: @unchecked Sendable {
+/// First run choices kept on this device.
+public protocol OnboardingStoring: Sendable {
+    func loadProactivity() -> Proactivity
+    func saveProactivity(_ choice: Proactivity)
+    /// True once the first run has been finished or skipped through.
+    func hasFinished() -> Bool
+    func markFinished()
+}
+
+public enum OnboardingStorageKeys {
+    public static let finished = "pebble.onboarding.finished"
+}
+
+/// Saves first run choices in UserDefaults.
+public struct UserDefaultsOnboardingStore: OnboardingStoring, @unchecked Sendable {
     private let defaults: UserDefaults
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
     }
 
-    public func load() -> Proactivity {
-        defaults.string(forKey: Proactivity.storageKey).flatMap(Proactivity.init(rawValue:)) ?? .startingPoint
+    public func loadProactivity() -> Proactivity {
+        defaults.string(forKey: Proactivity.storageKey)
+            .flatMap(Proactivity.init(rawValue:))
+            .flatMap { $0.isOffered ? $0 : nil } ?? .startingPoint
     }
 
-    public func save(_ choice: Proactivity) {
+    public func saveProactivity(_ choice: Proactivity) {
         defaults.set(choice.rawValue, forKey: Proactivity.storageKey)
+    }
+
+    public func hasFinished() -> Bool { defaults.bool(forKey: OnboardingStorageKeys.finished) }
+    public func markFinished() { defaults.set(true, forKey: OnboardingStorageKeys.finished) }
+}
+
+/// A stand in store for tests and screenshots.
+public final class InMemoryOnboardingStore: OnboardingStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var proactivity: Proactivity
+    private var finished: Bool
+
+    public init(proactivity: Proactivity = .startingPoint, finished: Bool = false) {
+        self.proactivity = proactivity
+        self.finished = finished
+    }
+
+    public func loadProactivity() -> Proactivity { lock.lock(); defer { lock.unlock() }; return proactivity }
+    public func saveProactivity(_ choice: Proactivity) { lock.lock(); proactivity = choice; lock.unlock() }
+    public func hasFinished() -> Bool { lock.lock(); defer { lock.unlock() }; return finished }
+    public func markFinished() { lock.lock(); finished = true; lock.unlock() }
+}
+
+extension OnboardingFlow {
+    /// Save the outcome once the flow is done. Does nothing before that.
+    public func save(to store: OnboardingStoring) {
+        guard step == .done else { return }
+        store.saveProactivity(proactivity)
+        store.markFinished()
     }
 }
