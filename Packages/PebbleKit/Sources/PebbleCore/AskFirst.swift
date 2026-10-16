@@ -37,7 +37,7 @@ public struct Recipient: Sendable, Equatable, Hashable {
         // then nothing is asked.
         self.handle = handle.flatMap { raw in
             let clean = Self.tidy(raw, limit: Self.maxHandleLength, truncate: false)
-            return clean == raw ? clean : nil
+            return clean == raw && !AskFirst.hasHiddenScalars(raw) ? clean : nil
         }
     }
 
@@ -202,17 +202,34 @@ public final class AskFirst: @unchecked Sendable {
         guard action.recipient.handle != nil else { return nil }
         // What is shown must read the same as what goes out: no hidden or
         // reordering characters in the details.
-        let hidden = action.details.unicodeScalars.contains {
-            ($0.properties.generalCategory == .format || CharacterSet.controlCharacters.contains($0))
-                && $0 != "\n" && $0 != "\t"
-        }
-        if hidden { return nil }
+        if Self.hasHiddenScalars(action.details) { return nil }
         if action.kind == .purchase, action.price == nil { return nil }
         let request = ConfirmationRequest(action: action)
         lock.lock()
         pending.insert(request.id)
         lock.unlock()
         return request
+    }
+
+    /// True when text carries anything a person can't see: control and format
+    /// characters, default ignorable code points (variation selectors, fillers)
+    /// and the blank braille cell. Newlines and tabs are fine, and so are the
+    /// joiner and emoji selector right after an emoji.
+    static func hasHiddenScalars(_ text: String) -> Bool {
+        var previous: Unicode.Scalar?
+        for scalar in text.unicodeScalars {
+            defer { previous = scalar }
+            if scalar == "\n" || scalar == "\t" { continue }
+            if (scalar.value == 0xFE0F || scalar.value == 0x200D),
+               let previous, previous.properties.isEmoji || previous.value == 0x200D { continue }
+            let p = scalar.properties
+            if p.generalCategory == .format || p.generalCategory == .control
+                || p.isDefaultIgnorableCodePoint || scalar.value == 0x2800 || scalar.value == 0x3164
+                || scalar.value == 0x115F || scalar.value == 0x1160 || scalar.value == 0xFFA0 {
+                return true
+            }
+        }
+        return false
     }
 
     /// The person said no or closed the question. It can't be approved later.
