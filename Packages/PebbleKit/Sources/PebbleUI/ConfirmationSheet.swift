@@ -61,6 +61,10 @@ public struct ConfirmationSheet: View {
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .interactiveDismissDisabled()
+        .onDisappear {
+            // A question that goes away unanswered can never be approved later.
+            if !answered { rule.withdraw(request) }
+        }
     }
 
     private var content: some View {

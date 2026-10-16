@@ -31,7 +31,10 @@ public struct HomeView: View {
         self.onboarding = onboarding
         self.memory = memory
         self.looks = looks
-        _finished = State(initialValue: !OnboardingFlow.isNeeded(store: onboarding, names: names))
+        let needed = OnboardingFlow.isNeeded(store: onboarding, names: names)
+        // People who named their agent before the first run existed count as finished.
+        if !needed, !onboarding.hasFinished() { onboarding.markFinished() }
+        _finished = State(initialValue: !needed)
     }
 
     public var body: some View {
@@ -42,11 +45,9 @@ public struct HomeView: View {
                              onFirstMessageSent: { firstMessage = nil })
                         .background(Backdrop())
                         .toolbar {
-                            if memory != nil {
-                                ToolbarItem(placement: .primaryAction) {
-                                    Button { showsMemory = true } label: {
-                                        Label(MemoryWords.title, systemImage: "heart.text.square")
-                                    }
+                            ToolbarItem(placement: .primaryAction) {
+                                Button { showsMemory = true } label: {
+                                    Label(MemoryWords.title, systemImage: "heart.text.square")
                                 }
                             }
                         }
@@ -55,6 +56,15 @@ public struct HomeView: View {
                     if let memory {
                         MemoryView(store: memory)
                             .presentationDragIndicator(.visible)
+                    } else {
+                        // The store couldn't be opened. Say so rather than hide memory.
+                        ZStack {
+                            Backdrop()
+                            Label(MemoryWords.unavailable, systemImage: "exclamationmark.circle")
+                                .foregroundStyle(.secondary)
+                                .padding(Theme.gutter)
+                        }
+                        .presentationDragIndicator(.visible)
                     }
                 }
                 .transition(.opacity)

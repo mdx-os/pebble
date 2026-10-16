@@ -115,9 +115,9 @@ struct FirstRunScreensTests {
         #expect(model.status == MemoryWords.needsWords)
     }
 
-    @Test func yesOnTheSheetApprovesExactlyOnce() {
+    @Test func extraApprovalsFromOneQuestionAreRefused() {
         let action = ProposedAction(kind: .purchase,
-                                    recipient: Recipient(id: "merchant:1", displayName: "Rise Bakery"),
+                                    recipient: Recipient(id: "merchant:1", displayName: "Rise Bakery", handle: "risebakery.ca"),
                                     details: "Sourdough", price: Price(minorUnits: 1450, currency: "CAD"))
         let rule = AskFirst.isolated()
         var approvals: [Approval] = []
@@ -133,7 +133,7 @@ struct FirstRunScreensTests {
     }
 
     @Test func notNowClosesTheQuestionForGood() {
-        let action = ProposedAction(kind: .send, recipient: Recipient(id: "c:1", displayName: "Sam"), details: "Hi")
+        let action = ProposedAction(kind: .send, recipient: Recipient(id: "c:1", displayName: "Sam", handle: "416 555 0101"), details: "Hi")
         let rule = AskFirst.isolated()
         let request = rule.ask(action)!
         var declined = false
