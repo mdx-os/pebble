@@ -114,6 +114,17 @@ struct FirstRunScreensTests {
         #expect(!FileManager.default.fileExists(atPath: url.path))
     }
 
+    @Test(arguments: [MemorySource.toldMe, .fromApp("Calendar"), .inferred], [ColorScheme.light, .dark])
+    func sourceLabelsRender(source: MemorySource, scheme: ColorScheme) throws {
+        let renderer = ImageRenderer(content: SourceLabel(source: source).environment(\.colorScheme, scheme))
+        #expect(try #require(renderer.cgImage).width > 0)
+    }
+
+    @Test func theMemoryScreenShowsWhereEachNoteCameFrom() {
+        let model = MemoryModel(store: ShowcaseScene.sampleMemory())
+        #expect(Set(model.notes.map(\.source)) == [.toldMe, .fromApp("Calendar"), .inferred])
+    }
+
     @Test func aBlankNoteFromTheScreenIsRefusedKindly() {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("pebble-ui-\(UUID().uuidString).json")
         let model = MemoryModel(store: MemoryStore(fileURL: url))

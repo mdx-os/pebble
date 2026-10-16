@@ -5,11 +5,90 @@ public struct MemoryNote: Identifiable, Codable, Sendable, Equatable {
     public let id: UUID
     public let text: String
     public let savedAt: Date
+    /// Where the note came from, shown next to it so the person can judge it.
+    public let source: MemorySource
 
-    public init(id: UUID = UUID(), text: String, savedAt: Date = Date()) {
+    public init(id: UUID = UUID(), text: String, savedAt: Date = Date(), source: MemorySource) {
         self.id = id
         self.text = text
         self.savedAt = savedAt
+        self.source = source
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, text, savedAt, source }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        text = try c.decode(String.self, forKey: .text)
+        savedAt = try c.decode(Date.self, forKey: .savedAt)
+        if !c.contains(.source) {
+            // Notes saved before sources existed were all typed by the person.
+            source = .toldMe
+        } else {
+            // A source this version can't read falls back to the least trusted label.
+            source = (try? c.decode(MemorySource.self, forKey: .source)) ?? .inferred
+        }
+    }
+}
+
+/// Where a memory came from.
+///
+/// On disk this is `{"kind":"toldMe"}`, `{"kind":"fromApp","app":"Calendar"}`
+/// or `{"kind":"inferred"}`. `MemorySourceTests` pins that format. An unknown
+/// kind reads as `inferred`, the least trusted label, rather than breaking
+/// the file.
+public enum MemorySource: Codable, Sendable, Equatable, Hashable {
+    /// The person said or typed it.
+    case toldMe
+    /// Read from a connected app, such as Calendar.
+    case fromApp(String)
+    /// The agent worked it out. It may be wrong.
+    case inferred
+
+    public static let maxAppNameLength = 30
+
+    private enum CodingKeys: String, CodingKey { case kind, app }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        switch try c.decodeIfPresent(String.self, forKey: .kind) {
+        case "toldMe": self = .toldMe
+        case "fromApp": self = .fromApp(try c.decodeIfPresent(String.self, forKey: .app) ?? "")
+        default: self = .inferred
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .toldMe: try c.encode("toldMe", forKey: .kind)
+        case .fromApp(let app):
+            try c.encode("fromApp", forKey: .kind)
+            try c.encode(app, forKey: .app)
+        case .inferred: try c.encode("inferred", forKey: .kind)
+        }
+    }
+
+    /// The label shown next to the note.
+    public var label: String {
+        switch self {
+        case .toldMe: return "You told me"
+        case .fromApp(let name):
+            let tidy = name.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
+            guard !tidy.isEmpty else { return "From an app" }
+            return "From \(tidy.count > Self.maxAppNameLength ? String(tidy.prefix(Self.maxAppNameLength)) + "..." : tidy)"
+        case .inferred: return "I inferred this"
+        }
+    }
+
+    /// SF Symbol for the label.
+    public var symbol: String {
+        switch self {
+        case .toldMe: return "person.wave.2"
+        case .fromApp: return "app.connected.to.app.below.fill"
+        case .inferred: return "sparkles"
+        }
     }
 }
 
@@ -147,7 +226,7 @@ public final class MemoryStore: @unchecked Sendable {
     }
 
     @discardableResult
-    public func remember(_ proposed: String, at date: Date = Date()) throws -> Decision {
+    public func remember(_ proposed: String, at date: Date = Date(), source: MemorySource) throws -> Decision {
         let text: String
         switch Self.clean(proposed) {
         case .success(let t): text = t
@@ -156,7 +235,7 @@ public final class MemoryStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         var all = try load()
-        let note = MemoryNote(text: text, savedAt: date)
+        let note = MemoryNote(text: text, savedAt: date, source: source)
         all.append(note)
         try save(all)
         return .saved(note)
@@ -174,7 +253,9 @@ public final class MemoryStore: @unchecked Sendable {
         defer { lock.unlock() }
         var all = try load()
         guard let index = all.firstIndex(where: { $0.id == id }) else { return .notFound }
-        let note = MemoryNote(id: id, text: text, savedAt: all[index].savedAt)
+        // Editing keeps where the note came from.
+        let old = all[index]
+        let note = MemoryNote(id: id, text: text, savedAt: old.savedAt, source: old.source)
         all[index] = note
         try save(all)
         return .saved(note)

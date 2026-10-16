@@ -19,7 +19,7 @@ struct MemoryStoreTests {
     }
 
     @Test func aNoteIsVisibleAndSurvivesARestart() throws {
-        let note = try saved(store.remember("  Sam's birthday is in May \n"))
+        let note = try saved(store.remember("  Sam's birthday is in May \n", source: .toldMe))
         #expect(note.text == "Sam's birthday is in May")
         #expect(store.notes() == [note])
         let reopened = MemoryStore(fileURL: store.fileURL)
@@ -27,14 +27,14 @@ struct MemoryStoreTests {
     }
 
     @Test func blankAndOverlongNotesAreRefused() throws {
-        #expect(try store.remember("   ") == .needsWords)
-        #expect(try store.remember(String(repeating: "a", count: MemoryStore.maxLength + 1)) == .tooLong)
+        #expect(try store.remember("   ", source: .toldMe) == .needsWords)
+        #expect(try store.remember(String(repeating: "a", count: MemoryStore.maxLength + 1), source: .toldMe) == .tooLong)
         #expect(store.notes().isEmpty)
     }
 
     @Test func forgettingANotePurgesItsWordsFromStorage() throws {
-        let keep = try saved(store.remember("Prefers tea"))
-        let secret = try saved(store.remember("Door code 4417"))
+        let keep = try saved(store.remember("Prefers tea", source: .toldMe))
+        let secret = try saved(store.remember("Door code 4417", source: .toldMe))
         #expect(try store.forget(secret.id))
         #expect(store.notes() == [keep])
         #expect(MemoryStore(fileURL: store.fileURL).notes() == [keep])
@@ -43,20 +43,20 @@ struct MemoryStoreTests {
     }
 
     @Test func forgettingTheLastNoteRemovesTheFile() throws {
-        let only = try saved(store.remember("Door code 4417"))
+        let only = try saved(store.remember("Door code 4417", source: .toldMe))
         #expect(try store.forget(only.id))
         #expect(!FileManager.default.fileExists(atPath: store.fileURL.path))
         #expect(!folderContains("4417"))
     }
 
     @Test func forgettingSomethingUnknownChangesNothing() throws {
-        let note = try saved(store.remember("Prefers tea"))
+        let note = try saved(store.remember("Prefers tea", source: .toldMe))
         #expect(try store.forget(UUID()) == false)
         #expect(store.notes() == [note])
     }
 
     @Test func editingLeavesNoTraceOfTheOldWords() throws {
-        let note = try saved(store.remember("Lives on Elm Street"))
+        let note = try saved(store.remember("Lives on Elm Street", source: .toldMe))
         let edited = try saved(store.edit(note.id, to: "Lives downtown"))
         #expect(edited.id == note.id)
         #expect(store.notes().map(\.text) == ["Lives downtown"])
@@ -67,8 +67,8 @@ struct MemoryStoreTests {
     }
 
     @Test func forgetEverythingLeavesNothingBehind() throws {
-        try store.remember("Door code 4417")
-        try store.remember("Sam's birthday is in May")
+        try store.remember("Door code 4417", source: .toldMe)
+        try store.remember("Sam's birthday is in May", source: .toldMe)
         try store.forgetEverything()
         #expect(store.notes().isEmpty)
         #expect(MemoryStore(fileURL: store.fileURL).notes().isEmpty)
@@ -81,7 +81,7 @@ struct MemoryStoreTests {
         let garbage = Data("not notes {".utf8)
         try garbage.write(to: store.fileURL)
         #expect(store.notes().isEmpty)
-        #expect(throws: MemoryStore.Unreadable.self) { try store.remember("Prefers tea") }
+        #expect(throws: MemoryStore.Unreadable.self) { try store.remember("Prefers tea", source: .toldMe) }
         #expect(throws: MemoryStore.Unreadable.self) { try store.edit(UUID(), to: "x") }
         #expect(throws: MemoryStore.Unreadable.self) { try store.forget(UUID()) }
         #expect(FileManager.default.contents(atPath: store.fileURL.path) == garbage)
@@ -95,8 +95,8 @@ struct MemoryStoreTests {
     }
 
     @Test func aStagedCopyFromAnInterruptedSaveDoesNotOutliveAForget() throws {
-        let note = try saved(store.remember("Door code 4417"))
-        try store.remember("Prefers tea")
+        let note = try saved(store.remember("Door code 4417", source: .toldMe))
+        try store.remember("Prefers tea", source: .toldMe)
         // Simulate a save that stopped after staging.
         try Data("Door code 4417".utf8).write(to: store.stagingURL)
         #expect(try store.forget(note.id))
@@ -114,11 +114,11 @@ struct MemoryStoreTests {
     @Test func aNoteHeavyWithHiddenMarksIsTooLong() throws {
         let heavy = "a" + String(repeating: "\u{0301}", count: 5_000)
         #expect(heavy.count == 1)
-        #expect(try store.remember(heavy) == .tooLong)
+        #expect(try store.remember(heavy, source: .toldMe) == .tooLong)
     }
 
     @Test func forgetEverythingAlsoClearsAStagedCopy() throws {
-        try store.remember("Door code 4417")
+        try store.remember("Door code 4417", source: .toldMe)
         try Data("Door code 4417".utf8).write(to: store.stagingURL)
         try store.forgetEverything()
         #expect(!folderContains("4417"))
@@ -127,7 +127,7 @@ struct MemoryStoreTests {
     @Test func forgetEverythingLeavesOtherFilesInTheFolderAlone() throws {
         let neighbor = folder.appendingPathComponent("memory-photos.db")
         try Data("keep".utf8).write(to: neighbor)
-        try store.remember("Prefers tea")
+        try store.remember("Prefers tea", source: .toldMe)
         try store.forgetEverything()
         #expect(FileManager.default.fileExists(atPath: neighbor.path))
     }
