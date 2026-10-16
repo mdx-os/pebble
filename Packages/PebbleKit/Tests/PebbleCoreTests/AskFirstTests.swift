@@ -1,68 +1,118 @@
-import PebbleCore
+import Foundation
+@testable import PebbleCore
 import Testing
 
 struct AskFirstTests {
-    let sam = Recipient(id: "contact:1/sms:+14165550101", displayName: "Sam")
+    let sam = Recipient(id: "contact:1/sms:+14165550101", displayName: "Sam", handle: "416 555 0101")
     var note: ProposedAction { ProposedAction(kind: .send, recipient: sam, details: "Running ten minutes late") }
-    let bakery = Recipient(id: "merchant:bakery-42", displayName: "the bakery")
-
-    func yes(_ action: ProposedAction) -> Approval { ConfirmationRequest(action: action).approve() }
+    let bakery = Recipient(id: "merchant:bakery-42", displayName: "the bakery", handle: "risebakery.ca")
+    let cad850 = Price(minorUnits: 850, currency: "CAD")!
+    let en = Locale(identifier: "en_CA")
 
     @Test(arguments: ConsequentialAction.allCases)
     func withoutAnApprovalNothingHappens(_ kind: ConsequentialAction) {
-        let action = ProposedAction(kind: kind, recipient: bakery, details: "x", price: Price(minorUnits: 500, currency: "cad"))
-        #expect(AskFirst().decide(action, approval: nil) == .stop)
+        let rule = AskFirst.isolated()
+        let action = ProposedAction(kind: kind, recipient: bakery, details: "x", price: cad850)
+        _ = rule.ask(action)
+        #expect(rule.decide(action, approval: nil) == .stop)
     }
 
-    @Test func aYesForTheShownActionLetsItHappenOnce() {
-        let rule = AskFirst()
-        let approval = yes(note)
+    @Test func aYesForTheAskedActionLetsItHappenOnce() {
+        let rule = AskFirst.isolated()
+        let approval = rule.ask(note).approve()
         #expect(rule.decide(note, approval: approval) == .proceed)
         #expect(rule.decide(note, approval: approval) == .stop)
     }
 
+    @Test func tappingYesTwiceStillApprovesOnce() {
+        let rule = AskFirst.isolated()
+        let request = rule.ask(note)
+        let first = request.approve()
+        let second = request.approve()
+        #expect(first == second)
+        #expect(rule.decide(note, approval: first) == .proceed)
+        #expect(rule.decide(note, approval: second) == .stop)
+    }
+
+    @Test func anApprovalFromAnotherRuleIsNotHonored() {
+        let asked = AskFirst.isolated()
+        let other = AskFirst.isolated()
+        let approval = asked.ask(note).approve()
+        #expect(other.decide(note, approval: approval) == .stop)
+        #expect(asked.decide(note, approval: approval) == .proceed)
+    }
+
+    @Test func aWithdrawnQuestionCannotBeApprovedLater() {
+        let rule = AskFirst.isolated()
+        let request = rule.ask(note)
+        rule.withdraw(request)
+        #expect(rule.decide(note, approval: request.approve()) == .stop)
+    }
+
     @Test func aSecondSendNeedsASecondYes() {
-        let rule = AskFirst()
-        #expect(rule.decide(note, approval: yes(note)) == .proceed)
-        #expect(rule.decide(note, approval: yes(note)) == .proceed)
+        let rule = AskFirst.isolated()
+        #expect(rule.decide(note, approval: rule.ask(note).approve()) == .proceed)
+        #expect(rule.decide(note, approval: rule.ask(note).approve()) == .proceed)
     }
 
     @Test func aYesDoesNotCarryOverToChangedDetails() {
+        let rule = AskFirst.isolated()
         let changed = ProposedAction(kind: .send, recipient: sam, details: "My home address is 12 Elm St")
-        #expect(AskFirst().decide(changed, approval: yes(note)) == .stop)
+        #expect(rule.decide(changed, approval: rule.ask(note).approve()) == .stop)
     }
 
-    @Test func anotherPersonWithTheSameNameIsSomeoneElse() {
-        let otherSam = Recipient(id: "contact:9/sms:+14165550199", displayName: "Sam")
+    @Test func anotherPersonWithTheSameNameIsSomeoneElseAndLooksDifferent() {
+        let rule = AskFirst.isolated()
+        let otherSam = Recipient(id: "contact:9/sms:+14165550199", displayName: "Sam", handle: "416 555 0199")
         let other = ProposedAction(kind: .send, recipient: otherSam, details: note.details)
-        #expect(other.question == note.question)
-        #expect(AskFirst().decide(other, approval: yes(note)) == .stop)
+        #expect(other.question != note.question)
+        #expect(rule.decide(other, approval: rule.ask(note).approve()) == .stop)
     }
 
     @Test func aYesToSendDoesNotCoverSharingOrBuying() {
+        let rule = AskFirst.isolated()
         let share = ProposedAction(kind: .sharePersonalInfo, recipient: sam, details: note.details)
-        let buy = ProposedAction(kind: .purchase, recipient: sam, details: note.details, price: Price(minorUnits: 1, currency: "CAD"))
-        #expect(AskFirst().decide(share, approval: yes(note)) == .stop)
-        #expect(AskFirst().decide(buy, approval: yes(note)) == .stop)
+        let buy = ProposedAction(kind: .purchase, recipient: sam, details: note.details, price: cad850)
+        #expect(rule.decide(share, approval: rule.ask(note).approve()) == .stop)
+        #expect(rule.decide(buy, approval: rule.ask(note).approve()) == .stop)
     }
 
     @Test func aPriceChangeAfterTheYesStopsThePurchase() {
-        let shown = ProposedAction(kind: .purchase, recipient: bakery, details: "Sourdough", price: Price(minorUnits: 850, currency: "CAD"))
+        let rule = AskFirst.isolated()
+        let shown = ProposedAction(kind: .purchase, recipient: bakery, details: "Sourdough", price: cad850)
         let pricier = ProposedAction(kind: .purchase, recipient: bakery, details: "Sourdough", price: Price(minorUnits: 8500, currency: "CAD"))
         let otherCurrency = ProposedAction(kind: .purchase, recipient: bakery, details: "Sourdough", price: Price(minorUnits: 850, currency: "USD"))
-        #expect(AskFirst().decide(pricier, approval: yes(shown)) == .stop)
-        #expect(AskFirst().decide(otherCurrency, approval: yes(shown)) == .stop)
-        #expect(AskFirst().decide(shown, approval: yes(shown)) == .proceed)
+        #expect(rule.decide(pricier, approval: rule.ask(shown).approve()) == .stop)
+        #expect(rule.decide(otherCurrency, approval: rule.ask(shown).approve()) == .stop)
+        #expect(rule.decide(shown, approval: rule.ask(shown).approve()) == .proceed)
     }
 
     @Test func aPurchaseWithoutAPriceIsNeverApproved() {
+        let rule = AskFirst.isolated()
         let vague = ProposedAction(kind: .purchase, recipient: bakery, details: "Sourdough")
-        #expect(AskFirst().decide(vague, approval: yes(vague)) == .stop)
+        #expect(rule.decide(vague, approval: rule.ask(vague).approve()) == .stop)
     }
 
-    @Test func theQuestionNamesWhoItGoesTo() {
-        #expect(note.question == "Send this to Sam?")
-        #expect(ProposedAction(kind: .purchase, recipient: bakery, details: "").question == "Buy this from the bakery?")
+    @Test func pricesMustBeRealAmounts() {
+        #expect(Price(minorUnits: 0, currency: "CAD") == nil)
+        #expect(Price(minorUnits: -5, currency: "CAD") == nil)
+        #expect(Price(minorUnits: 5, currency: "") == nil)
+        #expect(Price(minorUnits: 5, currency: "CA$") == nil)
+        #expect(Price(minorUnits: 5, currency: " cad ")?.currency == "CAD")
+    }
+
+    @Test func pricesUseEachCurrencysOwnDecimals() {
+        #expect(Price(minorUnits: 1450, currency: "JPY")!.fractionDigits == 0)
+        #expect(Price(minorUnits: 1450, currency: "CAD")!.fractionDigits == 2)
+        #expect(Price(minorUnits: 1450, currency: "KWD")!.fractionDigits == 3)
+        #expect(Price(minorUnits: 1450, currency: "JPY")!.formatted(locale: Locale(identifier: "en_US")).contains("1,450"))
+        #expect(Price(minorUnits: 1450, currency: "CAD")!.formatted(locale: en).contains("14.50"))
+    }
+
+    @Test func theQuestionNamesWhoAndHowMuch() {
+        #expect(note.question == "Send this to Sam at 416 555 0101?")
+        let buy = ProposedAction(kind: .purchase, recipient: bakery, details: "", price: cad850)
+        #expect(buy.question(locale: en) == "Buy this from the bakery at risebakery.ca for $8.50?")
         let buyer = Recipient(id: "x", displayName: "a buyer")
         #expect(ProposedAction(kind: .sharePersonalInfo, recipient: buyer, details: "").question == "Share this with a buyer?")
     }
@@ -72,12 +122,32 @@ struct AskFirstTests {
         #expect(!long.displayName.contains("\n"))
         #expect(long.displayName.count <= Recipient.maxDisplayLength + 3)
         #expect(Recipient(id: "y", displayName: "  ").displayName == "someone")
+        let sneaky = Recipient(id: "z", displayName: "Mom\u{202E}\u{200B}")
+        #expect(sneaky.displayName == "Mom")
     }
 
     @Test func theWordsUseNoDashes() {
         let words = [ProposedAction.yesTitle, ProposedAction.noTitle, ProposedAction.declined, note.question]
         for line in words {
             #expect(!line.contains("\u{2014}") && !line.contains("\u{2013}"))
+        }
+    }
+}
+
+/// A permanent gate: only the confirmation sheet may turn a question into
+/// an approval. Any other caller of `approve()` in the sources fails here.
+struct AskFirstGateTests {
+    @Test func onlyTheConfirmationSheetApproves() throws {
+        let sources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources")
+        let allowed: Set<String> = ["AskFirst.swift", "ConfirmationSheet.swift"]
+        let files = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" } ?? []
+        #expect(!files.isEmpty)
+        for file in files where !allowed.contains(file.lastPathComponent) {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            #expect(!text.contains(".approve()"), "approve() called from \(file.lastPathComponent)")
         }
     }
 }

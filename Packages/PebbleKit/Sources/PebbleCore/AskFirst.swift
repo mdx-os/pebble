@@ -12,38 +12,86 @@ public enum ConsequentialAction: String, CaseIterable, Codable, Sendable {
 }
 
 /// Who an action goes to. Identity is `id`, a resolved contact, address or
-/// merchant. Two people both called Sam are different recipients.
+/// merchant. Two people both called Sam are different recipients, and the
+/// `handle` shows the person which one.
 public struct Recipient: Sendable, Equatable, Hashable {
     /// Stable identity, such as a contact ID plus the exact address used.
     public let id: String
     /// Shown in the question only. Never used to match.
     public let displayName: String
+    /// The exact address, number or site it goes to, as shown to the person.
+    public let handle: String?
 
     public static let maxDisplayLength = 40
 
-    public init(id: String, displayName: String) {
+    public init(id: String, displayName: String, handle: String? = nil) {
         self.id = id
-        let collapsed = displayName
+        self.displayName = Self.tidy(displayName) ?? "someone"
+        self.handle = handle.flatMap(Self.tidy)
+    }
+
+    /// Name plus handle, so two people with one name read differently.
+    public var shownAs: String {
+        guard let handle else { return displayName }
+        return "\(displayName) at \(handle)"
+    }
+
+    private static func tidy(_ text: String) -> String? {
+        let collapsed = text
+            .unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) && $0.properties.generalCategory != .format }
+            .map(String.init).joined()
             .split(whereSeparator: { $0.isWhitespace || $0.isNewline })
             .joined(separator: " ")
-        self.displayName = collapsed.count > Self.maxDisplayLength
-            ? String(collapsed.prefix(Self.maxDisplayLength)) + "..."
-            : (collapsed.isEmpty ? "someone" : collapsed)
+        if collapsed.isEmpty { return nil }
+        return collapsed.count > maxDisplayLength ? String(collapsed.prefix(maxDisplayLength)) + "..." : collapsed
     }
 
     public static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
     public func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
-/// An exact amount of money, in minor units such as cents.
+/// An exact amount of money in the currency's smallest unit (cents for CAD,
+/// yen for JPY, fils for KWD).
 public struct Price: Sendable, Equatable, Hashable {
     public let minorUnits: Int
     /// ISO 4217 code, such as "CAD".
     public let currency: String
 
-    public init(minorUnits: Int, currency: String) {
+    /// Nil unless the amount is above zero and the code is three letters.
+    public init?(minorUnits: Int, currency: String) {
+        let code = currency.trimmingCharacters(in: .whitespaces).uppercased()
+        guard minorUnits > 0, code.count == 3, code.allSatisfy({ $0.isASCII && $0.isLetter }) else { return nil }
         self.minorUnits = minorUnits
-        self.currency = currency.uppercased()
+        self.currency = code
+    }
+
+    /// Digits after the decimal point for this currency, from ISO 4217.
+    /// Every currency not listed here uses two.
+    public var fractionDigits: Int {
+        switch currency {
+        case "BIF", "CLP", "DJF", "GNF", "ISK", "JPY", "KMF", "KRW", "PYG",
+             "RWF", "UGX", "UYI", "VND", "VUV", "XAF", "XOF", "XPF":
+            return 0
+        case "BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND":
+            return 3
+        case "CLF", "UYW":
+            return 4
+        default:
+            return 2
+        }
+    }
+
+    /// The amount as the person will be charged, such as "CA$14.50".
+    public func formatted(locale: Locale = .current) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = currency
+        formatter.locale = locale
+        formatter.minimumFractionDigits = fractionDigits
+        formatter.maximumFractionDigits = fractionDigits
+        var amount = Decimal(minorUnits)
+        for _ in 0..<fractionDigits { amount /= 10 }
+        return formatter.string(from: amount as NSDecimalNumber) ?? "\(currency) \(amount)"
     }
 }
 
@@ -64,24 +112,39 @@ public struct ProposedAction: Sendable, Equatable, Hashable {
     }
 
     /// The question shown before anything happens.
-    public var question: String {
-        let name = recipient.displayName
+    public func question(locale: Locale = .current) -> String {
+        let who = recipient.shownAs
         switch kind {
-        case .send: return "Send this to \(name)?"
-        case .purchase: return "Buy this from \(name)?"
-        case .sharePersonalInfo: return "Share this with \(name)?"
+        case .send: return "Send this to \(who)?"
+        case .purchase:
+            guard let price else { return "Buy this from \(who)?" }
+            return "Buy this from \(who) for \(price.formatted(locale: locale))?"
+        case .sharePersonalInfo: return "Share this with \(who)?"
         }
     }
+
+    public var question: String { question() }
 
     public static let yesTitle = "Yes, go ahead"
     public static let noTitle = "Not now"
     public static let declined = "Okay, I won't."
 }
 
-/// A yes for exactly one action. Only the confirmation surface can create
-/// one, through `ConfirmationRequest.approve()`. Code that wants to act
-/// cannot make its own.
+/// A yes for exactly one action, tied to the question that was asked.
 public struct Approval: Sendable, Equatable {
+    /// Same as the request it answers. Tapping yes twice gives the same id.
+    public let id: UUID
+    public let action: ProposedAction
+
+    fileprivate init(request: ConfirmationRequest) {
+        self.id = request.id
+        self.action = request.action
+    }
+}
+
+/// A question issued by `AskFirst.ask`. Only `AskFirst` can make one, and
+/// only the confirmation sheet turns it into an `Approval`.
+public struct ConfirmationRequest: Sendable, Equatable, Identifiable {
     public let id: UUID
     public let action: ProposedAction
 
@@ -89,39 +152,51 @@ public struct Approval: Sendable, Equatable {
         self.id = UUID()
         self.action = action
     }
-}
 
-/// The question as shown to the person. The confirmation sheet holds one of
-/// these and turns a tap on yes into an `Approval`.
-public struct ConfirmationRequest: Sendable, Equatable {
-    public let action: ProposedAction
-
-    public init(action: ProposedAction) {
-        self.action = action
-    }
-
-    /// Called by the confirmation sheet when the person taps yes. Package
-    /// access keeps it out of reach of code outside the app's own packages.
+    /// Called by the confirmation sheet when the person taps yes. A test in
+    /// `AskFirstGateTests` fails if anything else in the sources calls it.
     package func approve() -> Approval {
-        Approval(action: action)
+        Approval(request: self)
     }
 }
 
 /// The rule: the agent asks before it sends, buys or shares, every time.
 ///
-/// There is no "always allow" and no setting that turns this off. An
-/// approval covers only the exact action it was given for and can be spent
-/// once. Anything changed after the yes needs a new one.
+/// There is no "always allow" and no setting that turns this off. There is
+/// one rule for the app. It honors only approvals for questions it asked,
+/// for the identical action, once.
 public final class AskFirst: @unchecked Sendable {
     public enum Outcome: Sendable, Equatable {
         case proceed
         case stop
     }
 
-    private let lock = NSLock()
-    private var spent: Set<UUID> = []
+    /// The app's one rule.
+    public static let shared = AskFirst()
 
-    public init() {}
+    private let lock = NSLock()
+    private var pending: Set<UUID> = []
+
+    private init() {}
+
+    /// A separate rule for tests, so they don't share state.
+    package static func isolated() -> AskFirst { AskFirst() }
+
+    /// Record a question to show the person.
+    public func ask(_ action: ProposedAction) -> ConfirmationRequest {
+        let request = ConfirmationRequest(action: action)
+        lock.lock()
+        pending.insert(request.id)
+        lock.unlock()
+        return request
+    }
+
+    /// The person said no or closed the question. It can't be approved later.
+    public func withdraw(_ request: ConfirmationRequest) {
+        lock.lock()
+        pending.remove(request.id)
+        lock.unlock()
+    }
 
     /// Decide whether an action may happen now. A `.proceed` spends the approval.
     public func decide(_ action: ProposedAction, approval: Approval?) -> Outcome {
@@ -129,7 +204,7 @@ public final class AskFirst: @unchecked Sendable {
         if action.kind == .purchase, action.price == nil { return .stop }
         lock.lock()
         defer { lock.unlock() }
-        guard spent.insert(approval.id).inserted else { return .stop }
+        guard pending.remove(approval.id) != nil else { return .stop }
         return .proceed
     }
 }
