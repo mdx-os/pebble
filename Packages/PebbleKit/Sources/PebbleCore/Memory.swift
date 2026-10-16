@@ -70,8 +70,16 @@ public final class MemoryStore: @unchecked Sendable {
     public let fileURL: URL
     private let lock = NSLock()
 
-    public init(fileURL: URL) {
+    /// Package access: the app uses `onDevice()` so there is one store per
+    /// file. Tests and screenshots point a store at a scratch file.
+    package init(fileURL: URL) {
         self.fileURL = fileURL
+    }
+
+    /// The only other file this store ever writes: the next version of the
+    /// notes, staged next to the real file and renamed over it.
+    var stagingURL: URL {
+        fileURL.deletingLastPathComponent().appendingPathComponent("." + fileURL.lastPathComponent + ".next")
     }
 
     private static let sharedLock = NSLock()
@@ -182,21 +190,12 @@ public final class MemoryStore: @unchecked Sendable {
         return true
     }
 
-    /// Remove every note and the file that held them, even an unreadable one.
-    /// Also removes any leftover copy from an interrupted save, which sits
-    /// next to the file under a name that starts with the file's name or a dot.
+    /// Remove every note and the file that held them, even an unreadable
+    /// one, along with any staged copy from an interrupted save.
     public func forgetEverything() throws {
         lock.lock()
         defer { lock.unlock() }
         try removeFile()
-        let manager = FileManager.default
-        let folder = fileURL.deletingLastPathComponent()
-        let name = fileURL.lastPathComponent
-        let stem = fileURL.deletingPathExtension().lastPathComponent
-        for entry in (try? manager.contentsOfDirectory(atPath: folder.path)) ?? []
-        where entry != name && (entry.hasPrefix(stem) || entry.hasPrefix(".dat") || entry.hasPrefix("." + name)) {
-            try manager.removeItem(at: folder.appendingPathComponent(entry))
-        }
     }
 
     // MARK: Storage
@@ -212,15 +211,30 @@ public final class MemoryStore: @unchecked Sendable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(all)
-        #if os(iOS)
-        try data.write(to: fileURL, options: [.atomic, .completeFileProtection])
+        // Stage under one known name, then rename over the real file. The
+        // system never makes a copy somewhere this store can't clean up.
+        try removeStaged()
+        #if os(macOS)
+        try data.write(to: stagingURL, options: [.withoutOverwriting])
         #else
-        try data.write(to: fileURL, options: [.atomic])
+        try data.write(to: stagingURL, options: [.withoutOverwriting, .completeFileProtection])
         #endif
+        guard rename(stagingURL.path, fileURL.path) == 0 else {
+            try? removeStaged()
+            throw CocoaError(.fileWriteUnknown)
+        }
+    }
+
+    private func removeStaged() throws {
+        let manager = FileManager.default
+        if manager.fileExists(atPath: stagingURL.path) {
+            try manager.removeItem(at: stagingURL)
+        }
     }
 
     private func removeFile() throws {
         let manager = FileManager.default
+        try removeStaged()
         if manager.fileExists(atPath: fileURL.path) {
             try manager.removeItem(at: fileURL)
         }
