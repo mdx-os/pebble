@@ -1,5 +1,5 @@
 import Foundation
-import PebbleCore
+@testable import PebbleCore
 import Testing
 
 struct MemoryStoreTests {
@@ -74,6 +74,7 @@ struct MemoryStoreTests {
         #expect(MemoryStore(fileURL: store.fileURL).notes().isEmpty)
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: folder.path)
         #expect(leftovers.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: store.stagingURL.path))
     }
 
     @Test func anUnreadableFileIsNeverOverwritten() throws {
@@ -93,12 +94,28 @@ struct MemoryStoreTests {
         #expect(store.hasStoredFile)
     }
 
-    @Test func forgetEverythingAlsoClearsLeftoverSaveCopies() throws {
+    @Test func aStagedCopyFromAnInterruptedSaveDoesNotOutliveAForget() throws {
+        let note = try saved(store.remember("Door code 4417"))
+        try store.remember("Prefers tea")
+        // Simulate a save that stopped after staging.
+        try Data("Door code 4417".utf8).write(to: store.stagingURL)
+        #expect(try store.forget(note.id))
+        #expect(!folderContains("4417"))
+    }
+
+    @Test func forgetEverythingAlsoClearsAStagedCopy() throws {
         try store.remember("Door code 4417")
-        let leftover = folder.appendingPathComponent("memory.json.tmp-1")
-        try Data("Door code 4417".utf8).write(to: leftover)
+        try Data("Door code 4417".utf8).write(to: store.stagingURL)
         try store.forgetEverything()
         #expect(!folderContains("4417"))
+    }
+
+    @Test func forgetEverythingLeavesOtherFilesInTheFolderAlone() throws {
+        let neighbor = folder.appendingPathComponent("memory-photos.db")
+        try Data("keep".utf8).write(to: neighbor)
+        try store.remember("Prefers tea")
+        try store.forgetEverything()
+        #expect(FileManager.default.fileExists(atPath: neighbor.path))
     }
 
     @Test func forgetEverythingClearsAnUnreadableFileToo() throws {
