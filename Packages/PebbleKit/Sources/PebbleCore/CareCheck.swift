@@ -37,13 +37,7 @@ public enum CareCheck {
         let lastAgent = transcript.last(where: { $0.speaker == .agent })?.text
         guard let lastAgent, isCare(lastAgent) else { return nil }
         // "plan my morning" or "Help me plan my morning." both pick a starter.
-        let said = normalized(last.text)
-        let picksStarter = FirstConversation.jobs.contains { job in
-            let prompt = normalized(job.prompt)
-            let core = prompt.replacingOccurrences(of: " help me ", with: " ")
-            return said == prompt || said == core
-        }
-        return picksStarter ? nil : followUp
+        return picksStarter(last.text) ? nil : followUp
     }
 
     /// The transcript with every care exchange taken out: care replies and
@@ -63,6 +57,8 @@ public enum CareCheck {
 
     private static func isCare(_ text: String) -> Bool { text == reply || text == followUp }
 
+    /// Letters and mid-word apostrophes stay; wrapping quotes and other
+    /// marks become spaces, so 'kill myself' and "kill myself!" both match.
     private static func normalized(_ text: String) -> String {
         let folded = text
             .replacingOccurrences(of: "\u{2019}", with: "'")
@@ -70,10 +66,40 @@ public enum CareCheck {
             .replacingOccurrences(of: "\u{02BC}", with: "'")
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
             .lowercased()
-        let spaced = folded.unicodeScalars.map { scalar -> Character in
-            CharacterSet.letters.contains(scalar) || scalar == "'" ? Character(scalar) : " "
+        let scalars = Array(folded.unicodeScalars)
+        var spaced: [Character] = []
+        for (index, scalar) in scalars.enumerated() {
+            if CharacterSet.letters.contains(scalar) {
+                spaced.append(Character(scalar))
+            } else if scalar == "'" {
+                let before = index > 0 ? scalars[index - 1] : nil
+                let after = index + 1 < scalars.count ? scalars[index + 1] : nil
+                let midWord = before.map { CharacterSet.letters.contains($0) } == true
+                    && after.map { CharacterSet.letters.contains($0) } == true
+                spaced.append(midWord ? "'" : " ")
+            } else {
+                spaced.append(" ")
+            }
         }
         let collapsed = String(spaced).split(separator: " ").joined(separator: " ")
         return " \(collapsed) "
+    }
+
+    /// True when the person named a starter, including the short forms the
+    /// care follow-up suggests ("plan my morning") and the button prompts.
+    public static func picksStarter(_ text: String) -> Bool {
+        starter(matching: text) != nil
+    }
+
+    /// The starter the person named, if any. Accepts the button prompt, the
+    /// short line care suggests, and the title, with quotes or punctuation.
+    public static func starter(matching text: String) -> StarterJob? {
+        let said = normalized(text)
+        return FirstConversation.jobs.first { job in
+            let prompt = normalized(job.prompt)
+            let core = prompt.replacingOccurrences(of: " help me ", with: " ")
+            let title = normalized(job.title)
+            return said == prompt || said == core || said == title
+        }
     }
 }

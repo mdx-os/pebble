@@ -211,6 +211,52 @@ struct LocalStubModelTests {
         #expect(next.turns.last?.text == "Tell me the detail in your own words. I'll say it back so you can check I heard it. It stays on this device.")
     }
 
+
+    @Test func careRunsBeforeTheLeavesDeviceCheck() async throws {
+        struct Remote: ModelClient {
+            func reply(to transcript: [ChatTurn]) async throws -> String { "reached-model" }
+        }
+        let promised = try Conversation.firstRun(named: "Nova", onDevice: true)
+            .appendingPerson("I want to kill myself")
+        let next = try await promised.appendingReply(from: Remote())
+        #expect(next.turns.last?.text == CareCheck.reply)
+        #expect(CareCheck.reply.contains("988"))
+        // Ordinary words still refuse a remote model after the privacy promise.
+        let ordinary = try Conversation.firstRun(named: "Nova", onDevice: true)
+            .appendingPerson("plan my morning")
+        await #expect(throws: ConversationError.leavesDevice) {
+            _ = try await ordinary.appendingReply(from: Remote())
+        }
+    }
+
+    @Test(arguments: [
+        "'I want to kill myself'",
+        "I want to kill myself!",
+        "\"want to die\"",
+        "thinking about self-harm?",
+    ])
+    func quotedAndPunctuatedCrisisStillGetsCare(text: String) async throws {
+        #expect(CareCheck.needsCare(text), "missed care for \(text)")
+        struct NeverAsked: ModelClient {
+            func reply(to transcript: [ChatTurn]) async throws -> String { "reached-model" }
+        }
+        let next = try await Conversation.firstRun(named: "Nova").sending(text, with: NeverAsked())
+        #expect(next.turns.last?.text == CareCheck.reply)
+    }
+
+    @Test func theStubMatchesTheCareFollowUpNaturalPhrasing() async throws {
+        var convo = try await Conversation.firstRun(named: "Nova")
+            .sending("I want to end my life", with: model)
+        convo = try await convo.sending("yes", with: model)
+        #expect(convo.turns.last?.text == CareCheck.followUp)
+        let morning = try await convo.sending("plan my morning", with: model)
+        #expect(morning.turns.last?.text == "Tell me what's on for the morning, separated by commas. I'll turn it into a short plan you can keep.")
+        let again = try await convo.sending("'plan my morning!'", with: model)
+        #expect(again.turns.last?.text == morning.turns.last?.text)
+        let byTitle = try await model.reply(to: [person("Talk something through")])
+        #expect(byTitle.hasPrefix("I'm here."))
+    }
+
     private func play(_ jobID: String, then answer: String) async throws -> String {
         let job = try #require(FirstConversation.jobs.first { $0.id == jobID })
         var convo = try await Conversation.firstRun(named: "Nova").sending(job.prompt, with: model)

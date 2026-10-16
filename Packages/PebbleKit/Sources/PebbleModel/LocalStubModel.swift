@@ -33,11 +33,9 @@ public struct LocalStubModel: ModelClient {
     }
 
     private static func job(matching text: String) -> StarterJob? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return FirstConversation.jobs.first { job in
-            job.prompt.compare(trimmed, options: [.caseInsensitive]) == .orderedSame
-        }
+        CareCheck.starter(matching: text)
     }
+
 
     private static func result(for jobID: String, from text: String) -> String {
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
