@@ -33,16 +33,14 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                 ZStack {
                     Backdrop()
                     let rule = AskFirst.isolated()
-                    ConfirmationSheet(
-                        request: rule.ask(ProposedAction(
+                    if let request = rule.ask(ProposedAction(
                             kind: .purchase,
                             recipient: Recipient(id: "merchant:sample-bakery", displayName: "Rise Bakery", handle: "risebakery.ca"),
                             details: "Sourdough loaf and two croissants, pickup at 9",
                             price: Price(minorUnits: 1450, currency: "CAD")
-                        )),
-                        rule: rule,
-                        onApprove: { _ in }, onDecline: {}
-                    )
+                        )) {
+                        ConfirmationSheet(request: request, rule: rule, onApprove: { _ in }, onDecline: {})
+                    }
                 }
             }
         }

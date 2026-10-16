@@ -121,7 +121,7 @@ struct FirstRunScreensTests {
                                     details: "Sourdough", price: Price(minorUnits: 1450, currency: "CAD"))
         let rule = AskFirst.isolated()
         var approvals: [Approval] = []
-        let sheet = ConfirmationSheet(request: rule.ask(action), rule: rule,
+        let sheet = ConfirmationSheet(request: rule.ask(action)!, rule: rule,
                                       onApprove: { approvals.append($0) }, onDecline: {})
         sheet.approve()
         sheet.approve()
@@ -135,7 +135,7 @@ struct FirstRunScreensTests {
     @Test func notNowClosesTheQuestionForGood() {
         let action = ProposedAction(kind: .send, recipient: Recipient(id: "c:1", displayName: "Sam"), details: "Hi")
         let rule = AskFirst.isolated()
-        let request = rule.ask(action)
+        let request = rule.ask(action)!
         var declined = false
         let sheet = ConfirmationSheet(request: request, rule: rule, onApprove: { _ in }, onDecline: { declined = true })
         sheet.decline()
