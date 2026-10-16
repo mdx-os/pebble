@@ -7,15 +7,21 @@ import SwiftUI
 public struct ChatView: View {
     @StateObject private var controller: ChatController
     @FocusState private var nameFieldFocused: Bool
+    private let look: AgentLook?
+    private let firstMessage: String?
 
     public init(
         brand: Brand,
         model: any ModelClient = LocalStubModel(),
-        names: any AgentNameStoring = UserDefaultsAgentNameStore()
+        names: any AgentNameStoring = UserDefaultsAgentNameStore(),
+        look: AgentLook? = nil,
+        firstMessage: String? = nil
     ) {
         _controller = StateObject(
             wrappedValue: ChatController(brand: brand, model: model, names: names)
         )
+        self.look = look
+        self.firstMessage = firstMessage
     }
 
     public var body: some View {
@@ -50,11 +56,20 @@ public struct ChatView: View {
         .frame(maxWidth: 560)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(.easeOut(duration: 0.2), value: controller.conversation.turns.count)
+        .task {
+            if let firstMessage, controller.conversation.isWaitingForPerson {
+                controller.submit(firstMessage)
+            }
+        }
     }
 
     private var header: some View {
         VStack(spacing: 8) {
-            AvatarView(initial: controller.displayName.initial)
+            if let look {
+                CharacterView(look: look, size: 72)
+            } else {
+                AvatarView(initial: controller.displayName.initial)
+            }
             Text(controller.displayName.text)
                 .font(.title.weight(.semibold))
                 .multilineTextAlignment(.center)

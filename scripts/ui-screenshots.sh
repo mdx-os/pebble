@@ -1,0 +1,35 @@
+#!/bin/sh
+# Captures each showcase screen on iPhone in light and dark.
+# Usage: scripts/ui-screenshots.sh [output-dir]   (default: build/screenshots/ui)
+# Expects the iOS Simulator app already built by scripts/screenshots.sh.
+set -eu
+
+out="${1:-build/screenshots/ui}"
+derived="build/DerivedData"
+bundle_id="com.mdxos.pebble"
+mkdir -p "$out"
+
+app="$(find "$derived/Build/Products/Debug-iphonesimulator" -maxdepth 1 -name '*.app' | head -n 1)"
+udid="$(xcrun simctl list devices available -j | python3 -c '
+import json, sys
+wanted = sys.argv[1]
+devices = [d for r in json.load(sys.stdin)["devices"].values() for d in r]
+print([d for d in devices if d["name"].startswith(wanted)][0]["udid"])
+' "${PEBBLE_IPHONE:-iPhone 17 Pro}")"
+
+xcrun simctl boot "$udid" 2>/dev/null || true
+xcrun simctl bootstatus "$udid" -b >/dev/null
+xcrun simctl status_bar "$udid" override --time 9:41 --batteryState charged --batteryLevel 100 || true
+xcrun simctl install "$udid" "$app"
+
+for mode in light dark; do
+  xcrun simctl ui "$udid" appearance "$mode"
+  for screen in hello name look ideas memory confirm; do
+    xcrun simctl launch --terminate-running-process "$udid" "$bundle_id" -pebbleScreen "$screen" >/dev/null
+    sleep 3
+    xcrun simctl io "$udid" screenshot "$out/$screen-$mode.png" >/dev/null
+    echo "ui-screenshots: $out/$screen-$mode.png"
+  done
+done
+xcrun simctl terminate "$udid" "$bundle_id" || true
+xcrun simctl ui "$udid" appearance light

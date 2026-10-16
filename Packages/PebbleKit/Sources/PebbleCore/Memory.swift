@@ -22,6 +22,14 @@ public enum MemoryWords {
     public static let forgotten = "Gone. I no longer have it."
     public static let needsWords = "There's nothing to remember there."
     public static let tooLong = "That's a lot to hold. Try a shorter note."
+    public static let editTitle = "Change"
+    public static let saveTitle = "Save"
+    public static let cancelTitle = "Cancel"
+    public static let addPlaceholder = "Something for me to remember"
+    public static let addTitle = "Remember"
+    public static let forgetEverythingQuestion = "Forget everything I remember?"
+    public static let forgetEverythingDetail = "This removes every note from this device. It can't be undone."
+    public static let privacyNote = "Kept only on this device. Removing a note erases it."
 }
 
 /// Notes the agent keeps, stored only on this device.
