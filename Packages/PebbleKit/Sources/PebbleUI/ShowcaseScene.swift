@@ -60,9 +60,9 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         try? store.forgetEverything()
         let day: TimeInterval = 86_400
         let now = Date(timeIntervalSinceReferenceDate: 813_000_000)
-        try? store.remember("Sam's birthday is May 14. Loves lemon cake.", at: now - 9 * day)
-        try? store.remember("Prefers tea in the afternoon, coffee before 10", at: now - 4 * day)
-        try? store.remember("Walks with Juno on Saturday mornings", at: now - day)
+        _ = try? store.remember("Sam's birthday is May 14. Loves lemon cake.", at: now - 9 * day)
+        _ = try? store.remember("Prefers tea in the afternoon, coffee before 10", at: now - 4 * day)
+        _ = try? store.remember("Walks with Juno on Saturday mornings", at: now - day)
         return store
     }
 }
