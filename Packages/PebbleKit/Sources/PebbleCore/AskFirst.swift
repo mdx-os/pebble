@@ -31,7 +31,7 @@ public struct Recipient: Sendable, Equatable, Hashable {
 
     public init(id: String, displayName: String, handle: String? = nil) {
         self.id = id
-        self.displayName = Self.tidy(displayName, limit: Self.maxDisplayLength) ?? "someone"
+        self.displayName = Self.tidyName(displayName) ?? "someone"
         // Handles are never shortened: the end of an address is often the part that matters.
         self.handle = handle.flatMap { Self.tidy($0, limit: Self.maxHandleLength, truncate: false) }
     }
@@ -40,6 +40,11 @@ public struct Recipient: Sendable, Equatable, Hashable {
     public var shownAs: String {
         guard let handle else { return displayName }
         return "\(displayName) at \(handle)"
+    }
+
+    private static func tidyName(_ text: String) -> String? {
+        // A name must not pose as an address: drop "@" so only the handle carries one.
+        tidy(text.replacingOccurrences(of: "@", with: " "), limit: maxDisplayLength)
     }
 
     private static func tidy(_ text: String, limit: Int, truncate: Bool = true) -> String? {
@@ -191,6 +196,13 @@ public final class AskFirst: @unchecked Sendable {
     /// purchase, how much. Such a question must not be asked.
     public func ask(_ action: ProposedAction) -> ConfirmationRequest? {
         guard action.recipient.handle != nil else { return nil }
+        // What is shown must read the same as what goes out: no hidden or
+        // reordering characters in the details.
+        let hidden = action.details.unicodeScalars.contains {
+            ($0.properties.generalCategory == .format || CharacterSet.controlCharacters.contains($0))
+                && $0 != "\n" && $0 != "\t"
+        }
+        if hidden { return nil }
         if action.kind == .purchase, action.price == nil { return nil }
         let request = ConfirmationRequest(action: action)
         lock.lock()
