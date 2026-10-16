@@ -211,7 +211,6 @@ struct LocalStubModelTests {
         #expect(next.turns.last?.text == "Tell me the detail in your own words. I'll say it back so you can check I heard it. It stays on this device.")
     }
 
-
     @Test func careRunsBeforeTheLeavesDeviceCheck() async throws {
         struct Remote: ModelClient {
             func reply(to transcript: [ChatTurn]) async throws -> String {
@@ -273,16 +272,38 @@ struct LocalStubModelTests {
         #expect(byTitle.hasPrefix("I'm here."))
     }
 
-    @Test func aMidJobAnswerThatLooksLikeAnotherStarterStillFinishesTheJob() async throws {
+    @Test func aStarterSaidMidJobStartsThatJobInsteadOfFinishingTheOldOne() async throws {
         let talk = try #require(FirstConversation.jobs.first { $0.id == "talk" })
+        let morningOpener = "Tell me what's on for the morning, separated by commas. I'll turn it into a short plan you can keep."
         let reply = try await model.reply(to: [
             person(talk.prompt),
             agent("I'm here."),
             person("plan my morning"),
         ])
-        #expect(reply.contains("one small next step"))
-        #expect(!reply.contains("separated by commas"))
+        #expect(reply == morningOpener)
     }
+
+    @Test func tappingAStarterTwiceGetsTheOpenerAgain() async throws {
+        let morning = try #require(FirstConversation.jobs.first { $0.id == "morning" })
+        let opener = "Tell me what's on for the morning, separated by commas. I'll turn it into a short plan you can keep."
+        let first = try await model.reply(to: [person(morning.prompt)])
+        #expect(first == opener)
+        let second = try await model.reply(to: [
+            person(morning.prompt),
+            agent(opener),
+            person("plan my morning!"),
+        ])
+        #expect(second == opener)
+        let chained = try await model.reply(to: [
+            person(morning.prompt),
+            agent(opener),
+            person("plan my morning!"),
+            agent(opener),
+            person("gym, call mum"),
+        ])
+        #expect(chained.contains("8:00  Gym"))
+    }
+
 
     @Test func starterTitlesAreNotCasualRepliesAfterCare() {
         let casual = ["yes", "ok", "not now", "thanks", "no"]
@@ -293,8 +314,20 @@ struct LocalStubModelTests {
             for word in casual {
                 #expect(CareCheck.starter(matching: word) == nil)
             }
+            #expect(!CareCheck.needsCare(job.title))
+            #expect(!CareCheck.needsCare(job.prompt))
         }
     }
+
+    @Test(arguments: [
+        "kill myself", "don't want to be here", "can't go on", "self harm", "want to die",
+    ])
+    func carePhrasesStillMatchAfterNormalize(phrase: String) {
+        #expect(CareCheck.needsCare(phrase))
+        #expect(CareCheck.needsCare("\(phrase)."))
+        #expect(CareCheck.needsCare("'\(phrase)'"))
+    }
+
 
     private func play(_ jobID: String, then answer: String) async throws -> String {
         let job = try #require(FirstConversation.jobs.first { $0.id == jobID })

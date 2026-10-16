@@ -19,15 +19,18 @@ public struct LocalStubModel: ModelClient {
     package static func answer(to transcript: [ChatTurn]) throws -> String {
         let people = transcript.filter { $0.speaker == .person }
         guard let last = people.last else { throw ModelClientError.noPersonTurn }
-        // Finish the open job first. An answer that happens to equal another
-        // starter's short form (like "plan my morning") is still an answer.
-        if people.count >= 2, let job = job(matching: people[people.count - 2].text) {
-            return result(for: job.id, from: last.text)
+        let lastAgent = transcript.last(where: { $0.speaker == .agent })?.text
+        // Only finish a job when the last agent line was that job's opener and
+        // the new line is not itself another starter (a second tap).
+        if people.count >= 2,
+           let open = job(matching: people[people.count - 2].text),
+           lastAgent == openers[open.id],
+           job(matching: last.text) == nil {
+            return result(for: open.id, from: last.text)
         }
         if let job = job(matching: last.text) {
             return openers[job.id] ?? fallback
         }
-        let lastAgent = transcript.last(where: { $0.speaker == .agent })?.text
         if lastAgent == morningReask {
             return morningPlan(from: last.text)
         }
