@@ -187,13 +187,45 @@ public final class AskFirst: @unchecked Sendable {
     /// The app's one rule.
     public static let shared = AskFirst()
 
+    /// How long a question stays open. After this an answer can't approve
+    /// it; the agent has to ask again with what is true now.
+    public static let defaultWindow: TimeInterval = 5 * 60
+
+    /// How long a yes given in time stays good while the action is checked.
+    /// Short, so little can change between the yes and what happens.
+    public static let yesGrace: Duration = .seconds(30)
+
+    /// When a question was asked and, once the person said yes in time,
+    /// when they said it.
+    private struct Open {
+        let askedAt: ContinuousClock.Instant
+        var yesAt: ContinuousClock.Instant?
+    }
+
     private let lock = NSLock()
-    private var pending: Set<UUID> = []
+    private var pending: [UUID: Open] = [:]
+    private let window: Duration
+    /// A monotonic clock that keeps counting while the device sleeps.
+    /// Changing the date and time in Settings can't move it, so it can't
+    /// bring a timed out question back.
+    private let now: @Sendable () -> ContinuousClock.Instant
 
-    private init() {}
+    private init(
+        window: TimeInterval = AskFirst.defaultWindow,
+        now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
+    ) {
+        self.window = .milliseconds(Int64((window * 1000).rounded()))
+        self.now = now
+    }
 
-    /// A separate rule for tests, so they don't share state.
-    package static func isolated() -> AskFirst { AskFirst() }
+    /// A separate rule for tests, so they don't share state. Tests can pass
+    /// a clock to move time forward.
+    package static func isolated(
+        window: TimeInterval = AskFirst.defaultWindow,
+        now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
+    ) -> AskFirst {
+        AskFirst(window: window, now: now)
+    }
 
     /// Record a question to show the person. Nil when the question can't say
     /// exactly where it goes (no handle that fits in full) or, for a
@@ -206,7 +238,9 @@ public final class AskFirst: @unchecked Sendable {
         if action.kind == .purchase, action.price == nil { return nil }
         let request = ConfirmationRequest(action: action)
         lock.lock()
-        pending.insert(request.id)
+        let time = now()
+        pending = pending.filter { isOpen($0.value) || isFreshYes($0.value) }
+        pending[request.id] = Open(askedAt: time)
         lock.unlock()
         return request
     }
@@ -235,17 +269,94 @@ public final class AskFirst: @unchecked Sendable {
     /// The person said no or closed the question. It can't be approved later.
     public func withdraw(_ request: ConfirmationRequest) {
         lock.lock()
-        pending.remove(request.id)
+        pending[request.id] = nil
         lock.unlock()
+    }
+
+    /// True once a yes can no longer be given: the question expired, was
+    /// withdrawn, or was checked. A yes already given in time but not yet
+    /// checked keeps it open until `yesGrace` runs out.
+    public func isClosed(_ request: ConfirmationRequest) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let open = pending[request.id] else { return true }
+        if open.yesAt != nil {
+            if isFreshYes(open) { return false }
+            pending[request.id] = nil
+            return true
+        }
+        if !isOpen(open) {
+            pending[request.id] = nil
+            return true
+        }
+        return false
+    }
+
+    /// What the sheet gets when the person taps yes.
+    package enum Yes: Equatable {
+        case approved(Approval)
+        case timedOut
+    }
+
+    /// The person tapped yes. Inside the window this records the time of the
+    /// yes, so the action can still go ahead if it is checked a moment
+    /// later. After the window it approves nothing and says so.
+    package func sayYes(to request: ConfirmationRequest) -> Yes {
+        lock.lock()
+        defer { lock.unlock() }
+        guard var open = pending[request.id] else { return .timedOut }
+        // A second tap on yes changes nothing; the first one stands.
+        if open.yesAt != nil {
+            return isFreshYes(open) ? .approved(request.approve()) : .timedOut
+        }
+        // A late yes drops the question, so a later check reads `.stop`.
+        guard isOpen(open) else {
+            pending[request.id] = nil
+            return .timedOut
+        }
+        open.yesAt = now()
+        pending[request.id] = open
+        return .approved(request.approve())
     }
 
     /// Decide whether an action may happen now. A `.proceed` spends the approval.
     public func decide(_ action: ProposedAction, approval: Approval?) -> Outcome {
+        verdict(action, approval: approval) == .proceed ? .proceed : .stop
+    }
+
+    /// Like `decide`, but says when the stop was a timeout, so the caller can
+    /// tell the person instead of failing quietly.
+    public enum Verdict: Sendable, Equatable {
+        case proceed
+        case stop
+        case timedOut
+    }
+
+    /// A `.proceed` spends the approval. A yes given inside the window counts
+    /// even if this check runs a little later; a yes after it never does.
+    public func verdict(_ action: ProposedAction, approval: Approval?) -> Verdict {
         guard let approval, approval.action == action, action.recipient.handle != nil else { return .stop }
         if action.kind == .purchase, action.price == nil { return .stop }
         lock.lock()
         defer { lock.unlock() }
-        guard pending.remove(approval.id) != nil else { return .stop }
-        return .proceed
+        guard let open = pending.removeValue(forKey: approval.id) else { return .stop }
+        if open.yesAt != nil {
+            return isFreshYes(open) ? .proceed : .timedOut
+        }
+        return isOpen(open) ? .proceed : .timedOut
+    }
+
+    /// A yes given inside the window, still recent enough to act on. A yes
+    /// is never a standing permission: it lapses `yesGrace` after it was given.
+    private func isFreshYes(_ open: Open) -> Bool {
+        guard let yesAt = open.yesAt else { return false }
+        let since = now() - yesAt
+        return yesAt - open.askedAt <= window && since >= .zero && since <= Self.yesGrace
+    }
+
+    /// The one test for whether a question is still open.
+    private func isOpen(_ open: Open) -> Bool {
+        let age = now() - open.askedAt
+        return age >= .zero && age <= window
     }
 }

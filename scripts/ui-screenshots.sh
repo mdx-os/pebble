@@ -24,7 +24,7 @@ xcrun simctl install "$udid" "$app"
 
 for mode in light dark; do
   xcrun simctl ui "$udid" appearance "$mode"
-  for screen in hello name look ideas memory confirm; do
+  for screen in hello name look ideas memory confirm confirmTimedOut; do
     xcrun simctl launch --terminate-running-process "$udid" "$bundle_id" -pebbleScreen "$screen" >/dev/null
     sleep 3
     xcrun simctl io "$udid" screenshot "$out/$screen-$mode.png" >/dev/null
