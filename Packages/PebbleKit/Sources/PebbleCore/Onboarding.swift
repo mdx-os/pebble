@@ -9,7 +9,7 @@ public enum Proactivity: String, CaseIterable, Codable, Sendable {
     case quiet
     /// Checks in now and then with something useful.
     case checkIn
-    /// Offers ideas whenever it notices something.
+    /// Offers ideas drawn from what the person has shared.
     case suggest
 
     /// The gentlest choice until the person picks one.
@@ -52,7 +52,7 @@ public enum OnboardingStep: Int, CaseIterable, Sendable, Comparable {
 
 /// Words for the first run.
 public enum OnboardingWords {
-    public static let welcome = "Hi. Before we start, a couple of quick choices."
+    public static let welcome = "Hi. Before we start, one quick choice."
     public static let proactivityQuestion = "How often should I speak up on my own?"
     public static let startersHeading = "Here are a few places to start."
     public static let continueTitle = "Continue"
@@ -130,6 +130,8 @@ public protocol OnboardingStoring: Sendable {
     /// True once the first run has been finished or skipped through.
     func hasFinished() -> Bool
     func markFinished()
+    /// Forget every first run choice, as if the app were new.
+    func reset()
 }
 
 public enum OnboardingStorageKeys {
@@ -156,6 +158,11 @@ public struct UserDefaultsOnboardingStore: OnboardingStoring, @unchecked Sendabl
 
     public func hasFinished() -> Bool { defaults.bool(forKey: OnboardingStorageKeys.finished) }
     public func markFinished() { defaults.set(true, forKey: OnboardingStorageKeys.finished) }
+
+    public func reset() {
+        defaults.removeObject(forKey: OnboardingStorageKeys.finished)
+        defaults.removeObject(forKey: Proactivity.storageKey)
+    }
 }
 
 /// A stand in store for tests and screenshots.
@@ -173,13 +180,22 @@ public final class InMemoryOnboardingStore: OnboardingStoring, @unchecked Sendab
     public func saveProactivity(_ choice: Proactivity) { lock.lock(); proactivity = choice; lock.unlock() }
     public func hasFinished() -> Bool { lock.lock(); defer { lock.unlock() }; return finished }
     public func markFinished() { lock.lock(); finished = true; lock.unlock() }
+    public func reset() { lock.lock(); finished = false; proactivity = .startingPoint; lock.unlock() }
 }
 
 extension OnboardingFlow {
-    /// Save the outcome once the flow is done. Does nothing before that.
-    public func save(to store: OnboardingStoring) {
+    /// Save the outcome once the flow is done: the chosen name, the
+    /// proactivity choice and the finished flag. Does nothing before that.
+    public func save(to store: OnboardingStoring, names: AgentNameStoring) {
         guard step == .done else { return }
+        if let name { names.saveDisplayName(name.text) }
         store.saveProactivity(proactivity)
         store.markFinished()
+    }
+
+    /// True when the first run should show. Someone who already named their
+    /// agent before the first run existed is not asked again.
+    public static func isNeeded(store: OnboardingStoring, names: AgentNameStoring) -> Bool {
+        !store.hasFinished() && names.loadDisplayName() == nil
     }
 }
