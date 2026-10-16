@@ -39,6 +39,10 @@ public final class MemoryStore: @unchecked Sendable {
 
     public static let maxLength = 500
 
+    /// The file is there but can't be read as notes. Writes refuse rather
+    /// than replace notes that may still be recoverable.
+    public struct Unreadable: Error, Equatable {}
+
     public let fileURL: URL
     private let lock = NSLock()
 
@@ -57,11 +61,11 @@ public final class MemoryStore: @unchecked Sendable {
         return MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
     }
 
-    /// Every note, oldest first.
+    /// Every note, oldest first. Empty when the file can't be read.
     public func notes() -> [MemoryNote] {
         lock.lock()
         defer { lock.unlock() }
-        return load()
+        return (try? load()) ?? []
     }
 
     @discardableResult
@@ -73,7 +77,7 @@ public final class MemoryStore: @unchecked Sendable {
         }
         lock.lock()
         defer { lock.unlock() }
-        var all = load()
+        var all = try load()
         let note = MemoryNote(text: text, savedAt: date)
         all.append(note)
         try save(all)
@@ -90,7 +94,7 @@ public final class MemoryStore: @unchecked Sendable {
         }
         lock.lock()
         defer { lock.unlock() }
-        var all = load()
+        var all = try load()
         guard let index = all.firstIndex(where: { $0.id == id }) else { return .notFound }
         let note = MemoryNote(id: id, text: text, savedAt: all[index].savedAt)
         all[index] = note
@@ -103,7 +107,7 @@ public final class MemoryStore: @unchecked Sendable {
     public func forget(_ id: UUID) throws -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        var all = load()
+        var all = try load()
         let before = all.count
         all.removeAll { $0.id == id }
         guard all.count != before else { return false }
@@ -115,7 +119,7 @@ public final class MemoryStore: @unchecked Sendable {
         return true
     }
 
-    /// Remove every note and the file that held them.
+    /// Remove every note and the file that held them, even an unreadable one.
     public func forgetEverything() throws {
         lock.lock()
         defer { lock.unlock() }
@@ -124,9 +128,12 @@ public final class MemoryStore: @unchecked Sendable {
 
     // MARK: Storage
 
-    private func load() -> [MemoryNote] {
-        guard let data = try? Data(contentsOf: fileURL) else { return [] }
-        return (try? JSONDecoder().decode([MemoryNote].self, from: data)) ?? []
+    private func load() throws -> [MemoryNote] {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return [] }
+        guard let data = try? Data(contentsOf: fileURL),
+              let all = try? JSONDecoder().decode([MemoryNote].self, from: data)
+        else { throw Unreadable() }
+        return all
     }
 
     private func save(_ all: [MemoryNote]) throws {

@@ -76,6 +76,22 @@ struct MemoryStoreTests {
         #expect(leftovers.isEmpty)
     }
 
+    @Test func anUnreadableFileIsNeverOverwritten() throws {
+        let garbage = Data("not notes {".utf8)
+        try garbage.write(to: store.fileURL)
+        #expect(store.notes().isEmpty)
+        #expect(throws: MemoryStore.Unreadable.self) { try store.remember("Prefers tea") }
+        #expect(throws: MemoryStore.Unreadable.self) { try store.edit(UUID(), to: "x") }
+        #expect(throws: MemoryStore.Unreadable.self) { try store.forget(UUID()) }
+        #expect(FileManager.default.contents(atPath: store.fileURL.path) == garbage)
+    }
+
+    @Test func forgetEverythingClearsAnUnreadableFileToo() throws {
+        try Data("not notes {".utf8).write(to: store.fileURL)
+        try store.forgetEverything()
+        #expect(!FileManager.default.fileExists(atPath: store.fileURL.path))
+    }
+
     private func saved(_ decision: MemoryStore.Decision) throws -> MemoryNote {
         guard case .saved(let note) = decision else {
             Issue.record("expected a saved note, got \(decision)")
