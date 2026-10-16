@@ -86,6 +86,21 @@ struct MemoryStoreTests {
         #expect(FileManager.default.contents(atPath: store.fileURL.path) == garbage)
     }
 
+    @Test func anUnreadableFileIsNotShownAsAnEmptyMemory() throws {
+        #expect(store.contents() == .notes([]))
+        try Data("not notes {".utf8).write(to: store.fileURL)
+        #expect(store.contents() == .unreadable)
+        #expect(store.hasStoredFile)
+    }
+
+    @Test func forgetEverythingAlsoClearsLeftoverSaveCopies() throws {
+        try store.remember("Door code 4417")
+        let leftover = folder.appendingPathComponent("memory.json.tmp-1")
+        try Data("Door code 4417".utf8).write(to: leftover)
+        try store.forgetEverything()
+        #expect(!folderContains("4417"))
+    }
+
     @Test func forgetEverythingClearsAnUnreadableFileToo() throws {
         try Data("not notes {".utf8).write(to: store.fileURL)
         try store.forgetEverything()
