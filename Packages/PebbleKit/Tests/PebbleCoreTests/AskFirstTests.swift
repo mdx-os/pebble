@@ -110,9 +110,20 @@ struct AskFirstTests {
         #expect(rule.ask(plain) != nil)
     }
 
-    @Test func aNameCannotPoseAsAnAddress() {
-        let r = Recipient(id: "x", displayName: "Mom at mom@family.ca", handle: "x@evil.net")
-        #expect(!r.displayName.contains("@"))
+    @Test(arguments: ["Sam at 416 555 0101", "Mom at family.ca", "mom\u{FF20}family.ca", "the bakery for $1.00"])
+    func aNameNeverAppearsInTheQuestion(_ name: String) {
+        let r = Recipient(id: "x", displayName: name, handle: "evil.net")
+        let send = ProposedAction(kind: .send, recipient: r, details: "hi")
+        let buy = ProposedAction(kind: .purchase, recipient: r, details: "hi", price: Price(minorUnits: 8500, currency: "CAD"))
+        #expect(send.question == "Send this to evil.net?")
+        #expect(buy.question(locale: en) == "Pay $85.00 to evil.net?")
+    }
+
+    @Test(arguments: ["evil\u{200B}.com", " evil.com", "evil  .com", "evil.com\n"])
+    func handlesThatNeedCleaningAreRefused(_ raw: String) {
+        let r = Recipient(id: "x", displayName: "Rise", handle: raw)
+        #expect(r.handle == nil)
+        #expect(AskFirst.isolated().ask(ProposedAction(kind: .send, recipient: r, details: "hi")) == nil)
     }
 
     @Test func longHandlesAreNeverShortened() {
@@ -150,11 +161,11 @@ struct AskFirstTests {
     }
 
     @Test func theQuestionNamesWhoAndHowMuch() {
-        #expect(note.question == "Send this to Sam at 416 555 0101?")
+        #expect(note.question == "Send this to 416 555 0101?")
         let buy = ProposedAction(kind: .purchase, recipient: bakery, details: "", price: cad850)
-        #expect(buy.question(locale: en) == "Buy this from the bakery at risebakery.ca for $8.50?")
+        #expect(buy.question(locale: en) == "Pay $8.50 to risebakery.ca?")
         let buyer = Recipient(id: "x", displayName: "a buyer", handle: "buyer@example.com")
-        #expect(ProposedAction(kind: .sharePersonalInfo, recipient: buyer, details: "").question == "Share this with a buyer at buyer@example.com?")
+        #expect(ProposedAction(kind: .sharePersonalInfo, recipient: buyer, details: "").question == "Share this with buyer@example.com?")
     }
 
     @Test func oddRecipientNamesAreTidiedForTheQuestion() {
