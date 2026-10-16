@@ -167,11 +167,11 @@ public struct ConfirmationSheet: View {
             state.disappeared()
         }
         .onChange(of: state.spoken) { _, line in
-            // Read the timeout first, and move VoiceOver to it, before the
-            // person meets the Close button.
-            guard let line else { return }
+            // Move VoiceOver to the timeout words so they are read first,
+            // before the person meets the Close button. Moving focus reads
+            // them, so there is no second announcement on top.
+            guard line != nil else { return }
             footnoteFocused = true
-            AccessibilityNotification.Announcement(line).post()
         }
         .task {
             // Notice a timeout while the sheet sits open, not only on tap.

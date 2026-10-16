@@ -53,10 +53,20 @@ struct AskFirstExpiryTests {
         clock.advance(10)
         #expect(rule.verdict(note, approval: approval) == .proceed)
 
+        let edge = try #require(rule.ask(note))
+        guard case .approved(let onTime) = rule.sayYes(to: edge) else { Issue.record("yes refused"); return }
+        clock.advance(29.9)
+        #expect(!rule.isClosed(edge))
+        #expect(rule.verdict(note, approval: onTime) == .proceed)
+
         let stale = try #require(rule.ask(note))
         guard case .approved(let held) = rule.sayYes(to: stale) else { Issue.record("yes refused"); return }
-        clock.advance(AskFirst.defaultWindow + 1)
+        clock.advance(30.1)
         #expect(rule.verdict(note, approval: held) == .timedOut)
+        let lapsed = try #require(rule.ask(note))
+        _ = rule.sayYes(to: lapsed)
+        clock.advance(30.1)
+        #expect(rule.isClosed(lapsed))
     }
 
     /// Changing the date and time in Settings must not bring a question back.
@@ -68,7 +78,8 @@ struct AskFirstExpiryTests {
         let text = try String(contentsOf: file, encoding: .utf8)
         let start = try #require(text.range(of: "public final class AskFirst"))
         let rule = String(text[start.lowerBound...])
-        for wall in ["Date(", "Date.init", "Date.now", "-> Date", ": Date", "timeIntervalSince"] {
+        for wall in ["Date(", "Date.init", "Date.now", "-> Date", ": Date", "timeIntervalSince",
+                     "CFAbsoluteTimeGetCurrent", "DispatchTime", "systemUptime", "SuspendingClock"] {
             #expect(!rule.contains(wall), "AskFirst reads the wall clock: \(wall)")
         }
         #expect(rule.contains("ContinuousClock"))

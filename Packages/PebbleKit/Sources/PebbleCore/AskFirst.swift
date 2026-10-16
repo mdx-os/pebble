@@ -191,6 +191,10 @@ public final class AskFirst: @unchecked Sendable {
     /// it; the agent has to ask again with what is true now.
     public static let defaultWindow: TimeInterval = 5 * 60
 
+    /// How long a yes given in time stays good while the action is checked.
+    /// Short, so little can change between the yes and what happens.
+    public static let yesGrace: Duration = .seconds(30)
+
     /// When a question was asked and, once the person said yes in time,
     /// when they said it.
     private struct Open {
@@ -269,14 +273,20 @@ public final class AskFirst: @unchecked Sendable {
         lock.unlock()
     }
 
-    /// True once a question can no longer be approved: it expired, was
-    /// answered, or was withdrawn.
+    /// True once a yes can no longer be given: the question expired, was
+    /// withdrawn, or was checked. A yes already given in time but not yet
+    /// checked keeps it open until `yesGrace` runs out.
     public func isClosed(_ request: ConfirmationRequest) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         guard let open = pending[request.id] else { return true }
+        if open.yesAt != nil {
+            if isFreshYes(open) { return false }
+            pending[request.id] = nil
+            return true
+        }
         if !isOpen(open) {
-            if !isFreshYes(open) { pending[request.id] = nil }
+            pending[request.id] = nil
             return true
         }
         return false
@@ -299,6 +309,7 @@ public final class AskFirst: @unchecked Sendable {
         if open.yesAt != nil {
             return isFreshYes(open) ? .approved(request.approve()) : .timedOut
         }
+        // A late yes drops the question, so a later check reads `.stop`.
         guard isOpen(open) else {
             pending[request.id] = nil
             return .timedOut
@@ -336,11 +347,11 @@ public final class AskFirst: @unchecked Sendable {
     }
 
     /// A yes given inside the window, still recent enough to act on. A yes
-    /// is never a standing permission: it lapses one window after it was given.
+    /// is never a standing permission: it lapses `yesGrace` after it was given.
     private func isFreshYes(_ open: Open) -> Bool {
         guard let yesAt = open.yesAt else { return false }
         let since = now() - yesAt
-        return yesAt - open.askedAt <= window && since >= .zero && since <= window
+        return yesAt - open.askedAt <= window && since >= .zero && since <= Self.yesGrace
     }
 
     /// The one test for whether a question is still open.
