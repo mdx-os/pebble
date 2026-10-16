@@ -62,13 +62,15 @@ public struct Conversation: Sendable, Equatable {
     }
 
     /// Asks `model` to answer the turns so far and appends that reply.
+    /// Words of crisis get a caring reply before any device check, so a
+    /// remote model never blocks 988.
     public func appendingReply(from model: any ModelClient, id: UUID = UUID()) async throws -> Conversation {
         guard turns.last?.speaker == .person else { throw ConversationError.missingPerson }
-        if onDevice && !model.runsOnDevice { throw ConversationError.leavesDevice }
         let reply: String
         if let care = CareCheck.reply(after: turns) {
             reply = care
         } else {
+            if onDevice && !model.runsOnDevice { throw ConversationError.leavesDevice }
             reply = try await model.reply(to: CareCheck.redacted(turns))
         }
         let cleaned = reply.trimmingCharacters(in: .whitespacesAndNewlines)
