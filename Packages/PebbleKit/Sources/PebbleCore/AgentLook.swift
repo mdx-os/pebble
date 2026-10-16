@@ -50,6 +50,7 @@ public enum ConfirmationWords {
     public static let toLabel = "To"
     public static let fromLabel = "From"
     public static let whatLabel = "What"
+    public static let whereLabel = "Where"
     public static let priceLabel = "Price"
     public static let promise = "I only do this once, exactly as shown. Anything different and I'll ask again."
 }

@@ -90,7 +90,11 @@ public struct ConfirmationSheet: View {
                     .accessibilityAddTraits(.isHeader)
             }
             VStack(spacing: 0) {
-                row(action.kind == .purchase ? ConfirmationWords.fromLabel : ConfirmationWords.toLabel, action.recipient.shownAs)
+                row(action.kind == .purchase ? ConfirmationWords.fromLabel : ConfirmationWords.toLabel, action.recipient.displayName)
+                if let handle = action.recipient.handle {
+                    Divider().overlay(Theme.hairline(scheme))
+                    row(ConfirmationWords.whereLabel, handle)
+                }
                 Divider().overlay(Theme.hairline(scheme))
                 row(ConfirmationWords.whatLabel, action.details)
                 if let price = action.price {
