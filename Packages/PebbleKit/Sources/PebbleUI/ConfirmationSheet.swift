@@ -90,9 +90,11 @@ public struct ConfirmationSheet: View {
         }
         .task {
             // Notice a timeout while the sheet sits open, not only on tap.
-            while !answered && !expired {
-                try? await Task.sleep(for: .seconds(1))
-                if !answered && rule.isClosed(request) { markExpired() }
+            // Stops the moment the sheet goes away, so it never spins or
+            // announces a timeout the person didn't have.
+            while !answered && !expired && !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                if !answered && !Task.isCancelled && rule.isClosed(request) { markExpired() }
             }
         }
     }
