@@ -214,13 +214,25 @@ struct LocalStubModelTests {
 
     @Test func careRunsBeforeTheLeavesDeviceCheck() async throws {
         struct Remote: ModelClient {
-            func reply(to transcript: [ChatTurn]) async throws -> String { "reached-model" }
+            func reply(to transcript: [ChatTurn]) async throws -> String {
+                Issue.record("model reached")
+                return "reached-model"
+            }
         }
         let promised = try Conversation.firstRun(named: "Nova", onDevice: true)
             .appendingPerson("I want to kill myself")
         let next = try await promised.appendingReply(from: Remote())
         #expect(next.turns.last?.text == CareCheck.reply)
         #expect(CareCheck.reply.contains("988"))
+        // A short "yes" after care still stays local and never reaches a remote model.
+        let follow = try await next.appendingPerson("yes")
+        let stayed = try await follow.appendingReply(from: Remote())
+        #expect(stayed.turns.last?.text == CareCheck.followUp)
+        // Picking a starter after care must still refuse a remote model.
+        let pick = try await stayed.appendingPerson("plan my morning")
+        await #expect(throws: ConversationError.leavesDevice) {
+            _ = try await pick.appendingReply(from: Remote())
+        }
         // Ordinary words still refuse a remote model after the privacy promise.
         let ordinary = try Conversation.firstRun(named: "Nova", onDevice: true)
             .appendingPerson("plan my morning")
@@ -234,11 +246,15 @@ struct LocalStubModelTests {
         "I want to kill myself!",
         "\"want to die\"",
         "thinking about self-harm?",
+        "\u{2018}kill myself\u{2019}",
     ])
     func quotedAndPunctuatedCrisisStillGetsCare(text: String) async throws {
         #expect(CareCheck.needsCare(text), "missed care for \(text)")
         struct NeverAsked: ModelClient {
-            func reply(to transcript: [ChatTurn]) async throws -> String { "reached-model" }
+            func reply(to transcript: [ChatTurn]) async throws -> String {
+                Issue.record("model reached")
+                return "reached-model"
+            }
         }
         let next = try await Conversation.firstRun(named: "Nova").sending(text, with: NeverAsked())
         #expect(next.turns.last?.text == CareCheck.reply)
@@ -255,6 +271,29 @@ struct LocalStubModelTests {
         #expect(again.turns.last?.text == morning.turns.last?.text)
         let byTitle = try await model.reply(to: [person("Talk something through")])
         #expect(byTitle.hasPrefix("I'm here."))
+    }
+
+    @Test func aMidJobAnswerThatLooksLikeAnotherStarterStillFinishesTheJob() async throws {
+        let talk = try #require(FirstConversation.jobs.first { $0.id == "talk" })
+        let reply = try await model.reply(to: [
+            person(talk.prompt),
+            agent("I'm here."),
+            person("plan my morning"),
+        ])
+        #expect(reply.contains("one small next step"))
+        #expect(!reply.contains("separated by commas"))
+    }
+
+    @Test func starterTitlesAreNotCasualRepliesAfterCare() {
+        let casual = ["yes", "ok", "not now", "thanks", "no"]
+        for job in FirstConversation.jobs {
+            let title = job.title.lowercased()
+            #expect(!casual.contains(title), "title \(job.title) looks casual")
+            #expect(CareCheck.starter(matching: job.title)?.id == job.id)
+            for word in casual {
+                #expect(CareCheck.starter(matching: word) == nil)
+            }
+        }
     }
 
     private func play(_ jobID: String, then answer: String) async throws -> String {

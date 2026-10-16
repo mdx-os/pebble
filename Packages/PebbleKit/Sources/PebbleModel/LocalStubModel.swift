@@ -19,11 +19,13 @@ public struct LocalStubModel: ModelClient {
     package static func answer(to transcript: [ChatTurn]) throws -> String {
         let people = transcript.filter { $0.speaker == .person }
         guard let last = people.last else { throw ModelClientError.noPersonTurn }
-        if let job = job(matching: last.text) {
-            return openers[job.id] ?? fallback
-        }
+        // Finish the open job first. An answer that happens to equal another
+        // starter's short form (like "plan my morning") is still an answer.
         if people.count >= 2, let job = job(matching: people[people.count - 2].text) {
             return result(for: job.id, from: last.text)
+        }
+        if let job = job(matching: last.text) {
+            return openers[job.id] ?? fallback
         }
         let lastAgent = transcript.last(where: { $0.speaker == .agent })?.text
         if lastAgent == morningReask {
@@ -35,7 +37,6 @@ public struct LocalStubModel: ModelClient {
     private static func job(matching text: String) -> StarterJob? {
         CareCheck.starter(matching: text)
     }
-
 
     private static func result(for jobID: String, from text: String) -> String {
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
