@@ -27,26 +27,37 @@ public enum CareCheck {
         return phrases.contains { words.contains(normalized($0)) }
     }
 
-    /// True when the reply to give is about care: the message itself, or the
-    /// next one after a care reply.
+    /// The care reply to give, if any. Once care starts it stays until the
+    /// person picks a starter on purpose, so a short "yes" or "I have the
+    /// pills" never lands on a cheerful menu.
     public static func reply(after transcript: [ChatTurn]) -> String? {
         guard let last = transcript.last, last.speaker == .person else { return nil }
         if needsCare(last.text) { return reply }
         let lastAgent = transcript.last(where: { $0.speaker == .agent })?.text
-        if lastAgent == reply { return followUp }
-        return nil
+        guard let lastAgent, isCare(lastAgent) else { return nil }
+        let trimmed = last.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let picksStarter = FirstConversation.jobs.contains {
+            $0.prompt.compare(trimmed, options: [.caseInsensitive]) == .orderedSame
+        }
+        return picksStarter ? nil : followUp
     }
 
-    /// The transcript with care exchanges taken out, so words of crisis are
-    /// never passed to a model, even on later turns.
+    /// The transcript with every care exchange taken out: care replies and
+    /// whatever the person said that led to one. A model never sees them.
     public static func redacted(_ transcript: [ChatTurn]) -> [ChatTurn] {
-        transcript.filter { turn in
-            switch turn.speaker {
-            case .person: return !needsCare(turn.text)
-            case .agent: return turn.text != reply && turn.text != followUp
+        var kept: [ChatTurn] = []
+        for (index, turn) in transcript.enumerated() {
+            if turn.speaker == .agent, isCare(turn.text) { continue }
+            if turn.speaker == .person {
+                let next = transcript[(index + 1)...].first { $0.speaker == .agent }
+                if needsCare(turn.text) || (next.map { isCare($0.text) } ?? false) { continue }
             }
+            kept.append(turn)
         }
+        return kept
     }
+
+    private static func isCare(_ text: String) -> Bool { text == reply || text == followUp }
 
     private static func normalized(_ text: String) -> String {
         let folded = text

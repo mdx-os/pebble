@@ -99,6 +99,11 @@ struct LocalStubModelTests {
         #expect(reply == CareCheck.followUp)
         #expect(!reply.contains("morning plans"))
         #expect(reply.contains("988"))
+        let third = try await next.sending("I have the pills here", with: model)
+        #expect(third.turns.last?.text == CareCheck.followUp)
+        let job = try #require(FirstConversation.jobs.first { $0.id == "morning" })
+        let chosen = try await third.sending(job.prompt, with: model)
+        #expect(chosen.turns.last?.text != CareCheck.followUp)
     }
 
     @Test func aModelNeverSeesWordsOfCrisisOnLaterTurns() async throws {
@@ -113,10 +118,12 @@ struct LocalStubModelTests {
         let seen = Seen()
         var convo = try await Conversation.firstRun(named: "Nova").sending("I want to kill myself", with: Recorder(seen: seen))
         convo = try await convo.sending("I'm ok now", with: Recorder(seen: seen))
-        convo = try await convo.sending("what should I cook", with: Recorder(seen: seen))
+        let job = try #require(FirstConversation.jobs.first { $0.id == "talk" })
+        convo = try await convo.sending(job.prompt, with: Recorder(seen: seen))
         #expect(convo.turns.last?.text == "ok")
         #expect(!seen.texts.isEmpty)
         #expect(!seen.texts.contains { CareCheck.needsCare($0) })
+        #expect(!seen.texts.contains("I'm ok now"))
         #expect(!seen.texts.contains(CareCheck.reply))
         #expect(!seen.texts.contains(CareCheck.followUp))
     }
