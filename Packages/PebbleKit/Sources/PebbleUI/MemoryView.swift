@@ -187,12 +187,23 @@ struct MemoryRow: View {
                 Text(note.text)
                     .font(.body)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 10) {
-                    SourceLabel(source: note.source)
-                    Text(note.savedAt, format: .dateTime.month(.abbreviated).day())
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                    Spacer()
+                HStack(spacing: 16) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        SourceLabel(source: note.source)
+                        Text(note.savedAt, format: .dateTime.month(.abbreviated).day())
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    // At large text sizes the source gets its own line so it never clips.
+                    VStack(alignment: .leading, spacing: 4) {
+                        SourceLabel(source: note.source)
+                        Text(note.savedAt, format: .dateTime.month(.abbreviated).day())
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                    Spacer(minLength: 0)
                     Button(action: onEdit) { Label(MemoryWords.editTitle, systemImage: "pencil") }
                         .labelStyle(.iconOnly)
                         .frame(minWidth: 44, minHeight: 44)
@@ -224,16 +235,22 @@ struct SourceLabel: View {
     let source: MemorySource
 
     var body: some View {
-        Label(source.label, systemImage: source.symbol)
+        Label {
+            Text(source.label)
+                .foregroundStyle(source == .inferred ? Color.primary : Color.secondary)
+        } icon: {
+            Image(systemName: source.symbol)
+                .foregroundStyle(source == .inferred ? Theme.accent : .secondary)
+        }
             .font(.caption.weight(.medium))
-            .foregroundStyle(source == .inferred ? Theme.accent : .secondary)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(
                 (source == .inferred ? Theme.accent : Color.secondary).opacity(0.12),
                 in: Capsule()
             )
-            .lineLimit(1)
+            .fixedSize(horizontal: false, vertical: true)
+            .layoutPriority(1)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(source.label)
     }
