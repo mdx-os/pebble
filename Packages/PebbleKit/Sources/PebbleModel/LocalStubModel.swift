@@ -18,12 +18,15 @@ public struct LocalStubModel: ModelClient {
     public static func answer(to transcript: [ChatTurn]) throws -> String {
         let people = transcript.filter { $0.speaker == .person }
         guard let last = people.last else { throw ModelClientError.noPersonTurn }
-        if needsCare(last.text) { return care }
         if let job = job(matching: last.text) {
             return openers[job.id] ?? fallback
         }
         if people.count >= 2, let job = job(matching: people[people.count - 2].text) {
             return result(for: job.id, from: last.text)
+        }
+        let lastAgent = transcript.last(where: { $0.speaker == .agent })?.text
+        if lastAgent == morningReask {
+            return morningPlan(from: last.text)
         }
         return fallback
     }
@@ -74,30 +77,20 @@ public struct LocalStubModel: ModelClient {
         let items = parts
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters)) }
             .filter { !$0.isEmpty }
-            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .map(capitalizedFirst)
         return items
+    }
+
+    /// "gym" becomes "Gym", but "iPhone" and "NYC" stay as typed.
+    private static func capitalizedFirst(_ text: String) -> String {
+        let chars = Array(text)
+        guard let first = chars.first, first.isLowercase else { return text }
+        if chars.count > 1, chars[1].isUppercase { return text }
+        return first.uppercased() + text.dropFirst()
     }
 
     package static let fallback = "Thanks for telling me. I'm a small helper that runs only on this device, so I can't do everything yet. I'm good at morning plans, saying a detail back, and talking things through. Want to start with one of those?"
 
     package static let morningReask = "I didn't catch any steps there. Try a few things separated by commas, like gym, email Ana, groceries."
 
-    package static let care = "I'm really glad you told me. I'm a small helper and I can't keep you safe on my own. If you might act on this, please call or text 988 now, or your local emergency number, and reach someone you trust."
-
-    private static let careWords = [
-        "kill myself", "suicide", "suicidal", "end my life", "hurt myself", "self harm",
-        "self-harm", "want to die", "don't want to be here", "dont want to be here",
-    ]
-
-    /// A small, fixed check. It favors caring too often over missing it.
-    package static func needsCare(_ text: String) -> Bool {
-        let lower = text.lowercased()
-        return careWords.contains { lower.contains($0) }
-    }
-
-    private static let openers: [String: String] = [
-        "morning": "Tell me what's on for the morning, separated by commas. I'll turn it into a short plan you can keep.",
-        "talk": "I'm here. Tell me what's going on, and what you want to be true when we're done.",
-        "remember": "Tell me the detail in your own words. I'll say it back so you can check I heard it. It stays on this device.",
-    ]
 }

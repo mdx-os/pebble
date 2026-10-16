@@ -42,7 +42,7 @@ struct LocalStubModelTests {
     }
 
     @Test func theMorningStarterEndsInARealPlan() async throws {
-        let reply = try await play("morning", then: "school drop off, gym and answer Priya; groceries")
+        let reply = try await play("morning", then: "school drop off, gym, answer Priya; groceries")
         #expect(reply == """
         Here's a calm start, beginning at 8:00. Move anything that doesn't fit.
         8:00  School drop off
@@ -67,19 +67,42 @@ struct LocalStubModelTests {
 
     @Test(arguments: [
         "I want to kill myself",
-        "Honestly I don't want to be here anymore",
+        "Honestly I don\u{2019}t want to be here anymore",
         "thinking about SELF HARM again",
+        "everyone is better off without me",
     ])
-    func wordsOfCrisisGetCareInsteadOfAPlan(text: String) async throws {
-        #expect(try await play("talk", then: text) == LocalStubModel.care)
-        #expect(try await play("morning", then: text) == LocalStubModel.care)
-        #expect(try await model.reply(to: [person(text)]) == LocalStubModel.care)
-        #expect(LocalStubModel.care.contains("988"))
+    func wordsOfCrisisGetCareBeforeAnyModel(text: String) async throws {
+        #expect(CareCheck.needsCare(text))
+        #expect(try await play("talk", then: text) == CareCheck.reply)
+        #expect(try await play("morning", then: text) == CareCheck.reply)
+        struct NeverAsked: ModelClient {
+            func reply(to transcript: [ChatTurn]) async throws -> String { "a plan" }
+        }
+        let next = try await Conversation.firstRun(named: "Nova").sending(text, with: NeverAsked())
+        #expect(next.turns.last?.text == CareCheck.reply)
+        #expect(CareCheck.reply.contains("988"))
     }
 
-    @Test func ordinaryWordsDoNotTriggerCare() {
-        #expect(!LocalStubModel.needsCare("I'm dying to try that bakery"))
-        #expect(!LocalStubModel.needsCare("Work is piling up"))
+    @Test(arguments: ["I'm dying to try that bakery", "Work is piling up", "plan my diet", "I want to diet"])
+    func ordinaryWordsDoNotTriggerCare(text: String) {
+        #expect(!CareCheck.needsCare(text))
+    }
+
+    @Test func aRetryAfterTheMorningReaskStillGetsAPlan() async throws {
+        let job = try #require(FirstConversation.jobs.first { $0.id == "morning" })
+        var convo = try await Conversation.firstRun(named: "Nova").sending(job.prompt, with: model)
+        convo = try await convo.sending(" , ; ", with: model)
+        convo = try await convo.sending("gym, iPhone repair, NYC call", with: model)
+        let reply = try #require(convo.turns.last?.text)
+        #expect(reply.contains("8:00  Gym"))
+        #expect(reply.contains("8:30  iPhone repair"))
+        #expect(reply.contains("9:00  NYC call"))
+    }
+
+    @Test func theOnDeviceFlagSurvivesSending() async throws {
+        let job = try #require(FirstConversation.jobs.first { $0.id == "morning" })
+        let convo = try await Conversation.firstRun(named: "Nova", onDevice: true).sending(job.prompt, with: model)
+        #expect(convo.onDevice)
     }
 
     @Test func aMorningAnswerWithNoItemsGetsTheFallback() async throws {

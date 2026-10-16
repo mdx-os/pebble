@@ -59,7 +59,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         let prompt = FirstConversation.jobs.first { $0.id == "morning" }?.prompt ?? ""
         for said in [prompt, "school drop off, gym, answer Priya, groceries"] {
             turns.append(ChatTurn(id: UUID(), speaker: .person, text: said))
-            let reply = try! LocalStubModel.answer(to: turns)
+            let reply = (try? LocalStubModel.answer(to: turns)) ?? LocalStubModel.fallback
             turns.append(ChatTurn(id: UUID(), speaker: .agent, text: reply))
         }
         return Conversation(turns: turns, onDevice: true)
