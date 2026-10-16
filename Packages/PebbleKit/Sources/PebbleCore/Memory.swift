@@ -194,7 +194,7 @@ public final class MemoryStore: @unchecked Sendable {
     }
 
     @discardableResult
-    public func remember(_ proposed: String, at date: Date = Date(), source: MemorySource = .toldMe) throws -> Decision {
+    public func remember(_ proposed: String, at date: Date = Date(), source: MemorySource) throws -> Decision {
         let text: String
         switch Self.clean(proposed) {
         case .success(let t): text = t
@@ -221,8 +221,10 @@ public final class MemoryStore: @unchecked Sendable {
         defer { lock.unlock() }
         var all = try load()
         guard let index = all.firstIndex(where: { $0.id == id }) else { return .notFound }
-        // Once the person rewrites a note, it is in their words.
-        let note = MemoryNote(id: id, text: text, savedAt: all[index].savedAt, source: .toldMe)
+        // Once the person changes the words, they are theirs. Saving the same
+        // words keeps where the note came from.
+        let old = all[index]
+        let note = MemoryNote(id: id, text: text, savedAt: old.savedAt, source: text == old.text ? old.source : .toldMe)
         all[index] = note
         try save(all)
         return .saved(note)

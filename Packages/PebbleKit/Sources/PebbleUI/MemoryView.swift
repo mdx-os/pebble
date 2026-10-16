@@ -271,7 +271,7 @@ final class MemoryModel: ObservableObject {
     }
 
     func add() {
-        report(try store.remember(newNote)) { self.newNote = "" }
+        report(try store.remember(newNote, source: .toldMe)) { self.newNote = "" }
     }
 
     func beginEdit(_ note: MemoryNote) {

@@ -11,7 +11,7 @@ struct MemorySourceTests {
 
     @Test func eachSourceIsSavedAndReadBack() throws {
         let store = try scratch()
-        try store.remember("Sam's birthday is in May")
+        try store.remember("Sam's birthday is in May", source: .toldMe)
         try store.remember("Dentist Thursday", source: .fromApp("Calendar"))
         try store.remember("Prefers tea", source: .inferred)
         let reopened = MemoryStore(fileURL: store.fileURL)
@@ -33,6 +33,15 @@ struct MemorySourceTests {
         }
         try store.edit(guess.id, to: "Prefers coffee")
         #expect(store.notes().first?.source == .toldMe)
+    }
+
+    @Test func savingTheSameWordsKeepsWhereItCameFrom() throws {
+        let store = try scratch()
+        guard case .saved(let guess) = try store.remember("Prefers tea", source: .inferred) else {
+            Issue.record("not saved"); return
+        }
+        try store.edit(guess.id, to: "  Prefers tea ")
+        #expect(store.notes().first?.source == .inferred)
     }
 
     @Test func labelsReadPlainly() {
