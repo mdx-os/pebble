@@ -141,6 +141,34 @@ struct OnboardingTests {
         #expect(!memory.hasFinished())
     }
 
+    @Test func startingOverForgetsTheNameToo() throws {
+        let suite = "pebble.onboarding.over.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = UserDefaultsOnboardingStore(defaults: defaults)
+        let names = UserDefaultsAgentNameStore(defaults: defaults)
+        var flow = OnboardingFlow()
+        _ = flow.chooseName("Pip")
+        flow.skip()
+        flow.save(to: store, names: names)
+        #expect(!OnboardingFlow.isNeeded(store: store, names: names))
+        OnboardingFlow.reset(store: store, names: names)
+        #expect(names.loadDisplayName() == nil)
+        #expect(defaults.object(forKey: AgentName.storageKey) == nil)
+        #expect(OnboardingFlow.isNeeded(store: store, names: names))
+    }
+
+    @Test func choicesNothingHonorsAreNeverStored() throws {
+        let suite = "pebble.onboarding.unoffered.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        UserDefaultsOnboardingStore(defaults: defaults).saveProactivity(.suggest)
+        #expect(defaults.object(forKey: Proactivity.storageKey) == nil)
+        let memory = InMemoryOnboardingStore()
+        memory.saveProactivity(.checkIn)
+        #expect(memory.loadProactivity() == .quiet)
+    }
+
     @Test func userDefaultsKeepsTheFirstRunOnDevice() throws {
         let suite = "pebble.onboarding.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))

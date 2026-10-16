@@ -146,6 +146,8 @@ public struct AgentRenameState: Sendable, Equatable {
 public protocol AgentNameStoring: Sendable {
     func loadDisplayName() -> String?
     func saveDisplayName(_ name: String)
+    /// Forget the chosen name, so the product name shows again.
+    func clearDisplayName()
 }
 
 /// The name saved in `UserDefaults` on this device.
@@ -162,6 +164,10 @@ public struct UserDefaultsAgentNameStore: AgentNameStoring, @unchecked Sendable 
 
     public func saveDisplayName(_ name: String) {
         defaults.set(name, forKey: AgentName.storageKey)
+    }
+
+    public func clearDisplayName() {
+        defaults.removeObject(forKey: AgentName.storageKey)
     }
 }
 
@@ -184,5 +190,11 @@ public final class InMemoryAgentNameStore: AgentNameStoring, @unchecked Sendable
         lock.lock()
         defer { lock.unlock() }
         stored = name
+    }
+
+    public func clearDisplayName() {
+        lock.lock()
+        defer { lock.unlock() }
+        stored = nil
     }
 }
