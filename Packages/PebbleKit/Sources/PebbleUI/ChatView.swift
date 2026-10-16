@@ -19,9 +19,22 @@ public struct ChatView: View {
         firstMessage: String? = nil,
         onFirstMessageSent: @escaping () -> Void = {}
     ) {
-        _controller = StateObject(
-            wrappedValue: ChatController(brand: brand, model: model, names: names)
-        )
+        self.init(brand: brand, model: model, names: names, look: look, firstMessage: firstMessage,
+                  conversation: nil, onFirstMessageSent: onFirstMessageSent)
+    }
+
+    package init(
+        brand: Brand,
+        model: any ModelClient,
+        names: any AgentNameStoring,
+        look: AgentLook?,
+        firstMessage: String?,
+        conversation: Conversation?,
+        onFirstMessageSent: @escaping () -> Void = {}
+    ) {
+        let controller = ChatController(brand: brand, model: model, names: names)
+        if let conversation { controller.conversation = conversation }
+        _controller = StateObject(wrappedValue: controller)
         self.look = look
         self.firstMessage = firstMessage
         self.onFirstMessageSent = onFirstMessageSent
