@@ -25,7 +25,7 @@ public enum Proactivity: String, CaseIterable, Codable, Sendable {
 
     public var title: String {
         switch self {
-        case .quiet: "Wait until I ask"
+        case .quiet: "Wait until you ask"
         case .checkIn: "Check in now and then"
         case .suggest: "Speak up with ideas"
         }
@@ -180,7 +180,10 @@ public final class InMemoryOnboardingStore: OnboardingStoring, @unchecked Sendab
         self.finished = finished
     }
 
-    public func loadProactivity() -> Proactivity { lock.lock(); defer { lock.unlock() }; return proactivity }
+    public func loadProactivity() -> Proactivity {
+        lock.lock(); defer { lock.unlock() }
+        return proactivity.isOffered ? proactivity : .startingPoint
+    }
     public func saveProactivity(_ choice: Proactivity) {
         guard choice.isOffered else { return }
         lock.lock(); proactivity = choice; lock.unlock()
