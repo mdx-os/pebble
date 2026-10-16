@@ -23,6 +23,8 @@ import PebbleCore
 /// person chooses one.
 public protocol ModelClient: Sendable {
     /// Answers the transcript. The newest person turn is the message to answer.
+    /// Call this only through `Conversation.appendingReply`, which runs
+    /// `CareCheck` first so words of crisis never reach a model.
     func reply(to transcript: [ChatTurn]) async throws -> String
 
     /// True only when every word stays on this device. The chat promises

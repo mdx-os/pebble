@@ -9,6 +9,9 @@ public enum CareCheck {
         "kill myself", "kms", "suicide", "suicidal", "end my life", "end it all",
         "hurt myself", "self harm", "want to die", "not worth living",
         "better off without me", "don't want to be here", "dont want to be here",
+        "killing myself", "hurting myself", "cutting myself", "wanna die",
+        "wish i was dead", "wish i were dead", "no reason to live", "can't go on",
+        "cant go on", "want to end it", "self harming",
     ]
 
     /// A small, fixed check that favors caring too often over missing it.
@@ -22,6 +25,7 @@ public enum CareCheck {
         let folded = text
             .replacingOccurrences(of: "\u{2019}", with: "'")
             .replacingOccurrences(of: "\u{2018}", with: "'")
+            .replacingOccurrences(of: "\u{02BC}", with: "'")
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
             .lowercased()
         let spaced = folded.unicodeScalars.map { scalar -> Character in

@@ -279,6 +279,8 @@ final class ChatController: ObservableObject {
         self.names = names
         let profile = AgentProfile(brand: brand, stored: names.loadDisplayName())
         naming = AgentRenameState(profile: profile)
+        // The privacy line is decided once here. If the model can ever be
+        // swapped, rebuild the opening so it never promises too much.
         conversation = .firstRun(named: profile.displayName.text, onDevice: model.runsOnDevice)
     }
 

@@ -75,7 +75,8 @@ public struct LocalStubModel: ModelClient {
             parts = parts.flatMap { $0.components(separatedBy: separator) }
         }
         let items = parts
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters)) }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.contains(where: { $0.isLetter || $0.isNumber }) }
             .filter { !$0.isEmpty }
             .map(capitalizedFirst)
         return items
@@ -93,4 +94,10 @@ public struct LocalStubModel: ModelClient {
 
     package static let morningReask = "I didn't catch any steps there. Try a few things separated by commas, like gym, email Ana, groceries."
 
+
+    private static let openers: [String: String] = [
+        "morning": "Tell me what's on for the morning, separated by commas. I'll turn it into a short plan you can keep.",
+        "talk": "I'm here. Tell me what's going on, and what you want to be true when we're done.",
+        "remember": "Tell me the detail in your own words. I'll say it back so you can check I heard it. It stays on this device.",
+    ]
 }

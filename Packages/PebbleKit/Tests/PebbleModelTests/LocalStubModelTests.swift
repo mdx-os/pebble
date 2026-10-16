@@ -63,6 +63,7 @@ struct LocalStubModelTests {
     @Test func onlyCommasSemicolonsAndNewLinesSplitSteps() {
         let items = LocalStubModel.planItems(from: "mac and cheese, pick up Sam and Ana then shop\ncall mum; ")
         #expect(items == ["Mac and cheese", "Pick up Sam and Ana then shop", "Call mum"])
+        #expect(LocalStubModel.planItems(from: "call (mum), see Dr. Lee") == ["Call (mum)", "See Dr. Lee"])
     }
 
     @Test(arguments: [
@@ -70,13 +71,18 @@ struct LocalStubModelTests {
         "Honestly I don\u{2019}t want to be here anymore",
         "thinking about SELF HARM again",
         "everyone is better off without me",
+        "I keep hurting myself",
+        "I wish I was dead",
+        "I can\u{2019}t go on",
+        "I don\u{02BC}t want to be here",
     ])
     func wordsOfCrisisGetCareBeforeAnyModel(text: String) async throws {
         #expect(CareCheck.needsCare(text))
         #expect(try await play("talk", then: text) == CareCheck.reply)
         #expect(try await play("morning", then: text) == CareCheck.reply)
+        struct Reached: Error {}
         struct NeverAsked: ModelClient {
-            func reply(to transcript: [ChatTurn]) async throws -> String { "a plan" }
+            func reply(to transcript: [ChatTurn]) async throws -> String { throw Reached() }
         }
         let next = try await Conversation.firstRun(named: "Nova").sending(text, with: NeverAsked())
         #expect(next.turns.last?.text == CareCheck.reply)
