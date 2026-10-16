@@ -187,13 +187,29 @@ public final class AskFirst: @unchecked Sendable {
     /// The app's one rule.
     public static let shared = AskFirst()
 
+    /// How long a question stays open. After this an answer can't approve
+    /// it; the agent has to ask again with what is true now.
+    public static let defaultWindow: TimeInterval = 5 * 60
+
     private let lock = NSLock()
-    private var pending: Set<UUID> = []
+    /// Open questions and when each was asked.
+    private var pending: [UUID: Date] = [:]
+    private let window: TimeInterval
+    private let now: @Sendable () -> Date
 
-    private init() {}
+    private init(window: TimeInterval = AskFirst.defaultWindow, now: @escaping @Sendable () -> Date = Date.init) {
+        self.window = window
+        self.now = now
+    }
 
-    /// A separate rule for tests, so they don't share state.
-    package static func isolated() -> AskFirst { AskFirst() }
+    /// A separate rule for tests, so they don't share state. Tests can pass
+    /// a clock to move time forward.
+    package static func isolated(
+        window: TimeInterval = AskFirst.defaultWindow,
+        now: @escaping @Sendable () -> Date = Date.init
+    ) -> AskFirst {
+        AskFirst(window: window, now: now)
+    }
 
     /// Record a question to show the person. Nil when the question can't say
     /// exactly where it goes (no handle that fits in full) or, for a
@@ -206,7 +222,9 @@ public final class AskFirst: @unchecked Sendable {
         if action.kind == .purchase, action.price == nil { return nil }
         let request = ConfirmationRequest(action: action)
         lock.lock()
-        pending.insert(request.id)
+        let time = now()
+        pending = pending.filter { time.timeIntervalSince($0.value) <= window }
+        pending[request.id] = time
         lock.unlock()
         return request
     }
@@ -235,8 +253,21 @@ public final class AskFirst: @unchecked Sendable {
     /// The person said no or closed the question. It can't be approved later.
     public func withdraw(_ request: ConfirmationRequest) {
         lock.lock()
-        pending.remove(request.id)
+        pending[request.id] = nil
         lock.unlock()
+    }
+
+    /// True once a question can no longer be approved: it expired, was
+    /// answered, or was withdrawn.
+    public func isClosed(_ request: ConfirmationRequest) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let asked = pending[request.id] else { return true }
+        if now().timeIntervalSince(asked) > window {
+            pending[request.id] = nil
+            return true
+        }
+        return false
     }
 
     /// Decide whether an action may happen now. A `.proceed` spends the approval.
@@ -245,7 +276,10 @@ public final class AskFirst: @unchecked Sendable {
         if action.kind == .purchase, action.price == nil { return .stop }
         lock.lock()
         defer { lock.unlock() }
-        guard pending.remove(approval.id) != nil else { return .stop }
+        guard let asked = pending.removeValue(forKey: approval.id) else { return .stop }
+        // Clocks can move backwards; a question from the future is not trusted either.
+        let age = now().timeIntervalSince(asked)
+        guard age >= 0, age <= window else { return .stop }
         return .proceed
     }
 }

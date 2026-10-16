@@ -30,9 +30,17 @@ public struct ConfirmationSheet: View {
         self.onDecline = onDecline
     }
 
+    @State private var expired = false
+
     func approve() {
         guard !answered else { return }
         answered = true
+        // A yes after the question timed out does nothing but say so.
+        if rule.isClosed(request) {
+            expired = true
+            onDecline()
+            return
+        }
         onApprove(request.approve())
     }
 
@@ -104,7 +112,7 @@ public struct ConfirmationSheet: View {
             }
             .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
-            Text(ConfirmationWords.promise)
+            Text(expired ? ConfirmationWords.expired : ConfirmationWords.promise)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
