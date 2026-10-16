@@ -65,7 +65,7 @@ struct ChatRenameTests {
         #expect(store.loadDisplayName() == nil)
         #expect(controller.nameHint == FirstConversation.needsAName)
         #expect(controller.isChoosingName)
-        #expect(controller.conversation.turns.first?.text == FirstConversation.opening(named: brand.name))
+        #expect(controller.conversation.turns.first?.text == FirstConversation.opening(named: brand.name, onDevice: true))
     }
 
     @Test func aNameChosenEarlierIsRestored() {
