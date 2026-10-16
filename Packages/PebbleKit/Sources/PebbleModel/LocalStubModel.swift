@@ -8,6 +8,8 @@ import PebbleCore
 public struct LocalStubModel: ModelClient {
     public init() {}
 
+    public var runsOnDevice: Bool { true }
+
     public func reply(to transcript: [ChatTurn]) async throws -> String {
         try Self.answer(to: transcript)
     }
@@ -16,6 +18,7 @@ public struct LocalStubModel: ModelClient {
     public static func answer(to transcript: [ChatTurn]) throws -> String {
         let people = transcript.filter { $0.speaker == .person }
         guard let last = people.last else { throw ModelClientError.noPersonTurn }
+        if needsCare(last.text) { return care }
         if let job = job(matching: last.text) {
             return openers[job.id] ?? fallback
         }
@@ -43,13 +46,18 @@ public struct LocalStubModel: ModelClient {
     }
 
     /// Splits what the person listed into steps and gives each a start time.
+    /// Times are a simple 8:00 start in 30 minute steps; a real model can do better.
     package static func morningPlan(from text: String) -> String {
-        let steps = planItems(from: text)
-        guard !steps.isEmpty else { return fallback }
+        let all = planItems(from: text)
+        let steps = Array(all.prefix(maxPlanItems))
+        guard !steps.isEmpty else { return morningReask }
         var lines = ["Here's a calm start, beginning at 8:00. Move anything that doesn't fit."]
         for (index, step) in steps.enumerated() {
             let minutes = 8 * 60 + index * 30
             lines.append("\(minutes / 60):\(String(format: "%02d", minutes % 60))  \(step)")
+        }
+        if all.count > steps.count {
+            lines.append("I kept the first \(maxPlanItems) so the morning stays light. Tell me what else and I'll fit it in.")
         }
         lines.append("Start with the first one. The rest gets easier after that.")
         return lines.joined(separator: "\n")
@@ -59,17 +67,33 @@ public struct LocalStubModel: ModelClient {
 
     package static func planItems(from text: String) -> [String] {
         var parts = [text]
-        for separator in ["\n", ",", ";", " and ", " then "] {
+        // Commas, semicolons and new lines only, so "mac and cheese" stays whole.
+        for separator in ["\n", ",", ";"] {
             parts = parts.flatMap { $0.components(separatedBy: separator) }
         }
         let items = parts
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters)) }
             .filter { !$0.isEmpty }
             .map { $0.prefix(1).uppercased() + $0.dropFirst() }
-        return Array(items.prefix(maxPlanItems))
+        return items
     }
 
-    package static let fallback = "I'm a small helper that runs only on this device, so I'm best at morning plans, saying a detail back, and talking things through. Pick one of those and I'll get you a result."
+    package static let fallback = "Thanks for telling me. I'm a small helper that runs only on this device, so I can't do everything yet. I'm good at morning plans, saying a detail back, and talking things through. Want to start with one of those?"
+
+    package static let morningReask = "I didn't catch any steps there. Try a few things separated by commas, like gym, email Ana, groceries."
+
+    package static let care = "I'm really glad you told me. I'm a small helper and I can't keep you safe on my own. If you might act on this, please call or text 988 now, or your local emergency number, and reach someone you trust."
+
+    private static let careWords = [
+        "kill myself", "suicide", "suicidal", "end my life", "hurt myself", "self harm",
+        "self-harm", "want to die", "don't want to be here", "dont want to be here",
+    ]
+
+    /// A small, fixed check. It favors caring too often over missing it.
+    package static func needsCare(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return careWords.contains { lower.contains($0) }
+    }
 
     private static let openers: [String: String] = [
         "morning": "Tell me what's on for the morning, separated by commas. I'll turn it into a short plan you can keep.",

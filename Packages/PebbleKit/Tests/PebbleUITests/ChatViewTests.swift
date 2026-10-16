@@ -51,7 +51,7 @@ struct ChatRenameTests {
         #expect(store.loadDisplayName() == "Pip")
         #expect(controller.displayName.text == "Pip")
         #expect(controller.brand.name == brand.name)
-        #expect(controller.conversation.turns.first?.text == FirstConversation.opening(named: "Pip"))
+        #expect(controller.conversation.turns.first?.text == FirstConversation.opening(named: "Pip", onDevice: true))
         #expect(!controller.showsNameInvitation)
         #expect(controller.renameTitle == FirstConversation.changeNameTitle)
     }
@@ -73,7 +73,7 @@ struct ChatRenameTests {
         let controller = ChatController(brand: brand, model: LocalStubModel(), names: store)
         #expect(controller.displayName.text == "Pip")
         #expect(controller.brand.name == brand.name)
-        #expect(controller.conversation.turns.first?.text == FirstConversation.opening(named: "Pip"))
+        #expect(controller.conversation.turns.first?.text == FirstConversation.opening(named: "Pip", onDevice: true))
         #expect(!controller.showsNameInvitation)
     }
 
@@ -88,6 +88,23 @@ struct ChatRenameTests {
         #expect(store.loadDisplayName() == "Pip")
         #expect(controller.displayName.text == "Pip")
         #expect(controller.conversation.turns.map(\.text) == spoken)
+    }
+
+    @Test func onlyNewAgentLinesAreReadAloud() throws {
+        let start = Conversation.firstRun(named: "Pip", onDevice: true)
+        #expect(ChatView.announcement(for: start) == nil)
+        let asked = try start.appendingPerson("gym")
+        #expect(ChatView.announcement(for: asked) == nil)
+        let answered = Conversation(
+            turns: asked.turns + [ChatTurn(id: UUID(), speaker: .agent, text: "Here's a plan")],
+            onDevice: true
+        )
+        #expect(ChatView.announcement(for: answered) == "Here's a plan")
+    }
+
+    @Test func theAppModelOpensWithAnHonestPrivacyLine() {
+        let controller = ChatController(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore())
+        #expect(controller.conversation.turns.first?.text.contains("stays here") == true)
     }
 }
 #endif

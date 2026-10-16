@@ -13,19 +13,22 @@ public enum ConversationError: Error, Equatable, Sendable {
 /// The turns so far, and how a new line is added.
 public struct Conversation: Sendable, Equatable {
     public private(set) var turns: [ChatTurn]
+    /// Whether the opening may promise that words stay on this device.
+    public let onDevice: Bool
 
-    public init(turns: [ChatTurn]) {
+    public init(turns: [ChatTurn], onDevice: Bool = false) {
         self.turns = turns
+        self.onDevice = onDevice
     }
 
-    public static func firstRun(named name: String) -> Conversation {
+    public static func firstRun(named name: String, onDevice: Bool = false) -> Conversation {
         Conversation(turns: [
             ChatTurn(
                 id: FirstConversation.openingID,
                 speaker: .agent,
-                text: FirstConversation.opening(named: name)
+                text: FirstConversation.opening(named: name, onDevice: onDevice)
             ),
-        ])
+        ], onDevice: onDevice)
     }
 
     /// Rewrites the opening line when the person has not spoken yet.
@@ -37,10 +40,10 @@ public struct Conversation: Sendable, Equatable {
             return ChatTurn(
                 id: turn.id,
                 speaker: .agent,
-                text: FirstConversation.opening(named: name.text)
+                text: FirstConversation.opening(named: name.text, onDevice: onDevice)
             )
         }
-        return Conversation(turns: turns)
+        return Conversation(turns: turns, onDevice: onDevice)
     }
 
     public var isWaitingForPerson: Bool {

@@ -7,6 +7,7 @@ import SwiftUI
 public struct ChatView: View {
     @StateObject private var controller: ChatController
     @FocusState private var nameFieldFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let look: AgentLook?
     private let firstMessage: String?
     private let onFirstMessageSent: () -> Void
@@ -32,9 +33,11 @@ public struct ChatView: View {
         conversation: Conversation?,
         onFirstMessageSent: @escaping () -> Void = {}
     ) {
-        let controller = ChatController(brand: brand, model: model, names: names)
-        if let conversation { controller.conversation = conversation }
-        _controller = StateObject(wrappedValue: controller)
+        _controller = StateObject(wrappedValue: {
+            let controller = ChatController(brand: brand, model: model, names: names)
+            if let conversation { controller.conversation = conversation }
+            return controller
+        }())
         self.look = look
         self.firstMessage = firstMessage
         self.onFirstMessageSent = onFirstMessageSent
@@ -66,9 +69,17 @@ public struct ChatView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.bottom, 12)
             }
-            .onAppear { Self.scrollToLatest(controller.conversation, with: scroller, animated: false) }
+            .onAppear {
+                // Wait one pass so layout is done before jumping to the end.
+                DispatchQueue.main.async {
+                    Self.scrollToLatest(controller.conversation, with: scroller, animated: false)
+                }
+            }
             .onChange(of: controller.conversation.turns.count) {
-                Self.scrollToLatest(controller.conversation, with: scroller, animated: true)
+                Self.scrollToLatest(controller.conversation, with: scroller, animated: !reduceMotion)
+                if let line = Self.announcement(for: controller.conversation) {
+                    AccessibilityNotification.Announcement(line).post()
+                }
             }
             }
             composer
@@ -169,6 +180,14 @@ public struct ChatView: View {
         }
     }
 
+    /// New lines from the agent are read out, since they may land offscreen.
+    static func announcement(for conversation: Conversation) -> String? {
+        guard let last = conversation.turns.last, last.speaker == .agent, !conversation.isWaitingForPerson else {
+            return nil
+        }
+        return last.text
+    }
+
     private var transcript: some View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(controller.conversation.turns) { turn in
@@ -260,7 +279,7 @@ final class ChatController: ObservableObject {
         self.names = names
         let profile = AgentProfile(brand: brand, stored: names.loadDisplayName())
         naming = AgentRenameState(profile: profile)
-        conversation = .firstRun(named: profile.displayName.text)
+        conversation = .firstRun(named: profile.displayName.text, onDevice: model.runsOnDevice)
     }
 
     var displayName: AgentName { naming.profile.displayName }

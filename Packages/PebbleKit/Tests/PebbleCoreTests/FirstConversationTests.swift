@@ -5,7 +5,7 @@ struct FirstConversationTests {
     let brand = Brand(name: "Nova")
 
     @Test func openingUsesTheNameItIsGiven() {
-        #expect(FirstConversation.opening(named: "Nova") == "Hi, I'm Nova. I run on this device, so what you tell me stays here. Pick a place to start, or tell me what's on your mind.")
+        #expect(FirstConversation.opening(named: "Nova") == "Hi, I'm Nova. Pick a place to start, or tell me what's on your mind.")
     }
 
     @Test func openingCanUseADifferentNameThanTheProduct() {

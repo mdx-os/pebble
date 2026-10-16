@@ -24,6 +24,15 @@ import PebbleCore
 public protocol ModelClient: Sendable {
     /// Answers the transcript. The newest person turn is the message to answer.
     func reply(to transcript: [ChatTurn]) async throws -> String
+
+    /// True only when every word stays on this device. The chat promises
+    /// privacy in its opening line only when this is true.
+    var runsOnDevice: Bool { get }
+}
+
+extension ModelClient {
+    /// Off by default, so a new adapter never makes a promise it can't keep.
+    public var runsOnDevice: Bool { false }
 }
 
 public enum ModelClientError: Error, Equatable, Sendable {

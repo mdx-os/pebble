@@ -55,14 +55,14 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
 
     /// The morning starter played through the on-device model.
     static func sampleFirstChat() -> Conversation {
-        var turns = Conversation.firstRun(named: "Pip").turns
+        var turns = Conversation.firstRun(named: "Pip", onDevice: true).turns
         let prompt = FirstConversation.jobs.first { $0.id == "morning" }?.prompt ?? ""
         for said in [prompt, "school drop off, gym, answer Priya, groceries"] {
             turns.append(ChatTurn(id: UUID(), speaker: .person, text: said))
-            let reply = (try? LocalStubModel.answer(to: turns)) ?? ""
+            let reply = try! LocalStubModel.answer(to: turns)
             turns.append(ChatTurn(id: UUID(), speaker: .agent, text: reply))
         }
-        return Conversation(turns: turns)
+        return Conversation(turns: turns, onDevice: true)
     }
 
     private var page: OnboardingView.Page {

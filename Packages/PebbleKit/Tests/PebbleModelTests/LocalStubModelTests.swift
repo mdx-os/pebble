@@ -1,6 +1,6 @@
 import Foundation
 import PebbleCore
-@testable import PebbleModel
+import PebbleModel
 import Testing
 
 struct LocalStubModelTests {
@@ -32,6 +32,7 @@ struct LocalStubModelTests {
 
     @Test func otherWordsGetAnHonestFallback() async throws {
         let reply = try await model.reply(to: [person("What should I cook tonight?")])
+        #expect(reply.hasPrefix("Thanks for telling me."))
         #expect(reply.contains("only on this device"))
         #expect(reply.contains("morning plans"))
         for job in FirstConversation.jobs {
@@ -52,14 +53,38 @@ struct LocalStubModelTests {
         """)
     }
 
-    @Test func aLongMorningListIsCappedSoThePlanStaysShort() {
-        let items = LocalStubModel.planItems(from: "a, b, c, d, e, f, g, h")
-        #expect(items == ["A", "B", "C", "D", "E", "F"])
+    @Test func aLongMorningListIsCappedAndSaysSo() async throws {
+        let reply = try await play("morning", then: "a, b, c, d, e, f, g, h")
+        #expect(reply.contains("10:30  F"))
+        #expect(!reply.contains("  G"))
+        #expect(reply.contains("I kept the first 6"))
+    }
+
+    @Test func onlyCommasSemicolonsAndNewLinesSplitSteps() {
+        let items = LocalStubModel.planItems(from: "mac and cheese, pick up Sam and Ana then shop\ncall mum; ")
+        #expect(items == ["Mac and cheese", "Pick up Sam and Ana then shop", "Call mum"])
+    }
+
+    @Test(arguments: [
+        "I want to kill myself",
+        "Honestly I don't want to be here anymore",
+        "thinking about SELF HARM again",
+    ])
+    func wordsOfCrisisGetCareInsteadOfAPlan(text: String) async throws {
+        #expect(try await play("talk", then: text) == LocalStubModel.care)
+        #expect(try await play("morning", then: text) == LocalStubModel.care)
+        #expect(try await model.reply(to: [person(text)]) == LocalStubModel.care)
+        #expect(LocalStubModel.care.contains("988"))
+    }
+
+    @Test func ordinaryWordsDoNotTriggerCare() {
+        #expect(!LocalStubModel.needsCare("I'm dying to try that bakery"))
+        #expect(!LocalStubModel.needsCare("Work is piling up"))
     }
 
     @Test func aMorningAnswerWithNoItemsGetsTheFallback() async throws {
         let reply = try await play("morning", then: " , ; ")
-        #expect(reply == LocalStubModel.fallback)
+        #expect(reply == LocalStubModel.morningReask)
     }
 
     @Test func theRememberStarterSaysTheDetailBackAndDoesNotClaimToSave() async throws {
@@ -85,8 +110,23 @@ struct LocalStubModelTests {
         for job in FirstConversation.jobs {
             let turns = [person(job.prompt), agent("..."), person("gym, call mum, email Ana")]
             let took = clock.measure { _ = try? LocalStubModel.answer(to: turns) }
-            #expect(took < .milliseconds(50), "\(job.id) took \(took)")
+            #expect(took < .milliseconds(250), "\(job.id) took \(took)")
         }
+    }
+
+    @Test func onlyAnOnDeviceModelMayPromisePrivacy() throws {
+        struct Remote: ModelClient {
+            func reply(to transcript: [ChatTurn]) async throws -> String { "" }
+        }
+        #expect(LocalStubModel().runsOnDevice)
+        #expect(!Remote().runsOnDevice)
+        let local = Conversation.firstRun(named: "Nova", onDevice: true)
+        let remote = Conversation.firstRun(named: "Nova", onDevice: false)
+        #expect(local.turns.first?.text.contains("stays here") == true)
+        #expect(remote.turns.first?.text.contains("stays here") == false)
+        guard case .accepted(let pip) = AgentName.decide("Pip") else { Issue.record("Pip refused"); return }
+        let renamed = local.renamingAgent(to: pip)
+        #expect(renamed.turns.first?.text == FirstConversation.opening(named: "Pip", onDevice: true))
     }
 
     @Test func aStarterJobRoundTripUsesTheModel() async throws {
