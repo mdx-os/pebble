@@ -269,6 +269,7 @@ final class MemoryModel: ObservableObject {
 
     func forget(_ note: MemoryNote) {
         pendingForget = nil
+        cancelEdit()
         do {
             status = try store.forget(note.id) ? MemoryWords.forgotten : nil
         } catch {
@@ -278,6 +279,7 @@ final class MemoryModel: ObservableObject {
     }
 
     func forgetEverything() {
+        cancelEdit()
         do {
             try store.forgetEverything()
             status = MemoryWords.forgotten
@@ -293,7 +295,7 @@ final class MemoryModel: ObservableObject {
             case .saved: status = nil; onSaved()
             case .needsWords: status = MemoryWords.needsWords
             case .tooLong: status = MemoryWords.tooLong
-            case .notFound: status = nil
+            case .notFound: status = nil; cancelEdit()
             }
         } catch is MemoryStore.Unavailable {
             status = MemoryWords.unavailable

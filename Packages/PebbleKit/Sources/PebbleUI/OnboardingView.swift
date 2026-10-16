@@ -299,9 +299,10 @@ final class OnboardingModel: ObservableObject {
     }
 
     func commitName() {
-        if flow.chooseName(draftName), let name = flow.name {
+        // The name is saved with everything else when the first run finishes,
+        // so quitting halfway brings the whole first run back.
+        if flow.chooseName(draftName) {
             hint = nil
-            names.saveDisplayName(name.text)
             advance()
         } else {
             hint = flow.hint

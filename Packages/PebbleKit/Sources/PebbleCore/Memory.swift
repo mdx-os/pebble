@@ -25,6 +25,7 @@ public enum MemoryWords {
     public static let editTitle = "Change"
     public static let saveTitle = "Save"
     public static let cancelTitle = "Cancel"
+    public static let doneTitle = "Done"
     public static let addPlaceholder = "Something for me to remember"
     public static let addTitle = "Remember"
     public static let forgetEverythingQuestion = "Forget everything I remember?"

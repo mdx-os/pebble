@@ -53,6 +53,8 @@ public struct HomeView: View {
                         }
                 }
                 .sheet(isPresented: $showsMemory) {
+                    NavigationStack {
+                    Group {
                     if let memory {
                         MemoryView(store: memory)
                             .presentationDragIndicator(.visible)
@@ -65,6 +67,14 @@ public struct HomeView: View {
                                 .padding(Theme.gutter)
                         }
                         .presentationDragIndicator(.visible)
+                    }
+                    }
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button(MemoryWords.doneTitle) { showsMemory = false }
+                                .keyboardShortcut(.cancelAction)
+                        }
+                    }
                     }
                 }
                 .transition(.opacity)

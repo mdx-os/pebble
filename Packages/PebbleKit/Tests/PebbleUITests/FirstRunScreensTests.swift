@@ -37,7 +37,8 @@ struct FirstRunScreensTests {
         #expect(model.hint == FirstConversation.needsAName)
         model.draftName = " Pip "
         model.commitName()
-        #expect(names.loadDisplayName() == "Pip")
+        // Not saved until the first run finishes.
+        #expect(names.loadDisplayName() == nil)
         #expect(model.page == .look)
         model.look = .tide
         model.advance()
@@ -47,6 +48,7 @@ struct FirstRunScreensTests {
         model.pick(job)
         #expect(sent == .some(job.prompt))
         #expect(store.hasFinished())
+        #expect(names.loadDisplayName() == "Pip")
         #expect(AgentLook.load(from: looks) == .tide)
         #expect(model.displayName == "Pip")
     }
@@ -100,6 +102,12 @@ struct FirstRunScreensTests {
         model.saveEdit()
         #expect(model.editingID == nil)
         #expect(!String(decoding: try Data(contentsOf: url), as: UTF8.self).contains("tea"))
+
+        let coffee = try #require(model.notes.first)
+        model.beginEdit(coffee)
+        model.forget(coffee)
+        #expect(model.editingID == nil)
+        #expect(model.editDraft.isEmpty)
 
         model.forgetEverything()
         #expect(model.notes.isEmpty)
