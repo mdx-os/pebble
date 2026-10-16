@@ -41,6 +41,8 @@ public final class MemoryStore: @unchecked Sendable {
     }
 
     public static let maxLength = 500
+    /// Size cap in bytes, so a short looking note can't carry megabytes.
+    public static let maxBytes = 4_096
 
     /// The file is there but its words can't be decoded. Writes refuse rather
     /// than replace notes that may still be recoverable.
@@ -115,6 +117,9 @@ public final class MemoryStore: @unchecked Sendable {
     public func contents() -> Contents {
         lock.lock()
         defer { lock.unlock() }
+        // A staged copy left by an interrupted save is never newer than the
+        // real file, and it can't be seen, so drop it.
+        try? removeStaged()
         do {
             return .notes(try load())
         } catch is Unavailable {
@@ -127,6 +132,7 @@ public final class MemoryStore: @unchecked Sendable {
     /// True when there is anything on disk to forget, readable or not.
     public var hasStoredFile: Bool {
         FileManager.default.fileExists(atPath: fileURL.path)
+            || FileManager.default.fileExists(atPath: stagingURL.path)
     }
 
     @discardableResult
@@ -238,7 +244,7 @@ public final class MemoryStore: @unchecked Sendable {
     private static func clean(_ proposed: String) -> Result<String, Refusal> {
         let text = proposed.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty { return .failure(.needsWords) }
-        if text.count > maxLength { return .failure(.tooLong) }
+        if text.count > maxLength || text.utf8.count > maxBytes { return .failure(.tooLong) }
         return .success(text)
     }
 }

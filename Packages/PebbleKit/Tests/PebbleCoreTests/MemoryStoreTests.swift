@@ -103,6 +103,20 @@ struct MemoryStoreTests {
         #expect(!folderContains("4417"))
     }
 
+    @Test func aStagedCopyWithNoRealFileIsVisibleUntilClearedOnRead() throws {
+        try Data("Door code 4417".utf8).write(to: store.stagingURL)
+        #expect(store.hasStoredFile)
+        #expect(store.contents() == .notes([]))
+        #expect(!folderContains("4417"))
+        #expect(!store.hasStoredFile)
+    }
+
+    @Test func aNoteHeavyWithHiddenMarksIsTooLong() throws {
+        let heavy = "a" + String(repeating: "\u{0301}", count: 5_000)
+        #expect(heavy.count == 1)
+        #expect(try store.remember(heavy) == .tooLong)
+    }
+
     @Test func forgetEverythingAlsoClearsAStagedCopy() throws {
         try store.remember("Door code 4417")
         try Data("Door code 4417".utf8).write(to: store.stagingURL)
