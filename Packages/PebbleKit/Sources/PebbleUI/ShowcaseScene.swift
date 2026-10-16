@@ -30,7 +30,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
             case .firstChat:
                 ZStack {
                     Backdrop()
-                    ChatView(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(),
+                    ChatView(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
                              look: AgentLook.load(from: looks), firstMessage: nil,
                              conversation: Self.sampleFirstChat())
                 }

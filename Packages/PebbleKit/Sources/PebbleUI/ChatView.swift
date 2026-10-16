@@ -45,6 +45,7 @@ public struct ChatView: View {
             header
                 .padding(.top, 28)
                 .padding(.bottom, 20)
+            ScrollViewReader { scroller in
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     transcript
@@ -64,6 +65,11 @@ public struct ChatView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.bottom, 12)
+            }
+            .onAppear { Self.scrollToLatest(controller.conversation, with: scroller, animated: false) }
+            .onChange(of: controller.conversation.turns.count) {
+                Self.scrollToLatest(controller.conversation, with: scroller, animated: true)
+            }
             }
             composer
                 .padding(.vertical, 16)
@@ -153,10 +159,21 @@ public struct ChatView: View {
         }
     }
 
+    /// New replies land below the fold on small screens, so follow them.
+    private static func scrollToLatest(_ conversation: Conversation, with scroller: ScrollViewProxy, animated: Bool) {
+        guard let last = conversation.turns.last?.id else { return }
+        if animated {
+            withAnimation(.easeOut(duration: 0.25)) { scroller.scrollTo(last, anchor: .bottom) }
+        } else {
+            scroller.scrollTo(last, anchor: .bottom)
+        }
+    }
+
     private var transcript: some View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(controller.conversation.turns) { turn in
                 bubble(turn)
+                    .id(turn.id)
             }
         }
     }
