@@ -140,11 +140,11 @@ struct FirstRunScreensTests {
                                     details: "Sourdough", price: Price(minorUnits: 1450, currency: "CAD"))
         let rule = AskFirst.isolated()
         var approvals: [Approval] = []
-        let sheet = ConfirmationSheet(request: rule.ask(action)!, rule: rule,
+        let sheet = ConfirmationState(request: rule.ask(action)!, rule: rule,
                                       onApprove: { approvals.append($0) }, onDecline: {})
-        sheet.approve()
-        sheet.approve()
-        #expect(approvals.count >= 1)
+        sheet.tapPrimary()
+        #expect(sheet.tapPrimary() == .ignored)
+        #expect(approvals.count == 1)
         #expect(rule.decide(action, approval: approvals.first) == .proceed)
         for extra in approvals {
             #expect(rule.decide(action, approval: extra) == .stop)
@@ -156,8 +156,8 @@ struct FirstRunScreensTests {
         let rule = AskFirst.isolated()
         let request = rule.ask(action)!
         var declined = false
-        let sheet = ConfirmationSheet(request: request, rule: rule, onApprove: { _ in }, onDecline: { declined = true })
-        sheet.decline()
+        let sheet = ConfirmationState(request: request, rule: rule, onApprove: { _ in }, onDecline: { declined = true })
+        sheet.cancel()
         #expect(declined)
         #expect(rule.decide(action, approval: request.approve()) == .stop)
     }

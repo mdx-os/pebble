@@ -7,7 +7,7 @@ import SwiftUI
 /// Fixed screens with sample content, used for screenshots and previews.
 /// Nothing here reads or writes the person's real data.
 public enum ShowcaseScene: String, CaseIterable, Sendable {
-    case hello, name, look, ideas, memory, confirm, firstChat
+    case hello, name, look, ideas, memory, confirm, confirmTimedOut, firstChat
 
     public static let launchKey = "pebbleScreen"
 
@@ -36,10 +36,11 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                 }
             case .memory:
                 MemoryView(store: Self.sampleMemory())
-            case .confirm:
+            case .confirm, .confirmTimedOut:
                 ZStack {
                     Backdrop()
-                    let rule = AskFirst.isolated()
+                    // The timed out scene uses a window that has already passed.
+                    let rule = AskFirst.isolated(window: self == .confirmTimedOut ? -1 : AskFirst.defaultWindow)
                     if let request = rule.ask(ProposedAction(
                             kind: .purchase,
                             recipient: Recipient(id: "merchant:sample-bakery", displayName: "Rise Bakery", handle: "risebakery.ca"),
