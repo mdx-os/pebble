@@ -225,11 +225,11 @@ struct LocalStubModelTests {
         #expect(next.turns.last?.text == CareCheck.reply)
         #expect(CareCheck.reply.contains("988"))
         // A short "yes" after care still stays local and never reaches a remote model.
-        let follow = try await next.appendingPerson("yes")
+        let follow = try next.appendingPerson("yes")
         let stayed = try await follow.appendingReply(from: Remote())
         #expect(stayed.turns.last?.text == CareCheck.followUp)
         // Picking a starter after care must still refuse a remote model.
-        let pick = try await stayed.appendingPerson("plan my morning")
+        let pick = try stayed.appendingPerson("plan my morning")
         await #expect(throws: ConversationError.leavesDevice) {
             _ = try await pick.appendingReply(from: Remote())
         }
