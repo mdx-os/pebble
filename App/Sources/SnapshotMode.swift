@@ -18,10 +18,11 @@ enum SnapshotMode {
         guard let path = UserDefaults.standard.string(forKey: "snapshotPath") else { return }
         #if DEBUG
         let scene = UserDefaults.standard.string(forKey: ShowcaseScene.launchKey).flatMap(ShowcaseScene.init(rawValue:)) ?? .hello
-        let view = scene.view(brand: brand)
+        let screen = AnyView(scene.view(brand: brand))
         #else
-        let view = OnboardingView(brand: brand, names: InMemoryAgentNameStore(), store: InMemoryOnboardingStore()) { _ in }
+        let screen = AnyView(OnboardingView(brand: brand, names: InMemoryAgentNameStore(), store: InMemoryOnboardingStore()) { _ in })
         #endif
+        let view = screen
             .frame(width: size.width, height: size.height)
             .background(Color(nsColor: .windowBackgroundColor))
         let renderer = ImageRenderer(content: view)
