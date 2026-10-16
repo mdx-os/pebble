@@ -11,9 +11,9 @@ public enum ConsequentialAction: String, CaseIterable, Codable, Sendable {
     case sharePersonalInfo
 }
 
-/// Who an action goes to. Identity is `id`, a resolved contact, address or
-/// merchant. Two people both called Sam are different recipients, and the
-/// `handle` shows the person which one.
+/// Who an action goes to: a resolved contact, address or merchant `id`, plus
+/// the name and exact handle the person is shown. All three must match for
+/// an approval to hold, so what runs is exactly what was shown.
 public struct Recipient: Sendable, Equatable, Hashable {
     /// Stable identity, such as a contact ID plus the exact address used.
     public let id: String
@@ -24,10 +24,13 @@ public struct Recipient: Sendable, Equatable, Hashable {
 
     public static let maxDisplayLength = 40
 
+    public static let maxHandleLength = 254
+
     public init(id: String, displayName: String, handle: String? = nil) {
         self.id = id
-        self.displayName = Self.tidy(displayName) ?? "someone"
-        self.handle = handle.flatMap(Self.tidy)
+        self.displayName = Self.tidy(displayName, limit: Self.maxDisplayLength) ?? "someone"
+        // Handles are never shortened: the end of an address is often the part that matters.
+        self.handle = handle.flatMap { Self.tidy($0, limit: Self.maxHandleLength, truncate: false) }
     }
 
     /// Name plus handle, so two people with one name read differently.
@@ -36,18 +39,16 @@ public struct Recipient: Sendable, Equatable, Hashable {
         return "\(displayName) at \(handle)"
     }
 
-    private static func tidy(_ text: String) -> String? {
+    private static func tidy(_ text: String, limit: Int, truncate: Bool = true) -> String? {
         let collapsed = text
             .unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) && $0.properties.generalCategory != .format }
             .map(String.init).joined()
             .split(whereSeparator: { $0.isWhitespace || $0.isNewline })
             .joined(separator: " ")
         if collapsed.isEmpty { return nil }
-        return collapsed.count > maxDisplayLength ? String(collapsed.prefix(maxDisplayLength)) + "..." : collapsed
+        guard collapsed.count > limit else { return collapsed }
+        return truncate ? String(collapsed.prefix(limit)) + "..." : nil
     }
-
-    public static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
-    public func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
 /// An exact amount of money in the currency's smallest unit (cents for CAD,
@@ -182,8 +183,10 @@ public final class AskFirst: @unchecked Sendable {
     /// A separate rule for tests, so they don't share state.
     package static func isolated() -> AskFirst { AskFirst() }
 
-    /// Record a question to show the person.
-    public func ask(_ action: ProposedAction) -> ConfirmationRequest {
+    /// Record a question to show the person. Nil for a purchase without a
+    /// price, which could never be approved and must not be asked.
+    public func ask(_ action: ProposedAction) -> ConfirmationRequest? {
+        if action.kind == .purchase, action.price == nil { return nil }
         let request = ConfirmationRequest(action: action)
         lock.lock()
         pending.insert(request.id)
