@@ -109,6 +109,17 @@ struct AskFirstTests {
         #expect(Recipient(id: "y", displayName: "x", handle: String(repeating: "a", count: Recipient.maxHandleLength + 1)).handle == nil)
     }
 
+    @Test(arguments: ConsequentialAction.allCases)
+    func aQuestionThatCantSayWhereItGoesIsNeverAsked(_ kind: ConsequentialAction) {
+        let rule = AskFirst.isolated()
+        let price = Price(minorUnits: 100, currency: "CAD")
+        let noHandle = ProposedAction(kind: kind, recipient: Recipient(id: "c:1", displayName: "Sam"), details: "x", price: price)
+        let tooLong = ProposedAction(kind: kind, recipient: Recipient(id: "c:2", displayName: "Sam",
+            handle: String(repeating: "a", count: Recipient.maxHandleLength + 1)), details: "x", price: price)
+        #expect(rule.ask(noHandle) == nil)
+        #expect(rule.ask(tooLong) == nil)
+    }
+
     @Test func pricesMustBeRealAmounts() {
         #expect(Price(minorUnits: 0, currency: "CAD") == nil)
         #expect(Price(minorUnits: -5, currency: "CAD") == nil)
@@ -129,8 +140,8 @@ struct AskFirstTests {
         #expect(note.question == "Send this to Sam at 416 555 0101?")
         let buy = ProposedAction(kind: .purchase, recipient: bakery, details: "", price: cad850)
         #expect(buy.question(locale: en) == "Buy this from the bakery at risebakery.ca for $8.50?")
-        let buyer = Recipient(id: "x", displayName: "a buyer")
-        #expect(ProposedAction(kind: .sharePersonalInfo, recipient: buyer, details: "").question == "Share this with a buyer?")
+        let buyer = Recipient(id: "x", displayName: "a buyer", handle: "buyer@example.com")
+        #expect(ProposedAction(kind: .sharePersonalInfo, recipient: buyer, details: "").question == "Share this with a buyer at buyer@example.com?")
     }
 
     @Test func oddRecipientNamesAreTidiedForTheQuestion() {

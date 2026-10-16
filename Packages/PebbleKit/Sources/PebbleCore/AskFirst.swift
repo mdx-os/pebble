@@ -20,6 +20,9 @@ public struct Recipient: Sendable, Equatable, Hashable {
     /// Shown in the question only. Never used to match.
     public let displayName: String
     /// The exact address, number or site it goes to, as shown to the person.
+    /// Nil when none was given or it was too long to show in full; either
+    /// way `AskFirst.ask` refuses to ask. The resolver that builds a
+    /// recipient must derive the handle from the same record as `id`.
     public let handle: String?
 
     public static let maxDisplayLength = 40
@@ -183,9 +186,11 @@ public final class AskFirst: @unchecked Sendable {
     /// A separate rule for tests, so they don't share state.
     package static func isolated() -> AskFirst { AskFirst() }
 
-    /// Record a question to show the person. Nil for a purchase without a
-    /// price, which could never be approved and must not be asked.
+    /// Record a question to show the person. Nil when the question can't say
+    /// exactly where it goes (no handle that fits in full) or, for a
+    /// purchase, how much. Such a question must not be asked.
     public func ask(_ action: ProposedAction) -> ConfirmationRequest? {
+        guard action.recipient.handle != nil else { return nil }
         if action.kind == .purchase, action.price == nil { return nil }
         let request = ConfirmationRequest(action: action)
         lock.lock()
@@ -203,7 +208,7 @@ public final class AskFirst: @unchecked Sendable {
 
     /// Decide whether an action may happen now. A `.proceed` spends the approval.
     public func decide(_ action: ProposedAction, approval: Approval?) -> Outcome {
-        guard let approval, approval.action == action else { return .stop }
+        guard let approval, approval.action == action, action.recipient.handle != nil else { return .stop }
         if action.kind == .purchase, action.price == nil { return .stop }
         lock.lock()
         defer { lock.unlock() }
