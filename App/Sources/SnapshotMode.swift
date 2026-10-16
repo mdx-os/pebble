@@ -16,7 +16,13 @@ enum SnapshotMode {
 
     static func runIfRequested(brand: Brand) {
         guard let path = UserDefaults.standard.string(forKey: "snapshotPath") else { return }
-        let view = ChatView(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore())
+        #if DEBUG
+        let scene = UserDefaults.standard.string(forKey: ShowcaseScene.launchKey).flatMap(ShowcaseScene.init(rawValue:)) ?? .hello
+        let screen = AnyView(scene.view(brand: brand))
+        #else
+        let screen = AnyView(OnboardingView(brand: brand, names: InMemoryAgentNameStore(), store: InMemoryOnboardingStore()) { _ in })
+        #endif
+        let view = screen
             .frame(width: size.width, height: size.height)
             .background(Color(nsColor: .windowBackgroundColor))
         let renderer = ImageRenderer(content: view)
