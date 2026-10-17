@@ -117,7 +117,7 @@ struct WarmthTests {
     @Test func aStoppedReplyNeverSettlesANewerOne() async throws {
         let gate = Gate()
         let controller = ChatController(brand: brand, model: FirstQuickModel(gate: gate),
-                                        names: InMemoryAgentNameStore(), replyBeat: .milliseconds(300))
+                                        names: InMemoryAgentNameStore(), replyBeat: .seconds(2))
         controller.submit("First")
         // The first answer is in; the controller is waiting out the beat.
         try await Task.sleep(for: .milliseconds(50))
@@ -127,7 +127,8 @@ struct WarmthTests {
         controller.submit("Second")
         #expect(controller.isReplying)
         // Well past the first reply's beat: it must not clear the newer one.
-        try await Task.sleep(for: .milliseconds(500))
+        // The beat is long so a busy machine can't make the test race itself.
+        try await Task.sleep(for: .milliseconds(2600))
         #expect(controller.isReplying)
         #expect(controller.conversation.turns.last?.text == "Second")
         #expect(!controller.conversation.turns.contains { $0.text == "Reply 1" })
