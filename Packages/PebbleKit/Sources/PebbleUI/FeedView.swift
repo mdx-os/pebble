@@ -17,42 +17,135 @@ final class FeedModel: ObservableObject {
     @Published var reading: FeedItem?
 
     let needsYou: NeedsYou
+    /// Long work shown on live task cards. Nil when nothing is running.
+    let tasks: (any TaskEngine)?
+    /// The rule that asked the question in the sheet, when a task asked it.
+    private var askedBy: AskFirst?
+    /// Moves a scripted engine's clock with real time, for the live showcase.
+    let drivesTasks: Bool
     private let sources: [any FeedSource]
     private let calendar: Calendar
     let now: () -> Date
+    private var watching: TaskObservation?
+    private var announcer = TaskAnnouncer()
+    private let clock: () -> ContinuousClock.Instant
+    /// Says a line to VoiceOver. Tests replace it to hear what would be said.
+    var announce: @MainActor (TaskAnnouncer.Line) -> Void = FeedModel.post
 
-    init(sources: [any FeedSource], needsYou: NeedsYou, calendar: Calendar = .current,
-         now: @escaping () -> Date = { Date() }) {
-        self.sources = sources
+    init(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)? = nil,
+         drivesTasks: Bool = false, calendar: Calendar = .current,
+         now: @escaping () -> Date = { Date() },
+         clock: @escaping () -> ContinuousClock.Instant = { ContinuousClock.now }) {
+        let all = tasks.map { sources + [TaskFeed(engine: $0)] } ?? sources
+        self.sources = all
         self.needsYou = needsYou
+        self.tasks = tasks
+        self.drivesTasks = drivesTasks
         self.calendar = calendar
         self.now = now
-        feed = Feed.build(from: [needsYou] + sources, now: now(), calendar: calendar)
+        self.clock = clock
+        feed = Feed.build(from: [needsYou] + all, now: now(), calendar: calendar)
+        _ = announcer.lines(for: tasks?.tasks ?? [], at: clock())
+        watching = tasks?.observe { [weak self] list in
+            // Engines tell us on whatever thread they run. Hop to the main
+            // one, without a wait when already there.
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { self?.tasksChanged(list) }
+            } else {
+                Task { @MainActor in self?.tasksChanged(list) }
+            }
+        }
     }
 
     var isSample: Bool { sources.contains { $0.isSample } }
-    var rule: AskFirst { needsYou.rule }
+    /// The rule for the question in the sheet: the one the task engine
+    /// asked through when a task asked it, the feed's otherwise.
+    var rule: AskFirst { askedBy ?? needsYou.rule }
 
     /// Builds the feed again. Questions that timed out drop away here.
     func refresh() {
+        tasks?.refresh()
         let next = Feed.build(from: [needsYou] + sources, now: now(), calendar: calendar)
         if next != feed { feed = next }
+    }
+
+    /// Moves a scripted engine along, for the live showcase.
+    func tick(_ seconds: TimeInterval) {
+        (tasks as? LocalFakeEngine)?.advance(by: seconds)
+    }
+
+    private func tasksChanged(_ list: [AgentTask]) {
+        let next = Feed.build(from: [needsYou] + sources, now: now(), calendar: calendar)
+        if next != feed { feed = next }
+        for line in announcer.lines(for: list, at: clock()) { announce(line) }
     }
 
     /// What a card's button does. Talking is handed to the screen around
     /// the feed, which owns the chat.
     func perform(_ item: FeedItem, talk: (String) -> Void) {
         switch item.action {
-        case .review(let request): reviewing = request
+        case .review(let request):
+            askedBy = nil
+            reviewing = request
         case .open: reading = item
         case .talk(let line): talk(line)
+        case .task(let task):
+            if task.question != nil { review(task) } else { open(task) }
         case nil: break
         }
     }
 
-    /// The sheet said yes. The card goes and the approval is handed on.
+    // MARK: Task cards
+
+    /// Approve opens the same question sheet as any other question. Only a
+    /// yes there, checked by `AskFirst`, lets the task go on.
+    func review(_ task: AgentTask) {
+        guard let tasks, let question = current(task)?.question else { return }
+        askedBy = tasks.rule
+        reviewing = question
+    }
+
+    /// New instructions. Never needs a yes. Any open question is withdrawn.
+    @discardableResult
+    func redirect(_ task: AgentTask, with words: String) -> Bool {
+        let done = tasks?.redirect(task.id, with: words) ?? false
+        if let reviewing, reviewing.id == task.question?.id { self.reviewing = nil }
+        refresh()
+        return done
+    }
+
+    /// Stops at once. Never needs a yes.
+    func stop(_ task: AgentTask) {
+        tasks?.stop(task.id)
+        if let reviewing, reviewing.id == task.question?.id { self.reviewing = nil }
+        refresh()
+    }
+
+    func retry(_ task: AgentTask) {
+        tasks?.retry(task.id)
+        refresh()
+    }
+
+    /// The finished result, in the same reader as other results.
+    func open(_ task: AgentTask) {
+        guard let result = task.result else { return }
+        reading = FeedItem(id: task.id, kind: .ready, time: task.updatedAt, title: task.title,
+                           body: task.step, action: .open(result))
+    }
+
+    private func current(_ task: AgentTask) -> AgentTask? {
+        tasks?.tasks.first { $0.id == task.id }
+    }
+
+    /// The sheet said yes. The card goes and the approval is handed on:
+    /// to the task that asked, which checks it with `AskFirst`, or to
+    /// `NeedsYou`.
     func approved(_ approval: Approval) {
-        needsYou.approved(approval)
+        if let task = tasks?.tasks.first(where: { $0.question?.id == approval.id }) {
+            _ = tasks?.resume(task.id, with: approval)
+        } else {
+            needsYou.approved(approval)
+        }
         reviewing = nil
         refresh()
     }
@@ -61,8 +154,17 @@ final class FeedModel: ObservableObject {
     /// The sheet has already withdrawn the question.
     func closedQuestion(_ request: ConfirmationRequest) {
         needsYou.dismissed(request)
+        tasks?.questionClosed(request)
         if reviewing?.id == request.id { reviewing = nil }
         refresh()
+    }
+
+    /// Posts a line to VoiceOver: politely for a new step, so it waits its
+    /// turn, and at the usual priority when the person is needed or a task ends.
+    static func post(_ line: TaskAnnouncer.Line) {
+        var text = AttributedString(line.text)
+        text.accessibilitySpeechAnnouncementPriority = line.urgent ? .default : .low
+        AccessibilityNotification.Announcement(text).post()
     }
 
     /// "8:52 AM" today, "Yesterday", then the day of the week, then the date.
@@ -117,6 +219,11 @@ struct FeedView: View {
                         .accessibilityIdentifier("needsYou")
                         .transition(Motion.arrival(reduceMotion: reduceMotion))
                 }
+                if model.feed.showsWorking {
+                    section(TaskWords.workingHeading, detail: TaskWords.workingDetail, items: model.feed.working)
+                        .accessibilityIdentifier("working")
+                        .transition(Motion.arrival(reduceMotion: reduceMotion))
+                }
                 ForEach(model.feed.groups) { group in
                     section(group.title, detail: nil, items: group.items)
                 }
@@ -147,6 +254,18 @@ struct FeedView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { model.refresh() }
         }
+        .task(id: model.drivesTasks) {
+            // The live showcase plays its scripted tasks in real time.
+            guard model.drivesTasks else { return }
+            var last = ContinuousClock.now
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+                let now = ContinuousClock.now
+                let step = now - last
+                last = now
+                model.tick(Double(step.components.seconds) + Double(step.components.attoseconds) / 1e18)
+            }
+        }
     }
 
     private var columns: [GridItem] {
@@ -167,8 +286,19 @@ struct FeedView: View {
             }
             LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
                 ForEach(items) { item in
-                    FeedCard(item: item, time: model.timeLabel(for: item.time)) {
-                        model.perform(item, talk: onTalk)
+                    Group {
+                        if let task = item.task {
+                            TaskCard(task: task, time: model.timeLabel(for: item.time),
+                                     onApprove: { model.review(task) },
+                                     onRedirect: { model.redirect(task, with: $0) },
+                                     onStop: { model.stop(task) },
+                                     onRetry: { model.retry(task) },
+                                     onOpen: { model.open(task) })
+                        } else {
+                            FeedCard(item: item, time: model.timeLabel(for: item.time)) {
+                                model.perform(item, talk: onTalk)
+                            }
+                        }
                     }
                     .transition(Motion.arrival(reduceMotion: reduceMotion))
                 }
@@ -290,6 +420,7 @@ struct FeedCard: View {
         case .ready: "doc.text.fill"
         case .noticed: "lightbulb.fill"
         case .needsYou: "hand.raised.fill"
+        case .task: "circle.fill"
         }
     }
 }

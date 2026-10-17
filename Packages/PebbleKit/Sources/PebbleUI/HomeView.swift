@@ -35,7 +35,8 @@ public struct HomeView: View {
     #endif
 
     /// `feed` is where finished work comes from. Questions come only from
-    /// `needsYou`, which asks through `AskFirst`.
+    /// `needsYou` and `tasks`, which both ask through `AskFirst`. `tasks`
+    /// shows long work on live cards.
     public init(
         brand: Brand,
         model: any ModelClient,
@@ -44,10 +45,11 @@ public struct HomeView: View {
         memory: MemoryStore?,
         looks: UserDefaults = .standard,
         feed: [any FeedSource] = [EmptyFeedSource()],
-        needsYou: NeedsYou = NeedsYou()
+        needsYou: NeedsYou = NeedsYou(),
+        tasks: (any TaskEngine)? = nil
     ) {
         self.init(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
-                  looks: looks, conversation: nil, section: .today, feed: feed, needsYou: needsYou)
+                  looks: looks, conversation: nil, section: .today, feed: feed, needsYou: needsYou, tasks: tasks)
     }
 
     /// Opens on a given conversation, section and feed, for screenshots and tests.
@@ -62,6 +64,8 @@ public struct HomeView: View {
         section: HomeSection,
         feed: [any FeedSource] = [EmptyFeedSource()],
         needsYou: NeedsYou = NeedsYou(),
+        tasks: (any TaskEngine)? = nil,
+        drivesTasks: Bool = false,
         now: @escaping () -> Date = { Date() }
     ) {
         self.brand = brand
@@ -70,7 +74,8 @@ public struct HomeView: View {
         self.onboarding = onboarding
         self.memory = memory
         self.looks = looks
-        _feed = StateObject(wrappedValue: FeedModel(sources: feed, needsYou: needsYou, now: now))
+        _feed = StateObject(wrappedValue: FeedModel(sources: feed, needsYou: needsYou, tasks: tasks,
+                                                     drivesTasks: drivesTasks, now: now))
         let needed = OnboardingFlow.isNeeded(store: onboarding, names: names)
         // People who named their agent before the first run existed count as finished.
         if !needed, !onboarding.hasFinished() { onboarding.markFinished() }

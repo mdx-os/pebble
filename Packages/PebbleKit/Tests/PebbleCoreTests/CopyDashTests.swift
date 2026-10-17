@@ -40,6 +40,11 @@ struct CopyDashTests {
       + AgentLook.allCases.map(\.title)
       + HomeWords.shortcuts.flatMap { [$0.keys, $0.action] }
       + FeedWords.all
+      + TaskState.allCases.map(\.label)
+      + [TaskWords.workingHeading, TaskWords.workingDetail, TaskWords.stalled, TaskWords.retrying,
+         TaskWords.stuck, TaskWords.waitingForYes, TaskWords.redirected, TaskWords.stopped, TaskWords.failed,
+         TaskWords.keptNothing, TaskWords.approveTitle, TaskWords.redirectTitle, TaskWords.redirectPlaceholder,
+         TaskWords.redirectSendTitle, TaskWords.redirectCancelTitle, TaskWords.stopTitle, TaskWords.tryAgainTitle]
 
     @Test func noScreenWordsUseADash() {
         for line in Self.copy {

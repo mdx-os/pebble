@@ -12,6 +12,8 @@ public struct FeedItem: Identifiable, Sendable, Equatable {
         case noticed
         /// A question waiting for the person's yes or no.
         case needsYou
+        /// Longer work, shown live on a task card.
+        case task
     }
 
     public let id: String
@@ -38,6 +40,12 @@ public struct FeedItem: Identifiable, Sendable, Equatable {
         return nil
     }
 
+    /// The task this card shows, when it is a task card.
+    public var task: AgentTask? {
+        if kind == .task, case .task(let task) = action { return task }
+        return nil
+    }
+
     /// What VoiceOver says first, so each card reads as one thought.
     public var spokenKind: String {
         switch kind {
@@ -45,6 +53,7 @@ public struct FeedItem: Identifiable, Sendable, Equatable {
         case .ready: FeedWords.readyLabel
         case .noticed: FeedWords.noticedLabel
         case .needsYou: FeedWords.needsYouHeading
+        case .task: task?.state.label ?? TaskWords.runningLabel
         }
     }
 }
@@ -60,12 +69,17 @@ public enum FeedAction: Sendable, Equatable {
     /// buys or shares. Only `NeedsYou` makes these, from a question
     /// `AskFirst` agreed to ask.
     case review(ConfirmationRequest)
+    /// A live task card, with its own buttons. Its Approve opens the same
+    /// question sheet as `review`, for the question the task's engine asked
+    /// through `AskFirst`.
+    case task(AgentTask)
 
     public var title: String {
         switch self {
         case .open: FeedWords.openTitle
         case .talk: FeedWords.talkTitle
         case .review: FeedWords.reviewTitle
+        case .task(let task): task.waitsForApproval ? TaskWords.approveTitle : FeedWords.openTitle
         }
     }
 }
@@ -230,6 +244,28 @@ public final class NeedsYou: FeedSource, @unchecked Sendable {
     }
 }
 
+/// Tasks from an engine, as live cards. A task that needs the person is
+/// pinned in Needs you; one still going sits in Working on it; one that
+/// ended joins the rest of the feed at the time it ended.
+public struct TaskFeed: FeedSource {
+    public let engine: any TaskEngine
+    public let isSample: Bool
+
+    public init(engine: any TaskEngine, isSample: Bool = false) {
+        self.engine = engine
+        self.isSample = isSample
+    }
+
+    public func items(now: Date) -> [FeedItem] {
+        engine.tasks.map(Self.item)
+    }
+
+    public static func item(_ task: AgentTask) -> FeedItem {
+        FeedItem(id: task.id, kind: .task, time: task.isActive ? task.startedAt : task.updatedAt,
+                 title: task.title, body: task.step, action: .task(task))
+    }
+}
+
 /// When a card happened, as the feed groups it.
 public enum FeedPeriod: Sendable, Equatable, Hashable, CaseIterable {
     case thisEvening, thisAfternoon, thisMorning, earlier
@@ -270,26 +306,33 @@ public struct Feed: Sendable, Equatable {
     /// Questions waiting for the person, the one that will time out first on
     /// top. Empty means the section is not shown at all.
     public let needsYou: [FeedItem]
+    /// Tasks still going, newest first, shown under Needs you.
+    public let working: [FeedItem]
     public let groups: [FeedGroup]
 
-    public var isEmpty: Bool { needsYou.isEmpty && groups.isEmpty }
+    public var isEmpty: Bool { needsYou.isEmpty && working.isEmpty && groups.isEmpty }
     public var showsNeedsYou: Bool { !needsYou.isEmpty }
-    public var count: Int { needsYou.count + groups.reduce(0) { $0 + $1.items.count } }
+    public var showsWorking: Bool { !working.isEmpty }
+    public var count: Int { needsYou.count + working.count + groups.reduce(0) { $0 + $1.items.count } }
 
     /// A question card only counts when it carries a real question, and a
-    /// real question only ever sits in the pinned section.
+    /// real question only ever sits in the pinned section. A task card is
+    /// pinned there too while it waits on the person.
     public static func build(_ items: [FeedItem], now: Date, calendar: Calendar = .current) -> Feed {
         let questions = items
-            .filter { $0.kind == .needsYou && $0.request != nil }
+            .filter { ($0.kind == .needsYou && $0.request != nil) || $0.task?.state == .waitingOnYou }
             .sorted { ($0.time, $0.id) < ($1.time, $1.id) }
+        let working = items
+            .filter { item in item.task.map { $0.isActive && $0.state != .waitingOnYou } ?? false }
+            .sorted { ($0.time, $0.id) > ($1.time, $1.id) }
         let rest = items
-            .filter { $0.kind != .needsYou && $0.request == nil }
+            .filter { $0.kind != .needsYou && $0.request == nil && ($0.kind != .task || $0.task?.isActive == false) }
             .sorted { ($0.time, $0.id) > ($1.time, $1.id) }
         let byPeriod = Dictionary(grouping: rest) { FeedPeriod.of($0.time, now: now, calendar: calendar) }
         let groups = FeedPeriod.allCases.compactMap { period in
             byPeriod[period].map { FeedGroup(period: period, items: $0) }
         }
-        return Feed(needsYou: questions, groups: groups)
+        return Feed(needsYou: questions, working: working, groups: groups)
     }
 
     public static func build(from sources: [any FeedSource], now: Date, calendar: Calendar = .current) -> Feed {

@@ -1,0 +1,560 @@
+import Foundation
+@testable import PebbleCore
+import Testing
+
+/// Collects every snapshot an engine reports.
+private final class Seen: @unchecked Sendable {
+    private let lock = NSLock()
+    private var list: [[AgentTask]] = []
+    func add(_ tasks: [AgentTask]) { lock.lock(); list.append(tasks); lock.unlock() }
+    var snapshots: [[AgentTask]] { lock.lock(); defer { lock.unlock() }; return list }
+    /// Each state the task was seen in, without repeats in a row.
+    func states(_ id: String) -> [TaskState] {
+        var out: [TaskState] = []
+        for state in snapshots.compactMap({ $0.first { $0.id == id }?.state }) where out.last != state {
+            out.append(state)
+        }
+        return out
+    }
+}
+
+/// The scripted engine, driven by a clock the tests move. Nothing sleeps.
+struct TaskEngineTests {
+    let origin = Date(timeIntervalSinceReferenceDate: 813_000_000)
+
+    private func engine(_ rule: AskFirst = .isolated(), policy: RetryPolicy = .standard) -> LocalFakeEngine {
+        LocalFakeEngine(rule: rule, policy: policy, origin: origin)
+    }
+
+    private static let quick = TaskScript(title: "Quick", steps: [
+        .init("One", duration: 2, kept: "the first thing", todo: "do one"),
+        .init("Two", duration: 2, kept: "the second thing", todo: "do two"),
+        .init("Three", duration: 2, todo: "do three"),
+    ], doneLine: "All done.", result: "The result")
+
+    // MARK: State machine
+
+    @Test func aScriptRunsItsStepsInOrderThenIsDone() throws {
+        let engine = engine()
+        let id = engine.start(Self.quick)
+        var task = try #require(engine.task(id))
+        #expect(task.state == .running)
+        #expect(task.step == "One")
+        #expect(task.progress == .fraction(0))
+        engine.advance(by: 1)
+        task = try #require(engine.task(id))
+        #expect(task.step == "One")
+        #expect(abs((task.progress.fraction ?? 0) - 1.0 / 6) < 0.001)
+        engine.advance(by: 1)
+        #expect(engine.task(id)?.step == "Two")
+        #expect(engine.task(id)?.history.map(\.text) == ["One"])
+        engine.advance(by: 4)
+        task = try #require(engine.task(id))
+        #expect(task.state == .done)
+        #expect(task.step == "All done.")
+        #expect(task.progress == .fraction(1))
+        #expect(task.result == "The result")
+        #expect(task.wrapUp == nil)
+        #expect(task.history.map(\.mark) == [.done, .done, .done])
+    }
+
+    @Test func oneLongJumpLandsWhereManyShortStepsWould() throws {
+        let short = engine()
+        let long = engine()
+        let a = short.start(SampleTasks.dentist)
+        let b = long.start(SampleTasks.dentist)
+        for _ in 0..<160 { short.advance(by: 0.25) }
+        long.advance(by: 40)
+        #expect(short.task(a)?.state == long.task(b)?.state)
+        #expect(short.task(a)?.step == long.task(b)?.step)
+        #expect(short.task(a)?.history.map(\.text) == long.task(b)?.history.map(\.text))
+    }
+
+    @Test func theDentistSearchGoesThroughEveryState() throws {
+        let rule = AskFirst.isolated()
+        let engine = engine(rule)
+        let seen = Seen()
+        let watch = engine.observe { seen.add($0) }
+        let id = engine.start(SampleTasks.dentist)
+        for _ in 0..<50 { engine.advance(by: 1) }
+        #expect(seen.states(id) == [.running, .stalled, .retrying, .running, .waitingOnYou])
+        let task = try #require(engine.task(id))
+        #expect(task.waitsForApproval)
+        #expect(task.question?.action == SampleTasks.holdVisit)
+        watch.cancel()
+    }
+
+    @Test func progressNeverGoesBackward() {
+        let engine = engine()
+        let id = engine.start(SampleTasks.dentist)
+        var last = 0.0
+        for _ in 0..<200 {
+            engine.advance(by: 0.25)
+            let now = engine.task(id)?.progress.fraction ?? 0
+            #expect(now >= last)
+            last = now
+        }
+    }
+
+    @Test func aScriptThatCantSayHowFarSaysSo() {
+        let engine = engine()
+        let id = engine.start(SampleTasks.plan)
+        engine.advance(by: 3)
+        #expect(engine.task(id)?.progress == .indeterminate)
+        #expect(engine.task(id)?.spokenProgress == TaskWords.stillWorking)
+        engine.advance(by: 30)
+        #expect(engine.task(id)?.state == .done)
+        #expect(engine.task(id)?.progress == .fraction(1))
+    }
+
+    @Test func theHistoryStaysShort() {
+        let steps = (1...10).map { TaskScript.Step("Step \($0)", duration: 1, todo: "do step \($0)") }
+        let engine = engine()
+        let id = engine.start(TaskScript(title: "Long", steps: steps, doneLine: "Done."))
+        engine.advance(by: 20)
+        #expect(engine.task(id)?.history.count == AgentTask.historyLimit)
+        #expect(engine.task(id)?.history.last?.text == "Step 10")
+    }
+
+    @Test func aStepThatCantBeDoneEndsInPlainWords() {
+        let engine = engine()
+        let id = engine.start(TaskScript(title: "Hard", steps: [
+            .init("First", duration: 1, kept: "a start", todo: "start"),
+            .init("Impossible", kind: .fails, todo: "do the impossible"),
+        ], doneLine: "Done."))
+        engine.advance(by: 2)
+        #expect(engine.task(id)?.state == .failed)
+        #expect(engine.task(id)?.step == TaskWords.failed)
+        #expect(engine.task(id)?.wrapUp == TaskWrapUp(kept: ["a start"], notDone: ["do the impossible"]))
+    }
+
+    @Test func aRequestNoScriptCoversStillRuns() {
+        let engine = engine()
+        let id = engine.start(TaskRequest(title: "Sort my photos"))
+        #expect(engine.task(id)?.title == "Sort my photos")
+        engine.advance(by: 60)
+        #expect(engine.task(id)?.state == .done)
+        let known = engine.start(TaskRequest(title: SampleTasks.planTitle))
+        #expect(engine.task(known)?.step == SampleTasks.plan.steps[0].text)
+    }
+
+    @Test func tasksAreNewestFirst() {
+        let engine = engine()
+        let first = engine.start(Self.quick)
+        let second = engine.start(SampleTasks.plan)
+        #expect(engine.tasks.map(\.id) == [second, first])
+    }
+
+    // MARK: Retry with backoff, then ask
+
+    @Test func theBackoffDoublesAndHasACeiling() {
+        let policy = RetryPolicy(timeout: 20, maxRetries: 5, backoff: 2, maxBackoff: 10)
+        #expect((0..<5).map(policy.delay(beforeRetry:)) == [2, 4, 8, 10, 10])
+    }
+
+    @Test func aHangingStepIsTriedAgainWithBackoffThenTheCardAsks() throws {
+        let engine = engine()
+        let id = engine.start(SampleTasks.lunch)
+        engine.advance(by: 19.9)
+        #expect(engine.task(id)?.state == .running)
+        // Hung past the 20 second timeout: wait 2 seconds, then try another way.
+        engine.advance(by: 0.1)
+        #expect(engine.task(id)?.state == .stalled)
+        #expect(engine.task(id)?.step == SampleTasks.lunch.steps[0].slowLine)
+        engine.advance(by: 1.9)
+        #expect(engine.task(id)?.state == .stalled)
+        engine.advance(by: 0.1)
+        #expect(engine.task(id)?.state == .retrying)
+        #expect(engine.task(id)?.step == "That page was slow, so I'm trying another way.")
+        // The second hang waits twice as long.
+        engine.advance(by: 20)
+        #expect(engine.task(id)?.state == .stalled)
+        engine.advance(by: 3.9)
+        #expect(engine.task(id)?.state == .stalled)
+        engine.advance(by: 0.1)
+        #expect(engine.task(id)?.state == .retrying)
+        // Retries spent: only now does it ask the person.
+        engine.advance(by: 19.9)
+        #expect(engine.task(id)?.state == .retrying)
+        engine.advance(by: 0.1)
+        let task = try #require(engine.task(id))
+        #expect(task.state == .waitingOnYou)
+        #expect(task.isStuck)
+        #expect(task.question == nil)
+        #expect(task.step == TaskWords.stuck)
+        // And nothing else happens until the person decides.
+        engine.advance(by: 600)
+        #expect(engine.task(id)?.state == .waitingOnYou)
+    }
+
+    @Test func aStuckTaskIsANeedsYouItem() throws {
+        let engine = engine()
+        let id = engine.start(SampleTasks.lunch)
+        engine.advance(by: 30)
+        var feed = Feed.build(from: [TaskFeed(engine: engine)], now: origin + 30)
+        #expect(feed.working.map(\.id) == [id])
+        #expect(feed.needsYou.isEmpty)
+        engine.advance(by: 60)
+        feed = Feed.build(from: [TaskFeed(engine: engine)], now: origin + 90)
+        #expect(feed.needsYou.map(\.id) == [id])
+        #expect(feed.working.isEmpty)
+        #expect(feed.groups.isEmpty)
+    }
+
+    @Test func tryAgainAfterTheRetriesRunOut() throws {
+        let engine = engine()
+        let id = engine.start(SampleTasks.lunch)
+        #expect(!engine.retry(id), "only a stuck task can be tried again")
+        engine.advance(by: 66)
+        #expect(engine.task(id)?.isStuck == true)
+        #expect(engine.retry(id))
+        #expect(engine.task(id)?.state == .running)
+        engine.advance(by: 5)
+        #expect(engine.task(id)?.state == .done)
+    }
+
+    @Test func aStepThatRecoversSaysItTookAnotherWay() {
+        let engine = engine()
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 36)
+        let marks = engine.task(id)?.history.map(\.mark)
+        #expect(marks == [.done, .retried])
+        #expect(engine.task(id)?.history.last?.text == "Found another way to check Saturday hours.")
+        #expect(engine.task(id)?.state == .running)
+    }
+
+    @Test func noRetriesMeansAskingAtTheFirstHang() {
+        let engine = engine(policy: RetryPolicy(timeout: 5, maxRetries: 0))
+        let id = engine.start(SampleTasks.lunch)
+        engine.advance(by: 5)
+        #expect(engine.task(id)?.isStuck == true)
+    }
+
+    // MARK: Stop
+
+    @Test func stopIsImmediateAndSaysWhatWasKeptAndWhatWasNot() throws {
+        let engine = engine()
+        let id = engine.start(Self.quick)
+        engine.advance(by: 3)
+        #expect(engine.stop(id))
+        let task = try #require(engine.task(id))
+        #expect(task.state == .stopped)
+        #expect(task.step == TaskWords.stopped)
+        #expect(task.wrapUp == TaskWrapUp(kept: ["the first thing"], notDone: ["do two", "do three"]))
+        #expect(task.wrapUp?.keptLine == "I kept the first thing.")
+        #expect(task.wrapUp?.notDoneLine == "I didn't do two or do three.")
+        // Nothing moves after a stop.
+        engine.advance(by: 60)
+        #expect(engine.task(id) == task)
+        #expect(!engine.stop(id))
+    }
+
+    @Test func stoppingBeforeAnythingIsKeptSaysSo() {
+        let engine = engine()
+        let id = engine.start(Self.quick)
+        engine.stop(id)
+        #expect(engine.task(id)?.wrapUp?.keptLine == TaskWords.keptNothing)
+    }
+
+    @Test func stoppingWhileWaitingForAYesWithdrawsTheQuestion() throws {
+        let rule = AskFirst.isolated()
+        let engine = engine(rule)
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        let question = try #require(engine.task(id)?.question)
+        #expect(engine.stop(id))
+        #expect(rule.isClosed(question))
+        #expect(engine.task(id)?.question == nil)
+        #expect(engine.task(id)?.wrapUp?.notDone == ["hold a Saturday visit"])
+        // A yes for it now does nothing.
+        #expect(engine.resume(id, with: question.approve()) == .refused)
+    }
+
+    // MARK: Redirect
+
+    @Test func redirectNeedsNoYesAndIsRecorded() throws {
+        let rule = AskFirst.isolated()
+        let engine = engine(rule)
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 3)
+        #expect(engine.redirect(id, with: "  Only ones near\nthe school  "))
+        let task = try #require(engine.task(id))
+        #expect(task.state == .running)
+        #expect(task.step == TaskWords.redirected)
+        #expect(task.question == nil)
+        #expect(task.history.last == TaskStep("You said: Only ones near the school", mark: .redirected, at: origin + 3))
+        // The step starts over with the new words.
+        engine.advance(by: 5.9)
+        #expect(engine.task(id)?.step == TaskWords.redirected)
+        engine.advance(by: 0.1)
+        #expect(engine.task(id)?.step == SampleTasks.dentist.steps[1].text)
+    }
+
+    @Test func redirectRefusesEmptyWordsAndEndedTasks() {
+        let engine = engine()
+        let id = engine.start(Self.quick)
+        #expect(!engine.redirect(id, with: "  \n "))
+        engine.advance(by: 10)
+        #expect(!engine.redirect(id, with: "Something else"))
+        #expect(!engine.redirect("task:nope", with: "Something else"))
+    }
+
+    @Test func longRedirectWordsAreShortened() {
+        let engine = engine()
+        let id = engine.start(Self.quick)
+        engine.redirect(id, with: String(repeating: "a", count: 500))
+        let said = engine.task(id)?.history.last?.text ?? ""
+        #expect(said.count <= "You said: ".count + LocalFakeEngine.maxInstructionLength + 3)
+    }
+
+    @Test func redirectWhileWaitingWithdrawsTheQuestionAndAsksAfresh() throws {
+        let rule = AskFirst.isolated()
+        let engine = engine(rule)
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        let old = try #require(engine.task(id)?.question)
+        #expect(engine.redirect(id, with: "Make it 11 instead"))
+        #expect(rule.isClosed(old))
+        let fresh = try #require(engine.task(id)?.question)
+        #expect(fresh.id != old.id)
+        // The old yes can't be used for the new question.
+        #expect(engine.resume(id, with: old.approve()) == .refused)
+    }
+
+    @Test func redirectGetsAStuckTaskGoing() {
+        let engine = engine()
+        let id = engine.start(SampleTasks.lunch)
+        engine.advance(by: 66)
+        #expect(engine.redirect(id, with: "Try the board's site"))
+        #expect(engine.task(id)?.state == .running)
+        engine.advance(by: 5)
+        #expect(engine.task(id)?.state == .done)
+    }
+
+    // MARK: Approve only through the approval path
+
+    private func waiting(_ rule: AskFirst) throws -> (LocalFakeEngine, String, ConfirmationRequest) {
+        let engine = engine(rule)
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        let question = try #require(engine.task(id)?.question)
+        return (engine, id, question)
+    }
+
+    @Test func aYesFromTheSheetLetsTheTaskGoOnOnce() throws {
+        let rule = AskFirst.isolated()
+        let (engine, id, question) = try waiting(rule)
+        guard case .approved(let yes) = rule.sayYes(to: question) else { Issue.record("yes refused"); return }
+        #expect(engine.resume(id, with: yes) == .proceeding)
+        #expect(engine.task(id)?.state == .running)
+        #expect(engine.task(id)?.history.last?.mark == .approved)
+        // Used once. The same yes again does nothing.
+        #expect(engine.resume(id, with: yes) == .refused)
+        #expect(rule.decide(question.action, approval: yes) == .stop)
+        engine.advance(by: 4)
+        #expect(engine.task(id)?.state == .done)
+        #expect(engine.task(id)?.wrapUp == nil)
+    }
+
+    @Test func aLateYesIsRefusedAndTheStepIsNotDone() throws {
+        let clock = TestClock()
+        let rule = AskFirst.isolated(now: clock.now)
+        let (engine, id, question) = try waiting(rule)
+        clock.advance(AskFirst.defaultWindow + 1)
+        #expect(rule.sayYes(to: question) == .timedOut)
+        #expect(engine.resume(id, with: question.approve()) == .refused)
+        engine.refresh()
+        let task = try #require(engine.task(id))
+        #expect(task.state == .done)
+        #expect(task.wrapUp?.notDone == ["hold a Saturday visit"])
+        #expect(task.history.last?.text == "That question timed out, so I didn't hold a Saturday visit.")
+    }
+
+    @Test func aYesGivenInTimeButCheckedTooLateTimesOut() throws {
+        let clock = TestClock()
+        let rule = AskFirst.isolated(now: clock.now)
+        let (engine, id, question) = try waiting(rule)
+        guard case .approved(let yes) = rule.sayYes(to: question) else { Issue.record("yes refused"); return }
+        clock.advance(31)
+        #expect(engine.resume(id, with: yes) == .timedOut)
+        #expect(engine.task(id)?.state == .done)
+        #expect(engine.task(id)?.wrapUp?.notDone == ["hold a Saturday visit"])
+    }
+
+    @Test func aYesForAnotherQuestionIsRefused() throws {
+        let rule = AskFirst.isolated()
+        let (engine, id, question) = try waiting(rule)
+        let other = try #require(rule.ask(ProposedAction(
+            kind: .send, recipient: Recipient(id: "c:1", displayName: "Sam", handle: "416 555 0101"), details: "Hi")))
+        #expect(engine.resume(id, with: other.approve()) == .refused)
+        #expect(engine.resume("task:nope", with: question.approve()) == .refused)
+        #expect(engine.task(id)?.waitsForApproval == true)
+    }
+
+    @Test func aYesFromAnotherRuleIsRefused() throws {
+        let (engine, id, question) = try waiting(.isolated())
+        // Not the rule that asked: it never issued this question.
+        let forged = try #require(AskFirst.isolated().ask(question.action)).approve()
+        #expect(engine.resume(id, with: forged) == .refused)
+        #expect(engine.task(id)?.waitsForApproval == true)
+    }
+
+    @Test func notNowLetsTheTaskGoOnWithoutTheStep() throws {
+        let rule = AskFirst.isolated()
+        let (engine, id, question) = try waiting(rule)
+        engine.questionClosed(question)
+        #expect(rule.isClosed(question))
+        let task = try #require(engine.task(id))
+        #expect(task.state == .done)
+        #expect(task.history.last?.text == "You said not now, so I didn't hold a Saturday visit.")
+        #expect(task.wrapUp?.notDoneLine == "I didn't hold a Saturday visit.")
+    }
+
+    @Test func aQuestionThatTimesOutOnScreenIsNoticed() throws {
+        let clock = TestClock()
+        let rule = AskFirst.isolated(now: clock.now)
+        let (engine, id, _) = try waiting(rule)
+        clock.advance(AskFirst.defaultWindow - 1)
+        engine.refresh()
+        #expect(engine.task(id)?.waitsForApproval == true)
+        clock.advance(2)
+        engine.advance(by: 0)
+        #expect(engine.task(id)?.state == .done)
+    }
+
+    @Test func aQuestionAskFirstWontAskIsNeverAsked() throws {
+        let engine = engine()
+        let unclear = ProposedAction(kind: .send, recipient: Recipient(id: "c:2", displayName: "Someone"), details: "Hello")
+        let id = engine.start(TaskScript(title: "Say hello", steps: [
+            .init("Sending hello", kind: .ask(unclear, askLine: "Ready to send."), todo: "send hello"),
+        ], doneLine: "Done."))
+        let task = try #require(engine.task(id))
+        #expect(task.question == nil)
+        #expect(task.state == .done)
+        #expect(task.history.last?.text == "I couldn't ask about this clearly, so I didn't send hello.")
+    }
+
+    // MARK: Observing
+
+    @Test func observersHearChangesUntilTheyCancel() {
+        let engine = engine()
+        let seen = Seen()
+        let watch = engine.observe { seen.add($0) }
+        #expect(seen.snapshots.count == 1, "told at once")
+        engine.start(Self.quick)
+        engine.advance(by: 1)
+        let heard = seen.snapshots.count
+        #expect(heard == 3)
+        // A tick that changes nothing says nothing.
+        engine.refresh()
+        #expect(seen.snapshots.count == heard)
+        watch.cancel()
+        engine.advance(by: 1)
+        #expect(seen.snapshots.count == heard)
+    }
+
+    // MARK: Words
+
+    @Test func taskWordsAreWarmAndPlain() {
+        var lines = [
+            TaskWords.workingHeading, TaskWords.workingDetail, TaskWords.runningLabel, TaskWords.stalledLabel,
+            TaskWords.retryingLabel, TaskWords.stoppedLabel, TaskWords.failedLabel, TaskWords.stalled,
+            TaskWords.retrying, TaskWords.stuck, TaskWords.waitingForYes, TaskWords.redirected, TaskWords.stopped,
+            TaskWords.failed, TaskWords.keptNothing, TaskWords.stillWorking, TaskWords.approveTitle,
+            TaskWords.redirectTitle, TaskWords.redirectPlaceholder, TaskWords.redirectSendTitle,
+            TaskWords.redirectCancelTitle, TaskWords.stopTitle, TaskWords.tryAgainTitle, TaskWords.youSaidYes,
+            TaskWords.youSaid("x"), TaskWords.tookAnotherWay("x"), TaskWords.declined("x"), TaskWords.timedOut("x"),
+            TaskWords.couldNotAsk("x"), TaskWords.percentDone(40), TaskWords.kept(["a", "b"]), TaskWords.notDone(["a"]),
+        ] + TaskState.allCases.map(\.label)
+        for script in SampleTasks.all {
+            lines += [script.title, script.doneLine, script.result ?? ""]
+            for step in script.steps {
+                lines += [step.text, step.todo, step.kept ?? "", step.slowLine, step.retryLine]
+                if case .ask(let action, let askLine) = step.kind { lines += [askLine, action.details] }
+            }
+        }
+        for line in lines {
+            #expect(!line.contains("\u{2014}") && !line.contains("\u{2013}"), "dash in: \(line)")
+            #expect(!line.contains("!"), "exclamation in: \(line)")
+            for avoid in ["retry", "error", "failed", "invalid", "timeout", "request", "N/A"] {
+                #expect(!line.lowercased().contains(avoid.lowercased()), "\(avoid) in: \(line)")
+            }
+        }
+    }
+
+    @Test func listsReadNaturally() {
+        #expect(TaskWords.kept(["a"]) == "I kept a.")
+        #expect(TaskWords.kept(["a", "b"]) == "I kept a and b.")
+        #expect(TaskWords.kept(["a", "b", "c"]) == "I kept a, b and c.")
+        #expect(TaskWords.notDone(["a", "b"]) == "I didn't a or b.")
+    }
+}
+
+/// What VoiceOver hears as tasks move.
+struct TaskAnnouncerTests {
+    let start = ContinuousClock.now
+
+    private func task(_ step: String, _ state: TaskState = .running, progress: Double = 0, id: String = "t") -> AgentTask {
+        AgentTask(id: id, title: "Find a dentist", step: step, progress: .fraction(progress), state: state,
+                  startedAt: Date(timeIntervalSinceReferenceDate: 0))
+    }
+
+    @Test func theFirstLookIsSilent() {
+        var announcer = TaskAnnouncer()
+        #expect(announcer.lines(for: [task("One")], at: start).isEmpty)
+    }
+
+    @Test func progressTicksAreNeverSaid() {
+        var announcer = TaskAnnouncer()
+        _ = announcer.lines(for: [task("One")], at: start)
+        for tick in 1...100 {
+            let lines = announcer.lines(for: [task("One", progress: Double(tick) / 100)], at: start + .seconds(tick))
+            #expect(lines.isEmpty)
+        }
+    }
+
+    @Test func aNewStepIsSaidOncePolitely() {
+        var announcer = TaskAnnouncer()
+        _ = announcer.lines(for: [task("One")], at: start)
+        let lines = announcer.lines(for: [task("Two")], at: start + .seconds(10))
+        #expect(lines == [TaskAnnouncer.Line(text: "Find a dentist. Two", urgent: false)])
+        #expect(announcer.lines(for: [task("Two", progress: 0.5)], at: start + .seconds(20)).isEmpty)
+    }
+
+    @Test func stepsThatComeTooFastWaitAndOnlyTheNewestIsSaid() {
+        var announcer = TaskAnnouncer()
+        _ = announcer.lines(for: [task("One")], at: start)
+        #expect(announcer.lines(for: [task("Two")], at: start + .seconds(10)).count == 1)
+        #expect(announcer.lines(for: [task("Three")], at: start + .seconds(11)).isEmpty)
+        #expect(announcer.lines(for: [task("Four")], at: start + .seconds(12)).isEmpty)
+        #expect(announcer.lines(for: [task("Four", progress: 0.1)], at: start + .seconds(13)).isEmpty)
+        let later = announcer.lines(for: [task("Four", progress: 0.2)], at: start + .seconds(14))
+        #expect(later.map(\.text) == ["Find a dentist. Four"])
+        #expect(announcer.lines(for: [task("Four", progress: 0.3)], at: start + .seconds(30)).isEmpty)
+    }
+
+    @Test func needingThePersonOrEndingIsSaidRightAway() {
+        var announcer = TaskAnnouncer()
+        _ = announcer.lines(for: [task("One")], at: start)
+        #expect(announcer.lines(for: [task("Two")], at: start + .seconds(10)).count == 1)
+        let ask = announcer.lines(for: [task("Ready. I'll wait for your yes.", .waitingOnYou)], at: start + .seconds(10.5))
+        #expect(ask == [TaskAnnouncer.Line(text: "Find a dentist. Ready. I'll wait for your yes.", urgent: true)])
+        let stop = announcer.lines(for: [task(TaskWords.stopped, .stopped)], at: start + .seconds(11))
+        #expect(stop.first?.urgent == true)
+    }
+
+    @Test func manyTasksShareOneGap() {
+        var announcer = TaskAnnouncer()
+        _ = announcer.lines(for: [task("A1", id: "a"), task("B1", id: "b")], at: start)
+        let both = announcer.lines(for: [task("A2", id: "a"), task("B2", id: "b")], at: start + .seconds(10))
+        #expect(both.count == 1)
+        let next = announcer.lines(for: [task("A2", id: "a"), task("B2", id: "b")], at: start + .seconds(14))
+        #expect(next.map(\.text) == ["Find a dentist. B2"])
+    }
+
+    @Test func aTaskThatAppearsLaterIsSaid() {
+        var announcer = TaskAnnouncer()
+        _ = announcer.lines(for: [], at: start)
+        #expect(announcer.lines(for: [task("One")], at: start + .seconds(1)).count == 1)
+    }
+}
