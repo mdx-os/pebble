@@ -260,6 +260,8 @@ struct FeedCard: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(spoken)
             .accessibilityHint(action.hint)
+            // Voice Control users can say the words they see on the card.
+            .accessibilityInputLabels([Text(action.title), Text(item.title)])
             .accessibilityAddTraits(.isButton)
         } else {
             content(actionTitle: nil)

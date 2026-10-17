@@ -84,7 +84,8 @@ struct PrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.headline)
-            .foregroundStyle(.white)
+            // Dark words on the accent read at about 6.4 to 1; white was 2.5.
+            .foregroundStyle(Theme.onAccent)
             .frame(maxWidth: .infinity, minHeight: 52)
             .background(Theme.accent.opacity(isEnabled ? 1 : 0.4), in: Capsule())
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
