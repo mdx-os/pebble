@@ -35,6 +35,23 @@ private struct GatedModel: ModelClient {
     }
 }
 
+/// Answers the first question at once and waits on the gate for the rest.
+private actor Calls {
+    private var count = 0
+    func next() -> Int { count += 1; return count }
+}
+
+private struct FirstQuickModel: ModelClient {
+    let gate: Gate
+    let calls = Calls()
+    var runsOnDevice: Bool { true }
+
+    func reply(to transcript: [ChatTurn]) async throws -> String {
+        if await calls.next() > 1 { await gate.wait() }
+        return "Reply \(transcript.filter { $0.speaker == .person }.count)"
+    }
+}
+
 @MainActor
 struct WarmthTests {
     let brand = Brand(name: "Nova")
@@ -78,18 +95,105 @@ struct WarmthTests {
         await settle(controller)
         #expect(ContinuousClock.now - started < .seconds(2))
         #expect(controller.conversation.turns.last?.text == CareCheck.reply)
+        // The follow-up after care is never held back either.
+        let again = ContinuousClock.now
+        controller.submit("yes")
+        await settle(controller)
+        #expect(ContinuousClock.now - again < .seconds(2))
+        #expect(controller.conversation.turns.last?.text == CareCheck.followUp)
+    }
+
+    @Test func careIsRecognisedFromTheTurnsNotTheReplyText() {
+        let opening = Conversation.firstRun(named: "Nova").turns
+        let asked = opening + [ChatTurn(id: UUID(), speaker: .person, text: "I want to end my life")]
+        #expect(CareCheck.answersWithCare(asked))
+        let cared = asked + [ChatTurn(id: UUID(), speaker: .agent, text: CareCheck.reply),
+                             ChatTurn(id: UUID(), speaker: .person, text: "yes")]
+        #expect(CareCheck.answersWithCare(cared))
+        let plain = opening + [ChatTurn(id: UUID(), speaker: .person, text: "Plan my day")]
+        #expect(!CareCheck.answersWithCare(plain))
+    }
+
+    @Test func aStoppedReplyNeverSettlesANewerOne() async throws {
+        let gate = Gate()
+        let controller = ChatController(brand: brand, model: FirstQuickModel(gate: gate),
+                                        names: InMemoryAgentNameStore(), replyBeat: .milliseconds(300))
+        controller.submit("First")
+        // The first answer is in; the controller is waiting out the beat.
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(controller.isReplying)
+        controller.stopReplying()
+        #expect(!controller.isReplying)
+        controller.submit("Second")
+        #expect(controller.isReplying)
+        // Well past the first reply's beat: it must not clear the newer one.
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(controller.isReplying)
+        #expect(controller.conversation.turns.last?.text == "Second")
+        #expect(!controller.conversation.turns.contains { $0.text == "Reply 1" })
+        await gate.release()
+        await settle(controller)
+        #expect(!controller.isReplying)
+        #expect(controller.conversation.turns.last?.text == "Reply 2")
     }
 
     @Test func aFailedReplyIsExplainedKindlyAndKeepsTheWords() async {
         let gate = Gate()
         let controller = ChatController(brand: brand, model: GatedModel(gate: gate, fails: true),
                                         names: InMemoryAgentNameStore(), replyBeat: .zero)
-        controller.submit("Plan my day")
+        controller.draft = "Plan my day"
+        controller.submit(controller.draft)
+        #expect(controller.draft.isEmpty)
         await gate.release()
         await settle(controller)
         #expect(controller.failure == FirstConversation.couldNotAnswer)
         #expect(controller.conversation.turns.last?.text == "Plan my day")
         #expect(!controller.isReplying)
+        // "What you wrote is still here": back in the composer, ready to send.
+        #expect(controller.draft == "Plan my day")
+    }
+
+    @Test func aFailedReplyNeverOverwritesANewDraft() async {
+        let gate = Gate()
+        let controller = ChatController(brand: brand, model: GatedModel(gate: gate, fails: true),
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
+        controller.submit("Plan my day")
+        controller.draft = "Something else"
+        await gate.release()
+        await settle(controller)
+        #expect(controller.draft == "Something else")
+    }
+
+    @Test func theFirstRunLineIsSentWithoutATap() {
+        let controller = ChatController(brand: brand, model: LocalStubModel(),
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
+        controller.submit("Help me plan my morning.", byHand: false)
+        #expect(controller.sentCount == 0)
+        #expect(controller.isReplying)
+    }
+
+    @Test func starterChipsShowInStillRendersAndWithReduceMotion() {
+        #expect(StarterChip.isShown(arrived: false, reduceMotion: true, animatesEntrances: true))
+        #expect(StarterChip.isShown(arrived: false, reduceMotion: false, animatesEntrances: false))
+        #expect(!StarterChip.isShown(arrived: false, reduceMotion: false, animatesEntrances: true))
+        #expect(StarterChip.isShown(arrived: true, reduceMotion: false, animatesEntrances: true))
+        // Off unless a live screen turns it on.
+        #expect(!EnvironmentValues().animatesEntrances)
+    }
+
+    @Test func unreadableNotesTurnOffAddingAndStayOnDisk() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("warmth-unreadable-\(UUID().uuidString).json")
+        let bytes = Data("not notes".utf8)
+        try bytes.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let model = MemoryModel(store: MemoryStore(fileURL: url))
+        #expect(model.isUnreadable)
+        #expect(!model.canAdd)
+        model.newNote = "Prefers tea"
+        model.add()
+        #expect(try Data(contentsOf: url) == bytes)
+        #expect(model.savedCount == 0)
+        #expect(model.newNote == "Prefers tea")
     }
 
     @Test func theDotsHoldStillWithReduceMotion() {
@@ -140,7 +244,7 @@ struct WarmthTests {
     }
 
     @Test func savingAndForgettingAreMarkedOnce() throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("pebble-warmth-\(UUID().uuidString).json")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("warmth-\(UUID().uuidString).json")
         let store = MemoryStore(fileURL: url)
         defer { try? store.forgetEverything() }
         let model = MemoryModel(store: store)

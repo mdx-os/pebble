@@ -32,7 +32,13 @@ public enum AgentLook: String, CaseIterable, Codable, Sendable {
 /// Words for the guided first run screens.
 public enum FirstRunWords {
     public static let hello = "Hi there. I'm glad you're here."
-    public static let helloDetail = "I'm here to help with everyday things, big and small. Everything you tell me stays on this device."
+    /// Only promise that words stay here when the model really runs here,
+    /// the same rule as `FirstConversation.opening`.
+    public static func helloDetail(onDevice: Bool = false) -> String {
+        onDevice
+            ? "I'm here to help with everyday things, big and small. Everything you tell me stays on this device."
+            : "I'm here to help with everyday things, big and small."
+    }
     public static let beginTitle = "Let's begin"
     public static let nameQuestion = "What would you like to call me?"
     public static let nameDetail = "Pick any name you like. You can change it later."
@@ -52,6 +58,7 @@ public enum ConfirmationWords {
     public static let whatLabel = "What"
     public static let whereLabel = "Where"
     public static let priceLabel = "Price"
-    public static let expired = "That question timed out, so I didn't do anything. Ask me again whenever you're ready."
+    public static let expired = "That question timed out, so I didn't do it. Ask me again whenever you're ready."
     public static let closeTitle = "Close"
-    public static let promise = "If you say yes, I'll do this once, exactly as shown. If anything changes, I'll ask you again."}
+    public static let promise = "If you say yes, I'll do this once, exactly as shown. If anything is different, I'll ask you again."
+}

@@ -96,12 +96,17 @@ public enum MemorySource: Codable, Sendable, Equatable, Hashable {
 public enum MemoryWords {
     public static let title = "What I remember"
     public static let emptyTitle = "Nothing here yet"
+    // "It stays on this device" in `empty` and `saved` is true in code: notes
+    // live only in `MemoryStore`'s file, which is left out of backups, and
+    // nothing passes them to a `ModelClient` or any network call. The model
+    // only ever sees chat turns. Keep it that way, or gate these lines.
     public static let empty = "Tell me something worth keeping, like a birthday or how you take your tea. It stays on this device, and you can change or remove it anytime."
     public static let emptyActionTitle = "Add your first note"
     public static let forgetTitle = "Forget this"
     public static let forgetEverythingTitle = "Forget everything"
+    /// See the note above `empty`: notes never leave this device.
     public static let saved = "Saved. It stays on this device."
-    public static let forgotten = "Forgotten. It's gone from this device."
+    public static let forgotten = "Gone. I no longer have it."
     public static let needsWords = "Type a few words first, and I'll keep them."
     public static let tooLong = "That's a lot for one note. Try splitting it into shorter ones."
     public static let editTitle = "Change"
@@ -113,8 +118,12 @@ public enum MemoryWords {
     public static let forgetEverythingQuestion = "Forget everything I remember?"
     public static let forgetEverythingDetail = "This removes every note from this device. It can't be undone."
     public static let privacyNote = "Kept only on this device. Removing a note erases it."
-    public static let unreadable = "Sorry, I can't read the notes I saved. I've left them untouched. If this keeps happening, Forget everything clears them so we can start fresh."
+    /// Shown while adding is turned off, so the saved notes stay as they are.
+    public static let unreadable = "Sorry, I can't read the notes I saved. I've left them untouched, so I won't add new ones for now. If this keeps happening, Forget everything clears them so we can start fresh."
     public static let unavailable = "I can't open my notes just now, usually because the device is locked. Unlock it, and I'll look again."
+    /// When the notes folder couldn't be opened at launch. It is only
+    /// opened again the next time the app starts.
+    public static let couldNotOpen = "Sorry, I can't open my notes right now. Closing and reopening the app may help."
     public static let tryAgainTitle = "Try again"
     public static let forgetOneQuestion = "Forget this note?"
     public static let editPlaceholder = "What should I remember instead?"

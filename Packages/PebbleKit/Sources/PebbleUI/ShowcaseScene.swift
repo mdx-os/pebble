@@ -39,6 +39,8 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     names: InMemoryAgentNameStore(),
                     store: InMemoryOnboardingStore(),
                     looks: looks,
+                    // The showcase plays the on-device model, as the app does.
+                    onDevice: LocalStubModel().runsOnDevice,
                     startAt: page,
                     draftName: self == .name || self == .look || self == .ideas ? "Pip" : ""
                 ) { _ in }
@@ -106,7 +108,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     }
 
     static func emptyMemory() -> MemoryStore {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("pebble-showcase-empty-memory.json")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("showcase-empty-memory.json")
         let store = MemoryStore(fileURL: url)
         try? store.forgetEverything()
         return store

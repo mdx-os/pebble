@@ -69,11 +69,16 @@ Privacy promises are facts, not decoration. State them simply and only
 when the code makes them true.
 
 - Say "stays on this device" only when the model really runs on the device.
-  `FirstConversation.opening` checks this; keep it that way.
+  `FirstConversation.opening` and `FirstRunWords.helloDetail` check this;
+  keep it that way. Memory notes may say it always, because they never
+  reach a model or the network.
 - Never soften a promise that is true ("mostly private") and never stretch
   one that is not ("totally secure").
-- Erasing is real erasing. "Forgotten. It's gone from this device." is true
-  because the file is rewritten without the note.
+- Say only what the agent knows. After a note is forgotten, "Gone. I no
+  longer have it." is true because the file is rewritten without the note.
+  Don't claim more about the device's storage than the code can check.
+- A promise about what happens next must have a button or a behavior
+  behind it. "I'll look again" needs a Try again or a re-check.
 
 ## When someone may be in danger
 
@@ -85,7 +90,8 @@ its own review.
 
 Before the agent sends, buys or shares anything, it asks. The question
 names exactly what will happen, to whom, and for how much. The buttons say
-what they do ("Yes, go ahead" and "Not now"), and the promise underneath
+what they do ("Yes, go ahead" and "Not now", from `ProposedAction.yesTitle`
+and `noTitle`; `CopyDashTests` checks they match), and the promise underneath
 says the yes counts once, for exactly what is shown.
 
 ## Patterns
@@ -124,6 +130,6 @@ Short and specific. "Saved. It stays on this device." beats "Success!".
 | --- | --- | --- |
 | First hello | "Hi there. I'm glad you're here." | "Welcome to the app." |
 | Naming | "Type a name first. Any name works." | "Name is required." |
-| Too long | "That's a little long. Try a name of 40 letters or fewer." | "Max length exceeded." |
+| Too long | "That's a little long. Try a name of N letters or fewer." (N is `AgentName.maxLength`) | "Max length exceeded." |
 | Memory saved | "Saved. It stays on this device." | "Note created." |
-| Question timed out | "That question timed out, so I didn't do anything." | "Request expired." |
+| Question timed out | "That question timed out, so I didn't do it." | "Request expired." |

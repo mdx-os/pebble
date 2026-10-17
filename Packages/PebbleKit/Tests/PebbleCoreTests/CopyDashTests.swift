@@ -8,7 +8,8 @@ struct CopyDashTests {
 
     /// The words people see on each screen.
     static let copy: [String] = [
-        FirstRunWords.hello, FirstRunWords.helloDetail, FirstRunWords.beginTitle,
+        FirstRunWords.hello, FirstRunWords.helloDetail(onDevice: true), FirstRunWords.helloDetail(),
+        FirstRunWords.beginTitle,
         FirstRunWords.nameQuestion, FirstRunWords.nameDetail, FirstRunWords.lookQuestion,
         FirstRunWords.lookDetail, FirstRunWords.ideasDetail, FirstRunWords.justChatTitle,
         FirstRunWords.step(1, of: 4), FirstRunWords.greeting(named: "Pip"),
@@ -25,7 +26,7 @@ struct CopyDashTests {
         MemoryWords.needsWords, MemoryWords.tooLong, MemoryWords.editTitle, MemoryWords.saveTitle,
         MemoryWords.cancelTitle, MemoryWords.doneTitle, MemoryWords.addPlaceholder, MemoryWords.addTitle,
         MemoryWords.forgetEverythingQuestion, MemoryWords.forgetEverythingDetail, MemoryWords.privacyNote,
-        MemoryWords.unreadable, MemoryWords.unavailable, MemoryWords.tryAgainTitle,
+        MemoryWords.unreadable, MemoryWords.unavailable, MemoryWords.couldNotOpen, MemoryWords.tryAgainTitle,
         MemoryWords.forgetOneQuestion, MemoryWords.editPlaceholder, MemoryWords.couldNotForget,
         MemorySource.toldMe.label, MemorySource.fromApp("Calendar").label, MemorySource.inferred.label,
         ConfirmationWords.heading, ConfirmationWords.toLabel, ConfirmationWords.fromLabel,
@@ -66,10 +67,27 @@ struct CopyDashTests {
     @Test func privacyAndCarePromisesStand() {
         #expect(FirstConversation.opening(named: "Pip", onDevice: true).contains("so what you tell me stays here"))
         #expect(!FirstConversation.opening(named: "Pip", onDevice: false).contains("stays"))
-        #expect(FirstRunWords.helloDetail.contains("Everything you tell me stays on this device."))
+        // The hello only promises it when the model runs here, like the opening.
+        #expect(FirstRunWords.helloDetail(onDevice: true).contains("Everything you tell me stays on this device."))
+        #expect(!FirstRunWords.helloDetail(onDevice: false).contains("stays"))
+        #expect(!FirstRunWords.helloDetail().contains("stays"))
         #expect(MemoryWords.privacyNote == "Kept only on this device. Removing a note erases it.")
+        #expect(MemoryWords.forgotten == "Gone. I no longer have it.")
         #expect(CareCheck.reply.contains("988"))
         #expect(CareCheck.followUp.contains("988"))
         #expect(ConfirmationWords.promise.contains("once, exactly as shown"))
+        #expect(ConfirmationWords.expired.contains("so I didn't do it."))
+    }
+
+    /// The voice guide quotes the approval buttons; they must match the app.
+    @Test func theVoiceGuideQuotesTheRealButtonTitles() throws {
+        let guide = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("docs/VOICE.md")
+        let text = try String(contentsOf: guide, encoding: .utf8)
+        #expect(text.contains("(\"\(ProposedAction.yesTitle)\" and \"\(ProposedAction.noTitle)\""))
+        // The name limit is referred to, not copied, so it can't drift.
+        #expect(!text.contains("\(AgentName.maxLength) letters"))
     }
 }

@@ -135,9 +135,13 @@ public struct MemoryView: View {
             }
             .buttonStyle(.plain)
             .help(MemoryWords.addTitle)
-            .disabled(model.newNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(!model.canAdd || model.newNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .accessibilityLabel(MemoryWords.addTitle)
         }
+        // Notes that can't be read are left as they are, so nothing new is
+        // added on top of them. The notice below says why.
+        .disabled(!model.canAdd)
+        .opacity(model.canAdd ? 1 : 0.5)
         .padding(.leading, 16)
         .padding(.trailing, 8)
         .padding(.vertical, 8)
@@ -294,7 +298,14 @@ final class MemoryModel: ObservableObject {
         hasStoredFile = store.hasStoredFile
     }
 
+    /// False while the saved notes can't be read, so they stay untouched.
+    var canAdd: Bool { !isUnreadable }
+
     func add() {
+        guard canAdd else {
+            status = MemoryWords.unreadable
+            return
+        }
         report(try store.remember(newNote, source: .toldMe)) { self.newNote = "" }
     }
 

@@ -90,7 +90,8 @@ public struct HomeView: View {
                 }
                 .transition(.opacity)
             } else {
-                OnboardingView(brand: brand, names: names, store: onboarding, looks: looks) { line in
+                OnboardingView(brand: brand, names: names, store: onboarding, looks: looks,
+                               onDevice: model.runsOnDevice) { line in
                     firstMessage = line
                     chat = ChatController.make(brand: brand, model: model, names: names, conversation: nil)
                     withAnimation(.easeInOut(duration: 0.4)) { finished = true }
@@ -99,6 +100,8 @@ public struct HomeView: View {
             }
         }
         .tint(Theme.accent)
+        // The live app plays entrances; still renders show everything at once.
+        .environment(\.animatesEntrances, true)
         .sheet(isPresented: $showsShortcuts) {
             KeyboardShortcutsView()
         }
@@ -194,9 +197,10 @@ public struct HomeView: View {
             MemoryView(store: memory)
         } else {
             // The store couldn't be opened. Say so rather than hide memory.
+            // It is only opened again at launch, so the words say that.
             ZStack {
                 Backdrop()
-                GentleNotice(text: MemoryWords.unavailable)
+                GentleNotice(text: MemoryWords.couldNotOpen)
                     .padding(Theme.gutter)
                     .frame(maxWidth: Theme.readableWidth)
             }

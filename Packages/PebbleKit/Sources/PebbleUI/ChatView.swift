@@ -11,6 +11,8 @@ public struct ChatView: View {
     @StateObject private var controller: ChatController
     @FocusState private var nameFieldFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The pending "thinking" announcement, cancelled if the reply lands first.
+    @State private var thinkingNotice: Task<Void, Never>?
     #if os(iOS)
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     #endif
@@ -121,9 +123,17 @@ public struct ChatView: View {
                 }
             }
             .onChange(of: controller.isReplying) { _, replying in
-                // Say "thinking" once as the dots appear, and keep them in view.
+                // Say "thinking" once, a moment after the dots appear, and
+                // keep them in view. A reply that lands first, care words
+                // above all, is never talked over.
+                thinkingNotice?.cancel()
+                thinkingNotice = nil
                 guard replying else { return }
-                AccessibilityNotification.Announcement(FirstConversation.thinking).post()
+                thinkingNotice = Task { @MainActor in
+                    try? await Task.sleep(for: Self.thinkingNoticeDelay)
+                    guard !Task.isCancelled, controller.isReplying else { return }
+                    AccessibilityNotification.Announcement(FirstConversation.thinking).post()
+                }
                 if reduceMotion {
                     scroller.scrollTo(Self.thinkingID, anchor: .bottom)
                 } else {
@@ -144,7 +154,7 @@ public struct ChatView: View {
         .haptic(.sent, trigger: controller.sentCount)
         .task {
             if let firstMessage, controller.conversation.isWaitingForPerson {
-                controller.submit(firstMessage)
+                controller.submit(firstMessage, byHand: false)
                 onFirstMessageSent()
             }
         }
@@ -235,6 +245,10 @@ public struct ChatView: View {
 
     /// Where the thinking dots sit, so the chat can follow them.
     static let thinkingID = "thinking"
+
+    /// How long the dots show before VoiceOver hears "thinking", so a quick
+    /// reply is read on its own.
+    static let thinkingNoticeDelay: Duration = .milliseconds(400)
 
     /// New lines from the agent are read out, since they may land offscreen.
     static func announcement(for conversation: Conversation) -> String? {
@@ -383,6 +397,9 @@ final class ChatController: ObservableObject {
     @Published var draft = ""
     @Published var isReplying = false
     private var replyTask: Task<Void, Never>?
+    /// Goes up with each reply asked for and each stop, so a late reply
+    /// can tell it is no longer the current one.
+    private var replyGeneration = 0
     @Published var failure: String?
     /// Goes up by one each time the person sends something.
     @Published private(set) var sentCount = 0
@@ -450,7 +467,9 @@ final class ChatController: ObservableObject {
         conversation = conversation.renamingAgent(to: name)
     }
 
-    func submit(_ text: String) {
+    /// Sends `text`. `byHand` is false for the line the first run sends on
+    /// its own, which gets no tap since the person didn't just press anything.
+    func submit(_ text: String, byHand: Bool = true) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isReplying else { return }
         let clearsDraft = trimmed == draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -462,12 +481,17 @@ final class ChatController: ObservableObject {
         if clearsDraft {
             draft = ""
         }
-        sentCount += 1
+        if byHand { sentCount += 1 }
         failure = nil
         isReplying = true
+        replyGeneration += 1
+        let generation = replyGeneration
         let snapshot = conversation
         let client = model
         let beat = replyBeat
+        // Words of care are never held back, not even for a beat. Decided
+        // from the turns, the same way the reply itself is chosen.
+        let caring = CareCheck.answersWithCare(snapshot.turns)
         replyTask = Task {
             let started = ContinuousClock.now
             let next: Conversation?
@@ -476,19 +500,17 @@ final class ChatController: ObservableObject {
             } catch {
                 next = nil
             }
-            // Words of care are never held back, not even for a beat.
-            let caring = next?.turns.last.map { $0.text == CareCheck.reply || $0.text == CareCheck.followUp } ?? false
             let waited = ContinuousClock.now - started
             if !caring, waited < beat { try? await Task.sleep(for: beat - waited) }
-            // A chat that was replaced takes nothing from a late reply.
-            if Task.isCancelled {
-                isReplying = false
-                return
-            }
+            // A reply that was stopped, or overtaken by a newer one, takes
+            // nothing and changes nothing; only the newest reply settles.
+            guard !Task.isCancelled, generation == replyGeneration else { return }
             if let next {
                 conversation = next
             } else {
                 failure = FirstConversation.couldNotAnswer
+                // The failure line promises the words are still here to send.
+                if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { draft = trimmed }
             }
             isReplying = false
         }
@@ -498,6 +520,9 @@ final class ChatController: ObservableObject {
     /// one. Nothing it would have said is added.
     func stopReplying() {
         replyTask?.cancel()
+        replyTask = nil
+        replyGeneration += 1
+        isReplying = false
     }
 }
 
@@ -508,7 +533,18 @@ struct StarterChip: View {
     let index: Int
     let action: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var shown = false
+    @Environment(\.animatesEntrances) private var animatesEntrances
+    @State private var arrived = false
+
+    /// Shown from the start with Reduce Motion or in a still picture, so a
+    /// render or preview never catches the chips before they arrive.
+    static func isShown(arrived: Bool, reduceMotion: Bool, animatesEntrances: Bool) -> Bool {
+        arrived || reduceMotion || !animatesEntrances
+    }
+
+    private var shown: Bool {
+        Self.isShown(arrived: arrived, reduceMotion: reduceMotion, animatesEntrances: animatesEntrances)
+    }
 
     var body: some View {
         Button(action: action) {
@@ -525,9 +561,10 @@ struct StarterChip: View {
         .opacity(shown ? 1 : 0)
         .offset(y: shown ? 0 : Motion.entranceOffset(reduceMotion: reduceMotion))
         .onAppear {
+            guard !shown else { return }
             let delay = Motion.stagger(index, reduceMotion: reduceMotion)
-            withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.45, dampingFraction: 0.85).delay(delay)) {
-                shown = true
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.85).delay(delay)) {
+                arrived = true
             }
         }
     }

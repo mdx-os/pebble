@@ -39,6 +39,13 @@ enum Motion {
     }
 }
 
+extension EnvironmentValues {
+    /// Whether things that arrive one by one, like the starter chips, play
+    /// their entrance. Off unless a live screen turns it on, so previews and
+    /// still renders, which may never call `onAppear`, show everything.
+    @Entry var animatesEntrances = false
+}
+
 /// Three soft dots in a bubble while a reply is on its way. VoiceOver reads
 /// it as one calm line rather than three dots.
 struct ThinkingDots: View {
@@ -167,7 +174,7 @@ struct GentleNotice: View {
             Label {
                 Text(text).fixedSize(horizontal: false, vertical: true)
             } icon: {
-                Image(systemName: "heart.text.square").foregroundStyle(Theme.accent)
+                Image(systemName: "info.circle").foregroundStyle(Theme.accent)
             }
             .font(.subheadline)
             if let actionTitle, let action {
