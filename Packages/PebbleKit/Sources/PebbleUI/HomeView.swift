@@ -299,13 +299,8 @@ public struct HomeView: View {
             MemoryView(store: memory, onForgetEverything: { feed.forgetTasks() })
         } else {
             // The store couldn't be opened. Say so rather than hide memory.
-            // It is only opened again at launch, so the words say that.
-            ZStack {
-                Backdrop()
-                GentleNotice(text: MemoryWords.couldNotOpen)
-                    .padding(Theme.gutter)
-                    .frame(maxWidth: Theme.readableWidth)
-            }
+            // Tasks can still be forgotten here, since Forget everything isn't.
+            MemoryUnavailableView(hasTasks: feed.hasTasks, onForgetTasks: { feed.forgetTasks() })
         }
     }
 }

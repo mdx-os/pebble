@@ -38,6 +38,15 @@ final class FeedModel: ObservableObject {
     private var cards: [AgentTask] = []
     /// Ids of every task, so `isSample` needn't ask the engine.
     private var taskIDs: Set<String> = []
+    /// What each task's card is in the middle of, by id: its Change course
+    /// field, the words in it, and where focus goes. Kept here, not in the
+    /// card, so a card moving to another section keeps it.
+    private var cardStates: [String: TaskCardState] = [:]
+    /// Which section each task's card was in at the last build.
+    private var sections: [String: String] = [:]
+    /// The task as it was when a note went on its card. The note goes once
+    /// the task moves on.
+    private var notedAs: [String: AgentTask] = [:]
     /// Which task asked each question opened from a task card, so a yes goes
     /// back where it came from.
     private var askedBy: [UUID: String] = [:]
@@ -59,6 +68,7 @@ final class FeedModel: ObservableObject {
         feed = Feed.build(from: sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
         let list = tasks?.tasks ?? []
         track(list)
+        sections = Self.sections(of: feed)
         _ = announcer.lines(for: list, at: clock())
         watching = tasks?.observe { [weak self] snapshot in
             // Engines tell us on whatever thread they run. Hop to the main
@@ -88,6 +98,18 @@ final class FeedModel: ObservableObject {
         return live
     }
 
+    /// What a task's card is in the middle of. The same object for as long
+    /// as the task is here, whichever section its card is in.
+    func cardState(_ id: String) -> TaskCardState {
+        if let state = cardStates[id] { return state }
+        let state = TaskCardState()
+        cardStates[id] = state
+        return state
+    }
+
+    /// True while there is any task to forget.
+    var hasTasks: Bool { !taskIDs.isEmpty }
+
     /// True only while this task's question is pinned in Needs you, the one
     /// place its Approve can open the sheet. A question asked through
     /// another rule, or one the rule closed before the engine noticed,
@@ -109,6 +131,37 @@ final class FeedModel: ObservableObject {
     private func rebuild() {
         let next = Feed.build(from: sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
         if next != feed { feed = next }
+        followCards()
+    }
+
+    /// Each task card's section: Needs you, Working on it, or a time group.
+    static func sections(of feed: Feed) -> [String: String] {
+        var out: [String: String] = [:]
+        for item in feed.needsYou where item.task != nil { out[item.id] = "needsYou" }
+        for item in feed.working where item.task != nil { out[item.id] = "working" }
+        for group in feed.groups {
+            for item in group.items where item.task != nil { out[item.id] = "group:\(group.id)" }
+        }
+        return out
+    }
+
+    /// A card that moves to another section is a new view, so its field
+    /// and focus are carried over here. A task that ended closes its field,
+    /// since half typed words have nowhere to go. Either way, if the person
+    /// was on the card, VoiceOver goes to its summary in the new place.
+    private func followCards() {
+        let next = Self.sections(of: feed)
+        defer { sections = next }
+        for (id, state) in cardStates {
+            let ended = cards.first { $0.id == id }.map { !$0.isActive } ?? false
+            let moved = sections[id] != nil && next[id] != nil && sections[id] != next[id]
+            if ended && state.redirecting {
+                state.closeField()
+            } else if moved && (state.redirecting || state.hasVoiceOver) {
+                state.pendingKeyboard = state.redirecting && state.typing
+                state.pendingFocus = .summary
+            }
+        }
     }
 
     /// Moves a scripted engine along, for the live showcase.
@@ -132,9 +185,19 @@ final class FeedModel: ObservableObject {
         }
         let ids = Set(list.map(\.id))
         progress = progress.filter { ids.contains($0.key) }
+        cardStates = cardStates.filter { ids.contains($0.key) }
+        // A result open to read whose task went away, as when the oldest
+        // ended tasks are let go, closes with it.
+        if let reading, taskIDs.contains(reading.id), !ids.contains(reading.id) { self.reading = nil }
         taskIDs = ids
         let next = list.map(\.card)
         defer { cards = next }
+        // A note stays only until its task moves on.
+        for task in next where notedAs[task.id] != nil && notedAs[task.id] != task {
+            notedAs[task.id] = nil
+            cardStates[task.id]?.note = nil
+        }
+        notedAs = notedAs.filter { ids.contains($0.key) }
         return next != cards
     }
 
@@ -223,14 +286,27 @@ final class FeedModel: ObservableObject {
     /// where the question came from: the task whose card opened it, which
     /// checks it with `AskFirst`, or else `NeedsYou`. A task's yes never
     /// falls through to `NeedsYou`, even if the task has moved on.
+    ///
+    /// A yes the task couldn't use did nothing, so its card says so rather
+    /// than leave the person wondering. A late one says so in its history.
     func approved(_ approval: Approval) {
+        var refusedBy: String?
         if let id = askedBy.removeValue(forKey: approval.id) {
-            _ = tasks?.resume(id, with: approval)
+            if tasks?.resume(id, with: approval) ?? .refused == .refused { refusedBy = id }
         } else {
             needsYou.approved(approval)
         }
         reviewing = nil
         refresh()
+        if let refusedBy { note(TaskWords.yesNotUsed, on: refusedBy) }
+    }
+
+    /// Puts a line on a task's card, and says it, until the task moves on.
+    private func note(_ line: String, on id: String) {
+        guard let task = cards.first(where: { $0.id == id }) else { return }
+        cardState(id).note = line
+        notedAs[id] = task
+        announce(TaskAnnouncer.Line(text: line, urgent: true))
     }
 
     /// The sheet closed without a yes, by Not now, Close, or going away.
@@ -411,6 +487,7 @@ struct FeedView: View {
                             // from the model, so a tick redraws only this card.
                             TaskCard(task: task, time: model.timeLabel(for: item.time),
                                      progress: model.liveProgress(task.id),
+                                     state: model.cardState(task.id),
                                      canApprove: model.canApprove(task),
                                      onApprove: { model.review(task) },
                                      onRedirect: { model.redirect(task, with: $0) },

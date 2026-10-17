@@ -131,7 +131,11 @@ once, politely, never every tick of progress. Never say a change was
 taken and then ask about the old thing: a step that can't change is left
 undone, and the card says so ("You changed course, so I didn't hold a
 Saturday visit."). A closed question says "You closed the question", which
-is true for Not now and a sheet swiped away alike.
+is true for Not now and a sheet swiped away alike. A step the person said
+yes to may already be under way, so never say it wasn't done: a change of
+course lets it finish ("You'd already said yes to this, so I'm finishing
+it."), and a stop says it may be done. A yes that didn't go through says
+so on the card, so a tap is never met with silence.
 
 ### Confirmations
 

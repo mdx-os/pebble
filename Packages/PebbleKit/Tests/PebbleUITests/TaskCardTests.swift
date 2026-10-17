@@ -285,7 +285,7 @@ struct TaskCardTests {
         let task = try #require(engine.task(id))
         model.review(task)
         let question = try #require(model.reviewing)
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("pebble-tasks-\(UUID().uuidString).json")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tasks-forget-\(UUID().uuidString).json")
         let store = MemoryStore(fileURL: url)
         defer { try? store.forgetEverything() }
         let memory = MemoryModel(store: store, onForgetEverything: { model.forgetTasks() })
@@ -297,6 +297,202 @@ struct TaskCardTests {
         #expect(model.feed.needsYou.isEmpty && model.feed.working.isEmpty)
         #expect(model.reviewing == nil)
         #expect(rule.isClosed(question))
+    }
+
+    /// The notes couldn't be opened, so there is no Forget everything. The
+    /// screen in its place still forgets every task.
+    @Test func theMemoryFallbackForgetsTasks() throws {
+        let rule = AskFirst.isolated()
+        let engine = LocalFakeEngine(rule: rule)
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        engine.redirect(engine.start(SampleTasks.plan), with: "Keep Friday free")
+        let model = model(engine)
+        let question = try #require(engine.task(id)?.question)
+        #expect(model.hasTasks)
+        let fallback = MemoryUnavailableView(hasTasks: model.hasTasks, onForgetTasks: { model.forgetTasks() })
+        _ = try #require(ImageRenderer(content: fallback.frame(width: 393, height: 852)).cgImage)
+        fallback.forgetTasks()
+        #expect(engine.tasks.isEmpty)
+        #expect(!model.hasTasks)
+        #expect(model.feed.needsYou.isEmpty && model.feed.working.isEmpty)
+        #expect(rule.isClosed(question))
+    }
+
+    // MARK: A card keeps what it was doing across sections
+
+    /// The dentist task is reading reviews, a breath before it asks. The
+    /// person opens Change course and types. The task reaches its ask step
+    /// and its card moves from Working on it to Needs you: a new view.
+    @Test func aCardMovingToNeedsYouKeepsItsFieldWordsAndFocus() throws {
+        let engine = LocalFakeEngine(rule: .isolated())
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 40)
+        let model = model(engine)
+        #expect(model.feed.working.contains { $0.id == id })
+        let state = model.cardState(id)
+        state.openField()
+        // What the card does once the field is on screen.
+        #expect(state.takeFocus() == .field)
+        state.pendingKeyboard = false
+        state.typing = true
+        state.hasVoiceOver = true
+        state.words = "Only ones near the school"
+        engine.advance(by: 5)
+        let moved = try #require(model.feed.needsYou.first { $0.id == id }?.task)
+        #expect(moved.state == .waitingOnYou)
+        #expect(!model.feed.working.contains { $0.id == id })
+        // The same state, words and open field, whatever view draws it.
+        #expect(model.cardState(id) === state)
+        #expect(state.redirecting)
+        #expect(state.words == "Only ones near the school")
+        // VoiceOver goes to the summary in its new place, and the keyboard
+        // goes back to the field.
+        #expect(state.pendingFocus == .summary)
+        #expect(state.pendingKeyboard)
+        let card = TaskCard(task: moved, time: "", state: model.cardState(id), canApprove: model.canApprove(moved))
+        #expect(card.actions == [.approval, .stop])
+        _ = try render(model, size: CGSize(width: 393, height: 852))
+        // The words still send.
+        #expect(model.redirect(moved, with: state.words))
+        #expect(engine.task(id)?.history.last?.text == TaskWords.changedCourse("hold a Saturday visit"))
+    }
+
+    /// A task that ends with the field open closes it, clears the words,
+    /// and sends VoiceOver to the summary in its new place.
+    @Test func aTaskThatEndsClosesItsFieldAndKeepsFocus() throws {
+        let engine = LocalFakeEngine(rule: .isolated())
+        let id = engine.start(SampleTasks.plan)
+        let model = model(engine)
+        let state = model.cardState(id)
+        state.openField()
+        _ = state.takeFocus()
+        state.words = "Keep Friday free"
+        engine.stop(id)
+        #expect(model.feed.groups.flatMap(\.items).contains { $0.id == id })
+        #expect(!state.redirecting)
+        #expect(state.words.isEmpty)
+        #expect(state.pendingFocus == .summary)
+        #expect(!state.pendingKeyboard)
+    }
+
+    /// VoiceOver was on a card's button with no field open. The task
+    /// finishes and the card moves to a time group: focus follows it.
+    @Test func voiceOverFollowsACardThatMoves() throws {
+        let engine = LocalFakeEngine(rule: .isolated())
+        let id = engine.start(SampleTasks.plan)
+        let other = engine.start(SampleTasks.lunch)
+        let model = model(engine)
+        let state = model.cardState(id)
+        state.hasVoiceOver = true
+        let quiet = model.cardState(other)
+        // Ticks and new steps in place ask for nothing.
+        engine.advance(by: 6)
+        #expect(state.pendingFocus == nil)
+        engine.advance(by: 60)
+        #expect(engine.task(id)?.state == .done)
+        #expect(state.pendingFocus == .summary)
+        #expect(!state.pendingKeyboard)
+        // The card VoiceOver wasn't on, though it moved to Needs you, asks for nothing.
+        #expect(model.feed.needsYou.contains { $0.id == other })
+        #expect(quiet.pendingFocus == nil)
+    }
+
+    @Test func aClearedTaskLetsGoOfItsCardState() throws {
+        let engine = LocalFakeEngine(rule: .isolated())
+        let id = engine.start(SampleTasks.plan)
+        let model = model(engine)
+        let state = model.cardState(id)
+        state.words = "Keep Friday free"
+        engine.advance(by: 30)
+        model.dismiss(try #require(engine.task(id)))
+        #expect(model.cardState(id) !== state)
+        #expect(model.cardState(id).words.isEmpty)
+    }
+
+    /// The oldest ended tasks are let go. One whose result is open to read
+    /// closes with it.
+    @Test func readingClosesWhenItsTaskIsLetGo() throws {
+        let engine = LocalFakeEngine(rule: .isolated())
+        let id = engine.start(SampleTasks.plan)
+        engine.advance(by: 30)
+        let model = model(engine)
+        model.open(try #require(engine.task(id)))
+        #expect(model.reading?.id == id)
+        for _ in 0..<(LocalFakeEngine.endedLimit - 1) {
+            engine.start(SampleTasks.plan)
+            engine.advance(by: 30)
+        }
+        #expect(engine.task(id) != nil)
+        #expect(model.reading?.id == id)
+        engine.start(SampleTasks.plan)
+        engine.advance(by: 30)
+        #expect(engine.task(id) == nil)
+        #expect(model.reading == nil)
+    }
+
+    /// A reader for something other than a task stays open.
+    @Test func readingANonTaskCardIsLeftAlone() throws {
+        let engine = LocalFakeEngine(rule: .isolated())
+        let model = model(engine)
+        let ready = try #require(model.feed.groups.flatMap(\.items).first { $0.task == nil && $0.kind == .ready })
+        model.perform(ready, talk: { _ in })
+        #expect(model.reading?.id == ready.id)
+        engine.start(SampleTasks.plan)
+        engine.advance(by: 30)
+        #expect(model.reading?.id == ready.id)
+    }
+
+    /// A yes the task couldn't use did nothing. The card says so, and so
+    /// does VoiceOver, until the task moves on.
+    @Test func aYesThatDoesNotGoThroughSaysSo() throws {
+        let rule = AskFirst.isolated()
+        let engine = LocalFakeEngine(rule: rule)
+        let script = TaskScript(title: "Hold it", steps: [
+            .init("Asking", kind: .ask(SampleTasks.holdVisit, askLine: "May I?"), duration: 2, todo: "hold it"),
+            .init("Tidying", duration: 5, todo: "tidy up"),
+        ], doneLine: "Done.")
+        let id = engine.start(script)
+        let model = model(engine)
+        var heard: [TaskAnnouncer.Line] = []
+        model.announce = { heard.append($0) }
+        model.review(try #require(engine.task(id)))
+        let request = try #require(model.reviewing)
+        guard case .approved(let yes) = rule.sayYes(to: request) else { Issue.record("yes refused"); return }
+        // Closed somewhere else before the yes reached the task.
+        rule.withdraw(request)
+        model.approved(yes)
+        let state = model.cardState(id)
+        #expect(state.note == TaskWords.yesNotUsed)
+        #expect(heard.contains(TaskAnnouncer.Line(text: TaskWords.yesNotUsed, urgent: true)))
+        #expect(engine.task(id)?.history.contains { $0.mark == .approved } == false)
+        // Gone once the task moves on.
+        engine.advance(by: 6)
+        #expect(engine.task(id)?.state == .done)
+        #expect(state.note == nil)
+        // A yes that goes through leaves no note.
+        let again = engine.start(script)
+        model.review(try #require(engine.task(again)))
+        let next = try #require(model.reviewing)
+        guard case .approved(let good) = rule.sayYes(to: next) else { Issue.record("yes refused"); return }
+        model.approved(good)
+        #expect(model.cardState(again).note == nil)
+    }
+
+    /// Change course asks for focus on the field, taken once the field is
+    /// on screen, not in the tap that adds it.
+    @Test func changeCourseDefersFocusToTheField() {
+        let state = TaskCardState()
+        state.openField()
+        #expect(state.redirecting)
+        #expect(state.pendingFocus == .field)
+        #expect(state.pendingKeyboard)
+        #expect(state.takeFocus() == .field)
+        #expect(state.takeFocus() == nil)
+        state.words = "x"
+        state.closeField()
+        #expect(state.words.isEmpty && !state.redirecting)
+        #expect(state.pendingFocus == .summary)
     }
 
     /// A yes for a question opened from a task card goes back to that task,

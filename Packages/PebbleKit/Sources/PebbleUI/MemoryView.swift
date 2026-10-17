@@ -163,6 +163,46 @@ public struct MemoryView: View {
     }
 }
 
+/// The memory screen when the notes couldn't be opened. It says so rather
+/// than hide memory; they are only opened again at launch, so the words say
+/// that. Forget everything needs the notes, so tasks can be forgotten here
+/// on their own, with words that are honest that the notes stay.
+struct MemoryUnavailableView: View {
+    let hasTasks: Bool
+    let onForgetTasks: @MainActor () -> Void
+    @State private var asking = false
+
+    var body: some View {
+        ZStack {
+            Backdrop()
+            VStack(spacing: 18) {
+                GentleNotice(text: MemoryWords.couldNotOpen)
+                if hasTasks {
+                    Button(role: .destructive) { asking = true } label: {
+                        Text(TaskWords.forgetTasksTitle)
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                    .accessibilityIdentifier("forgetTasks")
+                }
+            }
+            .padding(Theme.gutter)
+            .frame(maxWidth: Theme.readableWidth)
+        }
+        .confirmationDialog(TaskWords.forgetTasksQuestion, isPresented: $asking, titleVisibility: .visible) {
+            Button(TaskWords.forgetTasksTitle, role: .destructive, action: forgetTasks)
+            Button(MemoryWords.cancelTitle, role: .cancel) {}
+        } message: {
+            Text(TaskWords.forgetTasksDetail)
+        }
+    }
+
+    /// What the dialog's button does.
+    func forgetTasks() {
+        onForgetTasks()
+    }
+}
+
 struct MemoryRow: View {
     let note: MemoryNote
     let isEditing: Bool

@@ -25,6 +25,9 @@ public struct AgentTask: Identifiable, Sendable, Equatable {
     public var result: String?
     public let startedAt: Date
     public var updatedAt: Date
+    /// Steps recorded so far, counting those the history has let go. Each
+    /// new step takes this as its number, so no two steps share an id.
+    public private(set) var stepsRecorded: Int
 
     public static let historyLimit = 4
 
@@ -36,7 +39,8 @@ public struct AgentTask: Identifiable, Sendable, Equatable {
         self.step = step
         self.progress = progress
         self.state = state
-        self.history = Array(history.suffix(Self.historyLimit))
+        self.history = history.suffix(Self.historyLimit).enumerated().map { $1.numbered($0) }
+        self.stepsRecorded = self.history.count
         self.question = question
         self.wrapUp = wrapUp
         self.result = result
@@ -44,9 +48,11 @@ public struct AgentTask: Identifiable, Sendable, Equatable {
         self.updatedAt = updatedAt ?? startedAt
     }
 
-    /// Adds a step to the history, keeping only the last few.
+    /// Adds a step to the history, keeping only the last few. The step is
+    /// numbered here, after every step before it.
     public mutating func record(_ step: TaskStep) {
-        history.append(step)
+        history.append(step.numbered(stepsRecorded))
+        stepsRecorded += 1
         if history.count > Self.historyLimit { history.removeFirst(history.count - Self.historyLimit) }
     }
 
@@ -138,18 +144,28 @@ public struct TaskStep: Sendable, Hashable {
         case approved
     }
 
-    /// Steady while newer steps push in, so a list keyed by it never shows
-    /// one step's words in another step's place.
-    public var id: String { "\(at.timeIntervalSinceReferenceDate)|\(text)" }
+    /// Steady while newer steps push in, and never shared by two steps of
+    /// one task, even when the clock stands still and the words repeat. So
+    /// a list keyed by it never shows one step's words in another's place.
+    public var id: Int { number }
 
     public let text: String
     public let mark: Mark
     public let at: Date
+    /// Where the step falls in its task, from zero. Set by `AgentTask.record`.
+    public private(set) var number: Int
 
     public init(_ text: String, mark: Mark, at: Date) {
         self.text = text
         self.mark = mark
         self.at = at
+        self.number = 0
+    }
+
+    func numbered(_ number: Int) -> TaskStep {
+        var step = self
+        step.number = number
+        return step
     }
 }
 
@@ -159,10 +175,15 @@ public struct TaskWrapUp: Sendable, Equatable {
     public let kept: [String]
     /// What it didn't do, such as "hold a Saturday visit".
     public let notDone: [String]
+    /// A step the person said yes to that was under way when the task
+    /// stopped, such as "hold a Saturday visit". Neither kept nor not done:
+    /// it may have happened.
+    public let underway: String?
 
-    public init(kept: [String], notDone: [String]) {
+    public init(kept: [String], notDone: [String], underway: String? = nil) {
         self.kept = kept
         self.notDone = notDone
+        self.underway = underway
     }
 
     /// "I kept a, b and c." or that nothing was kept yet.
@@ -173,6 +194,12 @@ public struct TaskWrapUp: Sendable, Equatable {
     /// "I didn't a or b." Nil when everything was done.
     public var notDoneLine: String? {
         notDone.isEmpty ? nil : TaskWords.notDone(notDone)
+    }
+
+    /// "You said yes, so I'd already started to a. It may be done." Nil
+    /// when nothing approved was under way.
+    public var underwayLine: String? {
+        underway.map(TaskWords.mayBeDone)
     }
 }
 
@@ -205,6 +232,10 @@ public enum TaskApproval: Sendable, Equatable {
 /// confirmation sheet, checked by `AskFirst.verdict`, lets it go on.
 /// Redirect and stop never need a yes. Stop is immediate.
 ///
+/// An engine never calls `AskFirst` while it holds a lock of its own. The
+/// rule may one day tell others when a question opens or closes, and they
+/// may call straight back into the engine.
+///
 /// `LocalFakeEngine` runs scripted tasks on a clock tests control. A real
 /// engine (Forge) plugs in here later; any networking stays outside
 /// `PebbleCore`.
@@ -228,12 +259,16 @@ public protocol TaskEngine: AnyObject, Sendable {
     /// New instructions for a task still going. Never needs a yes. A step
     /// waiting on a yes is withdrawn and left undone, since the question no
     /// longer matches what the person asked for; it is never asked again
-    /// unchanged. False when the task has ended or the words are empty.
+    /// unchanged. A step already approved is committed: the yes stands, the
+    /// action may be under way, so it finishes and is never called undone.
+    /// False when the task has ended or the words are empty.
     @discardableResult
     func redirect(_ id: String, with instructions: String) -> Bool
 
     /// Stops at once and says what was kept and what was not done. Any open
-    /// question is withdrawn. False when the task had already ended.
+    /// question is withdrawn. A step already approved is never listed as not
+    /// done: the wrap-up names it as `underway`, since it may have happened.
+    /// False when the task had already ended.
     @discardableResult
     func stop(_ id: String) -> Bool
 
@@ -428,6 +463,19 @@ public enum TaskWords {
     public static func changedCourse(_ todo: String) -> String { "You changed course, so I didn't \(todo)." }
     public static func timedOut(_ todo: String) -> String { "That question timed out, so I didn't \(todo)." }
     public static func couldNotAsk(_ todo: String) -> String { "I couldn't ask about this clearly, so I didn't \(todo)." }
+    /// New instructions for a step the person already said yes to. The yes
+    /// stands and the step may be under way, so it is finished, not dropped.
+    public static let finishingApproved = "You'd already said yes to this, so I'm finishing it."
+    /// A step the person said yes to, under way when they stopped the task.
+    public static func mayBeDone(_ todo: String) -> String { "You said yes, so I'd already started to \(todo). It may be done." }
+    /// A yes from the sheet the task couldn't use. Nothing was done with it.
+    public static let yesNotUsed = "That yes didn't go through, so I didn't act on it."
+
+    /// Forgetting tasks when the notes can't be opened, so Forget everything
+    /// isn't there. Honest that the notes stay.
+    public static let forgetTasksTitle = "Forget all tasks"
+    public static let forgetTasksQuestion = "Forget all tasks?"
+    public static let forgetTasksDetail = "This removes every task, and what you told me for them, from this device. It can't be undone. Your notes stay until I can open them."
 
     public static func percentDone(_ percent: Int) -> String { "\(percent) percent done" }
     public static func kept(_ things: [String]) -> String { "I kept \(list(things, joiner: "and"))." }

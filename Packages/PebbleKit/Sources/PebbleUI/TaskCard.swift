@@ -14,6 +14,53 @@ final class LiveProgress: ObservableObject {
     }
 }
 
+/// What a task's card is in the middle of, kept by `FeedModel` by task id.
+/// A card moving from one section to another is a new view, so anything
+/// kept in the view itself would be lost: the half typed words, the open
+/// field, and where VoiceOver was.
+@MainActor
+final class TaskCardState: ObservableObject {
+    /// The Change course field is open.
+    @Published var redirecting = false
+    @Published var words = ""
+    /// Where VoiceOver goes next. The card takes it once it is on screen,
+    /// so a card that just moved sections still gets it.
+    @Published var pendingFocus: TaskCard.Focus?
+    /// The field had the keyboard when the card moved, so the new card
+    /// gives it back.
+    var pendingKeyboard = false
+    /// The field has the keyboard, as the card last said.
+    var typing = false
+    /// VoiceOver is on some part of the card, as the card last said.
+    var hasVoiceOver = false
+    /// A line to show on the card, such as a yes that didn't go through.
+    @Published var note: String?
+
+    init() {}
+
+    /// Where VoiceOver should go, once. Nil when nowhere.
+    func takeFocus() -> TaskCard.Focus? {
+        defer { pendingFocus = nil }
+        return pendingFocus
+    }
+
+    /// The field opens, and VoiceOver and the keyboard go to it once it is there.
+    func openField() {
+        redirecting = true
+        pendingFocus = .field
+        pendingKeyboard = true
+    }
+
+    /// The field closes, and VoiceOver goes back to the summary.
+    func closeField() {
+        words = ""
+        redirecting = false
+        pendingKeyboard = false
+        typing = false
+        pendingFocus = .summary
+    }
+}
+
 /// A live card for long work: what the agent is doing now, how far along it
 /// is, the last few steps, and what the person can do about it.
 ///
@@ -25,6 +72,9 @@ struct TaskCard: View {
     let task: AgentTask
     let time: String
     @ObservedObject var progress: LiveProgress
+    /// The field, its words and where focus goes. Held by the feed, so it
+    /// outlives this view when the card moves sections.
+    @ObservedObject var state: TaskCardState
     /// True only while the task's question is pinned in Needs you. Without
     /// it the card shows the waiting line and no Approve, since nothing
     /// could open the sheet.
@@ -37,13 +87,15 @@ struct TaskCard: View {
     let onOpen: () -> Void
     let onDismiss: () -> Void
 
-    init(task: AgentTask, time: String, progress: LiveProgress? = nil, canApprove: Bool = false,
+    init(task: AgentTask, time: String, progress: LiveProgress? = nil, state: TaskCardState? = nil,
+         canApprove: Bool = false,
          onApprove: @escaping () -> Void = {}, onRedirect: @escaping (String) -> Bool = { _ in true },
          onStop: @escaping () -> Void = {}, onRetry: @escaping () -> Void = {},
          onOpen: @escaping () -> Void = {}, onDismiss: @escaping () -> Void = {}) {
         self.task = task
         self.time = time
         _progress = ObservedObject(wrappedValue: progress ?? LiveProgress(task.progress))
+        _state = ObservedObject(wrappedValue: state ?? TaskCardState())
         self.canApprove = canApprove
         self.onApprove = onApprove
         self.onRedirect = onRedirect
@@ -53,10 +105,9 @@ struct TaskCard: View {
         self.onDismiss = onDismiss
     }
 
-    enum Focus: Hashable { case summary, field }
+    enum Focus: Hashable { case summary, field, action(Action) }
 
-    @State private var redirecting = false
-    @State private var words = ""
+    private var redirecting: Bool { state.redirecting }
     @FocusState private var fieldFocused: Bool
     /// Where VoiceOver goes when the redirect field opens and closes, so it
     /// never lands nowhere when a button it was on goes away.
@@ -73,6 +124,13 @@ struct TaskCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             summary
+            if let note = state.note {
+                Text(note)
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("taskNote")
+            }
             if task.isActive, !task.history.isEmpty {
                 history
             }
@@ -93,13 +151,33 @@ struct TaskCard: View {
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .easeInOut(duration: 0.3), value: redirecting)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("task:\(task.id)")
-        .onChange(of: task.isActive) { _, active in
-            guard !active else { return }
-            // The task is over, so half typed words have nowhere to go.
-            let wasRedirecting = redirecting
-            redirecting = false
-            words = ""
-            if wasRedirecting { focus = .summary }
+        // The feed asks for focus when the card moves sections or its task
+        // ends. A card that just moved is a new view, so it looks on appear.
+        .onAppear(perform: takeSummaryFocus)
+        .onChange(of: state.pendingFocus) { _, _ in takeSummaryFocus() }
+        .onChange(of: fieldFocused) { _, focused in state.typing = focused }
+        .onChange(of: focus) { _, place in state.hasVoiceOver = place != nil }
+    }
+
+    /// Takes VoiceOver to the summary a beat later, once the card is in
+    /// place; set in the same pass that moves it, SwiftUI drops it.
+    private func takeSummaryFocus() {
+        guard state.pendingFocus == .summary else { return }
+        _ = state.takeFocus()
+        Task { @MainActor in focus = .summary }
+    }
+
+    /// Takes VoiceOver, and the keyboard if it had it, to the field once it
+    /// is on screen.
+    private func takeFieldFocus() {
+        let voiceOver = state.pendingFocus == .field
+        if voiceOver { _ = state.takeFocus() }
+        let keyboard = state.pendingKeyboard
+        state.pendingKeyboard = false
+        guard voiceOver || keyboard else { return }
+        Task { @MainActor in
+            if keyboard { fieldFocused = true }
+            if voiceOver { focus = .field }
         }
     }
 
@@ -191,6 +269,9 @@ struct TaskCard: View {
             if let notDone = wrapUp.notDoneLine {
                 Text(notDone)
             }
+            if let underway = wrapUp.underwayLine {
+                Text(underway)
+            }
         }
         .font(.subheadline)
         .foregroundStyle(.primary)
@@ -240,37 +321,43 @@ struct TaskCard: View {
     @ViewBuilder
     private func buttonViews(_ row: [Action]) -> some View {
         ForEach(row, id: \.self) { action in
-            switch action {
-            case .approval:
-                Button(TaskWords.approveTitle, action: onApprove)
-                    .buttonStyle(CardButtonStyle(kind: .primary))
-            case .retry:
-                Button(TaskWords.tryAgainTitle, action: onRetry)
-                    .buttonStyle(CardButtonStyle(kind: .primary))
-            case .redirect:
-                Button(TaskWords.redirectTitle) {
-                    redirecting = true
-                    fieldFocused = true
-                    // This button goes away, so take VoiceOver to the field.
-                    focus = .field
-                }
-                .buttonStyle(CardButtonStyle(kind: .secondary))
-            case .stop:
-                Button(TaskWords.stopTitle, action: onStop)
-                    .buttonStyle(CardButtonStyle(kind: .quiet))
-            case .open:
-                Button(FeedWords.openTitle, action: onOpen)
-                    .buttonStyle(CardButtonStyle(kind: .secondary))
-            case .dismiss:
-                Button(TaskWords.dismissTitle, action: onDismiss)
-                    .buttonStyle(CardButtonStyle(kind: .quiet))
+            button(action)
+                // Known, so a card that moves sections can bring VoiceOver along.
+                .accessibilityFocused($focus, equals: .action(action))
+        }
+    }
+
+    @ViewBuilder
+    private func button(_ action: Action) -> some View {
+        switch action {
+        case .approval:
+            Button(TaskWords.approveTitle, action: onApprove)
+                .buttonStyle(CardButtonStyle(kind: .primary))
+        case .retry:
+            Button(TaskWords.tryAgainTitle, action: onRetry)
+                .buttonStyle(CardButtonStyle(kind: .primary))
+        case .redirect:
+            Button(TaskWords.redirectTitle) {
+                // This button goes away, so VoiceOver and the keyboard
+                // go to the field once it appears.
+                state.openField()
             }
+            .buttonStyle(CardButtonStyle(kind: .secondary))
+        case .stop:
+            Button(TaskWords.stopTitle, action: onStop)
+                .buttonStyle(CardButtonStyle(kind: .quiet))
+        case .open:
+            Button(FeedWords.openTitle, action: onOpen)
+                .buttonStyle(CardButtonStyle(kind: .secondary))
+        case .dismiss:
+            Button(TaskWords.dismissTitle, action: onDismiss)
+                .buttonStyle(CardButtonStyle(kind: .quiet))
         }
     }
 
     private var redirectField: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField(TaskWords.redirectPlaceholder, text: $words, axis: .vertical)
+            TextField(TaskWords.redirectPlaceholder, text: $state.words, axis: .vertical)
                 .lineLimit(1...3)
                 .font(.subheadline)
                 .focused($fieldFocused)
@@ -281,10 +368,11 @@ struct TaskCard: View {
                 .background(Theme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: Theme.smallCorner, style: .continuous))
                 .accessibilityLabel(TaskWords.redirectPlaceholder)
                 .accessibilityFocused($focus, equals: .field)
+                .onAppear(perform: takeFieldFocus)
             HStack(spacing: 8) {
                 Button(TaskWords.redirectSendTitle, action: send)
                     .buttonStyle(CardButtonStyle(kind: .primary))
-                    .disabled(words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(state.words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 Button(TaskWords.redirectCancelTitle, action: closeField)
                     .buttonStyle(CardButtonStyle(kind: .quiet))
             }
@@ -292,17 +380,15 @@ struct TaskCard: View {
     }
 
     private func send() {
-        guard !words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        if onRedirect(words) { closeField() }
+        guard !state.words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if onRedirect(state.words) { closeField() }
     }
 
     /// The field goes away with its buttons, so VoiceOver goes back to the
     /// card's summary, which says what happens now.
     private func closeField() {
-        words = ""
-        redirecting = false
         fieldFocused = false
-        focus = .summary
+        state.closeField()
     }
 
     static func symbol(_ state: TaskState) -> String {

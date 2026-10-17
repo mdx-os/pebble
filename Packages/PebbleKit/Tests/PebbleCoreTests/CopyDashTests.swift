@@ -40,19 +40,25 @@ struct CopyDashTests {
       + AgentLook.allCases.map(\.title)
       + HomeWords.shortcuts.flatMap { [$0.keys, $0.action] }
       + FeedWords.all
-      + TaskState.allCases.map(\.label)
-      + [TaskWords.workingHeading, TaskWords.workingDetail, TaskWords.stalled, TaskWords.retrying,
-         TaskWords.stuck, TaskWords.waitingForYes, TaskWords.redirected, TaskWords.stopped, TaskWords.failed,
-         TaskWords.keptNothing, TaskWords.approveTitle, TaskWords.redirectTitle, TaskWords.redirectPlaceholder,
-         TaskWords.redirectSendTitle, TaskWords.redirectCancelTitle, TaskWords.stopTitle, TaskWords.tryAgainTitle]
-      + taskEndings
-
-    static let taskEndings: [String] = [TaskWords.dismissTitle, TaskWords.declined("x"), TaskWords.changedCourse("x")]
+      + TaskWords.all
 
     @Test func noScreenWordsUseADash() {
         for line in Self.copy {
             #expect(!line.contains(where: Self.dashes.contains), "dash in: \(line)")
         }
+    }
+
+    /// Every line a task card can show, from the one list both word tests
+    /// read. A line missing here would go unchecked, so a few spot checks.
+    @Test func everyTaskLineIsChecked() {
+        let all = TaskWords.all
+        for line in [TaskWords.youSaidYes, TaskWords.timedOut("x"), TaskWords.couldNotAsk("x"),
+                     TaskWords.tookAnotherWay("x"), TaskWords.youSaid("x"), TaskWords.stillWorking,
+                     TaskWords.percentDone(40), TaskWords.finishingApproved, TaskWords.mayBeDone("x"),
+                     TaskWords.yesNotUsed, TaskWords.forgetTasksDetail] {
+            #expect(all.contains(line), "unchecked: \(line)")
+        }
+        #expect(Set(TaskState.allCases.map(\.label)).isSubset(of: Set(all)))
     }
 
     /// Catches new words too: no source file and not the voice guide.
@@ -98,5 +104,21 @@ struct CopyDashTests {
         #expect(text.contains("(\"\(ProposedAction.yesTitle)\" and \"\(ProposedAction.noTitle)\""))
         // The name limit is referred to, not copied, so it can't drift.
         #expect(!text.contains("\(AgentName.maxLength) letters"))
+    }
+}
+
+extension TaskWords {
+    /// Every task line a person can see or hear, with sample words where a
+    /// line takes some. The one list the dash test and the warmth test read.
+    static var all: [String] {
+        [workingHeading, workingDetail, runningLabel, stalledLabel, retryingLabel, stoppedLabel, failedLabel,
+         stalled, retrying, stuck, waitingForYes, redirected, stopped, failed, keptNothing, stillWorking,
+         approveTitle, redirectTitle, redirectPlaceholder, redirectSendTitle, redirectCancelTitle, stopTitle,
+         tryAgainTitle, dismissTitle, youSaidYes, finishingApproved, yesNotUsed,
+         forgetTasksTitle, forgetTasksQuestion, forgetTasksDetail,
+         youSaid("x"), tookAnotherWay("x"), declined("x"), changedCourse("x"), timedOut("x"), couldNotAsk("x"),
+         mayBeDone("x"), percentDone(40), kept(["a"]), kept(["a", "b", "c"]), notDone(["a", "b"]),
+         TaskWrapUp(kept: [], notDone: []).keptLine]
+        + TaskState.allCases.map(\.label)
     }
 }
