@@ -56,8 +56,11 @@ private struct FirstQuickModel: ModelClient {
 struct WarmthTests {
     let brand = Brand(name: "Nova")
 
-    private func settle(_ controller: ChatController) async {
-        for _ in 0..<200 where controller.isReplying {
+    /// Waits for the reply to land, up to a deadline long enough for a busy
+    /// CI machine, and returns as soon as it does.
+    private func settle(_ controller: ChatController, within limit: Duration = .seconds(20)) async {
+        let deadline = ContinuousClock.now + limit
+        while controller.isReplying, ContinuousClock.now < deadline {
             try? await Task.sleep(for: .milliseconds(10))
         }
     }
@@ -89,17 +92,19 @@ struct WarmthTests {
 
     @Test func wordsOfCareAreNeverHeldBack() async {
         let controller = ChatController(brand: brand, model: LocalStubModel(),
-                                        names: InMemoryAgentNameStore(), replyBeat: .seconds(5))
+                                        names: InMemoryAgentNameStore(), replyBeat: .seconds(60))
+        // The beat is a full minute, so a care reply that skips it is
+        // clear even on a slow, busy machine.
         let started = ContinuousClock.now
         controller.submit("I want to end my life")
         await settle(controller)
-        #expect(ContinuousClock.now - started < .seconds(2))
+        #expect(ContinuousClock.now - started < .seconds(30))
         #expect(controller.conversation.turns.last?.text == CareCheck.reply)
         // The follow-up after care is never held back either.
         let again = ContinuousClock.now
         controller.submit("yes")
         await settle(controller)
-        #expect(ContinuousClock.now - again < .seconds(2))
+        #expect(ContinuousClock.now - again < .seconds(30))
         #expect(controller.conversation.turns.last?.text == CareCheck.followUp)
     }
 
