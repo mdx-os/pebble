@@ -11,6 +11,9 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// The home screen after the first run: the sidebar on a wide window,
     /// one column on a narrow one.
     case home, homeMemory, shortcuts
+    /// A reply on its way, a new chat with its starters, and a memory with
+    /// nothing in it yet.
+    case thinking, newChat, memoryEmpty
 
     public static let launchKey = "pebbleScreen"
 
@@ -36,6 +39,8 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     names: InMemoryAgentNameStore(),
                     store: InMemoryOnboardingStore(),
                     looks: looks,
+                    // The showcase plays the on-device model, as the app does.
+                    onDevice: LocalStubModel().runsOnDevice,
                     startAt: page,
                     draftName: self == .name || self == .look || self == .ideas ? "Pip" : ""
                 ) { _ in }
@@ -46,8 +51,18 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                              look: AgentLook.load(from: looks), firstMessage: nil,
                              conversation: Self.sampleFirstChat())
                 }
+            case .thinking, .newChat:
+                ZStack {
+                    Backdrop()
+                    ChatView(controller: self == .thinking ? Self.thinkingChat(brand: brand)
+                                 : ChatController.make(brand: brand, model: LocalStubModel(),
+                                                       names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil),
+                             look: AgentLook.load(from: looks), firstMessage: nil)
+                }
             case .memory:
                 MemoryView(store: Self.sampleMemory())
+            case .memoryEmpty:
+                MemoryView(store: Self.emptyMemory())
             case .confirm, .confirmTimedOut:
                 ZStack {
                     Backdrop()
@@ -76,6 +91,27 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
             turns.append(ChatTurn(id: UUID(), speaker: .agent, text: reply))
         }
         return Conversation(turns: turns, onDevice: true)
+    }
+
+    /// The person has just asked for a morning plan and the dots are showing.
+    /// Nothing is sent to the model; the reply never comes.
+    @MainActor
+    static func thinkingChat(brand: Brand) -> ChatController {
+        var turns = Conversation.firstRun(named: "Pip", onDevice: true).turns
+        let prompt = FirstConversation.jobs.first { $0.id == "morning" }?.prompt ?? ""
+        turns.append(ChatTurn(id: UUID(), speaker: .person, text: prompt))
+        let controller = ChatController.make(brand: brand, model: LocalStubModel(),
+                                             names: InMemoryAgentNameStore(stored: "Pip"),
+                                             conversation: Conversation(turns: turns, onDevice: true))
+        controller.isReplying = true
+        return controller
+    }
+
+    static func emptyMemory() -> MemoryStore {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("showcase-empty-memory-\(UUID().uuidString).json")
+        let store = MemoryStore(fileURL: url)
+        try? store.forgetEverything()
+        return store
     }
 
     private var page: OnboardingView.Page {

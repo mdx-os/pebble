@@ -40,6 +40,13 @@ public enum CareCheck {
         return picksStarter(last.text) ? nil : followUp
     }
 
+    /// True when the next reply to `transcript` is a care reply. This is the
+    /// same decision `Conversation.appendingReply` makes, taken before any
+    /// model is asked, so callers never have to compare reply text.
+    public static func answersWithCare(_ transcript: [ChatTurn]) -> Bool {
+        reply(after: transcript) != nil
+    }
+
     /// The transcript with every care exchange taken out: care replies and
     /// whatever the person said that led to one. A model never sees them.
     public static func redacted(_ transcript: [ChatTurn]) -> [ChatTurn] {

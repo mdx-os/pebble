@@ -12,16 +12,21 @@ public struct OnboardingView: View {
     @FocusState private var nameFocused: Bool
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// True only when the model runs on this device, so the hello may
+    /// promise that words stay here.
+    private let onDevice: Bool
 
     public init(
         brand: Brand,
         names: any AgentNameStoring,
         store: any OnboardingStoring,
         looks: UserDefaults = .standard,
+        onDevice: Bool = false,
         startAt page: Page = .hello,
         draftName: String = "",
         onFinish: @escaping @MainActor (_ firstMessage: String?) -> Void
     ) {
+        self.onDevice = onDevice
         _model = StateObject(wrappedValue: OnboardingModel(
             brand: brand, names: names, store: store, looks: looks,
             page: page, draftName: draftName, onFinish: onFinish
@@ -97,7 +102,7 @@ public struct OnboardingView: View {
 
     private var hello: some View {
         VStack(spacing: 28) {
-            heading(FirstRunWords.hello, FirstRunWords.helloDetail)
+            heading(FirstRunWords.hello, FirstRunWords.helloDetail(onDevice: onDevice))
             Button(FirstRunWords.beginTitle) { model.advance() }
                 .buttonStyle(PrimaryButtonStyle())
                 .padding(.top, 12)

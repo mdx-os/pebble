@@ -2,6 +2,8 @@
 # Captures each showcase screen on iPhone in light and dark.
 # Usage: scripts/ui-screenshots.sh [output-dir]   (default: build/screenshots/ui)
 # Expects the iOS Simulator app already built by scripts/screenshots.sh.
+# PEBBLE_IPHONE picks the simulator by name (an iPad works too), and
+# PEBBLE_SCREENS picks the showcase screens, separated by spaces.
 set -eu
 
 out="${1:-build/screenshots/ui}"
@@ -24,7 +26,7 @@ xcrun simctl install "$udid" "$app"
 
 for mode in light dark; do
   xcrun simctl ui "$udid" appearance "$mode"
-  for screen in hello name look ideas memory confirm confirmTimedOut firstChat; do
+  for screen in ${PEBBLE_SCREENS:-hello name look ideas memory confirm confirmTimedOut firstChat}; do
     xcrun simctl launch --terminate-running-process "$udid" "$bundle_id" -pebbleScreen "$screen" >/dev/null
     sleep 3
     xcrun simctl io "$udid" screenshot "$out/$screen-$mode.png" >/dev/null

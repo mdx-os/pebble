@@ -16,7 +16,8 @@ struct AgentLookTests {
 
     @Test func screenWordsAreFreeOfDashes() {
         var lines = [
-            FirstRunWords.hello, FirstRunWords.helloDetail, FirstRunWords.beginTitle,
+            FirstRunWords.hello, FirstRunWords.helloDetail(onDevice: true), FirstRunWords.helloDetail(),
+            FirstRunWords.beginTitle,
             FirstRunWords.nameQuestion, FirstRunWords.nameDetail, FirstRunWords.lookQuestion,
             FirstRunWords.lookDetail, FirstRunWords.ideasDetail, FirstRunWords.justChatTitle,
             FirstRunWords.greeting(named: "Pip"),

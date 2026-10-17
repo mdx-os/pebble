@@ -8,6 +8,7 @@ public struct MemoryView: View {
     @StateObject private var model: MemoryModel
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @FocusState private var addFocused: Bool
 
     public init(store: MemoryStore) {
@@ -22,11 +23,14 @@ public struct MemoryView: View {
                     header
                     addField
                     if model.isUnreadable {
-                        problem(MemoryWords.unreadable)
+                        GentleNotice(text: MemoryWords.unreadable)
                     } else if model.isUnavailable {
-                        problem(MemoryWords.unavailable)
+                        GentleNotice(text: MemoryWords.unavailable, actionTitle: MemoryWords.tryAgainTitle) {
+                            model.refresh()
+                        }
                     } else if model.notes.isEmpty {
                         empty
+                            .transition(.opacity)
                     }
                     if !model.notes.isEmpty {
                         VStack(spacing: 10) {
@@ -92,18 +96,15 @@ public struct MemoryView: View {
         } message: { note in
             Text(note.text)
         }
-        .onChange(of: model.status) { _, status in
-            if let status { AccessibilityNotification.Announcement(status).post() }
+        .onChange(of: model.statusCount) { _, _ in
+            if let status = model.status { AccessibilityNotification.Announcement(status).post() }
         }
-    }
-
-    private func problem(_ text: String) -> some View {
-        Label(text, systemImage: "exclamationmark.circle")
-            .font(.body)
-            .foregroundStyle(.secondary)
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
+        .onChange(of: scenePhase) { _, phase in
+            // Back from a locked screen, look again rather than leave the note up.
+            if phase == .active, model.isUnavailable { model.refresh() }
+        }
+        .haptic(.saved, trigger: model.savedCount)
+        .haptic(.forgotten, trigger: model.forgottenCount)
     }
 
     private var header: some View {
@@ -134,9 +135,13 @@ public struct MemoryView: View {
             }
             .buttonStyle(.plain)
             .help(MemoryWords.addTitle)
-            .disabled(model.newNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(!model.canAdd || model.newNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .accessibilityLabel(MemoryWords.addTitle)
         }
+        // Notes that can't be read are left as they are, so nothing new is
+        // added on top of them. The notice below says why.
+        .disabled(!model.canAdd)
+        .opacity(model.canAdd ? 1 : 0.5)
         .padding(.leading, 16)
         .padding(.trailing, 8)
         .padding(.vertical, 8)
@@ -145,17 +150,14 @@ public struct MemoryView: View {
     }
 
     private var empty: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "sparkles")
-                .font(.largeTitle)
-                .foregroundStyle(Theme.accent)
-            Text(MemoryWords.empty)
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+        EmptyState(
+            symbol: "sparkles",
+            title: MemoryWords.emptyTitle,
+            detail: MemoryWords.empty,
+            actionTitle: MemoryWords.emptyActionTitle
+        ) {
+            addFocused = true
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 48)
     }
 }
 
@@ -274,7 +276,15 @@ final class MemoryModel: ObservableObject {
     @Published var editingID: UUID?
     @Published var editDraft = ""
     @Published var askForgetEverything = false
-    @Published private(set) var status: String?
+    /// What to say about the last thing that happened. Every new line,
+    /// even one the same as before, bumps statusCount so it is spoken again.
+    @Published private(set) var status: String? {
+        didSet { if status != nil { statusCount += 1 } }
+    }
+    @Published private(set) var statusCount = 0
+    /// Go up by one each time a note is saved or forgotten, for a light tap.
+    @Published private(set) var savedCount = 0
+    @Published private(set) var forgottenCount = 0
 
     init(store: MemoryStore) {
         self.store = store
@@ -293,7 +303,14 @@ final class MemoryModel: ObservableObject {
         hasStoredFile = store.hasStoredFile
     }
 
+    /// False while the saved notes can't be read or opened, so they stay untouched.
+    var canAdd: Bool { !isUnreadable && !isUnavailable }
+
     func add() {
+        guard canAdd else {
+            status = isUnavailable ? MemoryWords.unavailable : MemoryWords.unreadable
+            return
+        }
         report(try store.remember(newNote, source: .toldMe)) { self.newNote = "" }
     }
 
@@ -316,7 +333,12 @@ final class MemoryModel: ObservableObject {
         pendingForget = nil
         cancelEdit()
         do {
-            status = try store.forget(note.id) ? MemoryWords.forgotten : nil
+            if try store.forget(note.id) {
+                status = MemoryWords.forgotten
+                forgottenCount += 1
+            } else {
+                status = nil
+            }
         } catch {
             status = MemoryWords.couldNotForget
         }
@@ -328,6 +350,7 @@ final class MemoryModel: ObservableObject {
         do {
             try store.forgetEverything()
             status = MemoryWords.forgotten
+            forgottenCount += 1
         } catch {
             status = MemoryWords.couldNotForget
         }
@@ -337,7 +360,7 @@ final class MemoryModel: ObservableObject {
     private func report(_ decision: @autoclosure () throws -> MemoryStore.Decision, onSaved: () -> Void) {
         do {
             switch try decision() {
-            case .saved: status = nil; onSaved()
+            case .saved: status = MemoryWords.saved; savedCount += 1; onSaved()
             case .needsWords: status = MemoryWords.needsWords
             case .tooLong: status = MemoryWords.tooLong
             case .notFound: status = nil; cancelEdit()

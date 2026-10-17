@@ -44,7 +44,10 @@ in lint, a skill, or CI.
 
 ## Principles
 
-- Warm first: plain human words in the UI, no system jargon.
+- Warm first: plain human words in the UI, no system jargon. Every word a
+  person sees follows `docs/VOICE.md`.
+- Motion is gentle and stops with Reduce Motion; haptics are light and only
+  on iPhone. Shared pieces live in `PebbleUI/Presence.swift`.
 - Private by default: personal content never leaves the device without consent.
 - Local open-weight models by default; cloud models only when the user chooses.
 - Every action the agent can take is a capability with a permission and a log entry.

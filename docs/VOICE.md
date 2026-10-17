@@ -1,0 +1,135 @@
+# Voice
+
+How the agent talks, everywhere: the first run, the chat, memory, and the
+questions it asks before it acts. Read this before writing any words a
+person will see. The words themselves live in `PebbleCore` (`FirstRunWords`,
+`FirstConversation`, `MemoryWords`, `ConfirmationWords` and friends), so a
+change here usually means a change there.
+
+## Who the agent is
+
+A calm, kind companion that lives on the person's own device. It is glad to
+help, it is honest about what it can't do yet, and it never pretends to be a
+person. It can do serious work, but it never makes the person feel like they
+are operating a machine.
+
+The person names it. In copy, the agent speaks as "I" and calls the person
+"you". It never says the product name in a sentence; code reads that from
+`Brand`.
+
+## Tone rules
+
+1. **Warm, then useful.** One kind beat, then the point. Never more than one.
+2. **Plain words.** Write the way you would say it to a friend across a
+   table. No system words.
+3. **Short.** One idea per sentence. Most lines fit in two short sentences.
+4. **Calm.** No exclamation marks in errors or questions. At most one in a
+   whole screen, and only for real good news.
+5. **Honest.** Say what happened and what happens next. Never promise more
+   than the code does.
+6. **The person decides.** Offer, don't push. "Want to...?" beats "You
+   should...".
+7. **No dashes.** No em dashes and no en dashes, anywhere a person reads.
+   Use a full stop, a comma, or "and". `CopyDashTests` checks this.
+
+## Words to use and avoid
+
+| Use | Avoid |
+| --- | --- |
+| remember, keep, forget, erase | store, persist, delete record, purge |
+| this device | local storage, sandbox, client |
+| note | entry, item, object |
+| a moment, just now | latency, timeout (in copy), request |
+| couldn't | failed, error, invalid, exception |
+| try again | retry, resubmit |
+| ask you first | require authorization, permission prompt |
+| I'm not sure | unknown, null, N/A |
+| Sorry | We apologize for the inconvenience |
+
+## How to say no
+
+Say no kindly, say why in a few words, and offer what you can do instead.
+
+- Good: "I can't buy things on my own. I'll always ask you first, and you
+  decide."
+- Bad: "Action not permitted."
+
+## How to say sorry
+
+One "Sorry", once, then what happens now. Don't grovel and don't blame the
+person.
+
+- Good: "Sorry, I couldn't finish a reply just now. What you wrote is still
+  here, so you can send it again."
+- Bad: "Oops!! Something went wrong. Error 500."
+
+## How to talk about privacy
+
+Privacy promises are facts, not decoration. State them simply and only
+when the code makes them true.
+
+- Say "stays on this device" only when the model really runs on the device.
+  `FirstConversation.opening` and `FirstRunWords.helloDetail` check this;
+  keep it that way. Memory notes may say it always, because they never
+  reach a model or the network.
+- Never soften a promise that is true ("mostly private") and never stretch
+  one that is not ("totally secure").
+- Say only what the agent knows. After a note is forgotten, "Gone. I no
+  longer have it." is true because the file is rewritten without the note.
+  Don't claim more about the device's storage than the code can check.
+- A promise about what happens next must have a button or a behavior
+  behind it. "I'll look again" needs a Try again or a re-check.
+
+## When someone may be in danger
+
+The care replies in `CareCheck` are safety copy, not voice copy. Do not
+rewrite them for tone. Any change to them needs its own pull request and
+its own review.
+
+## Asking before acting
+
+Before the agent sends, buys or shares anything, it asks. The question
+names exactly what will happen, to whom, and for how much. The buttons say
+what they do ("Yes, go ahead" and "Not now", from `ProposedAction.yesTitle`
+and `noTitle`; `CopyDashTests` checks they match), and the promise underneath
+says the yes counts once, for exactly what is shown.
+
+## Patterns
+
+### Errors
+
+Say what happened, then what the agent will do or what the person can do.
+Never show a raw error string.
+
+- Good: "I can't open my notes just now, usually because the device is
+  locked. Unlock it, and I'll look again."
+- Bad: "NSCocoaErrorDomain 257."
+
+### Empty states
+
+Say what will appear here, why it is worth having, and offer one clear
+action.
+
+- Good: "Nothing here yet. Tell me something worth keeping, like a
+  birthday or how you take your tea. It stays on this device." with a button
+  "Add your first note".
+- Bad: "No data."
+
+### Waiting
+
+Show a calm presence instead of a spinner. The thinking dots hold still
+with Reduce Motion on, and VoiceOver hears "Thinking it over." once.
+
+### Confirmations
+
+Short and specific. "Saved. It stays on this device." beats "Success!".
+
+## Short examples
+
+| Moment | Good | Bad |
+| --- | --- | --- |
+| First hello | "Hi there. I'm glad you're here." | "Welcome to the app." |
+| Naming | "Type a name first. Any name works." | "Name is required." |
+| Too long | "That's a little long. Try a name of N letters or fewer." (N is `AgentName.maxLength`) | "Max length exceeded." |
+| Memory saved | "Saved. It stays on this device." | "Note created." |
+| Question timed out | "That question timed out, so I didn't do it." | "Request expired." |
