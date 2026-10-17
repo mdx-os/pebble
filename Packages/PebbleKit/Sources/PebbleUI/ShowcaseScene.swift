@@ -8,9 +8,12 @@ import SwiftUI
 /// Nothing here reads or writes the person's real data.
 public enum ShowcaseScene: String, CaseIterable, Sendable {
     case hello, name, look, ideas, memory, confirm, confirmTimedOut, firstChat
-    /// The home screen after the first run: the sidebar on a wide window,
-    /// one column on a narrow one.
+    /// The home screen after the first run, open on the chat and on the
+    /// memory: the sidebar on a wide window, one column on a narrow one.
     case home, homeMemory, shortcuts
+    /// Today with sample work, with a question waiting, and for a brand new
+    /// person with nothing yet.
+    case today, todayNeedsYou, todayEmpty
     /// A reply on its way, a new chat with its starters, and a memory with
     /// nothing in it yet.
     case thinking, newChat, memoryEmpty
@@ -30,6 +33,15 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     onboarding: InMemoryOnboardingStore(finished: true), memory: Self.sampleMemory(),
                     looks: looks, conversation: Self.sampleFirstChat(),
                     section: self == .home ? .chat : .memory
+                )
+            case .today, .todayNeedsYou, .todayEmpty:
+                HomeView(
+                    brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
+                    onboarding: InMemoryOnboardingStore(finished: true), memory: Self.sampleMemory(),
+                    looks: looks, conversation: Self.sampleFirstChat(), section: .today,
+                    feed: self == .todayEmpty ? [EmptyFeedSource()] : [SampleFeedSource()],
+                    needsYou: self == .todayNeedsYou ? Self.sampleQuestion() : NeedsYou(rule: .isolated()),
+                    now: { Self.morning }
                 )
             case .shortcuts:
                 KeyboardShortcutsView()
@@ -79,6 +91,25 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                 }
             }
         }
+    }
+
+    /// Today at 9:40, so the feed's times sit just before the 9:41 the
+    /// screenshots show in the status bar.
+    static var morning: Date {
+        Calendar.current.date(bySettingHour: 9, minute: 40, second: 0, of: Date()) ?? Date()
+    }
+
+    /// One purchase waiting for a yes, asked through its own rule so the
+    /// showcase never touches the app's.
+    static func sampleQuestion() -> NeedsYou {
+        let asks = NeedsYou(rule: .isolated())
+        asks.ask(ProposedAction(
+            kind: .purchase,
+            recipient: Recipient(id: "merchant:sample-bakery", displayName: "Rise Bakery", handle: "risebakery.ca"),
+            details: "Sourdough loaf and two croissants, pickup tomorrow at 9",
+            price: Price(minorUnits: 1450, currency: "CAD")
+        ), at: morning - 4 * 60)
+        return asks
     }
 
     /// The morning starter played through the on-device model.

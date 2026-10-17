@@ -12,6 +12,9 @@ enum Theme {
     /// default text size, so lines never run edge to edge on a big iPad.
     static let chatWidth: CGFloat = 680
     static let bubbleWidth: CGFloat = 520
+    /// The Today feed on wide screens: room for two cards side by side,
+    /// each about as wide as a phone.
+    static let feedWidth: CGFloat = 880
 
     /// The warm accent used for primary actions.
     static let accent = Color(red: 0.96, green: 0.52, blue: 0.29)
