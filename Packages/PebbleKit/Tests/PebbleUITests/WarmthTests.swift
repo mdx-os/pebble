@@ -244,6 +244,12 @@ struct WarmthTests {
         #expect(controller.conversation.turns.last?.speaker == .person)
     }
 
+    @Test func thinkingIsAnnouncedOnlyAfterTheBeat() {
+        for beat in [Duration.zero, .milliseconds(600), .seconds(2)] {
+            #expect(ChatView.thinkingNoticeDelay(after: beat) > beat)
+        }
+    }
+
     @Test func aSecondSaveInARowIsSpokenAgain() {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("warmth-\(UUID().uuidString).json")
         let store = MemoryStore(fileURL: url)

@@ -130,7 +130,7 @@ public struct ChatView: View {
                 thinkingNotice = nil
                 guard replying else { return }
                 thinkingNotice = Task { @MainActor in
-                    try? await Task.sleep(for: Self.thinkingNoticeDelay)
+                    try? await Task.sleep(for: Self.thinkingNoticeDelay(after: controller.replyBeat))
                     guard !Task.isCancelled, controller.isReplying else { return }
                     AccessibilityNotification.Announcement(FirstConversation.thinking).post()
                 }
@@ -152,6 +152,11 @@ public struct ChatView: View {
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.4, dampingFraction: 0.85),
                    value: controller.conversation.turns.count)
         .haptic(.sent, trigger: controller.sentCount)
+        .onDisappear {
+            // Never say "thinking" over another screen.
+            thinkingNotice?.cancel()
+            thinkingNotice = nil
+        }
         .task {
             if let firstMessage, controller.conversation.isWaitingForPerson {
                 controller.submit(firstMessage, byHand: false)
@@ -246,9 +251,12 @@ public struct ChatView: View {
     /// Where the thinking dots sit, so the chat can follow them.
     static let thinkingID = "thinking"
 
-    /// How long the dots show before VoiceOver hears "thinking", so a quick
-    /// reply is read on its own.
-    static let thinkingNoticeDelay: Duration = .milliseconds(400)
+    /// How long the dots show before VoiceOver hears "thinking". It waits
+    /// past the reply beat, so a reply that lands on the beat is read on its
+    /// own and only a slow one is announced.
+    static func thinkingNoticeDelay(after beat: Duration) -> Duration {
+        beat + .milliseconds(400)
+    }
 
     /// New lines from the agent are read out, since they may land offscreen.
     static func announcement(for conversation: Conversation) -> String? {
@@ -405,7 +413,7 @@ final class ChatController: ObservableObject {
     @Published private(set) var sentCount = 0
     /// The shortest time the thinking dots show, so a quick reply settles
     /// in after a calm beat instead of snapping onto the screen.
-    private let replyBeat: Duration
+    let replyBeat: Duration
 
     init(brand: Brand, model: any ModelClient, names: any AgentNameStoring,
          replyBeat: Duration = .milliseconds(600)) {
