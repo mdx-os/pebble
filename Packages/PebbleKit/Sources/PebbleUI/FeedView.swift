@@ -17,10 +17,10 @@ final class FeedModel: ObservableObject {
     @Published var reading: FeedItem?
 
     let needsYou: NeedsYou
-    /// Long work shown on live task cards. Nil when nothing is running.
+    /// Long work shown on live task cards. Nil when nothing is running. Its
+    /// questions reach the feed only when it asks through the rule of
+    /// `needsYou`.
     let tasks: (any TaskEngine)?
-    /// The rule that asked the question in the sheet, when a task asked it.
-    private var askedBy: AskFirst?
     /// Moves a scripted engine's clock with real time, for the live showcase.
     let drivesTasks: Bool
     private let sources: [any FeedSource]
@@ -36,15 +36,14 @@ final class FeedModel: ObservableObject {
          drivesTasks: Bool = false, calendar: Calendar = .current,
          now: @escaping () -> Date = { Date() },
          clock: @escaping () -> ContinuousClock.Instant = { ContinuousClock.now }) {
-        let all = tasks.map { sources + [TaskFeed(engine: $0)] } ?? sources
-        self.sources = all
+        self.sources = sources
         self.needsYou = needsYou
         self.tasks = tasks
         self.drivesTasks = drivesTasks
         self.calendar = calendar
         self.now = now
         self.clock = clock
-        feed = Feed.build(from: [needsYou] + all, now: now(), calendar: calendar)
+        feed = Feed.build(from: sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
         _ = announcer.lines(for: tasks?.tasks ?? [], at: clock())
         watching = tasks?.observe { [weak self] list in
             // Engines tell us on whatever thread they run. Hop to the main
@@ -57,15 +56,25 @@ final class FeedModel: ObservableObject {
         }
     }
 
-    var isSample: Bool { sources.contains { $0.isSample } }
-    /// The rule for the question in the sheet: the one the task engine
-    /// asked through when a task asked it, the feed's otherwise.
-    var rule: AskFirst { askedBy ?? needsYou.rule }
+    var isSample: Bool { sources.contains { $0.isSample } || tasks?.isSample == true }
+
+    /// True when this card came from an example source or a scripted engine.
+    func isSample(_ item: FeedItem) -> Bool {
+        if let tasks, tasks.isSample, tasks.tasks.contains(where: { $0.id == item.id }) { return true }
+        return sources.contains { $0.isSample && $0.items(now: now()).contains { $0.id == item.id } }
+    }
+
+    /// The rule for every question in the sheet, a task's included.
+    var rule: AskFirst { needsYou.rule }
 
     /// Builds the feed again. Questions that timed out drop away here.
     func refresh() {
         tasks?.refresh()
-        let next = Feed.build(from: [needsYou] + sources, now: now(), calendar: calendar)
+        rebuild()
+    }
+
+    private func rebuild() {
+        let next = Feed.build(from: sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
         if next != feed { feed = next }
     }
 
@@ -75,18 +84,17 @@ final class FeedModel: ObservableObject {
     }
 
     private func tasksChanged(_ list: [AgentTask]) {
-        let next = Feed.build(from: [needsYou] + sources, now: now(), calendar: calendar)
-        if next != feed { feed = next }
+        rebuild()
         for line in announcer.lines(for: list, at: clock()) { announce(line) }
     }
 
     /// What a card's button does. Talking is handed to the screen around
-    /// the feed, which owns the chat.
+    /// the feed, which owns the chat. Only a question pinned by `NeedsYou`
+    /// opens the question sheet.
     func perform(_ item: FeedItem, talk: (String) -> Void) {
         switch item.action {
         case .review(let request):
-            askedBy = nil
-            reviewing = request
+            if feed.needsYou.contains(where: { $0.request?.id == request.id }) { reviewing = request }
         case .open: reading = item
         case .talk(let line): talk(line)
         case .task(let task):
@@ -97,11 +105,13 @@ final class FeedModel: ObservableObject {
 
     // MARK: Task cards
 
-    /// Approve opens the same question sheet as any other question. Only a
-    /// yes there, checked by `AskFirst`, lets the task go on.
+    /// Approve opens the same question sheet as any other question, with the
+    /// rule of `needsYou`. Only the engine's own task, with its question
+    /// pinned in Needs you, opens it. Only a yes there, checked by
+    /// `AskFirst`, lets the task go on.
     func review(_ task: AgentTask) {
-        guard let tasks, let question = current(task)?.question else { return }
-        askedBy = tasks.rule
+        guard let question = current(task)?.question,
+              feed.needsYou.contains(where: { $0.task?.question?.id == question.id }) else { return }
         reviewing = question
     }
 
@@ -167,17 +177,19 @@ final class FeedModel: ObservableObject {
         AccessibilityNotification.Announcement(text).post()
     }
 
-    /// "8:52 AM" today, "Yesterday", then the day of the week, then the date.
+    /// "8:52 AM" today, "Yesterday", then the day of the week in the past
+    /// week, then the date. Any day but today says which day.
     func timeLabel(for time: Date) -> String {
         let today = now()
-        if calendar.isDate(time, inSameDayAs: today) || time > today {
+        if calendar.isDate(time, inSameDayAs: today) {
             return time.formatted(date: .omitted, time: .shortened)
         }
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: today),
            calendar.isDate(time, inSameDayAs: yesterday) {
             return FeedWords.yesterday
         }
-        if let weekAgo = calendar.date(byAdding: .day, value: -6, to: calendar.startOfDay(for: today)), time >= weekAgo {
+        if time < today, let weekAgo = calendar.date(byAdding: .day, value: -6, to: calendar.startOfDay(for: today)),
+           time >= weekAgo {
             return time.formatted(.dateTime.weekday(.wide))
         }
         return time.formatted(.dateTime.month(.abbreviated).day())
@@ -198,48 +210,63 @@ struct FeedView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var typeSize
     /// Two cards side by side once each can be at least this wide. Grows
     /// with the text size, so large text gets one roomy column.
     @ScaledMetric(relativeTo: .body) private var cardMinimum: CGFloat = 320
     @ScaledMetric(relativeTo: .body) private var columnWidth: CGFloat = Theme.feedWidth
 
+    static let cardSpacing: CGFloat = 14
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                Text(model.dateLine)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.secondary)
+        GeometryReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 28) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(model.dateLine)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        // Said first, so no example is ever taken for real work.
+                        if model.isSample && !model.feed.isEmpty {
+                            Text(FeedWords.sampleNote)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("sampleNote")
+                        }
+                    }
                     .padding(.bottom, -12)
-                if model.feed.isEmpty {
-                    empty
-                        .transition(.opacity)
+                    if model.feed.isEmpty {
+                        empty
+                            .transition(.opacity)
+                    }
+                    let columns = Self.columns(
+                        for: Self.contentWidth(in: proxy.size.width, column: columnWidth),
+                        minimum: cardMinimum, accessibilityText: typeSize.isAccessibilitySize)
+                    if model.feed.showsNeedsYou {
+                        section(FeedWords.needsYouHeading, detail: FeedWords.needsYouDetail,
+                                items: model.feed.needsYou, columns: columns)
+                            .accessibilityElement(children: .contain)
+                            .accessibilityIdentifier("needsYou")
+                            .transition(Motion.arrival(reduceMotion: reduceMotion))
+                    }
+                    if model.feed.showsWorking {
+                        section(TaskWords.workingHeading, detail: TaskWords.workingDetail,
+                                items: model.feed.working, columns: columns)
+                            .accessibilityElement(children: .contain)
+                            .accessibilityIdentifier("working")
+                            .transition(Motion.arrival(reduceMotion: reduceMotion))
+                    }
+                    ForEach(model.feed.groups) { group in
+                        section(group.title, detail: nil, items: group.items, columns: columns)
+                    }
                 }
-                if model.feed.showsNeedsYou {
-                    section(FeedWords.needsYouHeading, detail: FeedWords.needsYouDetail, items: model.feed.needsYou)
-                        .accessibilityIdentifier("needsYou")
-                        .transition(Motion.arrival(reduceMotion: reduceMotion))
-                }
-                if model.feed.showsWorking {
-                    section(TaskWords.workingHeading, detail: TaskWords.workingDetail, items: model.feed.working)
-                        .accessibilityIdentifier("working")
-                        .transition(Motion.arrival(reduceMotion: reduceMotion))
-                }
-                ForEach(model.feed.groups) { group in
-                    section(group.title, detail: nil, items: group.items)
-                }
-                if model.isSample && !model.feed.isEmpty {
-                    Text(FeedWords.sampleNote)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                        .multilineTextAlignment(.center)
-                }
+                .padding(.top, 8)
+                .padding(.bottom, 24)
+                .readableColumn(columnWidth)
+                .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.45, dampingFraction: 0.9),
+                           value: model.feed)
             }
-            .padding(.top, 8)
-            .padding(.bottom, 24)
-            .readableColumn(columnWidth)
-            .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.45, dampingFraction: 0.9),
-                       value: model.feed)
         }
         .background(Backdrop())
         .navigationTitle(FeedWords.title)
@@ -268,11 +295,29 @@ struct FeedView: View {
         }
     }
 
-    private var columns: [GridItem] {
-        [GridItem(.adaptive(minimum: cardMinimum), spacing: 14, alignment: .top)]
+    /// The room the cards have: the window's width, held to the reading
+    /// column, less the gutters `readableColumn` adds.
+    static func contentWidth(in width: CGFloat, column: CGFloat) -> CGFloat {
+        max(0, min(width, column) - 2 * Theme.gutter)
     }
 
-    private func section(_ title: String, detail: String?, items: [FeedItem]) -> some View {
+    /// How many cards fit side by side, each at least `minimum` wide. One
+    /// plain column at accessibility text sizes or when even one card at
+    /// `minimum` would not fit, and never more than two.
+    static func columnCount(for width: CGFloat, minimum: CGFloat, accessibilityText: Bool) -> Int {
+        guard !accessibilityText, minimum > 0 else { return 1 }
+        let fit = Int((width + cardSpacing) / (minimum + cardSpacing))
+        return min(2, max(1, fit))
+    }
+
+    /// Flexible columns share whatever width there is, so a card is never
+    /// wider than the screen, whatever the text size.
+    static func columns(for width: CGFloat, minimum: CGFloat, accessibilityText: Bool) -> [GridItem] {
+        let count = columnCount(for: width, minimum: minimum, accessibilityText: accessibilityText)
+        return Array(repeating: GridItem(.flexible(), spacing: cardSpacing, alignment: .top), count: count)
+    }
+
+    private func section(_ title: String, detail: String?, items: [FeedItem], columns: [GridItem]) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
@@ -284,7 +329,7 @@ struct FeedView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+            LazyVGrid(columns: columns, alignment: .leading, spacing: Self.cardSpacing) {
                 ForEach(items) { item in
                     Group {
                         if let task = item.task {
@@ -349,9 +394,10 @@ struct FeedCard: View {
             .pointerHover(in: shape)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(spoken)
-            .accessibilityHint(action.title)
+            .accessibilityHint(action.hint)
+            // Voice Control users can say the words they see on the card.
+            .accessibilityInputLabels([Text(action.title), Text(item.title)])
             .accessibilityAddTraits(.isButton)
-            .accessibilityAction(named: action.title, perform)
         } else {
             content(actionTitle: nil)
                 .accessibilityElement(children: .ignore)
@@ -400,7 +446,7 @@ struct FeedCard: View {
             if let actionTitle {
                 Text(actionTitle)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(asks ? Color.white : Theme.accent)
+                    .foregroundStyle(asks ? Theme.onAccent : Theme.accent)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                     .background(asks ? Theme.accent : Theme.accent.opacity(0.14), in: Capsule())
@@ -429,6 +475,8 @@ struct FeedCard: View {
 struct FeedReader: View {
     let item: FeedItem
     let time: String
+    /// True when the card was an example, so the reader says so too.
+    var isSample = false
     @Environment(\.dismiss) private var dismiss
 
     private var text: String {
@@ -440,6 +488,15 @@ struct FeedReader: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
+                    if isSample {
+                        Text(FeedWords.sampleLabel)
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color.primary.opacity(0.06), in: Capsule())
+                            .accessibilityIdentifier("sampleLabel")
+                    }
                     Label(item.spokenKind, systemImage: FeedCard.symbol(item.kind))
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(.secondary)

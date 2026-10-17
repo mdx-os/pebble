@@ -236,6 +236,14 @@ public protocol TaskEngine: AnyObject, Sendable {
     /// Looks again at anything that changes with time, such as a question
     /// that timed out.
     func refresh()
+
+    /// True when the tasks are scripted examples and nothing is really
+    /// done, so the feed labels them like every other example.
+    var isSample: Bool { get }
+}
+
+extension TaskEngine {
+    public var isSample: Bool { false }
 }
 
 /// Keeps an observation alive. Cancelling, or letting it go, stops the calls.

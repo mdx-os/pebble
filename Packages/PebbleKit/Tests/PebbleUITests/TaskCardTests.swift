@@ -248,21 +248,67 @@ struct TaskCardTests {
         #expect(model.feed.needsYou.isEmpty)
     }
 
-    @Test func aFeedQuestionStillUsesTheFeedsRule() throws {
+    /// An engine that asks through a rule other than the feed's can't open
+    /// the sheet: its question is never pinned, and the sheet only ever
+    /// uses the feed's rule.
+    @Test func aTaskAskingThroughAnotherRuleCantOpenTheSheet() throws {
         let rule = AskFirst.isolated()
         let asks = NeedsYou(rule: rule)
         let engine = LocalFakeEngine(rule: .isolated())
-        engine.start(SampleTasks.dentist)
+        let id = engine.start(SampleTasks.dentist)
         engine.advance(by: 45)
         let note = ProposedAction(kind: .send, recipient: Recipient(id: "c:1", displayName: "Sam", handle: "416 555 0101"),
                                   details: "Running late")
         _ = try #require(asks.ask(note))
         let model = FeedModel(sources: [], needsYou: asks, tasks: engine, now: { ShowcaseScene.morning })
-        model.review(try #require(engine.tasks.first))
-        #expect(model.rule === engine.rule)
+        let task = try #require(engine.task(id))
+        #expect(task.waitsForApproval)
+        #expect(!model.feed.needsYou.contains { $0.id == id })
+        model.review(task)
+        model.perform(TaskFeed.item(task), talk: { _ in })
+        #expect(model.reviewing == nil)
+        #expect(model.rule === rule)
         let question = try #require(model.feed.needsYou.first { $0.request != nil })
         model.perform(question, talk: { _ in })
-        #expect(model.rule === rule)
+        #expect(model.reviewing == question.request)
+    }
+
+    /// A task card from anywhere but the feed's engine shows nothing and
+    /// opens nothing, even with a real question inside.
+    @Test func aCardPosingAsATaskCantAsk() throws {
+        let rule = AskFirst.isolated()
+        let engine = LocalFakeEngine(rule: rule)
+        engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        struct Posing: FeedSource {
+            let item: FeedItem
+            func items(now: Date) -> [FeedItem] { [item] }
+        }
+        let posing = TaskFeed.item(try #require(engine.tasks.first))
+        let model = FeedModel(sources: [Posing(item: posing)], needsYou: NeedsYou(rule: rule),
+                              now: { ShowcaseScene.morning })
+        #expect(model.feed.isEmpty)
+        model.perform(posing, talk: { _ in })
+        model.review(try #require(posing.task))
+        #expect(model.reviewing == nil)
+    }
+
+    /// Scripted tasks are examples: the note says so even with no other
+    /// example cards, and a result opened from one carries the label.
+    @Test func sampleTasksAreLabelledAsExamples() throws {
+        let engine = LocalFakeEngine(rule: .isolated())
+        let id = engine.start(SampleTasks.plan)
+        engine.advance(by: 30)
+        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: engine.rule), tasks: engine,
+                              now: { ShowcaseScene.morning })
+        #expect(model.isSample)
+        model.open(try #require(engine.task(id)))
+        let reading = try #require(model.reading)
+        #expect(model.isSample(reading))
+        // Real cards beside them never get the label.
+        let plain = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), now: { ShowcaseScene.morning })
+        #expect(!plain.isSample)
+        #expect(!plain.isSample(reading))
     }
 
     @Test func calmMotionHoldsStillWithReduceMotion() {

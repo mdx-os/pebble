@@ -115,6 +115,8 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
 
     public let rule: AskFirst
     public let policy: RetryPolicy
+    /// Scripted, so always an example.
+    public var isSample: Bool { true }
     private let origin: Date
     private let scripts: [TaskScript]
     private let lock = NSLock()

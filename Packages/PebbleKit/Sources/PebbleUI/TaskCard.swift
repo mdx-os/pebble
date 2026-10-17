@@ -293,7 +293,8 @@ struct CardButtonStyle: ButtonStyle {
 
     private var foreground: Color {
         switch kind {
-        case .primary: .white
+        // Dark words on the accent fill, as everywhere else, so they read.
+        case .primary: Theme.onAccent
         case .secondary: Theme.accent
         case .quiet: .secondary
         }

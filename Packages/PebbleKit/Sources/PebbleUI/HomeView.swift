@@ -63,7 +63,9 @@ public struct HomeView: View {
         conversation: Conversation?,
         section: HomeSection,
         feed: [any FeedSource] = [EmptyFeedSource()],
-        needsYou: NeedsYou = NeedsYou(),
+        // No default: screenshots and tests pass their own rule, so they
+        // never touch the app's `AskFirst.shared`.
+        needsYou: NeedsYou,
         tasks: (any TaskEngine)? = nil,
         drivesTasks: Bool = false,
         now: @escaping () -> Date = { Date() }
@@ -121,6 +123,19 @@ public struct HomeView: View {
         .tint(Theme.accent)
         // The live app plays entrances; still renders show everything at once.
         .environment(\.animatesEntrances, true)
+        // A question on screen waits for its answer; Command Return can't
+        // send a chat line from behind it.
+        .environment(\.sendsFromKeyboard, feed.reviewing == nil)
+        .onChange(of: section) { old, new in
+            // The sidebar can change places without `go`, so keep where the
+            // memory was opened from true, and forget it once the memory
+            // closes. A later narrow window then never reopens a stale place.
+            if new == .memory, old != .memory {
+                memoryOverChat = old == .chat
+            } else if new != .memory {
+                memoryOverChat = false
+            }
+        }
         .sheet(isPresented: $showsShortcuts) {
             KeyboardShortcutsView()
         }
@@ -133,7 +148,7 @@ public struct HomeView: View {
                 .onDisappear { feed.closedQuestion(request) }
         }
         .sheet(item: $feed.reading) { item in
-            FeedReader(item: item, time: feed.timeLabel(for: item.time))
+            FeedReader(item: item, time: feed.timeLabel(for: item.time), isSample: feed.isSample(item))
         }
         // An alert, not a popover, so both choices show on iPad and Esc keeps the chat.
         .alert(HomeWords.newChatQuestion, isPresented: $asksNewChat) {
@@ -240,7 +255,9 @@ public struct HomeView: View {
         }
         .sheet(isPresented: Binding(
             get: { section == .memory },
-            set: { if !$0 { section = memoryOverChat ? .chat : .today } }
+            // Only a swipe down still has the memory chosen. Done has
+            // already gone back, and where it came from is forgotten by now.
+            set: { if !$0, section == .memory { section = memoryOverChat ? .chat : .today } }
         )) {
             NavigationStack {
                 memoryScreen
@@ -342,7 +359,7 @@ struct PillButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.subheadline.weight(.semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(Theme.onAccent)
             .padding(.horizontal, 18)
             .frame(minHeight: 44)
             .background(Theme.accent, in: Capsule())
@@ -409,6 +426,12 @@ public struct HomeActions {
 
 extension FocusedValues {
     @Entry public var homeActions: HomeActions?
+}
+
+extension EnvironmentValues {
+    /// Whether Command Return may send the chat line. Off while a question
+    /// sheet waits for its answer, like the other shortcuts.
+    @Entry var sendsFromKeyboard = true
 }
 
 /// The app's menu commands. On iPad, holding Command shows them with their

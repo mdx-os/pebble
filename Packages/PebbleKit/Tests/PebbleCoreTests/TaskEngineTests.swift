@@ -191,14 +191,74 @@ struct TaskEngineTests {
         let engine = engine()
         let id = engine.start(SampleTasks.lunch)
         engine.advance(by: 30)
-        var feed = Feed.build(from: [TaskFeed(engine: engine)], now: origin + 30)
+        var feed = Feed.build(from: [], tasks: engine, now: origin + 30)
         #expect(feed.working.map(\.id) == [id])
         #expect(feed.needsYou.isEmpty)
         engine.advance(by: 60)
-        feed = Feed.build(from: [TaskFeed(engine: engine)], now: origin + 90)
+        // A stuck task asks nothing, so it is pinned without a NeedsYou.
+        feed = Feed.build(from: [], tasks: engine, now: origin + 90)
         #expect(feed.needsYou.map(\.id) == [id])
         #expect(feed.working.isEmpty)
         #expect(feed.groups.isEmpty)
+    }
+
+    @Test func taskCardsComeOnlyFromTheFeedsOwnEngine() throws {
+        let rule = AskFirst.isolated()
+        let engine = engine(rule)
+        engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        let waiting = try #require(engine.tasks.first)
+        #expect(waiting.waitsForApproval)
+        // The engine passed as a plain source, or a card posing as its task,
+        // adds nothing: no card, and no question pinned.
+        struct Posing: FeedSource {
+            let item: FeedItem
+            func items(now: Date) -> [FeedItem] { [item] }
+        }
+        let posing = Posing(item: TaskFeed.item(waiting))
+        let feed = Feed.build(from: [TaskFeed(engine: engine), posing], needsYou: NeedsYou(rule: rule), now: origin + 45)
+        #expect(feed.isEmpty)
+    }
+
+    @Test func aTaskQuestionIsPinnedOnlyThroughTheFeedsRule() throws {
+        let rule = AskFirst.isolated()
+        let engine = engine(rule)
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        let question = try #require(engine.task(id)?.question)
+        // No NeedsYou: nothing holds the question open, so it isn't pinned.
+        #expect(Feed.build(from: [], tasks: engine, now: origin + 45).needsYou.isEmpty)
+        // Another rule never asked it.
+        let other = Feed.build(from: [], needsYou: NeedsYou(rule: .isolated()), tasks: engine, now: origin + 45)
+        #expect(other.needsYou.isEmpty)
+        #expect(other.working.map(\.id) == [id])
+        // The rule that asked it pins it.
+        let asked = Feed.build(from: [], needsYou: NeedsYou(rule: rule), tasks: engine, now: origin + 45)
+        #expect(asked.needsYou.map(\.id) == [id])
+        // Once the rule closes it, it is gone from Needs you, even before
+        // the engine notices.
+        rule.withdraw(question)
+        #expect(engine.task(id)?.waitsForApproval == true)
+        #expect(Feed.build(from: [], needsYou: NeedsYou(rule: rule), tasks: engine, now: origin + 45).needsYou.isEmpty)
+    }
+
+    @Test func questionsComeBeforeTasksInNeedsYou() throws {
+        let rule = AskFirst.isolated()
+        let engine = engine(rule)
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        let asks = NeedsYou(rule: rule)
+        let note = ProposedAction(kind: .send, recipient: Recipient(id: "c:1", displayName: "Sam", handle: "416 555 0101"),
+                                  details: "Running late")
+        let request = try #require(asks.ask(note, at: origin + 50))
+        let feed = Feed.build(from: [], needsYou: asks, tasks: engine, now: origin + 50)
+        #expect(feed.needsYou.map(\.id) == ["ask:\(request.id.uuidString)", id])
+    }
+
+    @Test func scriptedTasksAreExamples() {
+        let engine = engine()
+        #expect(engine.isSample)
+        #expect(TaskFeed(engine: engine).isSample)
     }
 
     @Test func tryAgainAfterTheRetriesRunOut() throws {

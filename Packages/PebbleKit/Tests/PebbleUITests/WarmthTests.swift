@@ -35,20 +35,35 @@ private struct GatedModel: ModelClient {
     }
 }
 
-/// Answers the first question at once and waits on the gate for the rest.
+/// Counts calls to a model.
 private actor Calls {
     private var count = 0
     func next() -> Int { count += 1; return count }
 }
 
-private struct FirstQuickModel: ModelClient {
-    let gate: Gate
+/// Holds each reply on its own gate, so a test decides exactly when each
+/// one lands, with no timing involved.
+private actor Landed {
+    private(set) var first = false
+    func markFirst() { first = true }
+}
+
+private struct TwoGateModel: ModelClient {
+    let first: Gate
+    let second: Gate
     let calls = Calls()
+    let landed = Landed()
     var runsOnDevice: Bool { true }
 
     func reply(to transcript: [ChatTurn]) async throws -> String {
-        if await calls.next() > 1 { await gate.wait() }
-        return "Reply \(transcript.filter { $0.speaker == .person }.count)"
+        let call = await calls.next()
+        if call == 1 {
+            await first.wait()
+            await landed.markFirst()
+        } else {
+            await second.wait()
+        }
+        return "Reply \(call)"
     }
 }
 
@@ -56,8 +71,11 @@ private struct FirstQuickModel: ModelClient {
 struct WarmthTests {
     let brand = Brand(name: "Nova")
 
-    private func settle(_ controller: ChatController) async {
-        for _ in 0..<200 where controller.isReplying {
+    /// Waits for the reply to land, up to a deadline long enough for a busy
+    /// CI machine, and returns as soon as it does.
+    private func settle(_ controller: ChatController, within limit: Duration = .seconds(20)) async {
+        let deadline = ContinuousClock.now + limit
+        while controller.isReplying, ContinuousClock.now < deadline {
             try? await Task.sleep(for: .milliseconds(10))
         }
     }
@@ -89,17 +107,19 @@ struct WarmthTests {
 
     @Test func wordsOfCareAreNeverHeldBack() async {
         let controller = ChatController(brand: brand, model: LocalStubModel(),
-                                        names: InMemoryAgentNameStore(), replyBeat: .seconds(5))
+                                        names: InMemoryAgentNameStore(), replyBeat: .seconds(60))
+        // The beat is a full minute, so a care reply that skips it is
+        // clear even on a slow, busy machine.
         let started = ContinuousClock.now
         controller.submit("I want to end my life")
         await settle(controller)
-        #expect(ContinuousClock.now - started < .seconds(2))
+        #expect(ContinuousClock.now - started < .seconds(30))
         #expect(controller.conversation.turns.last?.text == CareCheck.reply)
         // The follow-up after care is never held back either.
         let again = ContinuousClock.now
         controller.submit("yes")
         await settle(controller)
-        #expect(ContinuousClock.now - again < .seconds(2))
+        #expect(ContinuousClock.now - again < .seconds(30))
         #expect(controller.conversation.turns.last?.text == CareCheck.followUp)
     }
 
@@ -115,24 +135,25 @@ struct WarmthTests {
     }
 
     @Test func aStoppedReplyNeverSettlesANewerOne() async throws {
-        let gate = Gate()
-        let controller = ChatController(brand: brand, model: FirstQuickModel(gate: gate),
-                                        names: InMemoryAgentNameStore(), replyBeat: .seconds(2))
+        let first = Gate(), second = Gate()
+        let model = TwoGateModel(first: first, second: second)
+        let controller = ChatController(brand: brand, model: model,
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
         controller.submit("First")
-        // The first answer is in; the controller is waiting out the beat.
-        try await Task.sleep(for: .milliseconds(50))
         #expect(controller.isReplying)
         controller.stopReplying()
         #expect(!controller.isReplying)
         controller.submit("Second")
-        #expect(controller.isReplying)
-        // Well past the first reply's beat: it must not clear the newer one.
-        // The beat is long so a busy machine can't make the test race itself.
-        try await Task.sleep(for: .milliseconds(2600))
+        #expect(controller.isReplying, "the second send was accepted")
+        #expect(controller.conversation.turns.last?.text == "Second", "the second send was accepted")
+        // Let the stopped reply land while the newer one is still out.
+        await first.release()
+        while !(await model.landed.first) { await Task.yield() }
+        try await Task.sleep(for: .milliseconds(200))
         #expect(controller.isReplying)
         #expect(controller.conversation.turns.last?.text == "Second")
         #expect(!controller.conversation.turns.contains { $0.text == "Reply 1" })
-        await gate.release()
+        await second.release()
         await settle(controller)
         #expect(!controller.isReplying)
         #expect(controller.conversation.turns.last?.text == "Reply 2")

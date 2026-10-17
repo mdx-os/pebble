@@ -77,7 +77,7 @@ struct FeedTests {
 
         let asks = NeedsYou(rule: .isolated())
         _ = try #require(asks.ask(note, at: now - 60))
-        let feed = Feed.build(from: [asks, SampleFeedSource()], now: now, calendar: Self.calendar)
+        let feed = Feed.build(from: [SampleFeedSource()], needsYou: asks, now: now, calendar: Self.calendar)
         #expect(feed.showsNeedsYou)
         #expect(feed.needsYou.map(\.kind) == [.needsYou])
         #expect(feed.needsYou.first?.title == "Send this to 416 555 0101?")
@@ -86,14 +86,23 @@ struct FeedTests {
         #expect(!feed.groups.flatMap(\.items).contains { $0.kind == .needsYou })
     }
 
+    /// The order comes from when `AskFirst` asked, which is when its window
+    /// started, not from the time the caller gave the card.
     @Test func theQuestionThatWillTimeOutFirstIsOnTop() throws {
-        let asks = NeedsYou(rule: .isolated())
+        let clock = TestClock()
+        let asks = NeedsYou(rule: .isolated(now: clock.now))
         let now = Self.at(17, 10)
-        let late = ProposedAction(kind: .send, recipient: note.recipient, details: "On my way")
-        _ = try #require(asks.ask(late, at: now - 30))
-        _ = try #require(asks.ask(note, at: now - 120))
-        let feed = Feed.build(from: [asks], now: now, calendar: Self.calendar)
-        #expect(feed.needsYou.map(\.body) == [note.details, late.details])
+        let later = ProposedAction(kind: .send, recipient: note.recipient, details: "On my way")
+        // Asked first, though the caller says it was asked later.
+        _ = try #require(asks.ask(note, at: now - 30))
+        clock.advance(120)
+        _ = try #require(asks.ask(later, at: now - 300))
+        var feed = Feed.build(from: [], needsYou: asks, now: now, calendar: Self.calendar)
+        #expect(feed.needsYou.map(\.body) == [note.details, later.details])
+        // And the one on top is the one that times out first.
+        clock.advance(AskFirst.defaultWindow - 60)
+        feed = Feed.build(from: [], needsYou: asks, now: now, calendar: Self.calendar)
+        #expect(feed.needsYou.map(\.body) == [later.details])
     }
 
     @Test func aCardCantPoseAsAQuestion() throws {
@@ -102,6 +111,8 @@ struct FeedTests {
         let feed = Feed.build([
             // Says it needs you, but asks nothing: dropped.
             FeedItem(id: "fake", kind: .needsYou, time: now, title: "Pay me?", body: ""),
+            // Carries a real question in a question card, but not from NeedsYou: dropped.
+            FeedItem(id: "posing", kind: .needsYou, time: now, title: "Pay me?", body: "", action: .review(request)),
             // Carries a question but isn't a question card: dropped.
             FeedItem(id: "hidden", kind: .did, time: now, title: "Done", body: "", action: .review(request)),
             Self.item("real", at: now),
@@ -110,8 +121,35 @@ struct FeedTests {
         #expect(feed.groups.flatMap(\.items).map(\.id) == ["real"])
     }
 
+    /// Only the one `NeedsYou` the feed was given may pin questions. Another
+    /// one slipped in among the sources asks nothing.
+    @Test func onlyTheFeedsOwnNeedsYouCanAsk() throws {
+        let now = Self.at(17, 10)
+        let other = NeedsYou(rule: .isolated())
+        _ = try #require(other.ask(note, at: now))
+        let own = NeedsYou(rule: .isolated())
+        let feed = Feed.build(from: [other, SampleFeedSource()], needsYou: own, now: now, calendar: Self.calendar)
+        #expect(feed.needsYou.isEmpty)
+        #expect(!feed.groups.flatMap(\.items).contains { $0.kind == .needsYou || $0.request != nil })
+    }
+
+    /// A question the rule has closed is never pinned, even from a list
+    /// made before it closed.
+    @Test func aClosedQuestionIsNeverPinned() throws {
+        let now = Self.at(17, 10)
+        let rule = AskFirst.isolated()
+        let asks = NeedsYou(rule: rule)
+        let request = try #require(asks.ask(note, at: now))
+        let questions = asks.items(now: now)
+        #expect(Feed.build([], questions: questions, isClosed: rule.isClosed, now: now).needsYou.map(\.request) == [request])
+        rule.withdraw(request)
+        #expect(Feed.build([], questions: questions, isClosed: rule.isClosed, now: now).needsYou.isEmpty)
+        // With no rule to ask, nothing is pinned at all.
+        #expect(Feed.build([], questions: questions, now: now).needsYou.isEmpty)
+    }
+
     @Test func aBrandNewPersonSeesAnEmptyFeed() {
-        let feed = Feed.build(from: [EmptyFeedSource(), NeedsYou(rule: .isolated())], now: Self.at(17, 9))
+        let feed = Feed.build(from: [EmptyFeedSource()], needsYou: NeedsYou(rule: .isolated()), now: Self.at(17, 9))
         #expect(feed.isEmpty)
         #expect(!feed.showsNeedsYou)
     }
@@ -185,6 +223,42 @@ struct FeedTests {
         #expect(rule.decide(changed, approval: approval) == .stop)
     }
 
+    /// A yes to another rule's question does nothing here: the card stays
+    /// and nothing is handed on.
+    @Test func aForeignApprovalDoesNothing() throws {
+        let asks = NeedsYou(rule: .isolated())
+        let handed = Handed()
+        let asked = asks.ask(note, onApprove: { handed.add($0) })
+        #expect(asked != nil)
+        let elsewhere = AskFirst.isolated()
+        let foreign = try #require(elsewhere.ask(note))
+        guard case .approved(let approval) = elsewhere.sayYes(to: foreign) else {
+            Issue.record("a yes in time should approve")
+            return
+        }
+        asks.approved(approval)
+        #expect(handed.approvals.isEmpty)
+        #expect(asks.items(now: Date()).count == 1)
+    }
+
+    /// Once the rule has closed a question, a yes for it is not handed on.
+    @Test func aYesForAClosedQuestionIsNotHandedOn() throws {
+        let clock = TestClock()
+        let rule = AskFirst.isolated(now: clock.now)
+        let asks = NeedsYou(rule: rule)
+        let handed = Handed()
+        let asked = asks.ask(note, onApprove: { handed.add($0) })
+        let request = try #require(asked)
+        guard case .approved(let approval) = rule.sayYes(to: request) else {
+            Issue.record("a yes in time should approve")
+            return
+        }
+        clock.advance(31)
+        asks.approved(approval)
+        #expect(handed.approvals.isEmpty)
+        #expect(rule.decide(note, approval: approval) == .stop)
+    }
+
     @Test func notNowWithdrawsTheQuestionForGood() throws {
         let rule = AskFirst.isolated()
         let asks = NeedsYou(rule: rule)
@@ -216,6 +290,21 @@ struct FeedTests {
         #expect(Set(items.map(\.id)).count == items.count)
         let feed = Feed.build(items, now: Self.at(17, 10, 40), calendar: Self.calendar)
         #expect(feed.groups.map(\.period) == [.thisMorning, .earlier])
+    }
+
+    /// "Coming up" stays true whatever day the sample is shown.
+    @Test func theSampleBirthdayIsAlwaysAheadOfToday() throws {
+        for now in [Self.at(17, 10), Date()] {
+            let birthday = try #require(SampleFeedSource().items(now: now).first { $0.id == "sample:sam-birthday" })
+            let date = (now + 12 * 86_400).formatted(.dateTime.month(.wide).day())
+            #expect(birthday.body.hasPrefix("It's on \(date),"))
+        }
+    }
+
+    @Test func eachActionSaysWhatItDoes() throws {
+        let request = try #require(AskFirst.isolated().ask(note))
+        #expect(FeedAction.review(request).hint == "Opens the question.")
+        #expect(Set([FeedAction.open("a").hint, FeedAction.talk("b").hint, FeedAction.review(request).hint]).count == 3)
     }
 
     @Test func todayComesFirstAndTheShortcutsFollowTheSidebar() {
@@ -252,7 +341,7 @@ private final class Handed: @unchecked Sendable {
 extension FeedWords {
     static var all: [String] {
         [title, needsYouHeading, needsYouDetail, thisMorning, thisAfternoon, thisEvening, earlier, yesterday,
-         didLabel, readyLabel, noticedLabel, openTitle, talkTitle, reviewTitle, emptyTitle, empty,
-         emptyActionTitle, sampleNote, doneTitle, chatWith("Pip")]
+         didLabel, readyLabel, noticedLabel, openTitle, talkTitle, reviewTitle, openHint, talkHint, reviewHint,
+         emptyTitle, empty, emptyActionTitle, sampleNote, sampleLabel, doneTitle, chatWith("Pip")]
     }
 }
