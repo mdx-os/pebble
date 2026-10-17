@@ -8,6 +8,7 @@ public struct MemoryView: View {
     @StateObject private var model: MemoryModel
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @FocusState private var addFocused: Bool
 
     public init(store: MemoryStore) {
@@ -22,11 +23,14 @@ public struct MemoryView: View {
                     header
                     addField
                     if model.isUnreadable {
-                        problem(MemoryWords.unreadable)
+                        GentleNotice(text: MemoryWords.unreadable)
                     } else if model.isUnavailable {
-                        problem(MemoryWords.unavailable)
+                        GentleNotice(text: MemoryWords.unavailable, actionTitle: MemoryWords.tryAgainTitle) {
+                            model.refresh()
+                        }
                     } else if model.notes.isEmpty {
                         empty
+                            .transition(.opacity)
                     }
                     if !model.notes.isEmpty {
                         VStack(spacing: 10) {
@@ -95,15 +99,12 @@ public struct MemoryView: View {
         .onChange(of: model.status) { _, status in
             if let status { AccessibilityNotification.Announcement(status).post() }
         }
-    }
-
-    private func problem(_ text: String) -> some View {
-        Label(text, systemImage: "exclamationmark.circle")
-            .font(.body)
-            .foregroundStyle(.secondary)
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
+        .onChange(of: scenePhase) { _, phase in
+            // Back from a locked screen, look again rather than leave the note up.
+            if phase == .active, model.isUnavailable { model.refresh() }
+        }
+        .haptic(.saved, trigger: model.savedCount)
+        .haptic(.forgotten, trigger: model.forgottenCount)
     }
 
     private var header: some View {
@@ -145,17 +146,14 @@ public struct MemoryView: View {
     }
 
     private var empty: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "sparkles")
-                .font(.largeTitle)
-                .foregroundStyle(Theme.accent)
-            Text(MemoryWords.empty)
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+        EmptyState(
+            symbol: "sparkles",
+            title: MemoryWords.emptyTitle,
+            detail: MemoryWords.empty,
+            actionTitle: MemoryWords.emptyActionTitle
+        ) {
+            addFocused = true
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 48)
     }
 }
 
@@ -275,6 +273,9 @@ final class MemoryModel: ObservableObject {
     @Published var editDraft = ""
     @Published var askForgetEverything = false
     @Published private(set) var status: String?
+    /// Go up by one each time a note is saved or forgotten, for a light tap.
+    @Published private(set) var savedCount = 0
+    @Published private(set) var forgottenCount = 0
 
     init(store: MemoryStore) {
         self.store = store
@@ -316,7 +317,12 @@ final class MemoryModel: ObservableObject {
         pendingForget = nil
         cancelEdit()
         do {
-            status = try store.forget(note.id) ? MemoryWords.forgotten : nil
+            if try store.forget(note.id) {
+                status = MemoryWords.forgotten
+                forgottenCount += 1
+            } else {
+                status = nil
+            }
         } catch {
             status = MemoryWords.couldNotForget
         }
@@ -328,6 +334,7 @@ final class MemoryModel: ObservableObject {
         do {
             try store.forgetEverything()
             status = MemoryWords.forgotten
+            forgottenCount += 1
         } catch {
             status = MemoryWords.couldNotForget
         }
@@ -337,7 +344,7 @@ final class MemoryModel: ObservableObject {
     private func report(_ decision: @autoclosure () throws -> MemoryStore.Decision, onSaved: () -> Void) {
         do {
             switch try decision() {
-            case .saved: status = nil; onSaved()
+            case .saved: status = MemoryWords.saved; savedCount += 1; onSaved()
             case .needsWords: status = MemoryWords.needsWords
             case .tooLong: status = MemoryWords.tooLong
             case .notFound: status = nil; cancelEdit()

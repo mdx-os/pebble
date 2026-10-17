@@ -78,7 +78,7 @@ public enum MemorySource: Codable, Sendable, Equatable, Hashable {
             let tidy = name.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
             guard !tidy.isEmpty else { return "From an app" }
             return "From \(tidy.count > Self.maxAppNameLength ? String(tidy.prefix(Self.maxAppNameLength)) + "..." : tidy)"
-        case .inferred: return "I inferred this"
+        case .inferred: return "My guess"
         }
     }
 
@@ -95,12 +95,15 @@ public enum MemorySource: Codable, Sendable, Equatable, Hashable {
 /// Words for the memory screen.
 public enum MemoryWords {
     public static let title = "What I remember"
-    public static let empty = "Nothing yet. Anything I remember shows up here, and you can change or remove it."
+    public static let emptyTitle = "Nothing here yet"
+    public static let empty = "Tell me something worth keeping, like a birthday or how you take your tea. It stays on this device, and you can change or remove it anytime."
+    public static let emptyActionTitle = "Add your first note"
     public static let forgetTitle = "Forget this"
     public static let forgetEverythingTitle = "Forget everything"
-    public static let forgotten = "Gone. I no longer have it."
-    public static let needsWords = "There's nothing to remember there."
-    public static let tooLong = "That's a lot to hold. Try a shorter note."
+    public static let saved = "Saved. It stays on this device."
+    public static let forgotten = "Forgotten. It's gone from this device."
+    public static let needsWords = "Type a few words first, and I'll keep them."
+    public static let tooLong = "That's a lot for one note. Try splitting it into shorter ones."
     public static let editTitle = "Change"
     public static let saveTitle = "Save"
     public static let cancelTitle = "Cancel"
@@ -110,11 +113,12 @@ public enum MemoryWords {
     public static let forgetEverythingQuestion = "Forget everything I remember?"
     public static let forgetEverythingDetail = "This removes every note from this device. It can't be undone."
     public static let privacyNote = "Kept only on this device. Removing a note erases it."
-    public static let unreadable = "I can't read what I saved. You can clear it with Forget everything."
-    public static let unavailable = "I can't open my notes right now. Unlock your device and try again."
+    public static let unreadable = "Sorry, I can't read the notes I saved. I've left them untouched. If this keeps happening, Forget everything clears them so we can start fresh."
+    public static let unavailable = "I can't open my notes just now, usually because the device is locked. Unlock it, and I'll look again."
+    public static let tryAgainTitle = "Try again"
     public static let forgetOneQuestion = "Forget this note?"
     public static let editPlaceholder = "What should I remember instead?"
-    public static let couldNotForget = "I couldn't erase that just now. Try once more."
+    public static let couldNotForget = "Sorry, I couldn't erase that just now. Please try again in a moment."
 }
 
 /// Notes the agent keeps, stored only on this device.

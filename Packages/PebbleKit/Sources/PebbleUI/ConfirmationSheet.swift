@@ -166,6 +166,8 @@ public struct ConfirmationSheet: View {
             // A question that goes away unanswered can never be approved later.
             state.disappeared()
         }
+        // One light tap when the person answers, yes or not now.
+        .haptic(.answered, trigger: state.screen == .answered)
         .onChange(of: state.spoken) { _, line in
             // Move VoiceOver to the timeout words so they are read first,
             // before the person meets the Close button. Moving focus reads

@@ -1,6 +1,6 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test build screenshots device-screenshots ui-test brand-check secrets-check pulse clean
+.PHONY: verify generate test build screenshots ui-screenshots device-screenshots ui-test brand-check secrets-check pulse clean
 
 ## verify: everything CI runs. Run this before every PR.
 verify: brand-check test build screenshots
@@ -26,6 +26,12 @@ build: generate
 ## screenshots: first screen on iPhone, iPad and Mac, written to build/screenshots
 screenshots: generate
 	sh scripts/screenshots.sh build/screenshots
+
+## ui-screenshots: showcase screens in light and dark on one simulator, written to
+## build/screenshots/ui (or OUT=dir). DEVICE= names the simulator, SCREENS= the screens.
+ui-screenshots: generate
+	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -destination 'generic/platform=iOS Simulator' -derivedDataPath $(DERIVED) CODE_SIGNING_ALLOWED=NO
+	PEBBLE_IPHONE="$(or $(DEVICE),iPhone 17 Pro)" PEBBLE_SCREENS="$(SCREENS)" sh scripts/ui-screenshots.sh $(or $(OUT),build/screenshots/ui)
 
 ## device-screenshots: showcase screens on iPad Pro 13-inch, iPad mini and iPhone,
 ## portrait and landscape, written to build/screenshots/devices (or OUT=dir)

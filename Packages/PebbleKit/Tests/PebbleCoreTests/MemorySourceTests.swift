@@ -71,7 +71,7 @@ struct MemorySourceTests {
         #expect(MemorySource.toldMe.label == "You told me")
         #expect(MemorySource.fromApp("Calendar").label == "From Calendar")
         #expect(MemorySource.fromApp("  ").label == "From an app")
-        #expect(MemorySource.inferred.label == "I inferred this")
+        #expect(MemorySource.inferred.label == "My guess")
         let long = MemorySource.fromApp(String(repeating: "x", count: 80)).label
         #expect(long.count <= "From ".count + MemorySource.maxAppNameLength + 3)
         for s in [MemorySource.toldMe, .fromApp("Mail\nApp"), .inferred] {

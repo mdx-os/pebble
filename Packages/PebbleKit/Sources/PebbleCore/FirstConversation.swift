@@ -26,23 +26,26 @@ public enum FirstConversation {
     public static let presence = "Here with you, on this device."
     public static let composerPlaceholder = "Say what's on your mind"
     public static let sendTitle = "Send"
-    public static let thinking = "One moment."
-    public static let couldNotAnswer = "I couldn't answer that just now. Try once more."
+    /// Read out once by VoiceOver while a reply is on its way.
+    public static let thinking = "Thinking it over."
+    public static let couldNotAnswer = "Sorry, I couldn't finish a reply just now. What you wrote is still here, so you can send it again when you're ready."
+    /// Above the starter choices in a new chat.
+    public static let startersHeading = "A few places to start"
 
-    public static let nameInvitation = "You get to name me."
+    public static let nameInvitation = "You can give me any name you like."
     public static let giveNameTitle = "Give me a name"
     public static let changeNameTitle = "Call me something else"
     public static let namePlaceholder = "A name for me"
     public static let confirmNameTitle = "That's my name"
     public static let cancelNameTitle = "Never mind"
-    public static let needsAName = "I need a name to go by."
-    public static let nameTooLong = "That's a little long for a name."
+    public static let needsAName = "Type a name first. Any name works."
+    public static let nameTooLong = "That's a little long. Try a name of \(AgentName.maxLength) letters or fewer."
 
     /// Only promise that words stay here when the model really runs here.
     public static func opening(named name: String, onDevice: Bool = false) -> String {
         onDevice
-            ? "Hi, I'm \(name). I run on this device, so what you tell me stays here. Pick a place to start, or tell me what's on your mind."
-            : "Hi, I'm \(name). Pick a place to start, or tell me what's on your mind."
+            ? "Hi, I'm \(name). I'm glad you're here. I run on this device, so what you tell me stays here. Pick a place to start, or tell me what's on your mind."
+            : "Hi, I'm \(name). I'm glad you're here. Pick a place to start, or tell me what's on your mind."
     }
 
     public static let jobs: [StarterJob] = [

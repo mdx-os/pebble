@@ -196,9 +196,9 @@ public struct HomeView: View {
             // The store couldn't be opened. Say so rather than hide memory.
             ZStack {
                 Backdrop()
-                Label(MemoryWords.unavailable, systemImage: "exclamationmark.circle")
-                    .foregroundStyle(.secondary)
+                GentleNotice(text: MemoryWords.unavailable)
                     .padding(Theme.gutter)
+                    .frame(maxWidth: Theme.readableWidth)
             }
         }
     }
