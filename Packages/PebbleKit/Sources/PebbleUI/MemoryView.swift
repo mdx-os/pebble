@@ -11,8 +11,15 @@ public struct MemoryView: View {
     @Environment(\.scenePhase) private var scenePhase
     @FocusState private var addFocused: Bool
 
-    public init(store: MemoryStore) {
-        _model = StateObject(wrappedValue: MemoryModel(store: store))
+    /// `place` comes from the active model (`ModelClient.privacyPlace`), so
+    /// the device promise here is the same one the chat makes.
+    public init(store: MemoryStore, place: PrivacyPlace) {
+        _model = StateObject(wrappedValue: MemoryModel(store: store, place: place))
+    }
+
+    /// Shows a model that already has something to say, for screenshots.
+    init(model: @autoclosure @escaping () -> MemoryModel) {
+        _model = StateObject(wrappedValue: model())
     }
 
     public var body: some View {
@@ -112,7 +119,7 @@ public struct MemoryView: View {
             Text(MemoryWords.title)
                 .font(.system(.largeTitle, design: .rounded).weight(.bold))
                 .accessibilityAddTraits(.isHeader)
-            Label(MemoryWords.privacyNote, systemImage: "lock.fill")
+            Label(MemoryWords.privacyNote(model.place), systemImage: "lock.fill")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
@@ -153,7 +160,7 @@ public struct MemoryView: View {
         EmptyState(
             symbol: "sparkles",
             title: MemoryWords.emptyTitle,
-            detail: MemoryWords.empty,
+            detail: MemoryWords.empty(model.place),
             actionTitle: MemoryWords.emptyActionTitle
         ) {
             addFocused = true
@@ -267,6 +274,8 @@ struct SourceLabel: View {
 @MainActor
 final class MemoryModel: ObservableObject {
     let store: MemoryStore
+    /// Whether the words here may promise the device.
+    let place: PrivacyPlace
     @Published private(set) var notes: [MemoryNote] = []
     @Published private(set) var isUnreadable = false
     @Published private(set) var isUnavailable = false
@@ -286,8 +295,9 @@ final class MemoryModel: ObservableObject {
     @Published private(set) var savedCount = 0
     @Published private(set) var forgottenCount = 0
 
-    init(store: MemoryStore) {
+    init(store: MemoryStore, place: PrivacyPlace) {
         self.store = store
+        self.place = place
         refresh()
     }
 
@@ -306,11 +316,9 @@ final class MemoryModel: ObservableObject {
     /// False while the saved notes can't be read or opened, so they stay untouched.
     var canAdd: Bool { !isUnreadable && !isUnavailable }
 
+    /// The store refuses notes it can't read or open, so the words that were
+    /// typed stay in the field and the file stays as it was.
     func add() {
-        guard canAdd else {
-            status = isUnavailable ? MemoryWords.unavailable : MemoryWords.unreadable
-            return
-        }
         report(try store.remember(newNote, source: .toldMe)) { self.newNote = "" }
     }
 
@@ -360,7 +368,7 @@ final class MemoryModel: ObservableObject {
     private func report(_ decision: @autoclosure () throws -> MemoryStore.Decision, onSaved: () -> Void) {
         do {
             switch try decision() {
-            case .saved: status = MemoryWords.saved; savedCount += 1; onSaved()
+            case .saved: status = MemoryWords.saved(place); savedCount += 1; onSaved()
             case .needsWords: status = MemoryWords.needsWords
             case .tooLong: status = MemoryWords.tooLong
             case .notFound: status = nil; cancelEdit()

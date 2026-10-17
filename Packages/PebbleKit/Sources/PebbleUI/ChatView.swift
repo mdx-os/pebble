@@ -21,6 +21,9 @@ public struct ChatView: View {
     @ScaledMetric(relativeTo: .body) private var bubbleWidth: CGFloat = Theme.bubbleWidth
     private let look: AgentLook?
     private let firstMessage: String?
+    /// True while another sheet, such as the shortcuts, covers the chat, so
+    /// nothing here is spoken over it.
+    private let covered: Bool
     private let onFirstMessageSent: () -> Void
 
     public init(
@@ -56,11 +59,13 @@ public struct ChatView: View {
         controller: @autoclosure @escaping () -> ChatController,
         look: AgentLook?,
         firstMessage: String?,
+        covered: Bool = false,
         onFirstMessageSent: @escaping () -> Void = {}
     ) {
         _controller = StateObject(wrappedValue: controller())
         self.look = look
         self.firstMessage = firstMessage
+        self.covered = covered
         self.onFirstMessageSent = onFirstMessageSent
     }
 
@@ -129,10 +134,12 @@ public struct ChatView: View {
                 thinkingNotice?.cancel()
                 thinkingNotice = nil
                 guard replying else { return }
-                thinkingNotice = Task { @MainActor in
-                    try? await Task.sleep(for: Self.thinkingNoticeDelay(after: controller.replyBeat))
-                    guard !Task.isCancelled, controller.isReplying else { return }
-                    AccessibilityNotification.Announcement(FirstConversation.thinking).post()
+                if Self.speaks(covered: covered) {
+                    thinkingNotice = Task { @MainActor in
+                        try? await Task.sleep(for: Self.thinkingNoticeDelay(after: controller.replyBeat))
+                        guard !Task.isCancelled, controller.isReplying else { return }
+                        AccessibilityNotification.Announcement(FirstConversation.thinking).post()
+                    }
                 }
                 if reduceMotion {
                     scroller.scrollTo(Self.thinkingID, anchor: .bottom)
@@ -141,7 +148,15 @@ public struct ChatView: View {
                 }
             }
             .onChange(of: controller.failure) { _, failure in
-                if let failure { AccessibilityNotification.Announcement(failure).post() }
+                if let failure, Self.speaks(covered: covered) {
+                    AccessibilityNotification.Announcement(failure).post()
+                }
+            }
+            .onChange(of: covered) { _, covered in
+                // A sheet came over the chat, so a pending "thinking" stays quiet.
+                guard !Self.speaks(covered: covered) else { return }
+                thinkingNotice?.cancel()
+                thinkingNotice = nil
             }
             }
             composer
@@ -175,7 +190,7 @@ public struct ChatView: View {
             Text(controller.displayName.text)
                 .font(.title.weight(.semibold))
                 .multilineTextAlignment(.center)
-            Text(FirstConversation.presence)
+            Text(FirstConversation.presence(controller.privacyPlace))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -258,6 +273,10 @@ public struct ChatView: View {
         beat + .milliseconds(400)
     }
 
+    /// "Thinking it over." and the failure line are spoken only while the
+    /// chat is in front. Another sheet over it means quiet.
+    static func speaks(covered: Bool) -> Bool { !covered }
+
     /// New lines from the agent are read out, since they may land offscreen.
     static func announcement(for conversation: Conversation) -> String? {
         guard let last = conversation.turns.last, last.speaker == .agent, !conversation.isWaitingForPerson else {
@@ -297,7 +316,7 @@ public struct ChatView: View {
     private func bubbleFill(for speaker: ChatTurn.Speaker) -> Color {
         switch speaker {
         case .agent:
-            Color.primary.opacity(0.06)
+            Color.primary.opacity(Theme.bubbleTint)
         case .person:
             Color.orange.opacity(0.18)
         }
@@ -404,7 +423,8 @@ final class ChatController: ObservableObject {
     @Published var conversation: Conversation
     @Published var draft = ""
     @Published var isReplying = false
-    private var replyTask: Task<Void, Never>?
+    /// The reply on its way. Tests await it so ordering never rests on timing.
+    private(set) var replyTask: Task<Void, Never>?
     /// Goes up with each reply asked for and each stop, so a late reply
     /// can tell it is no longer the current one.
     private var replyGeneration = 0
@@ -438,6 +458,9 @@ final class ChatController: ObservableObject {
         }
         return controller
     }
+
+    /// Whether the chat may promise the device, from the model it talks to.
+    var privacyPlace: PrivacyPlace { model.privacyPlace }
 
     var displayName: AgentName { naming.profile.displayName }
     var renameTitle: String { naming.renameTitle }
@@ -515,10 +538,13 @@ final class ChatController: ObservableObject {
             guard !Task.isCancelled, generation == replyGeneration else { return }
             if let next {
                 conversation = next
-            } else {
+            } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // The failure line promises the words are back, ready to send.
+                draft = trimmed
                 failure = FirstConversation.couldNotAnswer
-                // The failure line promises the words are still here to send.
-                if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { draft = trimmed }
+            } else {
+                // A newer draft is never replaced, so point at the bubble instead.
+                failure = FirstConversation.couldNotAnswerKeptDraft
             }
             isReplying = false
         }
@@ -550,6 +576,14 @@ struct StarterChip: View {
         arrived || reduceMotion || !animatesEntrances
     }
 
+    /// What appearing does: the chip always lands, and plays its entrance
+    /// only when it isn't showing yet. Landing even when Reduce Motion
+    /// already shows it means turning Reduce Motion off later never leaves
+    /// the chip invisible.
+    static func appearing(arrived: Bool, reduceMotion: Bool, animatesEntrances: Bool) -> (arrived: Bool, animates: Bool) {
+        (true, !isShown(arrived: arrived, reduceMotion: reduceMotion, animatesEntrances: animatesEntrances))
+    }
+
     private var shown: Bool {
         Self.isShown(arrived: arrived, reduceMotion: reduceMotion, animatesEntrances: animatesEntrances)
     }
@@ -569,10 +603,14 @@ struct StarterChip: View {
         .opacity(shown ? 1 : 0)
         .offset(y: shown ? 0 : Motion.entranceOffset(reduceMotion: reduceMotion))
         .onAppear {
-            guard !shown else { return }
+            let step = Self.appearing(arrived: arrived, reduceMotion: reduceMotion, animatesEntrances: animatesEntrances)
+            guard step.animates else {
+                arrived = step.arrived
+                return
+            }
             let delay = Motion.stagger(index, reduceMotion: reduceMotion)
             withAnimation(.spring(response: 0.45, dampingFraction: 0.85).delay(delay)) {
-                arrived = true
+                arrived = step.arrived
             }
         }
     }

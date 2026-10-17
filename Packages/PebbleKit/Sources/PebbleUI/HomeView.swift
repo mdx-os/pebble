@@ -91,7 +91,7 @@ public struct HomeView: View {
                 .transition(.opacity)
             } else {
                 OnboardingView(brand: brand, names: names, store: onboarding, looks: looks,
-                               onDevice: model.runsOnDevice) { line in
+                               onDevice: model.privacyPlace.staysOnDevice) { line in
                     firstMessage = line
                     chat = ChatController.make(brand: brand, model: model, names: names, conversation: nil)
                     withAnimation(.easeInOut(duration: 0.4)) { finished = true }
@@ -181,8 +181,15 @@ public struct HomeView: View {
         }
     }
 
+    /// True while a sheet sits over the chat: the shortcuts, or the memory
+    /// on a narrow window. The chat says nothing aloud while covered.
+    static func chatIsCovered(usesSidebar: Bool, section: HomeSection?, showsShortcuts: Bool) -> Bool {
+        showsShortcuts || (!usesSidebar && section == .memory)
+    }
+
     private func chatScreen(_ chat: ChatController) -> some View {
         ChatView(controller: chat, look: AgentLook.load(from: looks), firstMessage: firstMessage,
+                 covered: Self.chatIsCovered(usesSidebar: usesSidebar, section: section, showsShortcuts: showsShortcuts),
                  onFirstMessageSent: { firstMessage = nil })
             .background(Backdrop())
             // A new chat is a new conversation, so it starts fresh on screen too.
@@ -194,7 +201,7 @@ public struct HomeView: View {
     @ViewBuilder
     private var memoryScreen: some View {
         if let memory {
-            MemoryView(store: memory)
+            MemoryView(store: memory, place: model.privacyPlace)
         } else {
             // The store couldn't be opened. Say so rather than hide memory.
             // It is only opened again at launch, so the words say that.

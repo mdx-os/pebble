@@ -35,49 +35,54 @@ private struct GatedModel: ModelClient {
     }
 }
 
-/// Counts calls to a model.
-private actor Calls {
-    private var count = 0
-    func next() -> Int { count += 1; return count }
-}
-
 /// Holds each reply on its own gate, so a test decides exactly when each
-/// one lands, with no timing involved.
-private actor Landed {
-    private(set) var first = false
-    func markFirst() { first = true }
-}
-
+/// one lands, with no timing involved. Which gate is chosen by what the
+/// person said, never by which call reached the model first.
 private struct TwoGateModel: ModelClient {
     let first: Gate
     let second: Gate
-    let calls = Calls()
-    let landed = Landed()
     var runsOnDevice: Bool { true }
 
     func reply(to transcript: [ChatTurn]) async throws -> String {
-        let call = await calls.next()
-        if call == 1 {
+        if transcript.last?.text == "First" {
             await first.wait()
-            await landed.markFirst()
-        } else {
-            await second.wait()
+            return "Reply 1"
         }
-        return "Reply \(call)"
+        await second.wait()
+        return "Reply 2"
     }
+}
+
+/// Every transcript a model was handed.
+private actor Transcripts {
+    private(set) var all: [[ChatTurn]] = []
+    func add(_ turns: [ChatTurn]) { all.append(turns) }
+}
+
+/// A model that writes down everything it is shown.
+private struct SpyModel: ModelClient {
+    let seen = Transcripts()
+    var runsOnDevice: Bool { true }
+
+    func reply(to transcript: [ChatTurn]) async throws -> String {
+        await seen.add(transcript)
+        return "Noted."
+    }
+}
+
+/// A model that does not run here, like a cloud model would.
+private struct RemoteModel: ModelClient {
+    func reply(to transcript: [ChatTurn]) async throws -> String { "From afar." }
 }
 
 @MainActor
 struct WarmthTests {
     let brand = Brand(name: "Nova")
 
-    /// Waits for the reply to land, up to a deadline long enough for a busy
-    /// CI machine, and returns as soon as it does.
-    private func settle(_ controller: ChatController, within limit: Duration = .seconds(20)) async {
-        let deadline = ContinuousClock.now + limit
-        while controller.isReplying, ContinuousClock.now < deadline {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
+    /// Waits for the reply on its way to finish. No polling and no deadline:
+    /// it returns exactly when the reply task does.
+    private func settle(_ controller: ChatController) async {
+        await controller.replyTask?.value
     }
 
     @Test func theThinkingPresenceShowsWhileAReplyComesAndThenGoes() async {
@@ -134,29 +139,50 @@ struct WarmthTests {
         #expect(!CareCheck.answersWithCare(plain))
     }
 
+    /// Only the generation counter stands between a superseded reply and the
+    /// screen: the first reply is never cancelled, it just stops being the
+    /// newest. The test decides every step, so nothing rests on timing.
     @Test func aStoppedReplyNeverSettlesANewerOne() async throws {
         let first = Gate(), second = Gate()
-        let model = TwoGateModel(first: first, second: second)
-        let controller = ChatController(brand: brand, model: model,
+        let controller = ChatController(brand: brand, model: TwoGateModel(first: first, second: second),
                                         names: InMemoryAgentNameStore(), replyBeat: .zero)
         controller.submit("First")
-        #expect(controller.isReplying)
-        controller.stopReplying()
-        #expect(!controller.isReplying)
+        let firstReply = try #require(controller.replyTask)
+        // What a stop does to the screen, without cancelling the reply.
+        controller.isReplying = false
         controller.submit("Second")
+        let secondReply = try #require(controller.replyTask)
         #expect(controller.isReplying, "the second send was accepted")
         #expect(controller.conversation.turns.last?.text == "Second", "the second send was accepted")
-        // Let the stopped reply land while the newer one is still out.
+        // The superseded reply lands first and runs to its end, uncancelled,
+        // while the newer one is still out.
         await first.release()
-        while !(await model.landed.first) { await Task.yield() }
-        try await Task.sleep(for: .milliseconds(200))
+        await firstReply.value
+        #expect(!firstReply.isCancelled)
         #expect(controller.isReplying)
+        #expect(controller.failure == nil)
         #expect(controller.conversation.turns.last?.text == "Second")
         #expect(!controller.conversation.turns.contains { $0.text == "Reply 1" })
         await second.release()
-        await settle(controller)
+        await secondReply.value
         #expect(!controller.isReplying)
         #expect(controller.conversation.turns.last?.text == "Reply 2")
+        #expect(!controller.conversation.turns.contains { $0.text == "Reply 1" })
+    }
+
+    @Test func aCancelledReplyChangesNothing() async throws {
+        let gate = Gate()
+        let controller = ChatController(brand: brand, model: GatedModel(gate: gate),
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
+        controller.submit("Plan my day")
+        let reply = try #require(controller.replyTask)
+        controller.stopReplying()
+        #expect(!controller.isReplying)
+        await gate.release()
+        await reply.value
+        #expect(controller.conversation.turns.last?.text == "Plan my day")
+        #expect(controller.failure == nil)
+        #expect(!controller.isReplying)
     }
 
     @Test func aFailedReplyIsExplainedKindlyAndKeepsTheWords() async {
@@ -169,6 +195,7 @@ struct WarmthTests {
         await gate.release()
         await settle(controller)
         #expect(controller.failure == FirstConversation.couldNotAnswer)
+        #expect(FirstConversation.couldNotAnswer.contains("What you wrote is still here"))
         #expect(controller.conversation.turns.last?.text == "Plan my day")
         #expect(!controller.isReplying)
         // "What you wrote is still here": back in the composer, ready to send.
@@ -184,6 +211,10 @@ struct WarmthTests {
         await gate.release()
         await settle(controller)
         #expect(controller.draft == "Something else")
+        // The words weren't put back, so the line points at the bubble.
+        #expect(controller.failure == FirstConversation.couldNotAnswerKeptDraft)
+        #expect(!FirstConversation.couldNotAnswerKeptDraft.contains("still here"))
+        #expect(controller.conversation.turns.last?.text == "Plan my day")
     }
 
     @Test func theFirstRunLineIsSentWithoutATap() {
@@ -203,12 +234,33 @@ struct WarmthTests {
         #expect(!EnvironmentValues().animatesEntrances)
     }
 
+    @Test func aChipShownByReduceMotionHasStillArrivedWhenItIsTurnedOff() {
+        let still = StarterChip.appearing(arrived: false, reduceMotion: true, animatesEntrances: true)
+        #expect(still.arrived && !still.animates)
+        // Reduce Motion goes off while the chip is on screen: it stays visible.
+        #expect(StarterChip.isShown(arrived: still.arrived, reduceMotion: false, animatesEntrances: true))
+        let live = StarterChip.appearing(arrived: false, reduceMotion: false, animatesEntrances: true)
+        #expect(live.arrived && live.animates)
+        let render = StarterChip.appearing(arrived: false, reduceMotion: false, animatesEntrances: false)
+        #expect(render.arrived && !render.animates)
+    }
+
+    @Test func nothingIsSpokenWhileASheetCoversTheChat() {
+        #expect(ChatView.speaks(covered: false))
+        #expect(!ChatView.speaks(covered: true))
+        #expect(HomeView.chatIsCovered(usesSidebar: true, section: .chat, showsShortcuts: true))
+        #expect(HomeView.chatIsCovered(usesSidebar: false, section: .chat, showsShortcuts: true))
+        #expect(HomeView.chatIsCovered(usesSidebar: false, section: .memory, showsShortcuts: false))
+        #expect(!HomeView.chatIsCovered(usesSidebar: false, section: .chat, showsShortcuts: false))
+        #expect(!HomeView.chatIsCovered(usesSidebar: true, section: .chat, showsShortcuts: false))
+    }
+
     @Test func unreadableNotesTurnOffAddingAndStayOnDisk() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("warmth-unreadable-\(UUID().uuidString).json")
         let bytes = Data("not notes".utf8)
         try bytes.write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
-        let model = MemoryModel(store: MemoryStore(fileURL: url))
+        let model = MemoryModel(store: MemoryStore(fileURL: url), place: .onDevice)
         #expect(model.isUnreadable)
         #expect(!model.canAdd)
         model.newNote = "Prefers tea"
@@ -216,6 +268,10 @@ struct WarmthTests {
         #expect(try Data(contentsOf: url) == bytes)
         #expect(model.savedCount == 0)
         #expect(model.newNote == "Prefers tea")
+        #expect(model.status == MemoryWords.unreadable)
+        // A writer that skips the screen is refused by the store itself.
+        #expect(throws: MemoryStore.Unreadable.self) { try MemoryStore(fileURL: url).remember("Walks at noon", source: .inferred) }
+        #expect(try Data(contentsOf: url) == bytes)
     }
 
     @Test func theDotsHoldStillWithReduceMotion() {
@@ -254,7 +310,7 @@ struct WarmthTests {
     }
 
     @Test func theEmptyMemoryHasNothingInIt() {
-        let model = MemoryModel(store: ShowcaseScene.emptyMemory())
+        let model = MemoryModel(store: ShowcaseScene.emptyMemory(), place: .onDevice)
         #expect(model.notes.isEmpty)
         #expect(!model.isUnreadable && !model.isUnavailable)
     }
@@ -275,13 +331,13 @@ struct WarmthTests {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("warmth-\(UUID().uuidString).json")
         let store = MemoryStore(fileURL: url)
         defer { try? store.forgetEverything() }
-        let model = MemoryModel(store: store)
+        let model = MemoryModel(store: store, place: .onDevice)
         let before = model.statusCount
         model.newNote = "Prefers tea"
         model.add()
         model.newNote = "Walks at noon"
         model.add()
-        #expect(model.status == MemoryWords.saved)
+        #expect(model.status == MemoryWords.saved(.onDevice))
         #expect(model.statusCount == before + 2)
     }
 
@@ -289,24 +345,106 @@ struct WarmthTests {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("warmth-\(UUID().uuidString).json")
         let store = MemoryStore(fileURL: url)
         defer { try? store.forgetEverything() }
-        let model = MemoryModel(store: store)
+        let model = MemoryModel(store: store, place: .onDevice)
         model.newNote = "   "
         model.add()
         #expect(model.savedCount == 0)
         model.newNote = "Prefers tea"
         model.add()
         #expect(model.savedCount == 1)
-        #expect(model.status == MemoryWords.saved)
+        #expect(model.status == MemoryWords.saved(.onDevice))
         let tea = try #require(model.notes.first)
         model.forget(tea)
         #expect(model.forgottenCount == 1)
         #expect(model.status == MemoryWords.forgotten)
     }
 
-    @Test func noHapticsWithoutAPhone() {
-        #if os(macOS)
-        #expect(!Haptic.isAvailable)
-        #endif
+    @Test func theDotsStayVisibleOnTheirBubble() {
+        // The math itself: black on white is 21:1, a color on itself is 1:1.
+        #expect(abs(Contrast.ratio(.black, .white) - 21) < 0.01)
+        #expect(Contrast.ratio(.white, .white) == 1)
+        #expect(Contrast.RGB.black.over(.white, opacity: 0.5) == Contrast.RGB(0.5, 0.5, 0.5))
+        // The faintest a dot ever gets still reaches 3:1, light and dark.
+        let times = stride(from: 0.0, through: 1.4, by: 0.01)
+        let faintest = times.flatMap { t in (0..<3).map { Motion.dot($0, at: t, reduceMotion: false).opacity } }.min() ?? 0
+        #expect(faintest >= Motion.dotFloor - 0.000_001)
+        #expect(Motion.dot(0, at: 0, reduceMotion: true).opacity == Motion.dotFloor)
+        for scheme in [ColorScheme.light, .dark] {
+            #expect(Contrast.thinkingDot(scheme, opacity: Motion.dotFloor) >= 3, "\(scheme)")
+        }
+        // Increase Contrast makes them solid, moving or still.
+        for t in times {
+            #expect(Motion.dot(1, at: t, reduceMotion: false, increasedContrast: true).opacity == 1)
+        }
+        #expect(Motion.dot(1, at: 0, reduceMotion: true, increasedContrast: true).opacity == 1)
+    }
+
+    @Test(arguments: [ColorScheme.light, .dark])
+    func theDotsRenderWithIncreasedContrast(scheme: ColorScheme) throws {
+        let renderer = ImageRenderer(content: ThinkingDots(stillOverride: true)
+            .environment(\.colorScheme, scheme)
+            .environment(\._colorSchemeContrast, .increased))
+        #expect(try #require(renderer.cgImage).width > 0)
+    }
+
+    // MARK: Privacy
+
+    /// A note's words never reach the model, not even across a full turn.
+    @Test func aMemoryNoteNeverReachesTheModel() async throws {
+        let token = UUID().uuidString
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("warmth-private-\(UUID().uuidString).json")
+        let store = MemoryStore(fileURL: url)
+        defer { try? store.forgetEverything() }
+        let memory = MemoryModel(store: store, place: .onDevice)
+        memory.newNote = "My locker code is \(token)"
+        memory.add()
+        #expect(memory.status == MemoryWords.saved(.onDevice))
+        #expect(store.notes().contains { $0.text.contains(token) })
+
+        let spy = SpyModel()
+        let controller = ChatController(brand: brand, model: spy, names: InMemoryAgentNameStore(), replyBeat: .zero)
+        controller.submit("What do you remember about me?")
+        await settle(controller)
+        controller.submit("What is my locker code?")
+        await settle(controller)
+
+        let seen = await spy.seen.all
+        #expect(seen.count == 2, "both turns reached the model")
+        #expect(controller.conversation.turns.last?.text == "Noted.")
+        for transcript in seen {
+            #expect(!transcript.contains { $0.text.contains(token) }, "the note reached the model")
+        }
+        #expect(!controller.conversation.turns.contains { $0.text.contains(token) })
+    }
+
+    @Test func aModelThatLeavesTheDeviceMakesNoDevicePromise() {
+        let controller = ChatController(brand: brand, model: RemoteModel(), names: InMemoryAgentNameStore(), replyBeat: .zero)
+        #expect(controller.privacyPlace == .mayLeaveDevice)
+        #expect(!FirstConversation.presence(controller.privacyPlace).contains("this device"))
+        #expect(controller.conversation.turns.first?.text.contains("stays") == false)
+        let local = ChatController(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(), replyBeat: .zero)
+        #expect(local.privacyPlace == .onDevice)
+    }
+
+    @Test func savingSaysOnlyWhatIsTrueForThePlace() {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("warmth-\(UUID().uuidString).json")
+        let store = MemoryStore(fileURL: url)
+        defer { try? store.forgetEverything() }
+        let model = MemoryModel(store: store, place: .mayLeaveDevice)
+        model.newNote = "Prefers tea"
+        model.add()
+        #expect(model.status == "Saved.")
+    }
+
+    @Test(arguments: [ColorScheme.light, .dark])
+    func theSavedNoteSceneRenders(scheme: ColorScheme) throws {
+        let model = ShowcaseScene.savedNoteMemory(place: .onDevice)
+        #expect(model.status == MemoryWords.saved(.onDevice))
+        #expect(model.notes.count == 1)
+        let renderer = ImageRenderer(content: ShowcaseScene.memorySaved.view(brand: brand)
+            .environment(\.colorScheme, scheme)
+            .frame(width: 393, height: 852))
+        #expect(try #require(renderer.cgImage).width > 0)
     }
 }
 #endif

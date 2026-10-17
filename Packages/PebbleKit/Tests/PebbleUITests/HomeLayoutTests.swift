@@ -30,7 +30,7 @@ struct HomeLayoutTests {
             chat: controller,
             section: .constant(section),
             chatScreen: ChatView(controller: controller, look: .startingPoint, firstMessage: nil),
-            memoryScreen: MemoryView(store: ShowcaseScene.sampleMemory()),
+            memoryScreen: MemoryView(store: ShowcaseScene.sampleMemory(), place: .onDevice),
             newChat: {}
         )
         let renderer = ImageRenderer(content: view.frame(width: size.width, height: size.height))

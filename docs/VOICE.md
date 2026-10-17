@@ -68,10 +68,17 @@ person.
 Privacy promises are facts, not decoration. State them simply and only
 when the code makes them true.
 
-- Say "stays on this device" only when the model really runs on the device.
-  `FirstConversation.opening` and `FirstRunWords.helloDetail` check this;
-  keep it that way. Memory notes may say it always, because they never
-  reach a model or the network.
+- Say "stays on this device", "kept only on this device" or "on this
+  device" only when the flag says so. The flag is `PrivacyPlace`, read
+  from the active model's `runsOnDevice` through `ModelClient.privacyPlace`
+  and passed down by the app. There is no second flag. Every device line
+  takes it: `FirstConversation.opening` and `presence`,
+  `FirstRunWords.helloDetail`, and `MemoryWords.empty`, `saved` and
+  `privacyNote`. Memory lines follow it too: notes never reach a model,
+  but with a cloud model the chat does leave the device, so a promise on
+  the memory screen would mislead. `PrivacyPlaceTests` pins every line.
+- When the flag is off, say nothing about the device. Drop the sentence
+  rather than replace it with a claim about the cloud.
 - Never soften a promise that is true ("mostly private") and never stretch
   one that is not ("totally secure").
 - Say only what the agent knows. After a note is forgotten, "Gone. I no
@@ -111,8 +118,10 @@ Say what will appear here, why it is worth having, and offer one clear
 action.
 
 - Good: "Nothing here yet. Tell me something worth keeping, like a
-  birthday or how you take your tea. It stays on this device." with a button
-  "Add your first note".
+  birthday or how you take your tea. It stays on this device, and you can
+  change or remove it anytime." with a button "Add your first note". With
+  a model that leaves the device, the device sentence goes: "You can
+  change or remove it anytime."
 - Bad: "No data."
 
 ### Waiting
@@ -123,6 +132,7 @@ with Reduce Motion on, and VoiceOver hears "Thinking it over." once.
 ### Confirmations
 
 Short and specific. "Saved. It stays on this device." beats "Success!".
+With a model that leaves the device it is just "Saved."
 
 ## Short examples
 
@@ -131,5 +141,10 @@ Short and specific. "Saved. It stays on this device." beats "Success!".
 | First hello | "Hi there. I'm glad you're here." | "Welcome to the app." |
 | Naming | "Type a name first. Any name works." | "Name is required." |
 | Too long | "That's a little long. Try a name of N letters or fewer." (N is `AgentName.maxLength`) | "Max length exceeded." |
-| Memory saved | "Saved. It stays on this device." | "Note created." |
+| Memory saved, model on device | "Saved. It stays on this device." | "Note created." |
+| Memory saved, model may leave the device | "Saved." | "Saved. It stays on this device." |
+| Memory header, model on device | "Kept only on this device. Removing a note erases it." | "Stored locally." |
+| Memory header, model may leave the device | "Removing a note erases it." | "Kept only on this device." |
+| Chat presence, model on device | "Here with you, on this device." | "Running locally." |
+| Chat presence, model may leave the device | "Here with you." | "Here with you, on this device." |
 | Question timed out | "That question timed out, so I didn't do it." | "Request expired." |

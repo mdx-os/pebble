@@ -22,7 +22,7 @@ struct AgentLookTests {
             FirstRunWords.lookDetail, FirstRunWords.ideasDetail, FirstRunWords.justChatTitle,
             FirstRunWords.greeting(named: "Pip"),
             ConfirmationWords.heading, ConfirmationWords.promise,
-            MemoryWords.title, MemoryWords.empty, MemoryWords.forgetTitle,
+            MemoryWords.title, MemoryWords.empty(.onDevice), MemoryWords.empty(.mayLeaveDevice), MemoryWords.forgetTitle,
             MemoryWords.forgetEverythingTitle, MemoryWords.forgotten,
         ]
         lines += AgentLook.allCases.map(\.title)

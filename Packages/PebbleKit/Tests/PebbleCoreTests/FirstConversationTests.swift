@@ -22,7 +22,8 @@ struct FirstConversationTests {
         #expect(jobs.allSatisfy { !$0.title.isEmpty && !$0.prompt.isEmpty })
     }
 
-    @Test func presenceStaysOnDevice() {
-        #expect(FirstConversation.presence == "Here with you, on this device.")
+    @Test func presenceSaysOnDeviceOnlyWhenTrue() {
+        #expect(FirstConversation.presence(.onDevice) == "Here with you, on this device.")
+        #expect(FirstConversation.presence(.mayLeaveDevice) == "Here with you.")
     }
 }

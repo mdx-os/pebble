@@ -28,14 +28,19 @@ public protocol ModelClient: Sendable {
     /// those exchanges out of every transcript a model sees.
     func reply(to transcript: [ChatTurn]) async throws -> String
 
-    /// True only when every word stays on this device. The chat promises
-    /// privacy in its opening line only when this is true.
+    /// True only when every word stays on this device. Every promise about
+    /// the device, in the chat and in memory, follows this through
+    /// `privacyPlace`. A cloud model must say false.
     var runsOnDevice: Bool { get }
 }
 
 extension ModelClient {
     /// Off by default, so a new adapter never makes a promise it can't keep.
     public var runsOnDevice: Bool { false }
+
+    /// The one source for every "on this device" line. The app passes this
+    /// down from the active model; nothing keeps a second copy.
+    public var privacyPlace: PrivacyPlace { PrivacyPlace(staysOnDevice: runsOnDevice) }
 }
 
 public enum ModelClientError: Error, Equatable, Sendable {

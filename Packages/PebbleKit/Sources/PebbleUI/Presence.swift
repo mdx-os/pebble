@@ -22,13 +22,20 @@ enum Motion {
     /// How each thinking dot looks at a moment: its opacity and how far it
     /// lifts. The dots rise and fall in a slow wave, one after another.
     /// With Reduce Motion on they hold still, all three the same.
-    static func dot(_ index: Int, at time: TimeInterval, reduceMotion: Bool) -> (opacity: Double, lift: CGFloat) {
-        guard !reduceMotion else { return (0.55, 0) }
+    /// Never fainter than `dotFloor`, so a dot keeps 3:1 against its bubble
+    /// (see `Contrast`), and fully solid with Increase Contrast on.
+    static func dot(_ index: Int, at time: TimeInterval, reduceMotion: Bool,
+                    increasedContrast: Bool = false) -> (opacity: Double, lift: CGFloat) {
+        guard !reduceMotion else { return (increasedContrast ? 1 : dotFloor, 0) }
         let period = 1.4
         let phase = (time / period - Double(index) * 0.18).truncatingRemainder(dividingBy: 1)
         let wave = (sin(2 * .pi * phase) + 1) / 2
-        return (0.3 + 0.6 * wave, CGFloat(wave) * 3)
+        let opacity = increasedContrast ? 1 : dotFloor + (1 - dotFloor) * wave
+        return (opacity, CGFloat(wave) * 3)
     }
+
+    /// The faintest a thinking dot ever gets.
+    static let dotFloor = 0.6
 
     /// Messages slide up a touch and fade in; with Reduce Motion they only fade.
     static func arrival(reduceMotion: Bool) -> AnyTransition {
@@ -50,6 +57,7 @@ extension EnvironmentValues {
 /// it as one calm line rather than three dots.
 struct ThinkingDots: View {
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.colorSchemeContrast) private var contrast
     /// Set by tests; otherwise the system setting decides.
     var stillOverride: Bool?
 
@@ -60,9 +68,11 @@ struct ThinkingDots: View {
             let time = context.date.timeIntervalSinceReferenceDate
             HStack(spacing: 5) {
                 ForEach(0..<3, id: \.self) { index in
-                    let dot = Motion.dot(index, at: time, reduceMotion: reduceMotion)
+                    let dot = Motion.dot(index, at: time, reduceMotion: reduceMotion,
+                                         increasedContrast: contrast == .increased)
+                    // Full strength ink, so the floor opacity alone sets the contrast.
                     Circle()
-                        .fill(Color.secondary)
+                        .fill(Color.primary)
                         .frame(width: 7, height: 7)
                         .opacity(dot.opacity)
                         .offset(y: -dot.lift)
@@ -70,7 +80,7 @@ struct ThinkingDots: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
-            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
+            .background(Color.primary.opacity(Theme.bubbleTint), in: RoundedRectangle(cornerRadius: 16))
         }
         .accessibilityElement()
         .accessibilityLabel(FirstConversation.thinking)
@@ -83,13 +93,27 @@ struct ThinkingDots: View {
 enum Haptic: Equatable {
     case sent, answered, saved, forgotten
 
-    /// True only where a phone can be felt in the hand.
-    @MainActor static var isAvailable: Bool {
-        #if os(iOS)
-        UIDevice.current.userInterfaceIdiom == .phone
-        #else
-        false
-        #endif
+    /// The kinds of device the app runs on, as far as haptics care.
+    enum Device: Equatable, CaseIterable {
+        case phone, pad, mac
+
+        /// The device this is running on.
+        @MainActor static var current: Device {
+            #if os(iOS)
+            switch UIDevice.current.userInterfaceIdiom {
+            case .phone: .phone
+            case .mac: .mac
+            default: .pad
+            }
+            #else
+            .mac
+            #endif
+        }
+    }
+
+    /// The tap to play on `device`: only a phone, felt in the hand, gets one.
+    func feedback(on device: Device) -> SensoryFeedback? {
+        device == .phone ? feedback : nil
     }
 
     var feedback: SensoryFeedback {
@@ -112,7 +136,7 @@ extension View {
     @ViewBuilder
     func haptic<T: Equatable>(_ haptic: Haptic, trigger: T, when: @escaping (T) -> Bool) -> some View {
         #if os(iOS)
-        let feedback = Haptic.isAvailable ? haptic.feedback : nil
+        let feedback = haptic.feedback(on: .current)
         sensoryFeedback(trigger: trigger) { _, new in when(new) ? feedback : nil }
         #else
         self

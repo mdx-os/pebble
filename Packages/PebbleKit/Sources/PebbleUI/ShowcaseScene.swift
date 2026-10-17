@@ -11,9 +11,9 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// The home screen after the first run: the sidebar on a wide window,
     /// one column on a narrow one.
     case home, homeMemory, shortcuts
-    /// A reply on its way, a new chat with its starters, and a memory with
-    /// nothing in it yet.
-    case thinking, newChat, memoryEmpty
+    /// A reply on its way, a new chat with its starters, a memory with
+    /// nothing in it yet, and a note just saved.
+    case thinking, newChat, memoryEmpty, memorySaved
 
     public static let launchKey = "pebbleScreen"
 
@@ -40,7 +40,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     store: InMemoryOnboardingStore(),
                     looks: looks,
                     // The showcase plays the on-device model, as the app does.
-                    onDevice: LocalStubModel().runsOnDevice,
+                    onDevice: LocalStubModel().privacyPlace.staysOnDevice,
                     startAt: page,
                     draftName: self == .name || self == .look || self == .ideas ? "Pip" : ""
                 ) { _ in }
@@ -60,9 +60,11 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                              look: AgentLook.load(from: looks), firstMessage: nil)
                 }
             case .memory:
-                MemoryView(store: Self.sampleMemory())
+                MemoryView(store: Self.sampleMemory(), place: LocalStubModel().privacyPlace)
             case .memoryEmpty:
-                MemoryView(store: Self.emptyMemory())
+                MemoryView(store: Self.emptyMemory(), place: LocalStubModel().privacyPlace)
+            case .memorySaved:
+                MemoryView(model: Self.savedNoteMemory(place: LocalStubModel().privacyPlace))
             case .confirm, .confirmTimedOut:
                 ZStack {
                     Backdrop()
@@ -112,6 +114,16 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         let store = MemoryStore(fileURL: url)
         try? store.forgetEverything()
         return store
+    }
+
+    /// A first note, just added the way a person adds one, so the saved
+    /// line shows under it.
+    @MainActor
+    static func savedNoteMemory(place: PrivacyPlace) -> MemoryModel {
+        let model = MemoryModel(store: emptyMemory(), place: place)
+        model.newNote = "Sam's birthday is May 14. Loves lemon cake."
+        model.add()
+        return model
     }
 
     private var page: OnboardingView.Page {

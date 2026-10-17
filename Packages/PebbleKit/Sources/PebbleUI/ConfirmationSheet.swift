@@ -79,6 +79,10 @@ final class ConfirmationState: ObservableObject {
         }
     }
 
+    /// Whether moving to `screen` earns the light tap: only on the way into
+    /// answered, by Yes or Not now, never on the way out or on a timeout.
+    nonisolated static func tapsOnChange(to screen: Screen) -> Bool { screen == .answered }
+
     /// Called every second while the sheet is open.
     func tick() {
         if screen == .asking, rule.isClosed(request) { timeOut() }
@@ -168,7 +172,7 @@ public struct ConfirmationSheet: View {
         }
         // One light tap when the person answers, yes or not now.
         // Only on the way into answered, never on the way out.
-        .haptic(.answered, trigger: state.screen, when: { $0 == .answered })
+        .haptic(.answered, trigger: state.screen, when: ConfirmationState.tapsOnChange(to:))
         .onChange(of: state.spoken) { _, line in
             // Move VoiceOver to the timeout words so they are read first,
             // before the person meets the Close button. Moving focus reads
