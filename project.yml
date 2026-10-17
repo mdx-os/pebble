@@ -33,8 +33,20 @@ targets:
         PebbleBrandName: $(BRAND_NAME)
         LSApplicationCategoryType: public.app-category.productivity
         UILaunchScreen: {}
+        # Every orientation on iPad, which Split View, Slide Over and Stage Manager need.
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~iphone:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
+    scheme:
+      testTargets: [PebbleAppUITests]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.mdxos.pebble
@@ -44,3 +56,18 @@ targets:
         CODE_SIGN_STYLE: Automatic
         "CODE_SIGN_IDENTITY[sdk=macosx*]": "-"
         ENABLE_HARDENED_RUNTIME: YES
+  # Drives the iOS app in the Simulator: the iPad sidebar, keyboard
+  # shortcuts, and screenshots in each orientation. `make ui-test`.
+  PebbleAppUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - AppUITests
+    dependencies:
+      - target: Pebble
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mdxos.pebble.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Pebble
+        TARGETED_DEVICE_FAMILY: "1,2"

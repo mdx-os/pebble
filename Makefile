@@ -1,6 +1,6 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test build screenshots brand-check secrets-check pulse clean
+.PHONY: verify generate test build screenshots device-screenshots ui-test brand-check secrets-check pulse clean
 
 ## verify: everything CI runs. Run this before every PR.
 verify: brand-check test build screenshots
@@ -26,6 +26,19 @@ build: generate
 ## screenshots: first screen on iPhone, iPad and Mac, written to build/screenshots
 screenshots: generate
 	sh scripts/screenshots.sh build/screenshots
+
+## device-screenshots: showcase screens on iPad Pro 13-inch, iPad mini and iPhone,
+## portrait and landscape, written to build/screenshots/devices (or OUT=dir)
+device-screenshots: generate
+	sh scripts/device-screenshots.sh $(or $(OUT),build/screenshots/devices)
+
+## ui-test: drive the app in the Simulator: the iPad sidebar, Return to send,
+## and the keyboard shortcuts, on an iPad and an iPhone
+ui-test: generate
+	xcodebuild test -quiet -project Pebble.xcodeproj -scheme Pebble -derivedDataPath $(DERIVED) \
+		-destination 'platform=iOS Simulator,name=$(or $(PEBBLE_IPAD),iPad Pro 13-inch (M5))' \
+		-destination 'platform=iOS Simulator,name=$(or $(PEBBLE_IPHONE),iPhone 17 Pro)' \
+		-only-testing:PebbleAppUITests/HomeLayoutUITests
 
 ## brand-check: the product name must live only in Config/Brand.xcconfig
 brand-check:

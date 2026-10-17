@@ -29,6 +29,7 @@ struct PebbleApp: App {
             home
             #endif
         }
+        .commands { HomeCommands() }
     }
 
     private var home: some View {
