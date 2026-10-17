@@ -25,6 +25,30 @@ struct ComposerReturnTests {
         #expect(ComposerReturn.textToSend(old: old, new: new) == nil)
     }
 
+    @Test(arguments: [
+        ("Pack lunhces", "Pack lunches\n"),     // autocorrect swaps the last word as Return lands
+        ("Pack lunhces", "Pack lunches \n"),    // with the trailing space some keyboards add
+        ("teh", "the\n"),
+    ])
+    func returnWithAPendingCorrectionSendsTheCorrection(old: String, new: String) {
+        #expect(ComposerReturn.textToSend(old: old, new: new) == String(new.dropLast()))
+    }
+
+    @Test(arguments: [
+        ("Pack", "Pack then walk\n"),           // a pasted phrase ending in a break
+        ("Pack lunches", "Pick lunches\n"),     // a change before the last word
+        ("Pack\n", "Pack\nx\n"),               // the draft already ended in a break
+    ])
+    func otherBreaksAtTheEndStayEdits(old: String, new: String) {
+        #expect(ComposerReturn.textToSend(old: old, new: new) == nil)
+    }
+
+    @Test func newChatWordsHaveNoDashes() {
+        for line in [HomeWords.newChatQuestion, HomeWords.newChatDetail, HomeWords.newChatConfirm, HomeWords.cancelTitle] {
+            #expect(!line.isEmpty && !line.contains("\u{2014}") && !line.contains("\u{2013}"), "\(line)")
+        }
+    }
+
     @Test func existingLineBreaksStay() {
         let old = "Pack lunches\nthen walk"
         #expect(ComposerReturn.textToSend(old: old, new: old + "\n") == old)

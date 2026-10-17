@@ -296,7 +296,8 @@ public struct ChatView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
-                .onSubmit { controller.submit(controller.draft) }
+                // One send path per platform: the draft binding reads a lone
+                // Return as Send on iOS, and onKeyPress handles it on the Mac.
                 #if os(macOS)
                 .onKeyPress(.return, phases: .down) { press in
                     if press.modifiers.contains(.shift) {

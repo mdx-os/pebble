@@ -24,6 +24,7 @@ public struct HomeView: View {
     @State private var chat: ChatController?
     @State private var section: HomeSection?
     @State private var showsShortcuts = false
+    @State private var asksNewChat = false
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -101,6 +102,12 @@ public struct HomeView: View {
         .sheet(isPresented: $showsShortcuts) {
             KeyboardShortcutsView()
         }
+        .confirmationDialog(HomeWords.newChatQuestion, isPresented: $asksNewChat, titleVisibility: .visible) {
+            Button(HomeWords.newChatConfirm, role: .destructive) { resetChat() }
+            Button(HomeWords.cancelTitle, role: .cancel) {}
+        } message: {
+            Text(HomeWords.newChatDetail)
+        }
         .focusedSceneValue(\.homeActions, HomeActions(
             canNavigate: finished,
             newChat: startNewChat,
@@ -109,7 +116,18 @@ public struct HomeView: View {
         ))
     }
 
+    /// Chats aren't kept yet, so starting over asks first once the person
+    /// has said anything. An untouched chat just starts fresh.
     private func startNewChat() {
+        guard finished else { return }
+        if let chat, chat.conversation.turns.contains(where: { $0.speaker == .person }) || !chat.draft.isEmpty {
+            asksNewChat = true
+        } else {
+            resetChat()
+        }
+    }
+
+    private func resetChat() {
         guard finished else { return }
         firstMessage = nil
         chat = ChatController.make(brand: brand, model: model, names: names, conversation: nil)
