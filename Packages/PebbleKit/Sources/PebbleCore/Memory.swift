@@ -99,7 +99,9 @@ public enum MemoryWords {
     // "It stays on this device" in `empty` and `saved` is true in code: notes
     // live only in `MemoryStore`'s file, which is left out of backups, and
     // nothing passes them to a `ModelClient` or any network call. The model
-    // only ever sees chat turns. Keep it that way, or gate these lines.
+    // only ever sees chat turns. `Redactor` reads notes on this device to
+    // know which names to take out of a cloud request; the notes themselves
+    // are never sent. Keep it that way, or gate these lines.
     public static let empty = "Tell me something worth keeping, like a birthday or how you take your tea. It stays on this device, and you can change or remove it anytime."
     public static let emptyActionTitle = "Add your first note"
     public static let forgetTitle = "Forget this"

@@ -10,9 +10,12 @@ public struct MemoryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @FocusState private var addFocused: Bool
+    private let cloud: CloudHelp?
 
-    public init(store: MemoryStore) {
+    /// With `cloud`, the screen ends with a way into the cloud setting.
+    public init(store: MemoryStore, cloud: CloudHelp? = nil) {
         _model = StateObject(wrappedValue: MemoryModel(store: store))
+        self.cloud = cloud
     }
 
     public var body: some View {
@@ -58,6 +61,10 @@ public struct MemoryView: View {
                                 .frame(maxWidth: .infinity, minHeight: 44)
                         }
                         .padding(.top, 8)
+                    }
+                    if let cloud {
+                        CloudHelpRow(help: cloud)
+                            .padding(.top, 8)
                     }
                     if let status = model.status {
                         Text(status)

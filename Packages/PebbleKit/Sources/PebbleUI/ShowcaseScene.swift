@@ -17,6 +17,9 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// A reply on its way, a new chat with its starters, and a memory with
     /// nothing in it yet.
     case thinking, newChat, memoryEmpty
+    /// The cloud setting off, the question before it turns on, and the
+    /// preview of exactly what would leave the device.
+    case cloudOff, cloudAsk, cloudPreview
 
     public static let launchKey = "pebbleScreen"
 
@@ -79,6 +82,12 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                 MemoryView(store: Self.sampleMemory())
             case .memoryEmpty:
                 MemoryView(store: Self.emptyMemory())
+            case .cloudOff, .cloudAsk:
+                NavigationStack {
+                    CloudHelpView(help: Self.sampleCloud(asking: self == .cloudAsk))
+                }
+            case .cloudPreview:
+                Self.cloudPreviewChat(brand: brand, looks: looks)
             case .confirm, .confirmTimedOut:
                 ZStack {
                     Backdrop()
@@ -142,6 +151,48 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         return controller
     }
 
+    /// A made up address on a domain kept for examples. Nothing is ever sent
+    /// from the showcase: its transport refuses every request.
+    static let sampleEndpoint = URL(string: "https://cloud.example.com")!
+
+    /// The cloud setting, off, with one private word. `asking` opens on the
+    /// question before turning it on.
+    @MainActor
+    static func sampleCloud(asking: Bool = false) -> CloudHelp {
+        let help = CloudHelp(
+            store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: false, privateWords: ["lemon cake"])),
+            endpoint: sampleEndpoint, memory: sampleMemory(), transport: { NoSendTransport() }
+        )
+        if asking { help.setOn(true) }
+        return help
+    }
+
+    /// A chat on the cloud model with its preview showing. The preview is
+    /// built by the same code a real reply uses.
+    @MainActor
+    static func cloudPreviewChat(brand: Brand, looks: UserDefaults) -> some View {
+        let help = CloudHelp(
+            store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"])),
+            endpoint: sampleEndpoint, memory: sampleMemory(), transport: { NoSendTransport() }
+        )
+        let model = help.chatModel(local: LocalStubModel())
+        var turns = Conversation.firstRun(named: "Pip", onDevice: false).turns
+        turns.append(ChatTurn(id: UUID(), speaker: .person, text: "Help me write a note to Sam about Saturday. The party moved to 42 Maple Street. He can call me at 416 555 0199 or email jo.lee@example.com, and don't mention the lemon cake."))
+        let conversation = Conversation(turns: turns, onDevice: false)
+        let redactor = Redactor(memory: sampleMemory().notes(), privateWords: help.settings.privateWords)
+        if let preview = try? CloudModel.preview(for: turns, endpoint: sampleEndpoint, redactor: redactor) {
+            help.review.show(preview)
+        }
+        let controller = ChatController.make(brand: brand, model: model, names: InMemoryAgentNameStore(stored: "Pip"),
+                                             conversation: conversation)
+        controller.isReplying = true
+        return ZStack {
+            Backdrop()
+            ChatView(controller: controller, look: AgentLook.load(from: looks), firstMessage: nil)
+                .cloudPreview(help.review)
+        }
+    }
+
     static func emptyMemory() -> MemoryStore {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("showcase-empty-memory-\(UUID().uuidString).json")
         let store = MemoryStore(fileURL: url)
@@ -168,6 +219,15 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         _ = try? store.remember("Dentist on Thursday at 3", at: now - 4 * day, source: .fromApp("Calendar"))
         _ = try? store.remember("Prefers tea in the afternoon", at: now - day, source: .inferred)
         return store
+    }
+}
+#endif
+
+#if DEBUG
+/// The showcase's transport. It sends nothing, ever.
+struct NoSendTransport: CloudTransport {
+    func send(_ request: CloudRequest) async throws -> Data {
+        throw CloudModelError.notSent
     }
 }
 #endif

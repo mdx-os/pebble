@@ -19,6 +19,8 @@ public struct HomeView: View {
     let onboarding: any OnboardingStoring
     let memory: MemoryStore?
     let looks: UserDefaults
+    /// The cloud setting. Nil, or off, means every chat stays on this device.
+    let cloud: CloudHelp?
 
     @State private var finished: Bool
     @State private var firstMessage: String?
@@ -44,10 +46,12 @@ public struct HomeView: View {
         memory: MemoryStore?,
         looks: UserDefaults = .standard,
         feed: [any FeedSource] = [EmptyFeedSource()],
-        needsYou: NeedsYou = NeedsYou()
+        needsYou: NeedsYou = NeedsYou(),
+        cloud: CloudHelp? = nil
     ) {
         self.init(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
-                  looks: looks, conversation: nil, section: .today, feed: feed, needsYou: needsYou)
+                  looks: looks, conversation: nil, section: .today, feed: feed, needsYou: needsYou,
+                  cloud: cloud)
     }
 
     /// Opens on a given conversation, section and feed, for screenshots and tests.
@@ -64,7 +68,8 @@ public struct HomeView: View {
         // No default: screenshots and tests pass their own rule, so they
         // never touch the app's `AskFirst.shared`.
         needsYou: NeedsYou,
-        now: @escaping () -> Date = { Date() }
+        now: @escaping () -> Date = { Date() },
+        cloud: CloudHelp? = nil
     ) {
         self.brand = brand
         self.model = model
@@ -72,6 +77,8 @@ public struct HomeView: View {
         self.onboarding = onboarding
         self.memory = memory
         self.looks = looks
+        self.cloud = cloud
+        let chatModel = cloud?.chatModel(local: model) ?? model
         _feed = StateObject(wrappedValue: FeedModel(sources: feed, needsYou: needsYou, now: now))
         let needed = OnboardingFlow.isNeeded(store: onboarding, names: names)
         // People who named their agent before the first run existed count as finished.
@@ -79,8 +86,15 @@ public struct HomeView: View {
         _finished = State(initialValue: !needed)
         // The chat starts after the first run so it opens with the chosen name.
         _chat = State(initialValue: needed ? nil
-            : ChatController.make(brand: brand, model: model, names: names, conversation: conversation))
+            : ChatController.make(brand: brand, model: chatModel, names: names, conversation: conversation))
         _section = State(initialValue: section)
+    }
+
+    /// The model a new chat gets. A chat keeps the model it started with,
+    /// so its opening line stays true; changing the cloud setting counts
+    /// from the next new chat.
+    private var newChatModel: any ModelClient {
+        cloud?.chatModel(local: model) ?? model
     }
 
     /// True when the window is wide enough for a sidebar.
@@ -107,9 +121,9 @@ public struct HomeView: View {
                 .transition(.opacity)
             } else {
                 OnboardingView(brand: brand, names: names, store: onboarding, looks: looks,
-                               onDevice: model.runsOnDevice) { line in
+                               onDevice: newChatModel.runsOnDevice) { line in
                     firstMessage = line
-                    chat = ChatController.make(brand: brand, model: model, names: names, conversation: nil)
+                    chat = ChatController.make(brand: brand, model: newChatModel, names: names, conversation: nil)
                     withAnimation(.easeInOut(duration: 0.4)) { finished = true }
                 }
                 .transition(.opacity)
@@ -208,7 +222,7 @@ public struct HomeView: View {
         guard finished else { return }
         chat?.stopReplying()
         firstMessage = nil
-        chat = ChatController.make(brand: brand, model: model, names: names, conversation: nil)
+        chat = ChatController.make(brand: brand, model: newChatModel, names: names, conversation: nil)
         section = .chat
     }
 
@@ -282,6 +296,8 @@ public struct HomeView: View {
         ChatView(controller: chat, look: AgentLook.load(from: looks), firstMessage: firstMessage,
                  onFirstMessageSent: { firstMessage = nil })
             .background(Backdrop())
+            // What would leave the device, shown over the chat that asked.
+            .cloudPreview(cloud?.review)
             // A new chat is a new conversation, so it starts fresh on screen too.
             // Load-bearing: ChatView keeps its controller in a StateObject, so
             // without this id a new controller would never reach the screen.
@@ -291,7 +307,7 @@ public struct HomeView: View {
     @ViewBuilder
     private var memoryScreen: some View {
         if let memory {
-            MemoryView(store: memory)
+            MemoryView(store: memory, cloud: cloud)
         } else {
             // The store couldn't be opened. Say so rather than hide memory.
             // It is only opened again at launch, so the words say that.

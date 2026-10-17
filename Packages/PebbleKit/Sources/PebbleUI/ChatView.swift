@@ -176,7 +176,7 @@ public struct ChatView: View {
             Text(controller.displayName.text)
                 .font(.title.weight(.semibold))
                 .multilineTextAlignment(.center)
-            Text(FirstConversation.presence)
+            Text(controller.presence)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -504,10 +504,12 @@ final class ChatController: ObservableObject {
         replyTask = Task {
             let started = ContinuousClock.now
             let next: Conversation?
+            var failure = FirstConversation.couldNotAnswer
             do {
                 next = try await snapshot.appendingReply(from: client)
             } catch {
                 next = nil
+                failure = Self.failureLine(for: error)
             }
             let waited = ContinuousClock.now - started
             if !caring, waited < beat { try? await Task.sleep(for: beat - waited) }
@@ -517,11 +519,25 @@ final class ChatController: ObservableObject {
             if let next {
                 conversation = next
             } else {
-                failure = FirstConversation.couldNotAnswer
+                self.failure = failure
                 // The failure line promises the words are still here to send.
                 if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { draft = trimmed }
             }
             isReplying = false
+        }
+    }
+
+    /// The line under the name. "On this device" only when it is true.
+    var presence: String {
+        model.runsOnDevice ? FirstConversation.presence : CloudWords.presence
+    }
+
+    /// What to say when no reply came. Choosing not to send is not a failure.
+    nonisolated static func failureLine(for error: Error) -> String {
+        switch error as? CloudModelError {
+        case .notSent: CloudWords.notSent
+        case .off: CloudWords.turnedOff
+        default: FirstConversation.couldNotAnswer
         }
     }
 

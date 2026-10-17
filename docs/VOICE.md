@@ -79,6 +79,10 @@ when the code makes them true.
   Don't claim more about the device's storage than the code can check.
 - A promise about what happens next must have a button or a behavior
   behind it. "I'll look again" needs a Try again or a re-check.
+- Help from the cloud (`CloudWords`) is off until the person says yes to
+  a question that names what changes. Before anything leaves, the person
+  sees "Here is exactly what leaves your device" with the very bytes that
+  will be sent. A chat on the cloud never says "on this device".
 
 ## When someone may be in danger
 

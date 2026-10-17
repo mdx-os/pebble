@@ -32,13 +32,22 @@ struct PebbleApp: App {
         .commands { HomeCommands() }
     }
 
+    /// Off until the person turns it on, and unavailable while
+    /// Config/Cloud.xcconfig has no address.
+    @StateObject private var cloud = CloudHelp(
+        store: UserDefaultsCloudHelpStore(),
+        endpoint: CloudEndpoint.url(infoDictionary: Bundle.main.infoDictionary),
+        memory: try? MemoryStore.onDevice()
+    )
+
     private var home: some View {
         HomeView(
             brand: brand,
             model: LocalStubModel(),
             names: UserDefaultsAgentNameStore(),
             onboarding: UserDefaultsOnboardingStore(),
-            memory: try? MemoryStore.onDevice()
+            memory: try? MemoryStore.onDevice(),
+            cloud: cloud
         )
     }
 }

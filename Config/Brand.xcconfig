@@ -4,3 +4,5 @@
 // the device and is separate.
 // Code, packages, the repo and bundle IDs use the codename "pebble" instead.
 BRAND_NAME = Mia
+
+#include "Cloud.xcconfig"

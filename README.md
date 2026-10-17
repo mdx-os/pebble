@@ -66,6 +66,14 @@ A real adapter is another `Sendable` type in `PebbleModel` that implements
 `PebbleCore` does not do networking. A cloud model stays off until the person
 chooses one.
 
+- Cloud: `CloudModel` sends to the address in `Config/Cloud.xcconfig`, which
+  is empty by default, so the setting can't be turned on. Turning it on
+  (What I remember, then Help from the cloud) asks first and counts from the
+  next new chat. Every request is redacted on the device by `Redactor` and
+  shown to the person, byte for byte, before it is sent. Words of crisis and
+  chats that promised to stay on the device are never sent. Sign-in is a
+  `CloudAuth` hook that adds nothing by default; no keys live in the repo.
+
 ## The agent's name
 
 The product name is set in `Config/Brand.xcconfig`. The name you call your
