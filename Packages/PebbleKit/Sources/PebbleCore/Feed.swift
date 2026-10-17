@@ -425,6 +425,9 @@ public enum FeedWords {
     public static let sampleNote = "These are examples for now. They were made on this device, and nothing was sent or bought."
     /// Over an example opened to read.
     public static let sampleLabel = "This is an example. Nothing here was really done."
+    /// On a live card that is an example, such as a scripted task, which has
+    /// buttons that look like real work.
+    public static let exampleTag = "Example"
     public static let doneTitle = "Done"
 
     /// The chat button on a narrow screen, such as "Chat with Pip".

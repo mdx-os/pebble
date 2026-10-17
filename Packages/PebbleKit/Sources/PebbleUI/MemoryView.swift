@@ -12,8 +12,9 @@ public struct MemoryView: View {
     @FocusState private var addFocused: Bool
 
     /// `onForgetEverything` runs with Forget everything, so whatever else the
-    /// agent holds about the person, such as its tasks, goes too.
-    public init(store: MemoryStore, onForgetEverything: @escaping @MainActor () -> Void = {}) {
+    /// agent holds about the person, such as its tasks, goes too. It says
+    /// what it forgot, so the status line can be honest about it.
+    public init(store: MemoryStore, onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) {
         _model = StateObject(wrappedValue: MemoryModel(store: store, onForgetEverything: onForgetEverything))
     }
 
@@ -169,8 +170,21 @@ public struct MemoryView: View {
 /// on their own, with words that are honest that the notes stay.
 struct MemoryUnavailableView: View {
     let hasTasks: Bool
+    /// True once every task was forgotten here, until a new one starts.
+    var forgotten = false
+    /// The line kept while a step said yes to may have happened.
+    var underway: String?
     let onForgetTasks: @MainActor () -> Void
     @State private var asking = false
+    /// The button goes once the tasks do, so VoiceOver goes to the line
+    /// that says what happened rather than nowhere.
+    @AccessibilityFocusState private var statusFocused: Bool
+
+    /// What the screen says once the tasks are gone. Nil before then.
+    var status: String? {
+        guard forgotten, !hasTasks else { return nil }
+        return [TaskWords.tasksForgotten, underway].compactMap { $0 }.joined(separator: " ")
+    }
 
     var body: some View {
         ZStack {
@@ -184,6 +198,20 @@ struct MemoryUnavailableView: View {
                             .frame(maxWidth: .infinity, minHeight: 44)
                     }
                     .accessibilityIdentifier("forgetTasks")
+                } else if let status {
+                    Text(status)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity)
+                        .accessibilityIdentifier("tasksForgotten")
+                        .accessibilityFocused($statusFocused)
+                        .onAppear {
+                            // A beat later, once it is on screen; set in
+                            // the same pass that adds it, SwiftUI drops it.
+                            Task { @MainActor in statusFocused = true }
+                        }
                 }
             }
             .padding(Theme.gutter)
@@ -329,9 +357,9 @@ final class MemoryModel: ObservableObject {
     @Published private(set) var forgottenCount = 0
 
     /// Forgets what lives outside the memory file, such as tasks.
-    private let onForgetEverything: @MainActor () -> Void
+    private let onForgetEverything: @MainActor () -> ClearedTasks
 
-    init(store: MemoryStore, onForgetEverything: @escaping @MainActor () -> Void = {}) {
+    init(store: MemoryStore, onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) {
         self.store = store
         self.onForgetEverything = onForgetEverything
         refresh()
@@ -395,13 +423,16 @@ final class MemoryModel: ObservableObject {
         cancelEdit()
         // First, and even if the file can't be erased: the person asked to
         // forget, and nothing here depends on the file.
-        onForgetEverything()
+        let tasks = onForgetEverything()
+        // A step said yes to may have happened, so the line says so here too.
+        let underway = tasks.underwayLine.map { " " + $0 } ?? ""
         do {
             try store.forgetEverything()
-            status = MemoryWords.forgotten
+            status = MemoryWords.forgotten + underway
             forgottenCount += 1
         } catch {
-            status = MemoryWords.couldNotForget
+            // The tasks went even so; the words say which part didn't.
+            status = (tasks.forgotten > 0 ? MemoryWords.couldNotForgetNotes : MemoryWords.couldNotForget) + underway
         }
         refresh()
     }

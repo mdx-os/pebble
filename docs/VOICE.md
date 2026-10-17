@@ -135,7 +135,11 @@ is true for Not now and a sheet swiped away alike. A step the person said
 yes to may already be under way, so never say it wasn't done: a change of
 course lets it finish ("You'd already said yes to this, so I'm finishing
 it."), and a stop says it may be done. A yes that didn't go through says
-so on the card, so a tap is never met with silence.
+so on the card, so a tap is never met with silence, and so does an
+Approve tapped after its question timed out. Forget everything says it
+stops tasks still going. If a step said yes to was under way, a short line
+stays on Today to say it may be done, naming nothing the task held. A
+scripted task's card says "Example", like every other example.
 
 ### Confirmations
 

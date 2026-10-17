@@ -170,12 +170,12 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
 
     /// Seconds since the engine began.
     public var now: TimeInterval {
-        lock.lock(); defer { lock.unlock() }
+        lockRuns(); defer { unlockRuns() }
         return elapsed
     }
 
     public var tasks: [AgentTask] {
-        lock.lock(); defer { lock.unlock() }
+        lockRuns(); defer { unlockRuns() }
         return runs.reversed().map(\.task)
     }
 
@@ -211,16 +211,16 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
 
     public func observe(_ onChange: @escaping @Sendable (TaskSnapshot) -> Void) -> TaskObservation {
         let key = UUID()
-        lock.lock()
+        lockRuns()
         observers[key] = onChange
         let snapshot = TaskSnapshot(sequence: sequence, tasks: runs.reversed().map(\.task))
-        lock.unlock()
+        unlockRuns()
         onChange(snapshot)
         return TaskObservation { [weak self] in
             guard let self else { return }
-            self.lock.lock()
+            self.lockRuns()
             self.observers[key] = nil
-            self.lock.unlock()
+            self.unlockRuns()
         }
     }
 
@@ -303,10 +303,14 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
         }
     }
 
-    public func clear() {
+    @discardableResult
+    public func clear() -> ClearedTasks {
         mutate {
             for index in runs.indices { withdrawQuestion(&runs[index]) }
+            let cleared = ClearedTasks(forgotten: runs.count,
+                                       underway: runs.filter { $0.approved && $0.task.isActive }.count)
             runs.removeAll()
+            return cleared
         }
     }
 
@@ -324,12 +328,12 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
 
     public func resume(_ id: String, with approval: Approval) -> TaskApproval {
         // Find the question under the lock, and check the yes outside it.
-        lock.lock()
+        lockRuns()
         let asked: ConfirmationRequest? = runs.first { $0.task.id == id }.flatMap { run in
             if case .askingYes(let request) = run.phase, request.id == approval.id { return request }
             return nil
         }
-        lock.unlock()
+        unlockRuns()
         guard let asked else { return .refused }
         let verdict = withRule { $0.verdict(asked.action, approval: approval) }
         return mutate {
@@ -368,11 +372,48 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
 
     private var date: Date { origin + elapsed }
 
+    /// Takes the lock. In DEBUG it also marks this thread as its holder, so
+    /// `withRule` can tell this thread holding it from another one.
+    private func lockRuns() {
+        lock.lock()
+        #if DEBUG
+        holding = true
+        #endif
+    }
+
+    private func unlockRuns() {
+        #if DEBUG
+        holding = false
+        #endif
+        lock.unlock()
+    }
+
+    #if DEBUG
+    /// This thread's mark, kept per thread so no other thread reads or sets it.
+    private var holdingKey: String { "LocalFakeEngine.holding.\(ObjectIdentifier(self).hashValue)" }
+
+    private var holding: Bool {
+        get { Thread.current.threadDictionary[holdingKey] as? Bool ?? false }
+        set { Thread.current.threadDictionary[holdingKey] = newValue ? true : nil }
+    }
+
+    /// True when the lock is held by this thread.
+    var holdsLock: Bool { holding }
+
+    /// For tests: runs `body` holding the lock, as the engine itself would.
+    func holdingLock(_ body: () -> Void) {
+        lockRuns()
+        body()
+        unlockRuns()
+    }
+    #endif
+
     /// Every call to `AskFirst` goes through here, never holding the lock.
     private func withRule<T>(_ call: (AskFirst) -> T) -> T {
         #if DEBUG
-        let held = !lock.try()
-        if !held { lock.unlock() }
+        // Only this thread holding it counts. Another thread holding the
+        // lock at the same moment is no fault here.
+        let held = holdsLock
         countLock.lock()
         ruleCallCount += 1
         if held { ruleCallsHoldingLockCount += 1 }
@@ -384,12 +425,12 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
     /// The open questions `AskFirst` has closed, such as one that timed out.
     /// Asked with the lock let go.
     private func closedQuestions() -> [ConfirmationRequest] {
-        lock.lock()
+        lockRuns()
         let open = runs.compactMap { run -> ConfirmationRequest? in
             if case .askingYes(let request) = run.phase { return request }
             return nil
         }
-        lock.unlock()
+        unlockRuns()
         return open.filter { request in withRule { $0.isClosed(request) } }
     }
 
@@ -569,27 +610,27 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
     /// can start the next step, which may ask again, so this goes round
     /// until nothing is left to tell the rule.
     private func mutate<T>(_ change: () -> T) -> T {
-        lock.lock()
+        lockRuns()
         let before = runs.map(\.task)
         let value = change()
         var work = takeRuleWork()
-        lock.unlock()
+        unlockRuns()
         while !work.withdrawals.isEmpty || !work.asks.isEmpty {
             for request in work.withdrawals { withRule { $0.withdraw(request) } }
             let answers = work.asks.map { ask in (ask, withRule { $0.ask(ask.action) }) }
-            lock.lock()
+            lockRuns()
             for (ask, request) in answers { asked(ask, request) }
             work = takeRuleWork()
-            lock.unlock()
+            unlockRuns()
         }
-        lock.lock()
+        lockRuns()
         dropOldEnded()
         let after = runs.map(\.task)
         let changed = before != after
         if changed { sequence += 1 }
         let snapshot = TaskSnapshot(sequence: sequence, tasks: Array(after.reversed()))
         let listeners = changed ? Array(observers.values) : []
-        lock.unlock()
+        unlockRuns()
         for listener in listeners { listener(snapshot) }
         return value
     }
@@ -621,7 +662,8 @@ public enum SampleTasks {
     /// What holding the dentist visit would share, asked through `AskFirst`.
     public static let holdVisit = ProposedAction(
         kind: .sharePersonalInfo,
-        recipient: Recipient(id: "clinic:sample-maple-dental", displayName: "Maple Dental", handle: "mapledental.ca"),
+        // A reserved name, so the example never points at a real site.
+        recipient: Recipient(id: "clinic:sample-maple-dental", displayName: "Maple Dental", handle: "mapledental.example"),
         details: "Your name and phone number, to hold Saturday at 10:30"
     )
 

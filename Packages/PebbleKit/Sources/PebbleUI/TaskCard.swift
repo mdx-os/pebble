@@ -79,6 +79,8 @@ struct TaskCard: View {
     /// it the card shows the waiting line and no Approve, since nothing
     /// could open the sheet.
     let canApprove: Bool
+    /// A scripted example, so the card says so where its buttons are.
+    let isSample: Bool
     let onApprove: () -> Void
     /// Returns false when the engine couldn't take the words, so they stay.
     let onRedirect: (String) -> Bool
@@ -88,7 +90,7 @@ struct TaskCard: View {
     let onDismiss: () -> Void
 
     init(task: AgentTask, time: String, progress: LiveProgress? = nil, state: TaskCardState? = nil,
-         canApprove: Bool = false,
+         canApprove: Bool = false, isSample: Bool = false,
          onApprove: @escaping () -> Void = {}, onRedirect: @escaping (String) -> Bool = { _ in true },
          onStop: @escaping () -> Void = {}, onRetry: @escaping () -> Void = {},
          onOpen: @escaping () -> Void = {}, onDismiss: @escaping () -> Void = {}) {
@@ -97,6 +99,7 @@ struct TaskCard: View {
         _progress = ObservedObject(wrappedValue: progress ?? LiveProgress(task.progress))
         _state = ObservedObject(wrappedValue: state ?? TaskCardState())
         self.canApprove = canApprove
+        self.isSample = isSample
         self.onApprove = onApprove
         self.onRedirect = onRedirect
         self.onStop = onStop
@@ -185,9 +188,11 @@ struct TaskCard: View {
 
     // MARK: What it says
 
-    /// The card's first line for VoiceOver.
+    /// The card's first line for VoiceOver. An example says so first, as it
+    /// is seen first.
     var spoken: String {
-        [task.state.label, task.title, task.step, time].filter { !$0.isEmpty }.joined(separator: ". ")
+        [isSample ? FeedWords.exampleTag : "", task.state.label, task.title, task.step, time]
+            .filter { !$0.isEmpty }.joined(separator: ". ")
     }
 
     /// The progress, read after the label. Nil once the task has ended.
@@ -213,6 +218,16 @@ struct TaskCard: View {
                 }
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(.secondary)
+                if isSample {
+                    // The same capsule as the label over an example opened to read.
+                    Text(FeedWords.exampleTag)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.primary.opacity(0.06), in: Capsule())
+                        .accessibilityIdentifier("exampleTag")
+                }
                 Spacer(minLength: 8)
                 Text(time)
                     .font(.footnote)

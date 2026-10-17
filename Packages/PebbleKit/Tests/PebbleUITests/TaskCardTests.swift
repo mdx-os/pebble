@@ -152,8 +152,6 @@ struct TaskCardTests {
         #expect(model.feed.needsYou.contains { $0.id == id })
         #expect(!model.canApprove(pinned))
         #expect(!TaskCard(task: pinned, time: "", canApprove: model.canApprove(pinned)).actions.contains(.approval))
-        model.review(pinned)
-        #expect(model.reviewing == nil)
         // A feed built now has it in Working on it, still without Approve.
         let fresh = self.model(engine)
         #expect(!fresh.feed.needsYou.contains { $0.id == id })
@@ -161,6 +159,12 @@ struct TaskCardTests {
         #expect(card.waitsForApproval)
         #expect(!fresh.canApprove(card))
         #expect(!TaskCard(task: card, time: "", canApprove: fresh.canApprove(card)).actions.contains(.approval))
+        // A tap on a stale Approve opens nothing, and looks again, so the
+        // task settles and its card says why.
+        model.review(pinned)
+        #expect(model.reviewing == nil)
+        #expect(engine.task(id)?.waitsForApproval == false)
+        #expect(model.cardState(id).note == TaskWords.questionTimedOut)
         fresh.review(card)
         #expect(fresh.reviewing == nil)
     }
@@ -690,6 +694,201 @@ struct TaskCardTests {
         let plain = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), now: { ShowcaseScene.morning })
         #expect(!plain.isSample)
         #expect(!plain.isSample(reading))
+    }
+
+    /// Each scripted task's card carries the Example tag, read first, so a
+    /// dentist hold that shares a name and phone never reads as real.
+    @Test func sampleTaskCardsCarryTheExampleTag() throws {
+        let engine = ShowcaseScene.sampleTasks(.taskWaiting, rule: .isolated())
+        let model = model(engine)
+        let items = model.feed.needsYou.filter { $0.task != nil }
+        #expect(!items.isEmpty)
+        for item in items {
+            let task = try #require(item.task)
+            #expect(model.isSample(item))
+            let card = TaskCard(task: task, time: "9:40 AM", isSample: model.isSample(item))
+            #expect(card.spoken.hasPrefix("\(FeedWords.exampleTag). "))
+        }
+        // A real task card never says it.
+        let plain = TaskCard(task: try #require(engine.tasks.first), time: "9:40 AM")
+        #expect(!plain.spoken.contains(FeedWords.exampleTag))
+        _ = try render(model, size: CGSize(width: 393, height: 852))
+    }
+
+    /// Example questions name reserved places, never a site someone may own.
+    @Test func sampleHandlesAreReservedNames() throws {
+        #expect(SampleTasks.holdVisit.recipient.handle == "mapledental.example")
+        let question = try #require(ShowcaseScene.sampleQuestion().items(now: Date()).first?.request)
+        #expect(question.action.recipient.handle == "risebakery.example")
+    }
+
+    // MARK: Forgetting with a yes under way
+
+    /// The person said yes and the step is under way when they forget
+    /// everything. The task goes, but a plain line stays on Today, and in
+    /// the memory's status, to say it may be done. It names nothing.
+    @Test func forgetEverythingKeepsAMayBeDoneLineForAYesUnderWay() throws {
+        let rule = AskFirst.isolated()
+        let engine = LocalFakeEngine(rule: rule)
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        let model = model(engine)
+        var heard: [TaskAnnouncer.Line] = []
+        model.announce = { heard.append($0) }
+        model.review(try #require(engine.task(id)))
+        let request = try #require(model.reviewing)
+        let sheet = ConfirmationState(request: request, rule: model.rule,
+                                      onApprove: { model.approved($0) }, onDecline: { model.closedQuestion(request) })
+        #expect(sheet.tapPrimary() == .approved)
+        #expect(engine.task(id)?.state == .running)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tasks-underway-\(UUID().uuidString).json")
+        let store = MemoryStore(fileURL: url)
+        defer { try? store.forgetEverything() }
+        let memory = MemoryModel(store: store, onForgetEverything: { model.forgetTasks() })
+        memory.newNote = "Prefers mornings"
+        memory.add()
+        memory.forgetEverything()
+        let line = TaskWords.forgotUnderway(1)
+        #expect(engine.tasks.isEmpty)
+        #expect(model.forgotUnderway == line)
+        #expect(memory.status == MemoryWords.forgotten + " " + line)
+        #expect(heard.contains(TaskAnnouncer.Line(text: line, urgent: true)))
+        for detail in ["Maple", "Saturday", "10:30", "dentist"] { #expect(!line.contains(detail)) }
+        // On Today, even with nothing else there, until the person puts it away.
+        _ = try render(model, size: CGSize(width: 393, height: 852))
+        model.dismissForgotUnderway()
+        #expect(model.forgotUnderway == nil)
+    }
+
+    /// With no yes under way, forgetting leaves nothing behind on Today.
+    @Test func forgetEverythingWithNoYesUnderWayLeavesNoLine() throws {
+        let engine = LocalFakeEngine(rule: .isolated())
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        #expect(engine.task(id)?.waitsForApproval == true)
+        let model = model(engine)
+        let cleared = model.forgetTasks()
+        #expect(cleared == ClearedTasks(forgotten: 1, underway: 0))
+        #expect(model.forgotUnderway == nil)
+    }
+
+    /// The tasks went, but the notes couldn't be erased. The status says
+    /// which part worked rather than that nothing did.
+    @Test func aFailedForgetSaysTheTasksWent() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("locked-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let store = MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
+        _ = try store.remember("Prefers mornings", source: .toldMe)
+        // A folder nothing can be removed from, so erasing the notes fails.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let engine = LocalFakeEngine(rule: .isolated())
+        engine.start(SampleTasks.plan)
+        let model = model(engine)
+        let memory = MemoryModel(store: store, onForgetEverything: { model.forgetTasks() })
+        memory.forgetEverything()
+        #expect(engine.tasks.isEmpty)
+        #expect(memory.status == MemoryWords.couldNotForgetNotes)
+        // With no tasks to forget, the plain words.
+        let none = MemoryModel(store: store)
+        none.forgetEverything()
+        #expect(none.status == MemoryWords.couldNotForget)
+    }
+
+    /// The fallback screen says the tasks are gone once its button goes,
+    /// and points VoiceOver at that line.
+    @Test func theMemoryFallbackSaysTheTasksAreForgotten() throws {
+        let engine = LocalFakeEngine(rule: .isolated())
+        engine.start(SampleTasks.plan)
+        let model = model(engine)
+        #expect(MemoryUnavailableView(hasTasks: model.hasTasks, forgotten: model.tasksForgotten,
+                                      onForgetTasks: {}).status == nil)
+        model.forgetTasks()
+        #expect(model.tasksForgotten)
+        let after = MemoryUnavailableView(hasTasks: model.hasTasks, forgotten: model.tasksForgotten,
+                                          underway: model.forgotUnderway, onForgetTasks: {})
+        #expect(after.status == TaskWords.tasksForgotten)
+        _ = try #require(ImageRenderer(content: after.frame(width: 393, height: 852)).cgImage)
+        // With a yes under way, it says that too.
+        let underway = MemoryUnavailableView(hasTasks: false, forgotten: true,
+                                             underway: TaskWords.forgotUnderway(1), onForgetTasks: {})
+        #expect(underway.status == TaskWords.tasksForgotten + " " + TaskWords.forgotUnderway(1))
+        // A new task, and the line goes.
+        engine.start(SampleTasks.plan)
+        #expect(!model.tasksForgotten)
+    }
+
+    // MARK: A task's yes stays the task's
+
+    /// The task moved on (stopped, or forgotten) in the same moment its yes
+    /// came. The yes is still known as the task's, so it does nothing, says
+    /// so on the card, and never reaches `NeedsYou`.
+    @Test func aLateTaskYesNeverFallsToNeedsYou() throws {
+        let rule = AskFirst.isolated()
+        let asks = NeedsYou(rule: rule)
+        let note = ProposedAction(kind: .send, recipient: Recipient(id: "c:1", displayName: "Sam", handle: "416 555 0101"),
+                                  details: "Running late")
+        let noteQuestion = try #require(asks.ask(note))
+        let engine = LocalFakeEngine(rule: rule)
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        let model = FeedModel(sources: [], needsYou: asks, tasks: engine, now: { ShowcaseScene.morning })
+        let task = try #require(engine.task(id))
+        model.review(task)
+        let request = try #require(model.reviewing)
+        guard case .approved(let yes) = rule.sayYes(to: request) else { Issue.record("yes refused"); return }
+        model.stop(task)
+        model.approved(yes)
+        #expect(engine.task(id)?.state == .stopped)
+        #expect(engine.task(id)?.history.contains { $0.mark == .approved } == false)
+        #expect(model.cardState(id).note == TaskWords.yesNotUsed)
+        #expect(model.feed.needsYou.contains { $0.request == noteQuestion })
+        // Forgotten instead: the same, with no task left to note.
+        let again = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        model.review(try #require(engine.task(again)))
+        let second = try #require(model.reviewing)
+        guard case .approved(let late) = rule.sayYes(to: second) else { Issue.record("yes refused"); return }
+        model.forgetTasks()
+        model.approved(late)
+        #expect(engine.tasks.isEmpty)
+        #expect(model.feed.needsYou.contains { $0.request == noteQuestion })
+    }
+
+    // MARK: A stale Approve
+
+    /// The question timed out while its Approve was on screen, and nothing
+    /// built the feed again. The tap looks again, the task settles, and the
+    /// card says the question timed out.
+    @Test func aStaleApproveRefreshesAndSaysItTimedOut() throws {
+        let clock = Clock()
+        let rule = AskFirst.isolated(now: clock.now)
+        let engine = LocalFakeEngine(rule: rule)
+        let script = TaskScript(title: "Hold it", steps: [
+            .init("Asking", kind: .ask(SampleTasks.holdVisit, askLine: "May I?"), duration: 2, todo: "hold it"),
+            .init("Tidying", duration: 5, todo: "tidy up"),
+        ], doneLine: "Done.")
+        let id = engine.start(script)
+        let model = model(engine, clock: clock)
+        var heard: [TaskAnnouncer.Line] = []
+        model.announce = { heard.append($0) }
+        let shown = try #require(model.feed.needsYou.first { $0.id == id }?.task)
+        #expect(model.canApprove(shown))
+        clock.advance(AskFirst.defaultWindow + 1)
+        // Nothing has looked again: the engine and the feed still have it waiting.
+        #expect(engine.task(id)?.waitsForApproval == true)
+        model.review(shown)
+        #expect(model.reviewing == nil)
+        let settled = try #require(engine.task(id))
+        #expect(!settled.waitsForApproval)
+        #expect(settled.step == "Tidying")
+        #expect(settled.history.last?.text == TaskWords.timedOut("hold it"))
+        #expect(!model.feed.needsYou.contains { $0.id == id })
+        #expect(model.cardState(id).note == TaskWords.questionTimedOut)
+        #expect(heard.contains(TaskAnnouncer.Line(text: TaskWords.questionTimedOut, urgent: true)))
     }
 
     @Test func calmMotionHoldsStillWithReduceMotion() {

@@ -127,7 +127,7 @@ struct FeedViewTests {
         let item = try #require(ShowcaseScene.sampleQuestion().items(now: Date()).first)
         let card = FeedCard(item: item, time: "9:36 AM", perform: {})
         #expect(card.spoken.hasPrefix("Needs you. Pay "))
-        #expect(card.spoken.contains("risebakery.ca?"))
+        #expect(card.spoken.contains("risebakery.example?"))
         #expect(card.spoken.hasSuffix("pickup tomorrow at 9. 9:36 AM"))
     }
 

@@ -599,6 +599,68 @@ struct TaskEngineTests {
         watch.cancel()
     }
 
+    /// Forgetting never hides that a yes may already have done something:
+    /// clear counts the approved steps under way, and says nothing else
+    /// about them. Ended tasks and steps still waiting for a yes don't count.
+    @Test func clearCountsApprovedStepsUnderwayAndNothingMore() throws {
+        let rule = AskFirst.isolated()
+        let (engine, id, question) = try waiting(rule)
+        // Another still waiting on its yes, one stopped after a yes, and a plain one.
+        let asking = engine.start(SampleTasks.dentist)
+        let stoppedAfterYes = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        let second = try #require(engine.task(stoppedAfterYes)?.question)
+        guard case .approved(let again) = rule.sayYes(to: second) else { Issue.record("yes refused"); return }
+        #expect(engine.resume(stoppedAfterYes, with: again) == .proceeding)
+        #expect(engine.stop(stoppedAfterYes))
+        guard case .approved(let yes) = rule.sayYes(to: question) else { Issue.record("yes refused"); return }
+        #expect(engine.resume(id, with: yes) == .proceeding)
+        engine.advance(by: 1)
+        engine.start(Self.quick)
+        #expect(engine.task(asking)?.waitsForApproval == true)
+        #expect(engine.task(id)?.state == .running)
+        let cleared = engine.clear()
+        #expect(cleared == ClearedTasks(forgotten: 4, underway: 1))
+        #expect(engine.tasks.isEmpty)
+        let line = try #require(cleared.underwayLine)
+        #expect(line == TaskWords.forgotUnderway(1))
+        // Nothing the task held: no place, time, name or step words.
+        for detail in ["Maple", "Saturday", "10:30", "name", "phone", "dentist", "hold"] {
+            #expect(!line.contains(detail), "\(detail) in: \(line)")
+        }
+        // With nothing approved under way, there is nothing to say.
+        #expect(engine.clear() == ClearedTasks.none)
+        #expect(ClearedTasks.none.underwayLine == nil)
+        #expect(ClearedTasks(forgotten: 3, underway: 2).underwayLine == TaskWords.forgotUnderway(2))
+    }
+
+    #if DEBUG
+    /// Only this thread holding the lock counts as holding it. Another
+    /// thread holding it at the same moment is no false alarm.
+    @Test func holdingTheLockIsTrackedPerThread() {
+        let engine = engine()
+        #expect(!engine.holdsLock)
+        engine.holdingLock { #expect(engine.holdsLock) }
+        #expect(!engine.holdsLock)
+        let held = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let done = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            engine.holdingLock {
+                held.signal()
+                release.wait()
+            }
+            done.signal()
+        }
+        held.wait()
+        // The other thread holds it now; this one doesn't.
+        #expect(!engine.holdsLock)
+        release.signal()
+        done.wait()
+        #expect(!engine.holdsLock)
+    }
+    #endif
+
     @Test func endedTasksAreCappedAndTasksStillGoingAreKept() throws {
         let engine = engine()
         let going = engine.start(SampleTasks.lunch)

@@ -92,7 +92,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     let rule = AskFirst.isolated(window: self == .confirmTimedOut ? -1 : AskFirst.defaultWindow)
                     if let request = rule.ask(ProposedAction(
                             kind: .purchase,
-                            recipient: Recipient(id: "merchant:sample-bakery", displayName: "Rise Bakery", handle: "risebakery.ca"),
+                            recipient: Recipient(id: "merchant:sample-bakery", displayName: "Rise Bakery", handle: "risebakery.example"),
                             details: "Sourdough loaf and two croissants, pickup at 9",
                             price: Price(minorUnits: 1450, currency: "CAD")
                         )) {
@@ -115,7 +115,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         let asks = NeedsYou(rule: .isolated())
         asks.ask(ProposedAction(
             kind: .purchase,
-            recipient: Recipient(id: "merchant:sample-bakery", displayName: "Rise Bakery", handle: "risebakery.ca"),
+            recipient: Recipient(id: "merchant:sample-bakery", displayName: "Rise Bakery", handle: "risebakery.example"),
             details: "Sourdough loaf and two croissants, pickup tomorrow at 9",
             price: Price(minorUnits: 1450, currency: "CAD")
         ), at: now - 4 * 60)

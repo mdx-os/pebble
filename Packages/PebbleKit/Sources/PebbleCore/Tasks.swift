@@ -262,6 +262,11 @@ public protocol TaskEngine: AnyObject, Sendable {
     /// unchanged. A step already approved is committed: the yes stands, the
     /// action may be under way, so it finishes and is never called undone.
     /// False when the task has ended or the words are empty.
+    ///
+    /// `LocalFakeEngine` runs a script, so it can't act on the words: they go
+    /// into the history and the script goes on as written. That is fine for
+    /// a labelled example only. A real engine must work the words into what
+    /// it does next, or say plainly that it couldn't.
     @discardableResult
     func redirect(_ id: String, with instructions: String) -> Bool
 
@@ -278,10 +283,21 @@ public protocol TaskEngine: AnyObject, Sendable {
     @discardableResult
     func dismiss(_ id: String) -> Bool
 
-    /// Forgets every task at once. Anything still going stops, any open
-    /// question is withdrawn, and nothing a task held is kept. Wired to the
-    /// same Forget everything as memory.
-    func clear()
+    /// Forgets every task at once. Wired to the same Forget everything as
+    /// memory.
+    ///
+    /// The contract, which every engine keeps:
+    /// - Anything still going stops at once, with no wrap-up, and any open
+    ///   question is withdrawn.
+    /// - Nothing a task held is kept: its steps, the words the person gave
+    ///   it, what it kept, and what it found.
+    /// - A step the person already said yes to may be under way, and a
+    ///   forgotten task can't say so. So the engine counts those steps and
+    ///   returns the count, and nothing else about them, for the caller to
+    ///   tell the person it may be done. The engine never refuses to forget
+    ///   because of them.
+    @discardableResult
+    func clear() -> ClearedTasks
 
     /// Tries a stuck task again. False unless it was stuck.
     @discardableResult
@@ -307,6 +323,28 @@ public protocol TaskEngine: AnyObject, Sendable {
 
 extension TaskEngine {
     public var isSample: Bool { false }
+}
+
+/// What forgetting every task left behind: counts only, so nothing a task
+/// held outlives it.
+public struct ClearedTasks: Sendable, Equatable {
+    /// Tasks forgotten, ended or not.
+    public let forgotten: Int
+    /// Steps the person had said yes to that were under way, so may be done.
+    public let underway: Int
+
+    public init(forgotten: Int = 0, underway: Int = 0) {
+        self.forgotten = forgotten
+        self.underway = underway
+    }
+
+    public static let none = ClearedTasks()
+
+    /// The line to keep on screen once the tasks are gone, or nil when no
+    /// step said yes to was under way. It names nothing the task held.
+    public var underwayLine: String? {
+        underway > 0 ? TaskWords.forgotUnderway(underway) : nil
+    }
 }
 
 /// Every task at one moment, numbered so a late arrival can be told apart.
@@ -470,12 +508,24 @@ public enum TaskWords {
     public static func mayBeDone(_ todo: String) -> String { "You said yes, so I'd already started to \(todo). It may be done." }
     /// A yes from the sheet the task couldn't use. Nothing was done with it.
     public static let yesNotUsed = "That yes didn't go through, so I didn't act on it."
+    /// Approve tapped after the question timed out on screen. Nothing was done.
+    public static let questionTimedOut = "That question timed out, so I didn't act on it."
 
     /// Forgetting tasks when the notes can't be opened, so Forget everything
     /// isn't there. Honest that the notes stay.
     public static let forgetTasksTitle = "Forget all tasks"
     public static let forgetTasksQuestion = "Forget all tasks?"
-    public static let forgetTasksDetail = "This removes every task, and what you told me for them, from this device. It can't be undone. Your notes stay until I can open them."
+    public static let forgetTasksDetail = "This stops any task still going, and removes every task and what you told me for it from this device. It can't be undone. Your notes aren't touched."
+    /// Said and shown once the tasks are gone.
+    public static let tasksForgotten = "Your tasks are forgotten."
+    /// Kept on Today after forgetting, while a step the person said yes to
+    /// may have happened. Names nothing the task held.
+    public static func forgotUnderway(_ count: Int) -> String {
+        count == 1
+            ? "You'd said yes to a step that was already under way when I forgot your tasks. It may be done."
+            : "You'd said yes to some steps that were already under way when I forgot your tasks. They may be done."
+    }
+    public static let forgotUnderwayDismissTitle = "Got it"
 
     public static func percentDone(_ percent: Int) -> String { "\(percent) percent done" }
     public static func kept(_ things: [String]) -> String { "I kept \(list(things, joiner: "and"))." }

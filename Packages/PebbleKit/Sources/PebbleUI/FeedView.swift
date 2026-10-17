@@ -48,8 +48,19 @@ final class FeedModel: ObservableObject {
     /// the task moves on.
     private var notedAs: [String: AgentTask] = [:]
     /// Which task asked each question opened from a task card, so a yes goes
-    /// back where it came from.
+    /// back where it came from. Only while the question may still be used.
     private var askedBy: [UUID: String] = [:]
+    /// Every question ever opened from a task card, by the task that asked,
+    /// kept after redirect, stop, close or forget take it from `askedBy`. A
+    /// yes that comes late is then still known as the task's, and never
+    /// falls through to `NeedsYou`. Holds only ids, nothing a task said.
+    private var taskAsked: [UUID: String] = [:]
+    /// Kept on Today after Forget everything, while a step the person said
+    /// yes to may have happened. Names nothing the task held.
+    @Published private(set) var forgotUnderway: String?
+    /// True from forgetting every task until a new one starts, so the
+    /// memory screen can say the tasks are gone.
+    @Published private(set) var tasksForgotten = false
     private let clock: () -> ContinuousClock.Instant
     /// Says a line to VoiceOver. Tests replace it to hear what would be said.
     var announce: @MainActor (TaskAnnouncer.Line) -> Void = FeedModel.post
@@ -190,6 +201,7 @@ final class FeedModel: ObservableObject {
         // ended tasks are let go, closes with it.
         if let reading, taskIDs.contains(reading.id), !ids.contains(reading.id) { self.reading = nil }
         taskIDs = ids
+        if !ids.isEmpty && tasksForgotten { tasksForgotten = false }
         let next = list.map(\.card)
         defer { cards = next }
         // A note stays only until its task moves on.
@@ -222,9 +234,21 @@ final class FeedModel: ObservableObject {
     /// rule of `needsYou`. Only the engine's own task, with its question
     /// pinned in Needs you, opens it. Only a yes there, checked by
     /// `AskFirst`, lets the task go on.
+    ///
+    /// An Approve left on screen after its question timed out, with nothing
+    /// to build the feed again, looks again here: the task settles, and its
+    /// card says the question timed out, so the tap is never lost.
     func review(_ task: AgentTask) {
-        guard let live = current(task), canApprove(live), let question = live.question else { return }
+        guard let live = current(task), let question = live.question else { return }
+        guard canApprove(live) else {
+            if rule.isClosed(question) {
+                refresh()
+                note(TaskWords.questionTimedOut, on: live.id)
+            }
+            return
+        }
         askedBy[question.id] = live.id
+        taskAsked[question.id] = live.id
         reviewing = question
     }
 
@@ -259,16 +283,32 @@ final class FeedModel: ObservableObject {
     }
 
     /// Forget everything: every task goes, with its steps and the words the
-    /// person gave it. Any open task question is withdrawn and its sheet closed.
-    func forgetTasks() {
-        guard let tasks else { return }
+    /// person gave it, and anything still going stops. Any open task question
+    /// is withdrawn and its sheet closed.
+    ///
+    /// A step the person said yes to may be under way, so a short line
+    /// stays on Today to say it may be done. It names nothing the task held.
+    @discardableResult
+    func forgetTasks() -> ClearedTasks {
+        guard let tasks else { return .none }
         if let reviewing, askedBy[reviewing.id] != nil || tasks.tasks.contains(where: { $0.question?.id == reviewing.id }) {
             self.reviewing = nil
         }
         if let reading, taskIDs.contains(reading.id) { self.reading = nil }
         askedBy.removeAll()
-        tasks.clear()
+        let cleared = tasks.clear()
         refresh()
+        if cleared.forgotten > 0 { tasksForgotten = true }
+        if let line = cleared.underwayLine {
+            forgotUnderway = line
+            announce(TaskAnnouncer.Line(text: line, urgent: true))
+        }
+        return cleared
+    }
+
+    /// The person has read the line kept after forgetting.
+    func dismissForgotUnderway() {
+        forgotUnderway = nil
     }
 
     /// The finished result, in the same reader as other results.
@@ -293,6 +333,10 @@ final class FeedModel: ObservableObject {
         var refusedBy: String?
         if let id = askedBy.removeValue(forKey: approval.id) {
             if tasks?.resume(id, with: approval) ?? .refused == .refused { refusedBy = id }
+        } else if let id = taskAsked[approval.id] {
+            // The task moved on before this yes came. It does nothing, and
+            // never goes to `NeedsYou`.
+            refusedBy = id
         } else {
             needsYou.approved(approval)
         }
@@ -386,6 +430,10 @@ struct FeedView: View {
                         }
                     }
                     .padding(.bottom, -12)
+                    if let line = model.forgotUnderway {
+                        ForgotUnderwayNotice(line: line, onDismiss: model.dismissForgotUnderway)
+                            .transition(Motion.arrival(reduceMotion: reduceMotion))
+                    }
                     if model.feed.isEmpty {
                         empty
                             .transition(.opacity)
@@ -489,6 +537,7 @@ struct FeedView: View {
                                      progress: model.liveProgress(task.id),
                                      state: model.cardState(task.id),
                                      canApprove: model.canApprove(task),
+                                     isSample: model.isSample(item),
                                      onApprove: { model.review(task) },
                                      onRedirect: { model.redirect(task, with: $0) },
                                      onStop: { model.stop(task) },
@@ -622,8 +671,35 @@ struct FeedCard: View {
         case .ready: "doc.text.fill"
         case .noticed: "lightbulb.fill"
         case .needsYou: "hand.raised.fill"
+        // Never drawn: a task item is always a `TaskCard`, which picks its
+        // symbol by state. Here only so the switch is complete.
         case .task: "circle.fill"
         }
+    }
+}
+
+/// What stays on Today after Forget everything, while a step the person
+/// said yes to may have happened. One plain line and a way to put it away.
+struct ForgotUnderwayNotice: View {
+    let line: String
+    let onDismiss: () -> Void
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(line)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button(TaskWords.forgotUnderwayDismissTitle, action: onDismiss)
+                .buttonStyle(CardButtonStyle(kind: .quiet))
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("forgotUnderway")
     }
 }
 
