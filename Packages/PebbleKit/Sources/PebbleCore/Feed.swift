@@ -68,6 +68,15 @@ public enum FeedAction: Sendable, Equatable {
         case .review: FeedWords.reviewTitle
         }
     }
+
+    /// What VoiceOver says the card does, such as "Opens the question."
+    public var hint: String {
+        switch self {
+        case .open: FeedWords.openHint
+        case .talk: FeedWords.talkHint
+        case .review: FeedWords.reviewHint
+        }
+    }
 }
 
 /// Where feed items come from. Sources are local: nothing here goes to the
@@ -123,7 +132,7 @@ public struct SampleFeedSource: FeedSource {
             FeedItem(
                 id: "sample:sam-birthday", kind: .noticed, time: now - 2.2 * hour,
                 title: "Sam's birthday is coming up",
-                body: "It's on May 14, and Sam loves lemon cake. Want a few ideas?",
+                body: "It's on \((now + 12 * day).formatted(.dateTime.month(.wide).day())), and Sam loves lemon cake. Want a few ideas?",
                 action: .talk("Help me plan something for Sam's birthday.")
             ),
             FeedItem(
@@ -186,23 +195,39 @@ public final class NeedsYou: FeedSource, @unchecked Sendable {
     /// Ask the person about `action`. Nil, and nothing on the feed, when
     /// `AskFirst` won't ask it. `onApprove` gets the approval after a yes,
     /// and must still pass it to `AskFirst.decide` before acting.
+    ///
+    /// `time` is only what the card shows. The order comes from `AskFirst`:
+    /// it gives every question the same window from the moment it asks, so
+    /// the question asked first is the one that times out first.
     @discardableResult
     public func ask(_ action: ProposedAction, at time: Date = Date(),
                     onApprove: (@Sendable (Approval) -> Void)? = nil) -> ConfirmationRequest? {
-        guard let request = rule.ask(action) else { return nil }
         lock.lock()
+        defer { lock.unlock() }
+        // Asked and recorded under one lock, so the list keeps the rule's order.
+        guard let request = rule.ask(action) else { return nil }
         waiting.append(Waiting(request: request, askedAt: time, onApprove: onApprove))
-        lock.unlock()
         return request
     }
 
     /// The sheet said yes. Hands the approval on and takes the card away.
+    ///
+    /// Only a yes to a question this rule asked, for the same action, and
+    /// still held open by the rule counts. Anything else does nothing.
+    /// Turning a request into an `Approval` is package only, and inside the
+    /// package only `AskFirst.sayYes` does it (`AskFirstGateTests`), so the
+    /// sheet's yes is the only way to make one.
     public func approved(_ approval: Approval) {
         lock.lock()
-        let answered = waiting.first { $0.request.id == approval.id }
-        waiting.removeAll { $0.request.id == approval.id }
+        guard let index = waiting.firstIndex(where: { $0.request.id == approval.id }),
+              waiting[index].request.action == approval.action,
+              !rule.isClosed(waiting[index].request) else {
+            lock.unlock()
+            return
+        }
+        let answered = waiting.remove(at: index)
         lock.unlock()
-        answered?.onApprove?(approval)
+        answered.onApprove?(approval)
     }
 
     /// The sheet closed without a yes. The sheet has already withdrawn the
@@ -213,7 +238,8 @@ public final class NeedsYou: FeedSource, @unchecked Sendable {
         lock.unlock()
     }
 
-    /// Only questions `AskFirst` still holds open.
+    /// Only questions `AskFirst` still holds open, the one that times out
+    /// first on top.
     public func items(now: Date) -> [FeedItem] {
         lock.lock()
         waiting.removeAll { rule.isClosed($0.request) }
@@ -276,12 +302,17 @@ public struct Feed: Sendable, Equatable {
     public var showsNeedsYou: Bool { !needsYou.isEmpty }
     public var count: Int { needsYou.count + groups.reduce(0) { $0 + $1.items.count } }
 
-    /// A question card only counts when it carries a real question, and a
-    /// real question only ever sits in the pinned section.
-    public static func build(_ items: [FeedItem], now: Date, calendar: Calendar = .current) -> Feed {
-        let questions = items
-            .filter { $0.kind == .needsYou && $0.request != nil }
-            .sorted { ($0.time, $0.id) < ($1.time, $1.id) }
+    /// `items` can never ask anything: question cards and questions hidden
+    /// in other cards are dropped. Only `questions`, from `NeedsYou`, are
+    /// pinned, in the order given, and only while `isClosed` says the rule
+    /// still holds them open.
+    public static func build(_ items: [FeedItem], questions: [FeedItem] = [],
+                             isClosed: (ConfirmationRequest) -> Bool = { _ in true },
+                             now: Date, calendar: Calendar = .current) -> Feed {
+        let pinned = questions.filter { item in
+            guard item.kind == .needsYou, let request = item.request else { return false }
+            return !isClosed(request)
+        }
         let rest = items
             .filter { $0.kind != .needsYou && $0.request == nil }
             .sorted { ($0.time, $0.id) > ($1.time, $1.id) }
@@ -289,11 +320,17 @@ public struct Feed: Sendable, Equatable {
         let groups = FeedPeriod.allCases.compactMap { period in
             byPeriod[period].map { FeedGroup(period: period, items: $0) }
         }
-        return Feed(needsYou: questions, groups: groups)
+        return Feed(needsYou: pinned, groups: groups)
     }
 
-    public static func build(from sources: [any FeedSource], now: Date, calendar: Calendar = .current) -> Feed {
-        build(sources.flatMap { $0.items(now: now) }, now: now, calendar: calendar)
+    /// The feed from its sources, with questions taken only from `needsYou`.
+    /// A `NeedsYou` passed among the sources asks nothing.
+    public static func build(from sources: [any FeedSource], needsYou: NeedsYou? = nil,
+                             now: Date, calendar: Calendar = .current) -> Feed {
+        build(sources.flatMap { $0.items(now: now) },
+              questions: needsYou?.items(now: now) ?? [],
+              isClosed: { needsYou?.rule.isClosed($0) ?? true },
+              now: now, calendar: calendar)
     }
 }
 
@@ -313,10 +350,15 @@ public enum FeedWords {
     public static let openTitle = "Open"
     public static let talkTitle = "Talk about it"
     public static let reviewTitle = "Have a look"
+    public static let openHint = "Opens it to read."
+    public static let talkHint = "Opens the chat with a line ready. Nothing is sent."
+    public static let reviewHint = "Opens the question."
     public static let emptyTitle = "A quiet start"
     public static let empty = "When I finish something for you, it will show up here. I'll only ask when a choice is yours to make."
     public static let emptyActionTitle = "Say hello"
     public static let sampleNote = "These are examples for now. They were made on this device, and nothing was sent or bought."
+    /// Over an example opened to read.
+    public static let sampleLabel = "This is an example. Nothing here was really done."
     public static let doneTitle = "Done"
 
     /// The chat button on a narrow screen, such as "Chat with Pip".

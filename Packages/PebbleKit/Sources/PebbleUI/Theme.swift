@@ -17,7 +17,35 @@ enum Theme {
     static let feedWidth: CGFloat = 880
 
     /// The warm accent used for primary actions.
-    static let accent = Color(red: 0.96, green: 0.52, blue: 0.29)
+    static let accent = Color(red: accentRGB.red, green: accentRGB.green, blue: accentRGB.blue)
+    static let accentRGB = RGB(red: 0.96, green: 0.52, blue: 0.29)
+
+    /// Small words on an accent fill. White there is too faint to read
+    /// (about 2.5 to 1), so it is a deep brown of the same warmth, well over
+    /// the 4.5 to 1 small text needs.
+    static let onAccent = Color(red: onAccentRGB.red, green: onAccentRGB.green, blue: onAccentRGB.blue)
+    static let onAccentRGB = RGB(red: 0.20, green: 0.10, blue: 0.04)
+
+    /// An sRGB color by its parts, so contrast can be checked in tests.
+    struct RGB {
+        let red: Double
+        let green: Double
+        let blue: Double
+
+        /// Relative luminance, as WCAG defines it.
+        var luminance: Double {
+            func linear(_ c: Double) -> Double { c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+            return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+        }
+
+        /// The WCAG contrast ratio between two colors, from 1 to 21.
+        func contrast(with other: RGB) -> Double {
+            let (light, dark) = (max(luminance, other.luminance), min(luminance, other.luminance))
+            return (light + 0.05) / (dark + 0.05)
+        }
+
+        static let white = RGB(red: 1, green: 1, blue: 1)
+    }
 
     /// A soft wash behind every screen. Adapts to light and dark.
     static func backdrop(_ scheme: ColorScheme) -> LinearGradient {

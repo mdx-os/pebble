@@ -25,6 +25,8 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         // A throwaway suite so the showcase never touches real choices.
         let looks = UserDefaults(suiteName: "pebble.showcase")!
         looks.removePersistentDomain(forName: "pebble.showcase")
+        // Read the clock once, so the cards and the question agree.
+        let morning = Self.morning
         return Group {
             switch self {
             case .home, .homeMemory:
@@ -32,7 +34,9 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
                     onboarding: InMemoryOnboardingStore(finished: true), memory: Self.sampleMemory(),
                     looks: looks, conversation: Self.sampleFirstChat(),
-                    section: self == .home ? .chat : .memory
+                    section: self == .home ? .chat : .memory,
+                    // Its own rule, so the showcase never touches the app's.
+                    needsYou: NeedsYou(rule: .isolated())
                 )
             case .today, .todayNeedsYou, .todayEmpty:
                 HomeView(
@@ -40,8 +44,8 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     onboarding: InMemoryOnboardingStore(finished: true), memory: Self.sampleMemory(),
                     looks: looks, conversation: Self.sampleFirstChat(), section: .today,
                     feed: self == .todayEmpty ? [EmptyFeedSource()] : [SampleFeedSource()],
-                    needsYou: self == .todayNeedsYou ? Self.sampleQuestion() : NeedsYou(rule: .isolated()),
-                    now: { Self.morning }
+                    needsYou: self == .todayNeedsYou ? Self.sampleQuestion(at: morning) : NeedsYou(rule: .isolated()),
+                    now: { morning }
                 )
             case .shortcuts:
                 KeyboardShortcutsView()
@@ -101,14 +105,14 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
 
     /// One purchase waiting for a yes, asked through its own rule so the
     /// showcase never touches the app's.
-    static func sampleQuestion() -> NeedsYou {
+    static func sampleQuestion(at now: Date = morning) -> NeedsYou {
         let asks = NeedsYou(rule: .isolated())
         asks.ask(ProposedAction(
             kind: .purchase,
             recipient: Recipient(id: "merchant:sample-bakery", displayName: "Rise Bakery", handle: "risebakery.ca"),
             details: "Sourdough loaf and two croissants, pickup tomorrow at 9",
             price: Price(minorUnits: 1450, currency: "CAD")
-        ), at: morning - 4 * 60)
+        ), at: now - 4 * 60)
         return asks
     }
 

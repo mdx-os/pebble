@@ -83,10 +83,17 @@ final class HomeLayoutUITests: XCTestCase {
         }
         XCTAssertTrue(card.waitForExistence(timeout: 5))
 
-        // A result opens to read, and Done closes it.
+        // The examples say so on the first screen, above every card.
+        let sampleNote = app.staticTexts["sampleNote"]
+        XCTAssertTrue(sampleNote.exists)
+        XCTAssertTrue(sampleNote.isHittable)
+        XCTAssertLessThan(sampleNote.frame.minY, card.frame.minY)
+
+        // A result opens to read, says it is an example, and Done closes it.
         card.tap()
-        XCTAssertTrue(app.staticTexts["8:15  School drop off"].waitForExistence(timeout: 5)
-                      || app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "School drop off")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "School drop off")).firstMatch
+            .waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["sampleLabel"].exists)
         app.buttons["Done"].firstMatch.tap()
 
         // Something spotted opens the chat with a line ready, not sent.
