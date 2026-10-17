@@ -104,11 +104,16 @@ enum Haptic: Equatable {
 
 extension View {
     /// Plays `haptic` whenever `trigger` changes, on iPhone only.
-    @ViewBuilder
     func haptic<T: Equatable>(_ haptic: Haptic, trigger: T) -> some View {
+        self.haptic(haptic, trigger: trigger, when: { _ in true })
+    }
+
+    /// A light tap only when the trigger changes to a value that passes `when`.
+    @ViewBuilder
+    func haptic<T: Equatable>(_ haptic: Haptic, trigger: T, when: @escaping (T) -> Bool) -> some View {
         #if os(iOS)
         let feedback = Haptic.isAvailable ? haptic.feedback : nil
-        sensoryFeedback(trigger: trigger) { _, _ in feedback }
+        sensoryFeedback(trigger: trigger) { _, new in when(new) ? feedback : nil }
         #else
         self
         #endif

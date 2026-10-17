@@ -108,7 +108,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     }
 
     static func emptyMemory() -> MemoryStore {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("showcase-empty-memory.json")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("showcase-empty-memory-\(UUID().uuidString).json")
         let store = MemoryStore(fileURL: url)
         try? store.forgetEverything()
         return store

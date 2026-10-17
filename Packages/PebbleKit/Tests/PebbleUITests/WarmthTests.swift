@@ -244,6 +244,20 @@ struct WarmthTests {
         #expect(controller.conversation.turns.last?.speaker == .person)
     }
 
+    @Test func aSecondSaveInARowIsSpokenAgain() {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("warmth-\(UUID().uuidString).json")
+        let store = MemoryStore(fileURL: url)
+        defer { try? store.forgetEverything() }
+        let model = MemoryModel(store: store)
+        let before = model.statusCount
+        model.newNote = "Prefers tea"
+        model.add()
+        model.newNote = "Walks at noon"
+        model.add()
+        #expect(model.status == MemoryWords.saved)
+        #expect(model.statusCount == before + 2)
+    }
+
     @Test func savingAndForgettingAreMarkedOnce() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("warmth-\(UUID().uuidString).json")
         let store = MemoryStore(fileURL: url)

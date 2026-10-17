@@ -96,8 +96,8 @@ public struct MemoryView: View {
         } message: { note in
             Text(note.text)
         }
-        .onChange(of: model.status) { _, status in
-            if let status { AccessibilityNotification.Announcement(status).post() }
+        .onChange(of: model.statusCount) { _, _ in
+            if let status = model.status { AccessibilityNotification.Announcement(status).post() }
         }
         .onChange(of: scenePhase) { _, phase in
             // Back from a locked screen, look again rather than leave the note up.
@@ -276,7 +276,12 @@ final class MemoryModel: ObservableObject {
     @Published var editingID: UUID?
     @Published var editDraft = ""
     @Published var askForgetEverything = false
-    @Published private(set) var status: String?
+    /// What to say about the last thing that happened. Every new line,
+    /// even one the same as before, bumps statusCount so it is spoken again.
+    @Published private(set) var status: String? {
+        didSet { if status != nil { statusCount += 1 } }
+    }
+    @Published private(set) var statusCount = 0
     /// Go up by one each time a note is saved or forgotten, for a light tap.
     @Published private(set) var savedCount = 0
     @Published private(set) var forgottenCount = 0
@@ -298,12 +303,12 @@ final class MemoryModel: ObservableObject {
         hasStoredFile = store.hasStoredFile
     }
 
-    /// False while the saved notes can't be read, so they stay untouched.
-    var canAdd: Bool { !isUnreadable }
+    /// False while the saved notes can't be read or opened, so they stay untouched.
+    var canAdd: Bool { !isUnreadable && !isUnavailable }
 
     func add() {
         guard canAdd else {
-            status = MemoryWords.unreadable
+            status = isUnavailable ? MemoryWords.unavailable : MemoryWords.unreadable
             return
         }
         report(try store.remember(newNote, source: .toldMe)) { self.newNote = "" }
