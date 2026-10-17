@@ -26,7 +26,7 @@ public struct CloudHelpSettings: Sendable, Equatable, Codable {
         let word = proposed.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
         guard !word.isEmpty, word.count <= Self.maxPrivateWordLength,
               privateWords.count < Self.maxPrivateWords,
-              !privateWords.contains(where: { $0.lowercased() == word.lowercased() }) else { return false }
+              !privateWords.contains(where: { Self.same($0, word) }) else { return false }
         privateWords.append(word)
         return true
     }
@@ -34,32 +34,98 @@ public struct CloudHelpSettings: Sendable, Equatable, Codable {
     public mutating func removePrivateWord(_ word: String) {
         privateWords.removeAll { $0 == word }
     }
+
+    /// "Sam's" and "sam’s" are the same word.
+    private static func same(_ a: String, _ b: String) -> Bool {
+        func folded(_ s: String) -> String { s.replacingOccurrences(of: "\u{2019}", with: "'").lowercased() }
+        return folded(a) == folded(b)
+    }
 }
 
 /// Where the cloud helper's settings are kept.
 public protocol CloudHelpStoring: Sendable {
-    func load() -> CloudHelpSettings
-    func save(_ settings: CloudHelpSettings)
+    /// The saved settings, read fresh. Nothing saved reads as off. Throws
+    /// when they are saved but can't be read right now, so a caller can
+    /// refuse to send rather than send without the private words.
+    func load() throws -> CloudHelpSettings
+    func save(_ settings: CloudHelpSettings) throws
+    /// Erases everything saved, even when it can't be read.
+    func erase() throws
 }
 
-/// Keeps the settings in UserDefaults. Anything unreadable reads as off.
-public struct UserDefaultsCloudHelpStore: CloudHelpStoring, @unchecked Sendable {
-    public static let key = "pebble.cloudHelp"
-    private let defaults: UserDefaults
+extension CloudHelpStoring {
+    /// The settings, or off when they can't be read.
+    public func loadOrOff() -> CloudHelpSettings {
+        (try? load()) ?? .off
+    }
+}
 
-    public init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
+/// Keeps the settings in one file next to the notes: inside Application
+/// Support, left out of backups, and locked with the device on iPhone and
+/// iPad. The private words are the most sensitive words in the app, so they
+/// get the same care as the notes. A restored or new device reads as off.
+public final class CloudHelpFileStore: CloudHelpStoring, @unchecked Sendable {
+    public let fileURL: URL
+    private let lock = NSLock()
+
+    public init(fileURL: URL) {
+        self.fileURL = fileURL
     }
 
-    public func load() -> CloudHelpSettings {
-        guard let data = defaults.data(forKey: Self.key),
-              let settings = try? JSONDecoder().decode(CloudHelpSettings.self, from: data) else { return .off }
+    /// The store in the notes folder on this device.
+    public static func onDevice(fileManager: FileManager = .default) throws -> CloudHelpFileStore {
+        CloudHelpFileStore(fileURL: try MemoryStore.onDeviceFolder(fileManager: fileManager)
+            .appendingPathComponent("cloud-help.json"))
+    }
+
+    var stagingURL: URL {
+        fileURL.deletingLastPathComponent().appendingPathComponent("." + fileURL.lastPathComponent + ".next")
+    }
+
+    public func load() throws -> CloudHelpSettings {
+        lock.lock()
+        defer { lock.unlock() }
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return .off }
+        guard let data = try? Data(contentsOf: fileURL) else { throw MemoryStore.Unavailable() }
+        guard let settings = try? JSONDecoder().decode(CloudHelpSettings.self, from: data) else {
+            throw MemoryStore.Unreadable()
+        }
         return settings
     }
 
-    public func save(_ settings: CloudHelpSettings) {
-        guard let data = try? JSONEncoder().encode(settings) else { return }
-        defaults.set(data, forKey: Self.key)
+    public func save(_ settings: CloudHelpSettings) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(settings)
+        // Staged under one known name, then renamed over the real file, as
+        // the notes are, so no copy is left anywhere else.
+        try removeStaged()
+        #if os(macOS)
+        try data.write(to: stagingURL, options: [.withoutOverwriting])
+        #else
+        try data.write(to: stagingURL, options: [.withoutOverwriting, .completeFileProtection])
+        #endif
+        guard rename(stagingURL.path, fileURL.path) == 0 else {
+            try? removeStaged()
+            throw CocoaError(.fileWriteUnknown)
+        }
+    }
+
+    public func erase() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        try removeStaged()
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            try FileManager.default.removeItem(at: fileURL)
+        }
+    }
+
+    private func removeStaged() throws {
+        if FileManager.default.fileExists(atPath: stagingURL.path) {
+            try FileManager.default.removeItem(at: stagingURL)
+        }
     }
 }
 
@@ -67,41 +133,59 @@ public struct UserDefaultsCloudHelpStore: CloudHelpStoring, @unchecked Sendable 
 public final class InMemoryCloudHelpStore: CloudHelpStoring, @unchecked Sendable {
     private let lock = NSLock()
     private var settings: CloudHelpSettings
+    private var readable = true
 
     public init(_ settings: CloudHelpSettings = .off) {
         self.settings = settings
     }
 
-    public func load() -> CloudHelpSettings {
+    /// Makes `load` throw, as a locked or damaged file would.
+    public func makeUnreadable(_ unreadable: Bool = true) {
+        lock.withLock { readable = !unreadable }
+    }
+
+    public func load() throws -> CloudHelpSettings {
         lock.lock()
         defer { lock.unlock() }
+        guard readable else { throw MemoryStore.Unavailable() }
         return settings
     }
 
-    public func save(_ settings: CloudHelpSettings) {
+    public func save(_ settings: CloudHelpSettings) throws {
         lock.lock()
         defer { lock.unlock() }
         self.settings = settings
+        readable = true
+    }
+
+    public func erase() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        settings = .off
+        readable = true
     }
 }
 
 /// The address of the cloud helper.
 ///
-/// It is set in `Config/Cloud.xcconfig` and reaches the app through the
-/// `PebbleCloudEndpoint` Info.plist key. It is empty by default, and empty
-/// means there is no cloud helper: the setting stays off and can't be
-/// turned on.
+/// It is set in `Config/Cloud.local.xcconfig`, which git ignores, and
+/// reaches the app through the `PebbleCloudEndpoint` Info.plist key. It is
+/// empty by default, and empty means there is no cloud helper: the setting
+/// stays off and can't be turned on.
 public enum CloudEndpoint {
     public static let infoKey = "PebbleCloudEndpoint"
 
     /// The address, or nil when it is empty, still an unexpanded build
-    /// setting, or not a secure web address.
+    /// setting, or not a plain secure web address. A user name, password,
+    /// query or fragment is refused, so a key can never ride along in the
+    /// address or in Info.plist.
     public static func url(from raw: String?) -> URL? {
         guard let raw else { return nil }
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !text.hasPrefix("$("),
+        guard !text.isEmpty, !text.hasPrefix("$("), !text.contains(where: { "?#@".contains($0) }),
               let url = URL(string: text), url.scheme?.lowercased() == "https",
-              let host = url.host, !host.isEmpty else { return nil }
+              let host = url.host, !host.isEmpty,
+              url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { return nil }
         return url
     }
 
@@ -126,7 +210,7 @@ public enum CloudWords {
     public static let askPoints: [String] = [
         "Your next new chat will use a bigger model on a computer somewhere else, not on this device.",
         "Before anything leaves, I show you exactly what goes. You can send it or keep it here.",
-        "I take out names from your notes, emails, phone numbers, addresses, card numbers and your private words first.",
+        "I try to take out names from your notes, emails, phone numbers, addresses, card numbers and your private words first. Check what I show you, since I can miss things.",
         "Your notes themselves never leave this device.",
         "If you tell me you might be in danger, I answer here and send nothing.",
         "You can turn this off anytime.",
@@ -135,13 +219,15 @@ public enum CloudWords {
     public static let askNo = "Not now"
 
     public static let privateTitle = "Words I always hide"
-    public static let privateDetail = "Anything here is taken out before anything is sent."
+    public static let privateDetail = "Anything here is taken out before anything is sent. These words are kept only on this device, and Forget everything erases them too."
     public static let privatePlaceholder = "A word or name to keep private"
     public static let privateAdd = "Hide this word"
     public static func privateRemove(_ word: String) -> String { "Stop hiding \(word)" }
+    /// The private words couldn't be read, so they are left as they are.
+    public static let privateUnreadable = "Sorry, I can't read your private words just now, so I've left them as they are. If the device is locked, unlock it and try again."
 
     public static let previewTitle = "Here is exactly what leaves your device"
-    public static let previewDetail = "I took out personal details first. Nothing else goes, and only once."
+    public static let previewDetail = "This is all of it: where it goes, the labels sent with it, and the words. I took out the personal details I found. Nothing else goes, and only once."
     public static func previewDestination(_ host: String) -> String { "Going to \(host)" }
     public static let previewNothingHidden = "I didn't find anything personal to take out."
     public static func previewHidden(_ parts: [String]) -> String {
@@ -150,18 +236,40 @@ public enum CloudWords {
     public static let previewSend = "Send this"
     public static let previewCancel = "Don't send"
 
+    /// What VoiceOver reads for the preview, in place of the raw text.
+    public static func spokenAddress(_ address: String) -> String { "Going to \(address)." }
+    public static func spokenLabels(_ labels: [String]) -> String {
+        "Sent with these labels: " + labels.joined(separator: ". ") + "."
+    }
+    public static func spokenMessage(role: String, text: String) -> String {
+        switch role {
+        case "person": "You said: \(text)"
+        case "agent": "I said: \(text)"
+        default: text
+        }
+    }
+
     /// After the person chose not to send.
     public static let notSent = "Okay, I didn't send it. What you wrote is still here."
     /// The setting was turned off while this chat was using the cloud.
     public static let turnedOff = "Help from the cloud is off now, so I didn't send that. Start a new chat and I'll answer on this device."
+    /// Something earlier in this chat must stay on this device, so no part
+    /// of the chat can be sent. Only a new chat can use the cloud again.
+    public static let staysHere = "Part of this chat has to stay on this device, so I won't send any of it. A new chat starts fresh, and I can help there."
+    /// The notes or private words couldn't be read, so nothing was sent.
+    public static let notesUnreadable = "Sorry, I can't read your notes or private words just now, so I can't tell what to take out. I didn't send anything. If the device is locked, unlock it and try again."
+    /// The question before Forget everything, when private words go too.
+    public static let forgetEverythingDetail = "This removes every note, and every word you asked me to hide, from this device. It can't be undone."
     /// The chat header when the model is not on this device.
     public static let presence = "Here with you."
 
     public static let all: [String] = [
         title, toggleTitle, offDetail, onDetail, unavailable, rowTitle, rowOff, rowOn,
         askQuestion, askYes, askNo, privateTitle, privateDetail, privatePlaceholder, privateAdd,
-        privateRemove("Sam"), previewTitle, previewDetail, previewDestination("example.com"),
+        privateRemove("Sam"), privateUnreadable, previewTitle, previewDetail, previewDestination("example.com"),
         previewNothingHidden, previewHidden(["1 name"]), previewSend, previewCancel,
-        notSent, turnedOff, presence,
-    ] + askPoints
+        spokenAddress("example.com"), spokenLabels(["Accept, application/json"]),
+        spokenMessage(role: "person", text: "Hi"), spokenMessage(role: "agent", text: "Hi"),
+        notSent, turnedOff, staysHere, notesUnreadable, forgetEverythingDetail, presence,
+    ] + askPoints + Redaction.Kind.allCases.map(\.spoken)
 }

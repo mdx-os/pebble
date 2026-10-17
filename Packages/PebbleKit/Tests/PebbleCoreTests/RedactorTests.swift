@@ -24,6 +24,52 @@ struct RedactorTests {
         #expect(out.hidden == [.name: 3])
     }
 
+    /// The most common way notes are written: the name starts the sentence.
+    @Test(arguments: [
+        ("Priya is my sister.", ["Priya"]),
+        ("Sam loves lemon cake.", ["Sam"]),
+        ("Gym at 6. Ana works nights, so text after 9.", ["Ana"]),
+        ("Dentist is at 3. Lunch with the team.", []),
+        ("Meeting moved to Monday. Prefers tea.", []),
+    ])
+    func findsNamesThatStartASentence(note: String, expected: [String]) {
+        #expect(Redactor.names(in: [MemoryNote(text: note, source: .toldMe)]) == expected)
+    }
+
+    @Test func findsNamesWithCapitalsInside() {
+        let notes = [MemoryNote(text: "Dinner with Liam O'Brien, Ronan McDonald and DeShawn. Call Anne-Marie.", source: .toldMe)]
+        #expect(Redactor.names(in: notes) == ["Liam", "O'Brien", "Ronan", "McDonald", "DeShawn", "Anne-Marie"])
+        let out = Redactor(memory: notes).redact("Tell o\u{2019}brien and mcdonald I said hi.")
+        #expect(out.text == "Tell [name] and [name] I said hi.")
+    }
+
+    @Test func findsLowercaseNamesAfterAFamilyWordOrNamed() {
+        let notes = [
+            MemoryNote(text: "lunch with my sister priya on sundays", source: .toldMe),
+            MemoryNote(text: "our neighbour jo waters the plants", source: .toldMe),
+            MemoryNote(text: "a dog named biscuit", source: .toldMe),
+            MemoryNote(text: "my friend is coming over", source: .toldMe),
+        ]
+        #expect(Redactor.names(in: notes) == ["priya", "jo", "biscuit"])
+        #expect(Redactor(memory: notes).redact("Ask Priya if Jo can walk Biscuit.").text
+            == "Ask [name] if [name] can walk [name].")
+    }
+
+    @Test func capitalsThatAreNotNamesStay() {
+        let notes = [MemoryNote(text: "I'm off. NASA launch is at 9. I'll watch.", source: .toldMe)]
+        #expect(Redactor.names(in: notes).isEmpty)
+    }
+
+    @Test func curlyAndStraightApostrophesMatchEachOther() {
+        let curlyNote = [MemoryNote(text: "Sam\u{2019}s birthday is May 14.", source: .toldMe)]
+        #expect(Redactor.names(in: curlyNote) == ["Sam"])
+        #expect(Redactor(memory: curlyNote).redact("Sam's party").text == "[name]'s party")
+        let straight = Redactor(privateWords: ["Sam's place"])
+        #expect(straight.redact("Meet at Sam\u{2019}s place").text == "Meet at [private]")
+        let curly = Redactor(privateWords: ["Sam\u{2019}s place"])
+        #expect(curly.redact("Meet at Sam's place").text == "Meet at [private]")
+    }
+
     @Test func aNameInsideAnotherWordStays() {
         let out = Redactor(names: ["Ana"]).redact("Bananas and Anastasia's analysis.")
         #expect(out.text == "Bananas and Anastasia's analysis.")
@@ -52,6 +98,12 @@ struct RedactorTests {
         ("Call 1-800-555-0199 tonight", "Call [phone number] tonight"),
         ("Call +44 20 7946 0958 tonight", "Call [phone number] tonight"),
         ("Call 555-0199 tonight", "Call [phone number] tonight"),
+        // Numbers written at home outside North America, without a plus.
+        ("Call 020 7946 0958 tonight", "Call [phone number] tonight"),
+        ("Call 07700 900123 tonight", "Call [phone number] tonight"),
+        ("Call (020) 7946 0958 tonight", "Call [phone number] tonight"),
+        ("Call 01 23 45 67 89 tonight", "Call [phone number] tonight"),
+        ("Call 0412 345 678 tonight", "Call [phone number] tonight"),
     ])
     func hidesPhoneNumbers(input: String, expected: String) {
         let out = Redactor().redact(input)
@@ -66,6 +118,13 @@ struct RedactorTests {
         ("Send it to 1600 Pennsylvania Ave, please", "Send it to [address], please"),
         ("I live at 12 old mill rd apt 4", "I live at [address]"),
         ("My postal code is M5V 2T6", "My postal code is [address]"),
+        ("my postal code is m5v 2t6", "my postal code is [address]"),
+        ("It goes to sw1a 1aa today", "It goes to [address] today"),
+        ("Mail it to ZIP 10001-1234 please", "Mail it to ZIP [address] please"),
+        ("Ship to New York, NY 10001", "Ship to New York, [address]"),
+        ("I work at 1 Avenue of the Americas.", "I work at [address]."),
+        ("We're at 10 Lord of the Isles Road now", "We're at [address] now"),
+        ("Dinner at 12 Rue de la Paix", "Dinner at [address]"),
     ])
     func hidesAddresses(input: String, expected: String) {
         let out = Redactor().redact(input)
@@ -73,8 +132,13 @@ struct RedactorTests {
         #expect(out.hidden == [.address: 1])
     }
 
-    @Test func aDistanceIsNotAnAddress() {
-        let line = "Walk 5 blocks down the road, then 2 miles along the river drive."
+    @Test(arguments: [
+        "Walk 5 blocks down the road, then 2 miles along the river drive.",
+        "Take 3 of the main roads home.",
+        "Meet b4 1pm, we're in room a1 2nd floor.",
+        "Today is 01.02.2026 and the code is 0123.",
+    ])
+    func distancesTimesAndDatesAreNotAddressesOrPhones(line: String) {
         #expect(Redactor().redact(line).text == line)
     }
 

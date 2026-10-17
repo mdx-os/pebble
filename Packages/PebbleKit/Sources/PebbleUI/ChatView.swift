@@ -153,10 +153,14 @@ public struct ChatView: View {
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.4, dampingFraction: 0.85),
                    value: controller.conversation.turns.count)
         .haptic(.sent, trigger: controller.sentCount)
+        // What would leave the device, shown over the chat that asked.
+        .cloudPreview(controller.review)
         .onDisappear {
             // Never say "thinking" over another screen.
             thinkingNotice?.cancel()
             thinkingNotice = nil
+            // A preview can't wait on a screen that is gone, so it is not sent.
+            controller.screenWentAway()
         }
         .task {
             if let firstMessage, controller.conversation.isWaitingForPerson {
@@ -415,13 +419,16 @@ final class ChatController: ObservableObject {
     /// The shortest time the thinking dots show, so a quick reply settles
     /// in after a calm beat instead of snapping onto the screen.
     let replyBeat: Duration
+    /// Where a cloud chat shows its previews. Nil for a chat on this device.
+    let review: CloudReview?
 
     init(brand: Brand, model: any ModelClient, names: any AgentNameStoring,
-         replyBeat: Duration = .milliseconds(600)) {
+         replyBeat: Duration = .milliseconds(600), review: CloudReview? = nil) {
         self.brand = brand
         self.model = model
         self.names = names
         self.replyBeat = replyBeat
+        self.review = review
         let profile = AgentProfile(brand: brand, stored: names.loadDisplayName())
         naming = AgentRenameState(profile: profile)
         // The privacy line is decided once here. If the model can ever be
@@ -430,8 +437,10 @@ final class ChatController: ObservableObject {
     }
 
     static func make(brand: Brand, model: any ModelClient, names: any AgentNameStoring,
-                     conversation: Conversation?) -> ChatController {
-        let controller = ChatController(brand: brand, model: model, names: names)
+                     conversation: Conversation?, review: CloudReview? = nil,
+                     replyBeat: Duration = .milliseconds(600)) -> ChatController {
+        let controller = ChatController(brand: brand, model: model, names: names, replyBeat: replyBeat,
+                                        review: review)
         // A given conversation is used only when its privacy promise
         // matches the model; otherwise the honest opening stands.
         if let conversation, conversation.onDevice == model.runsOnDevice {
@@ -482,8 +491,9 @@ final class ChatController: ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isReplying else { return }
         let clearsDraft = trimmed == draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let personID = UUID()
         do {
-            conversation = try conversation.appendingPerson(trimmed)
+            conversation = try conversation.appendingPerson(trimmed, id: personID)
         } catch {
             return
         }
@@ -505,11 +515,13 @@ final class ChatController: ObservableObject {
             let started = ContinuousClock.now
             let next: Conversation?
             var failure = FirstConversation.couldNotAnswer
+            var takesBack = false
             do {
                 next = try await snapshot.appendingReply(from: client)
             } catch {
                 next = nil
                 failure = Self.failureLine(for: error)
+                takesBack = Self.nothingWasSent(error)
             }
             let waited = ContinuousClock.now - started
             if !caring, waited < beat { try? await Task.sleep(for: beat - waited) }
@@ -520,6 +532,9 @@ final class ChatController: ObservableObject {
                 conversation = next
             } else {
                 self.failure = failure
+                // Words that were not sent leave the conversation, so no
+                // later request carries them. They go back to the composer.
+                if takesBack { conversation = conversation.removingTurn(personID) }
                 // The failure line promises the words are still here to send.
                 if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { draft = trimmed }
             }
@@ -537,8 +552,31 @@ final class ChatController: ObservableObject {
         switch error as? CloudModelError {
         case .notSent: CloudWords.notSent
         case .off: CloudWords.turnedOff
+        case .staysHere: CloudWords.staysHere
+        case .notesUnreadable: CloudWords.notesUnreadable
         default: FirstConversation.couldNotAnswer
         }
+    }
+
+    /// True when the reply stopped before anything left the device: the
+    /// person said no, the setting was off, the chat must stay here, or
+    /// the notes couldn't be read.
+    nonisolated static func nothingWasSent(_ error: Error) -> Bool {
+        switch error as? CloudModelError {
+        case .notSent, .off, .staysHere, .notesUnreadable: true
+        case .unreadableReply, nil: false
+        }
+    }
+
+    /// The chat screen went away. A preview still waiting for an answer is
+    /// not sent, so the reply never hangs on a sheet no one can see.
+    func screenWentAway() {
+        review?.cancelPending()
+    }
+
+    /// Waits for the current reply to settle, with no timing involved. For tests.
+    func settled() async {
+        await replyTask?.value
     }
 
     /// Stops a reply that is still coming, as when a new chat replaces this

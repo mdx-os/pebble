@@ -171,25 +171,26 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// built by the same code a real reply uses.
     @MainActor
     static func cloudPreviewChat(brand: Brand, looks: UserDefaults) -> some View {
+        let memory = sampleMemory()
         let help = CloudHelp(
             store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"])),
-            endpoint: sampleEndpoint, memory: sampleMemory(), transport: { NoSendTransport() }
+            endpoint: sampleEndpoint, memory: memory, transport: { NoSendTransport() }
         )
-        let model = help.chatModel(local: LocalStubModel())
+        let review = CloudReview()
+        let model = help.chatModel(local: LocalStubModel(), review: review)
         var turns = Conversation.firstRun(named: "Pip", onDevice: false).turns
         turns.append(ChatTurn(id: UUID(), speaker: .person, text: "Help me write a note to Sam about Saturday. The party moved to 42 Maple Street. He can call me at 416 555 0199 or email jo.lee@example.com, and don't mention the lemon cake."))
         let conversation = Conversation(turns: turns, onDevice: false)
-        let redactor = Redactor(memory: sampleMemory().notes(), privateWords: help.settings.privateWords)
+        let redactor = Redactor(memory: memory.notes(), privateWords: help.settings.privateWords)
         if let preview = try? CloudModel.preview(for: turns, endpoint: sampleEndpoint, redactor: redactor) {
-            help.review.show(preview)
+            review.show(preview)
         }
         let controller = ChatController.make(brand: brand, model: model, names: InMemoryAgentNameStore(stored: "Pip"),
-                                             conversation: conversation)
+                                             conversation: conversation, review: review)
         controller.isReplying = true
         return ZStack {
             Backdrop()
             ChatView(controller: controller, look: AgentLook.load(from: looks), firstMessage: nil)
-                .cloudPreview(help.review)
         }
     }
 

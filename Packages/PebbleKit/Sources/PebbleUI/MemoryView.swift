@@ -14,8 +14,16 @@ public struct MemoryView: View {
 
     /// With `cloud`, the screen ends with a way into the cloud setting.
     public init(store: MemoryStore, cloud: CloudHelp? = nil) {
-        _model = StateObject(wrappedValue: MemoryModel(store: store))
+        // Forget everything erases the words always hidden too.
+        var alsoForget: (@MainActor () throws -> Void)?
+        if let cloud { alsoForget = { try cloud.forgetPrivateWords() } }
+        _model = StateObject(wrappedValue: MemoryModel(store: store, alsoForget: alsoForget))
         self.cloud = cloud
+    }
+
+    /// Whether there are private words that Forget everything would erase.
+    private var hasPrivateWords: Bool {
+        cloud?.settings.privateWords.isEmpty == false
     }
 
     public var body: some View {
@@ -54,14 +62,7 @@ public struct MemoryView: View {
                             }
                         }
                     }
-                    if model.hasStoredFile {
-                        Button(role: .destructive) { model.askForgetEverything = true } label: {
-                            Text(MemoryWords.forgetEverythingTitle)
-                                .font(.subheadline.weight(.semibold))
-                                .frame(maxWidth: .infinity, minHeight: 44)
-                        }
-                        .padding(.top, 8)
-                    }
+                    forgetEverythingSection
                     if let cloud {
                         CloudHelpRow(help: cloud)
                             .padding(.top, 8)
@@ -90,7 +91,7 @@ public struct MemoryView: View {
             Button(MemoryWords.forgetEverythingTitle, role: .destructive) { model.forgetEverything() }
             Button(MemoryWords.cancelTitle, role: .cancel) {}
         } message: {
-            Text(MemoryWords.forgetEverythingDetail)
+            Text(hasPrivateWords ? CloudWords.forgetEverythingDetail : MemoryWords.forgetEverythingDetail)
         }
         .confirmationDialog(
             MemoryWords.forgetOneQuestion,
@@ -112,6 +113,31 @@ public struct MemoryView: View {
         }
         .haptic(.saved, trigger: model.savedCount)
         .haptic(.forgotten, trigger: model.forgottenCount)
+    }
+
+    @ViewBuilder
+    private var forgetEverythingSection: some View {
+        if let cloud {
+            // Watches the cloud setting, so the button shows while there
+            // are private words to erase.
+            CloudWatcher(help: cloud) { help in
+                forgetEverythingButton(shown: model.hasStoredFile || !help.settings.privateWords.isEmpty)
+            }
+        } else {
+            forgetEverythingButton(shown: model.hasStoredFile)
+        }
+    }
+
+    @ViewBuilder
+    private func forgetEverythingButton(shown: Bool) -> some View {
+        if shown {
+            Button(role: .destructive) { model.askForgetEverything = true } label: {
+                Text(MemoryWords.forgetEverythingTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .padding(.top, 8)
+        }
     }
 
     private var header: some View {
@@ -166,6 +192,14 @@ public struct MemoryView: View {
             addFocused = true
         }
     }
+}
+
+/// Redraws `content` whenever the cloud setting changes.
+private struct CloudWatcher<Content: View>: View {
+    @ObservedObject var help: CloudHelp
+    @ViewBuilder let content: (CloudHelp) -> Content
+
+    var body: some View { content(help) }
 }
 
 struct MemoryRow: View {
@@ -292,9 +326,12 @@ final class MemoryModel: ObservableObject {
     /// Go up by one each time a note is saved or forgotten, for a light tap.
     @Published private(set) var savedCount = 0
     @Published private(set) var forgottenCount = 0
+    /// Anything else Forget everything erases, like the private words.
+    private let alsoForget: (@MainActor () throws -> Void)?
 
-    init(store: MemoryStore) {
+    init(store: MemoryStore, alsoForget: (@MainActor () throws -> Void)? = nil) {
         self.store = store
+        self.alsoForget = alsoForget
         refresh()
     }
 
@@ -356,6 +393,7 @@ final class MemoryModel: ObservableObject {
         cancelEdit()
         do {
             try store.forgetEverything()
+            try alsoForget?()
             status = MemoryWords.forgotten
             forgottenCount += 1
         } catch {

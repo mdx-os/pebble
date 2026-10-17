@@ -15,47 +15,78 @@ public final class CloudHelp: ObservableObject {
     /// The turn on question is showing.
     @Published var asksToTurnOn = false
     @Published var newPrivateWord = ""
+    /// What to say about the last change that couldn't be made.
+    @Published private(set) var status: String?
 
     public let endpoint: URL?
-    public let review: CloudReview
+    /// The same store the memory screen uses, so the redactor always reads
+    /// the notes as they are now.
+    let memory: MemoryStore?
     private let store: any CloudHelpStoring
-    private let memory: MemoryStore?
     private let auth: any CloudAuth
     private let makeTransport: @Sendable () -> any CloudTransport
+    /// Every chat's preview gate, so turning the cloud off closes them all.
+    private let reviews = NSHashTable<CloudReview>.weakObjects()
+    /// Sign-in after the person's yes. Tests wait on it.
+    private(set) var signingIn: Task<Void, Never>?
 
     public init(
         store: any CloudHelpStoring,
         endpoint: URL?,
         memory: MemoryStore?,
-        review: CloudReview = CloudReview(),
         auth: any CloudAuth = NoCloudAuth(),
         transport: @escaping @Sendable () -> any CloudTransport = { URLSessionCloudTransport() }
     ) {
         self.store = store
         self.endpoint = endpoint
         self.memory = memory
-        self.review = review
         self.auth = auth
         self.makeTransport = transport
-        settings = store.load()
+        settings = store.loadOrOff()
     }
 
     /// False when no address is set up. The setting then stays off.
     public var isAvailable: Bool { endpoint != nil }
 
-    /// The model for a new chat: `local` unless the cloud is on.
-    public func chatModel(local: any ModelClient) -> any ModelClient {
+    /// True when a new chat would use the cloud model.
+    public var usesCloudForNewChats: Bool {
+        ModelChoice.usesCloud(settings: settings, endpoint: endpoint)
+    }
+
+    /// Whether a new chat's model runs on this device, without making it.
+    public func runsOnDevice(local: any ModelClient) -> Bool {
+        ModelChoice.runsOnDevice(settings: settings, endpoint: endpoint, local: local)
+    }
+
+    /// The model for a new chat: `local` unless the cloud is on. A cloud
+    /// chat asks the person through `review`, which belongs to that chat
+    /// alone, so one window's preview never shows in another.
+    public func chatModel(local: any ModelClient, review: CloudReview) -> any ModelClient {
         ModelChoice.model(settings: settings, endpoint: endpoint, local: local) { url in
+            reviews.add(review)
             let store = self.store
             let memory = self.memory
             return CloudModel(
                 endpoint: url, transport: makeTransport(), reviewer: review, auth: auth,
                 // Read fresh for each reply, on this device, so new notes
-                // and private words count right away.
-                redactor: { Redactor(memory: memory?.notes() ?? [], privateWords: store.load().privateWords) },
-                isOn: { store.load().isOn }
+                // and private words count right away. Notes or words that
+                // can't be read mean nothing is sent.
+                redactor: {
+                    guard let memory else { throw MemoryStore.Unavailable() }
+                    switch memory.contents() {
+                    case .notes(let notes): return Redactor(memory: notes, privateWords: try store.load().privateWords)
+                    case .unreadable: throw MemoryStore.Unreadable()
+                    case .unavailable: throw MemoryStore.Unavailable()
+                    }
+                },
+                isOn: { store.loadOrOff().isOn }
             )
         }
+    }
+
+    /// Reads the settings again, as after the device was locked at launch.
+    func refresh() {
+        if let fresh = try? store.load() { settings = fresh }
     }
 
     /// The toggle. Turning on asks first; turning off never does.
@@ -67,11 +98,13 @@ public final class CloudHelp: ObservableObject {
         }
     }
 
-    /// The yes to the turn on question.
+    /// The yes to the turn on question. Sign-in, if there is any, starts
+    /// only now, after the yes.
     func confirmTurnOn() {
         asksToTurnOn = false
-        guard isAvailable else { return }
-        update { $0.isOn = true }
+        guard isAvailable, update({ $0.isOn = true }) else { return }
+        let auth = auth
+        signingIn = Task { await auth.signIn() }
     }
 
     func declineTurnOn() {
@@ -79,69 +112,114 @@ public final class CloudHelp: ObservableObject {
     }
 
     func turnOff() {
-        update { $0.isOn = false }
+        // Settings that can't be read already count as off, so this never
+        // waits on a save to stop sending.
+        if !update({ $0.isOn = false }) { settings.isOn = false }
         // Anything waiting for a yes is not sent.
-        review.answer(.cancel)
+        for review in reviews.allObjects { review.cancelPending() }
     }
 
     func addPrivateWord() {
-        var next = settings
-        if next.addPrivateWord(newPrivateWord) {
-            settings = next
-            store.save(next)
-            newPrivateWord = ""
-        }
+        let word = newPrivateWord
+        if update({ _ = $0.addPrivateWord(word) }) { newPrivateWord = "" }
     }
 
     func removePrivateWord(_ word: String) {
         update { $0.removePrivateWord(word) }
     }
 
-    private func update(_ change: (inout CloudHelpSettings) -> Void) {
-        var next = settings
+    /// Erases the private words, as Forget everything does. The setting
+    /// itself stays as it was.
+    func forgetPrivateWords() throws {
+        if var current = try? store.load() {
+            current.privateWords = []
+            try store.save(current)
+            settings = current
+        } else {
+            try store.erase()
+            settings = .off
+        }
+    }
+
+    /// Changes the saved settings, read fresh so words saved elsewhere or
+    /// unreadable at launch are never written over. Returns false when
+    /// nothing changed.
+    @discardableResult
+    private func update(_ change: (inout CloudHelpSettings) -> Void) -> Bool {
+        guard var next = try? store.load() else {
+            status = CloudWords.privateUnreadable
+            return false
+        }
+        let before = next
         change(&next)
+        guard next != before else {
+            settings = next
+            return false
+        }
+        do {
+            try store.save(next)
+        } catch {
+            status = CloudWords.privateUnreadable
+            return false
+        }
         settings = next
-        store.save(next)
+        status = nil
+        return true
     }
 }
 
-/// Holds a preview on screen until the person sends it or not.
+/// Holds a chat's preview on screen until the person sends it or not.
 ///
 /// `CloudModel` waits here before every request. The sheet reads `pending`,
-/// shows its exact bytes, and answers. Going away without an answer, or the
-/// reply being stopped, counts as not sending.
+/// shows its exact bytes, and answers for that preview by its id. Going
+/// away without an answer, the chat screen leaving, or the reply being
+/// stopped all count as not sending.
 @MainActor
 public final class CloudReview: ObservableObject, CloudReviewing {
     @Published public private(set) var pending: CloudPreview?
     private var waiting: CheckedContinuation<CloudConsent, Never>?
+    private var watchers: [CheckedContinuation<CloudPreview, Never>] = []
 
     public init() {}
 
     public func review(_ preview: CloudPreview) async -> CloudConsent {
         if Task.isCancelled { return .cancel }
         // Only one question at a time; an older one is not sent.
-        answer(.cancel)
+        cancelPending()
         let id = preview.id
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 waiting = continuation
                 pending = preview
+                let watchers = self.watchers
+                self.watchers = []
+                for watcher in watchers { watcher.resume(returning: preview) }
             }
         } onCancel: {
-            Task { @MainActor in self.cancel(id) }
+            Task { @MainActor in self.answer(.cancel, for: id) }
         }
     }
 
-    /// The person's answer to what is showing.
-    public func answer(_ consent: CloudConsent) {
-        guard let waiting else { return }
+    /// The person's answer to the preview with `id`, the one they saw. An
+    /// answer meant for any other preview is ignored, so a tap can never
+    /// send something that wasn't on screen.
+    public func answer(_ consent: CloudConsent, for id: UUID) {
+        guard let pending, pending.id == id else { return }
+        self.pending = nil
+        let waiting = self.waiting
         self.waiting = nil
-        pending = nil
-        waiting.resume(returning: consent)
+        waiting?.resume(returning: consent)
     }
 
-    private func cancel(_ id: UUID) {
-        if pending?.id == id { answer(.cancel) }
+    /// Sends nothing for whatever is waiting.
+    public func cancelPending() {
+        if let id = pending?.id { answer(.cancel, for: id) }
+    }
+
+    /// Waits until a preview is on screen, with no timing involved. For tests.
+    package func shown() async -> CloudPreview {
+        if let pending { return pending }
+        return await withCheckedContinuation { watchers.append($0) }
     }
 
     /// Puts a preview on screen with nothing waiting on it, for screenshots.
@@ -159,6 +237,9 @@ public struct CloudHelpView: View {
         self.help = help
     }
 
+    /// The add button, at least the size a finger needs.
+    static let addButtonSize: CGFloat = 44
+
     public var body: some View {
         ZStack {
             Backdrop()
@@ -169,12 +250,22 @@ public struct CloudHelpView: View {
                         .accessibilityAddTraits(.isHeader)
                     switchCard
                     privateWordsCard
+                    if let status = help.status {
+                        Text(status)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .padding(.horizontal, Theme.gutter)
                 .padding(.vertical, 20)
                 .frame(maxWidth: Theme.readableWidth)
                 .frame(maxWidth: .infinity)
             }
+        }
+        .onAppear { help.refresh() }
+        .onChange(of: help.status) { _, status in
+            if let status { AccessibilityNotification.Announcement(status).post() }
         }
         .sheet(isPresented: $help.asksToTurnOn) {
             CloudTurnOnSheet(onYes: { help.confirmTurnOn() }, onNo: { help.declineTurnOn() })
@@ -183,7 +274,7 @@ public struct CloudHelpView: View {
 
     private var detail: String {
         if !help.isAvailable { return CloudWords.unavailable }
-        return help.settings.isOn ? CloudWords.onDetail : CloudWords.offDetail
+        return help.usesCloudForNewChats ? CloudWords.onDetail : CloudWords.offDetail
     }
 
     private var switchCard: some View {
@@ -218,12 +309,17 @@ public struct CloudHelpView: View {
             HStack(spacing: 10) {
                 TextField(CloudWords.privatePlaceholder, text: $help.newPrivateWord)
                     .textFieldStyle(.plain)
+                    // The keyboard never learns or suggests private words.
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    #endif
                     .onSubmit { help.addPrivateWord() }
                 Button { help.addPrivateWord() } label: {
                     Image(systemName: "plus")
                         .font(.headline)
                         .foregroundStyle(Theme.onAccent)
-                        .frame(width: 36, height: 36)
+                        .frame(width: Self.addButtonSize, height: Self.addButtonSize)
                         .background(Theme.accent, in: Circle())
                         .pointerHover(in: Circle())
                 }
@@ -233,15 +329,37 @@ public struct CloudHelpView: View {
                 .disabled(help.newPrivateWord.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             .padding(.leading, 14)
-            .padding(.trailing, 6)
-            .padding(.vertical, 6)
+            .padding(.trailing, 4)
+            .padding(.vertical, 4)
             .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: Theme.smallCorner, style: .continuous))
-            ForEach(help.settings.privateWords, id: \.self) { word in
+            PrivateWordList(words: help.settings.privateWords) { help.removePrivateWord($0) }
+        }
+        .padding(16)
+        .card(scheme)
+    }
+}
+
+/// What the system hides on screens marked private: nothing while the app
+/// is in use, and everything marked private once it isn't, so the app
+/// switcher's picture never shows private words or a payload.
+func privateRedaction(_ phase: ScenePhase) -> RedactionReasons {
+    phase == .active ? [] : .privacy
+}
+
+/// The words always hidden, each with a way to stop hiding it.
+struct PrivateWordList: View {
+    let words: [String]
+    let onRemove: (String) -> Void
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(words, id: \.self) { word in
                 HStack {
                     Label(word, systemImage: "eye.slash")
                         .font(.body)
                     Spacer(minLength: 8)
-                    Button { help.removePrivateWord(word) } label: {
+                    Button { onRemove(word) } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.secondary)
                             .frame(minWidth: 44, minHeight: 44)
@@ -252,8 +370,10 @@ public struct CloudHelpView: View {
                 }
             }
         }
-        .padding(16)
-        .card(scheme)
+        // Hidden wherever the system hides private things, and in the app
+        // switcher.
+        .privacySensitive()
+        .redacted(reason: privateRedaction(scenePhase))
     }
 }
 
@@ -346,22 +466,40 @@ struct CloudTurnOnSheet: View {
     private static let symbols = ["cloud", "eye", "eye.slash", "lock", "heart", "arrow.uturn.backward"]
 }
 
-/// "Here is exactly what leaves your device": the request's own bytes, with
-/// what was taken out marked, and a choice to send them or not.
+/// "Here is exactly what leaves your device": the whole request, its
+/// address, headers and body, with what was taken out marked, and a choice
+/// to send it or not.
 struct CloudPreviewSheet: View {
     let preview: CloudPreview
     let onSend: () -> Void
     let onCancel: () -> Void
-    @Environment(\.colorScheme) private var scheme
 
-    /// What the payload card shows: the very bytes that will be sent.
-    static func shownText(_ preview: CloudPreview) -> String { preview.request.text }
+    /// What the payload card shows: the very request that will be sent.
+    static func shownText(_ preview: CloudPreview) -> String { preview.request.shownText }
 
     static func hiddenLine(_ preview: CloudPreview) -> String {
         let parts = Redaction.Kind.allCases.compactMap { kind in
             preview.hidden[kind].map { kind.counted($0) }
         }
         return parts.isEmpty ? CloudWords.previewNothingHidden : CloudWords.previewHidden(parts)
+    }
+
+    /// What VoiceOver reads instead of the raw text: where it goes, the
+    /// labels, then each message by who said it, with masks read as
+    /// "hidden name" and the like.
+    static func spokenLines(_ preview: CloudPreview) -> [String] {
+        let request = preview.request
+        var lines = [CloudWords.spokenAddress(request.url.absoluteString)]
+        let labels = request.headers.sorted { $0.key.lowercased() < $1.key.lowercased() }.map { "\($0.key), \($0.value)" }
+        if !labels.isEmpty { lines.append(CloudWords.spokenLabels(labels)) }
+        if let payload = try? JSONDecoder().decode(CloudPayload.self, from: request.body) {
+            lines += payload.messages.map {
+                CloudWords.spokenMessage(role: $0.role, text: Redaction.Kind.spoken($0.text))
+            }
+        } else {
+            lines.append(Redaction.Kind.spoken(request.text))
+        }
+        return lines
     }
 
     var body: some View {
@@ -374,19 +512,14 @@ struct CloudPreviewSheet: View {
                     Text(CloudWords.previewDetail)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     Label(CloudWords.previewDestination(preview.request.url.host ?? ""), systemImage: "arrow.up.forward.circle")
                     Label(Self.hiddenLine(preview), systemImage: "eye.slash")
                 }
                 .font(.subheadline.weight(.medium))
-                Text(highlighted)
-                    .font(.system(.footnote, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(14)
-                    .card(scheme)
-                    .accessibilityIdentifier("cloudPayload")
+                CloudPayloadCard(preview: preview)
                 VStack(spacing: 6) {
                     Button(CloudWords.previewSend, action: onSend)
                         .buttonStyle(PrimaryButtonStyle())
@@ -404,10 +537,39 @@ struct CloudPreviewSheet: View {
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
     }
+}
 
-    /// The payload with each mask tinted, so what was taken out stands out.
+/// The request itself, as plain text, with what was taken out marked.
+/// VoiceOver reads it message by message instead of as raw text.
+struct CloudPayloadCard: View {
+    let preview: CloudPreview
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        Text(highlighted)
+            .font(.system(.footnote, design: .monospaced))
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .card(scheme)
+            // Hidden wherever the system hides private things, and in the
+            // app switcher.
+            .privacySensitive()
+            .redacted(reason: privateRedaction(scenePhase))
+            .accessibilityRepresentation {
+                VStack(alignment: .leading) {
+                    ForEach(Array(CloudPreviewSheet.spokenLines(preview).enumerated()), id: \.offset) { _, line in
+                        Text(line)
+                    }
+                }
+            }
+            .accessibilityIdentifier("cloudPayload")
+    }
+
+    /// The request with each mask tinted, so what was taken out stands out.
     private var highlighted: AttributedString {
-        var text = AttributedString(Self.shownText(preview))
+        var text = AttributedString(CloudPreviewSheet.shownText(preview))
         for kind in Redaction.Kind.allCases {
             var start = text.startIndex
             while let range = text[start...].range(of: kind.mask) {
@@ -443,12 +605,14 @@ private struct CloudPreviewPresenter: ViewModifier {
     @ObservedObject var review: CloudReview
 
     func body(content: Content) -> some View {
+        // Swiping the sheet away only ever cancels, which is always safe.
+        // Send is tied to the preview that sheet showed.
         content.sheet(
-            item: Binding(get: { review.pending }, set: { if $0 == nil { review.answer(.cancel) } })
+            item: Binding(get: { review.pending }, set: { if $0 == nil { review.cancelPending() } })
         ) { preview in
             CloudPreviewSheet(preview: preview,
-                              onSend: { review.answer(.send) },
-                              onCancel: { review.answer(.cancel) })
+                              onSend: { review.answer(.send, for: preview.id) },
+                              onCancel: { review.answer(.cancel, for: preview.id) })
         }
     }
 }

@@ -17,6 +17,7 @@ in lint, a skill, or CI.
 
 - `make verify`: everything CI runs (brand check, tests, builds, screenshots)
 - `make test`: package unit tests (Swift Testing)
+- `make build-release`: Release builds for macOS and the iOS Simulator (part of verify). Anything behind `#if DEBUG`, like the showcase, must only be used behind it too
 - `make pulse`: fetch the competitor watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
 - `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`
 - `make generate`: regenerate `Pebble.xcodeproj` after editing `project.yml`

@@ -262,6 +262,8 @@ struct FeedCard: View {
             .accessibilityHint(action.hint)
             // Voice Control users can say the words they see on the card.
             .accessibilityInputLabels([Text(action.title), Text(item.title)])
+            // Not redundant: `children: .ignore` makes a new element without
+            // the button's trait. The UI tests find these cards as buttons.
             .accessibilityAddTraits(.isButton)
         } else {
             content(actionTitle: nil)

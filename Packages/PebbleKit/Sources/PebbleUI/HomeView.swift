@@ -78,7 +78,9 @@ public struct HomeView: View {
         self.memory = memory
         self.looks = looks
         self.cloud = cloud
-        let chatModel = cloud?.chatModel(local: model) ?? model
+        // One store for the notes: the redactor must read the same notes
+        // the memory screen writes.
+        assert(cloud.map { $0.memory === memory } ?? true, "Pass the same MemoryStore to CloudHelp and HomeView")
         _feed = StateObject(wrappedValue: FeedModel(sources: feed, needsYou: needsYou, now: now))
         let needed = OnboardingFlow.isNeeded(store: onboarding, names: names)
         // People who named their agent before the first run existed count as finished.
@@ -86,15 +88,30 @@ public struct HomeView: View {
         _finished = State(initialValue: !needed)
         // The chat starts after the first run so it opens with the chosen name.
         _chat = State(initialValue: needed ? nil
-            : ChatController.make(brand: brand, model: chatModel, names: names, conversation: conversation))
+            : Self.newChat(brand: brand, model: model, names: names, cloud: cloud, conversation: conversation))
         _section = State(initialValue: section)
     }
 
-    /// The model a new chat gets. A chat keeps the model it started with,
-    /// so its opening line stays true; changing the cloud setting counts
-    /// from the next new chat.
-    private var newChatModel: any ModelClient {
-        cloud?.chatModel(local: model) ?? model
+    /// A new chat with the model the setting picks now. A chat keeps the
+    /// model it started with, so its opening line stays true; changing the
+    /// cloud setting counts from the next new chat. A cloud chat gets its
+    /// own preview gate, shown over that chat alone.
+    static func newChat(brand: Brand, model: any ModelClient, names: any AgentNameStoring, cloud: CloudHelp?,
+                        conversation: Conversation?) -> ChatController {
+        let review = CloudReview()
+        let chatModel = cloud?.chatModel(local: model, review: review) ?? model
+        return ChatController.make(brand: brand, model: chatModel, names: names, conversation: conversation,
+                                   review: chatModel.runsOnDevice ? nil : review)
+    }
+
+    private func newChat() -> ChatController {
+        Self.newChat(brand: brand, model: model, names: names, cloud: cloud, conversation: nil)
+    }
+
+    /// Whether a new chat would run on this device, worked out from the
+    /// setting without making a model.
+    private var newChatRunsOnDevice: Bool {
+        cloud?.runsOnDevice(local: model) ?? model.runsOnDevice
     }
 
     /// True when the window is wide enough for a sidebar.
@@ -121,9 +138,9 @@ public struct HomeView: View {
                 .transition(.opacity)
             } else {
                 OnboardingView(brand: brand, names: names, store: onboarding, looks: looks,
-                               onDevice: newChatModel.runsOnDevice) { line in
+                               onDevice: newChatRunsOnDevice) { line in
                     firstMessage = line
-                    chat = ChatController.make(brand: brand, model: newChatModel, names: names, conversation: nil)
+                    chat = newChat()
                     withAnimation(.easeInOut(duration: 0.4)) { finished = true }
                 }
                 .transition(.opacity)
@@ -222,7 +239,7 @@ public struct HomeView: View {
         guard finished else { return }
         chat?.stopReplying()
         firstMessage = nil
-        chat = ChatController.make(brand: brand, model: newChatModel, names: names, conversation: nil)
+        chat = newChat()
         section = .chat
     }
 
@@ -296,8 +313,6 @@ public struct HomeView: View {
         ChatView(controller: chat, look: AgentLook.load(from: looks), firstMessage: firstMessage,
                  onFirstMessageSent: { firstMessage = nil })
             .background(Backdrop())
-            // What would leave the device, shown over the chat that asked.
-            .cloudPreview(cloud?.review)
             // A new chat is a new conversation, so it starts fresh on screen too.
             // Load-bearing: ChatView keeps its controller in a StateObject, so
             // without this id a new controller would never reach the screen.
@@ -452,6 +467,13 @@ public struct HomeCommands: Commands {
 
     public init() {}
 
+    /// Command 1 to Command 9 for the first nine places. A tenth gets no
+    /// shortcut rather than a key that doesn't exist.
+    static func goShortcut(for index: Int) -> KeyboardShortcut? {
+        guard (0..<9).contains(index) else { return nil }
+        return KeyboardShortcut(KeyEquivalent(Character(String(index + 1))))
+    }
+
     public var body: some Commands {
         CommandGroup(replacing: .newItem) {
             Button(HomeWords.newChatTitle) { actions?.newChat() }
@@ -462,7 +484,7 @@ public struct HomeCommands: Commands {
             // Numbered in sidebar order, the way Apple's apps do it.
             ForEach(Array(HomeSection.allCases.enumerated()), id: \.element) { index, place in
                 Button(place.title) { actions?.show(place) }
-                    .keyboardShortcut(KeyEquivalent(Character(String(index + 1))))
+                    .keyboardShortcut(Self.goShortcut(for: index))
                     .disabled(actions?.canNavigate != true)
             }
         }
