@@ -8,6 +8,10 @@ enum Theme {
     static let smallCorner: CGFloat = 14
     static let gutter: CGFloat = 24
     static let readableWidth: CGFloat = 560
+    /// The chat column on wide screens: about 75 characters a line at the
+    /// default text size, so lines never run edge to edge on a big iPad.
+    static let chatWidth: CGFloat = 680
+    static let bubbleWidth: CGFloat = 520
 
     /// The warm accent used for primary actions.
     static let accent = Color(red: 0.96, green: 0.52, blue: 0.29)
@@ -67,6 +71,27 @@ struct QuietButtonStyle: ButtonStyle {
             .frame(minHeight: 44)
             .opacity(configuration.isPressed ? 0.5 : 1)
             .contentShape(Rectangle())
+    }
+}
+
+extension View {
+    /// Centers content in a column no wider than `width`, with the usual
+    /// gutter, while whatever holds it (a scroll view) stays full width.
+    func readableColumn(_ width: CGFloat) -> some View {
+        padding(.horizontal, Theme.gutter)
+            .frame(maxWidth: width)
+            .frame(maxWidth: .infinity)
+    }
+
+    /// The pointer's highlight on iPad. Elsewhere this does nothing.
+    @ViewBuilder
+    func pointerHover(in shape: some Shape = RoundedRectangle(cornerRadius: Theme.smallCorner, style: .continuous)) -> some View {
+        #if os(iOS)
+        contentShape(.hoverEffect, shape)
+            .hoverEffect(.highlight)
+        #else
+        self
+        #endif
     }
 }
 

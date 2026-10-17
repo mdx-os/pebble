@@ -8,6 +8,9 @@ import SwiftUI
 /// Nothing here reads or writes the person's real data.
 public enum ShowcaseScene: String, CaseIterable, Sendable {
     case hello, name, look, ideas, memory, confirm, confirmTimedOut, firstChat
+    /// The home screen after the first run: the sidebar on a wide window,
+    /// one column on a narrow one.
+    case home, homeMemory, shortcuts
 
     public static let launchKey = "pebbleScreen"
 
@@ -18,6 +21,15 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         looks.removePersistentDomain(forName: "pebble.showcase")
         return Group {
             switch self {
+            case .home, .homeMemory:
+                HomeView(
+                    brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
+                    onboarding: InMemoryOnboardingStore(finished: true), memory: Self.sampleMemory(),
+                    looks: looks, conversation: Self.sampleFirstChat(),
+                    section: self == .home ? .chat : .memory
+                )
+            case .shortcuts:
+                KeyboardShortcutsView()
             case .hello, .name, .look, .ideas:
                 OnboardingView(
                     brand: brand,

@@ -35,6 +35,43 @@ struct ChatViewTests {
     }
 }
 
+/// Answers only after a long pause, so a test can act while a reply is coming.
+private struct SlowModel: ModelClient {
+    var runsOnDevice: Bool { true }
+    func reply(to transcript: [ChatTurn]) async throws -> String {
+        try await Task.sleep(for: .seconds(30))
+        return "late"
+    }
+}
+
+@MainActor
+struct ChatSendingTests {
+    let brand = Brand(name: "Nova")
+
+    @Test func aSecondSendWhileReplyingIsIgnoredAndKeepsTheDraft() {
+        let controller = ChatController(brand: brand, model: SlowModel(), names: InMemoryAgentNameStore(stored: "Pip"))
+        controller.submit("Pack lunches")
+        #expect(controller.isReplying)
+        let turns = controller.conversation.turns.count
+        controller.draft = "and then walk"
+        controller.submit(controller.draft)
+        #expect(controller.conversation.turns.count == turns)
+        #expect(controller.draft == "and then walk")
+        controller.stopReplying()
+    }
+
+    @Test func stoppingAReplyAddsNothing() async {
+        let controller = ChatController(brand: brand, model: SlowModel(), names: InMemoryAgentNameStore(stored: "Pip"))
+        controller.submit("Pack lunches")
+        let turns = controller.conversation.turns.count
+        controller.stopReplying()
+        for _ in 0..<100 where controller.isReplying { try? await Task.sleep(for: .milliseconds(10)) }
+        #expect(!controller.isReplying)
+        #expect(controller.conversation.turns.count == turns)
+        #expect(controller.failure == nil)
+    }
+}
+
 @MainActor
 struct ChatRenameTests {
     let brand = Brand(name: "Nova")

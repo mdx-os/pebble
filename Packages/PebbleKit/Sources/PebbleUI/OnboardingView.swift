@@ -156,6 +156,7 @@ public struct OnboardingView: View {
                             RoundedRectangle(cornerRadius: Theme.smallCorner, style: .continuous)
                                 .stroke(model.look == look ? Theme.accent : .clear, lineWidth: 2)
                         )
+                        .pointerHover()
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(look.title)
@@ -180,6 +181,7 @@ public struct OnboardingView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(16)
                     .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
+                    .pointerHover(in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
                 }
                 .buttonStyle(.plain)
             }
@@ -237,6 +239,7 @@ struct IdeaCardButton: View {
             .padding(14)
             .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
+            .pointerHover(in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(job.title)

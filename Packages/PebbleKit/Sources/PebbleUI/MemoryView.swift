@@ -130,8 +130,10 @@ public struct MemoryView: View {
                     .foregroundStyle(.white)
                     .frame(width: 36, height: 36)
                     .background(Theme.accent, in: Circle())
+                    .pointerHover(in: Circle())
             }
             .buttonStyle(.plain)
+            .help(MemoryWords.addTitle)
             .disabled(model.newNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .accessibilityLabel(MemoryWords.addTitle)
         }
@@ -207,10 +209,14 @@ struct MemoryRow: View {
                     Button(action: onEdit) { Label(MemoryWords.editTitle, systemImage: "pencil") }
                         .labelStyle(.iconOnly)
                         .frame(minWidth: 44, minHeight: 44)
+                        .pointerHover(in: Circle())
+                        .help(MemoryWords.editTitle)
                         .accessibilityLabel(MemoryWords.editTitle)
                     Button(role: .destructive, action: onForget) { Label(MemoryWords.forgetTitle, systemImage: "trash") }
                         .labelStyle(.iconOnly)
                         .frame(minWidth: 44, minHeight: 44)
+                        .pointerHover(in: Circle())
+                        .help(MemoryWords.forgetTitle)
                         .accessibilityLabel(MemoryWords.forgetTitle)
                 }
                 .font(.subheadline)
