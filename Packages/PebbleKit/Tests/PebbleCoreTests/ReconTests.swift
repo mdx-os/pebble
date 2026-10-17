@@ -1,0 +1,350 @@
+import Foundation
+@testable import PebbleCore
+import Testing
+
+struct ReconTests {
+    static let readOn = SampleSources.day(2026, 10, 17)
+
+    static func summary(_ topic: String) throws -> ReconSummary {
+        let task = try #require(ReconTask(topic: topic))
+        let sources = try SampleSources().sources(for: task)
+        return LocalReconSummarizer().summary(task, id: "task:1", sources: sources, gatheredAt: readOn)
+    }
+
+    // MARK: Phrasing
+
+    @Test(arguments: [
+        ("look into the Riverside pool reopening for me", "the Riverside pool reopening"),
+        ("Look into the Riverside pool reopening.", "the Riverside pool reopening"),
+        ("Can you look into heat pumps for our house?", "heat pumps for our house"),
+        ("could you please research the school's new start times", "the school's new start times"),
+        ("Research quiet dishwashers", "quiet dishwashers"),
+        ("Please find out about the library's new Sunday hours", "the library's new Sunday hours"),
+        ("find out more about the bus strike for me please", "the bus strike"),
+        ("Hey Pip, look into flu shots near us", "flu shots near us"),
+        ("help me read up on composting", "composting"),
+        ("I\u{2019}d like you to dig into the hydro bill", "the hydro bill"),
+    ])
+    func asksToLookIntoSomething(said: String, topic: String) {
+        #expect(ReconIntent.topic(in: said) == topic)
+    }
+
+    @Test(arguments: [
+        "Research shows coffee is fine",
+        "research says sleep matters",
+        "I looked into it yesterday",
+        "I need to research this later",
+        "Find me a dentist open Saturdays",
+        "What did you find out?",
+        "Let's look at the plan for tomorrow",
+        "Please look into it",
+        "look into this for me",
+        "Can you look into",
+        "Plan my morning",
+        "So sorry, I'm late",
+        "Remind me about the pool",
+        "",
+    ])
+    func ordinarySentencesAreNotRequests(said: String) {
+        #expect(ReconIntent.topic(in: said) == nil)
+    }
+
+    // MARK: Care comes first
+
+    @Test(arguments: [
+        "look into how to kill myself",
+        "Can you research ways to end my life",
+        "find out about overdose amounts for me",
+        "research suicide methods",
+    ])
+    func wordsOfCrisisNeverBecomeATask(said: String) {
+        #expect(CareCheck.needsCare(said))
+        #expect(ReconIntent.topic(in: said) == nil)
+        #expect(ReconTask(topic: said) == nil)
+        let runner = ReconRunner(engine: LocalFakeEngine(rule: .isolated()), provider: SampleSources())
+        #expect(runner.lookInto(said) == nil)
+        #expect(runner.tasks.isEmpty)
+    }
+
+    // MARK: Every point has a source
+
+    @Test(arguments: [SampleSources.poolTopic, SampleSources.libraryTopic])
+    func everyPointNamesARealSource(topic: String) throws {
+        let summary = try Self.summary(topic)
+        let ids = Set(summary.sources.map(\.id))
+        #expect((3...ReconSummary.maxPoints).contains(summary.points.count))
+        for point in summary.points {
+            #expect(!point.sourceIDs.isEmpty, "no source for: \(point.text)")
+            #expect(Set(point.sourceIDs).isSubset(of: ids))
+            // The words are the source's own: the first source really says it.
+            let first = try #require(summary.source(point.sourceIDs[0]))
+            #expect(first.text.contains(point.text), "\(first.publisher) doesn't say: \(point.text)")
+        }
+        #expect(summary.overviewSourceIDs.isEmpty)
+        #expect(summary.madeOnDevice)
+    }
+
+    /// A second source is listed beside a point only when it repeats the
+    /// point's dates, prices and numbers too.
+    @Test func aSourceIsListedOnlyBesideWhatItSays() throws {
+        let summary = try Self.summary(SampleSources.poolTopic)
+        let swim = try #require(summary.points.first { $0.text.contains("Family swim") })
+        #expect(swim.sourceIDs == ["sample:parks-pool"])
+        let library = try Self.summary(SampleSources.libraryTopic)
+        let sundays = try #require(library.points.first { $0.text.contains("noon to 5") })
+        #expect(Set(sundays.sourceIDs) == ["sample:library-hours", "sample:gazette-library"])
+    }
+
+    @Test func aPointWithoutARealSourceIsDropped() {
+        let source = SampleSources.all[0]
+        let summary = ReconSummary(
+            id: "t", topic: "the pool", overview: "Some words.",
+            points: [
+                ReconPoint(id: "a", text: "Backed by a real source.", sourceIDs: [source.id]),
+                ReconPoint(id: "b", text: "Backed by nothing.", sourceIDs: []),
+                ReconPoint(id: "c", text: "Backed by a made up source.", sourceIDs: ["nowhere"]),
+                ReconPoint(id: "d", text: "  ", sourceIDs: [source.id]),
+                ReconPoint(id: "e", text: "Half backed.", sourceIDs: ["nowhere", source.id],
+                           disagreement: ReconDisagreement(text: "One side only.", sourceIDs: [source.id, "nowhere"])),
+            ],
+            sources: [source], gatheredAt: Self.readOn, madeOnDevice: true)
+        #expect(summary.points.map(\.id) == ["a", "e"])
+        #expect(summary.points[1].sourceIDs == [source.id])
+        // A disagreement needs two real sides.
+        #expect(summary.points[1].disagreement == nil)
+    }
+
+    @Test func anOverviewNamingNoRealSourceIsReplaced() {
+        let source = SampleSources.all[0]
+        let summary = ReconSummary(id: "t", topic: "the pool", overview: "The pool is shut forever.",
+                                   overviewSourceIDs: ["nowhere"],
+                                   points: [ReconPoint(id: "a", text: "Real.", sourceIDs: [source.id])],
+                                   sources: [source], gatheredAt: Self.readOn, madeOnDevice: false)
+        #expect(summary.overview.hasPrefix("I read 1 source on the pool."))
+        #expect(summary.overviewSourceIDs.isEmpty)
+    }
+
+    @Test func noPointsAtAllWhenNothingWasFound() throws {
+        let task = try #require(ReconTask(topic: "volcanoes on Mars"))
+        let sources = try SampleSources().sources(for: task)
+        #expect(sources.isEmpty)
+        let summary = LocalReconSummarizer().summary(task, id: "t", sources: sources, gatheredAt: Self.readOn)
+        #expect(summary.points.isEmpty)
+        #expect(summary.overview == ReconWords.nothingFound("volcanoes on Mars"))
+    }
+
+    // MARK: Disagreement and dates
+
+    @Test func disagreementIsSaidPlainly() throws {
+        let summary = try Self.summary(SampleSources.poolTopic)
+        #expect(summary.disagreements.count == 1)
+        let point = try #require(summary.points.first { $0.disagreement != nil })
+        let disagreement = try #require(point.disagreement)
+        #expect(Set(disagreement.sourceIDs) == ["sample:parks-pool", "sample:gazette-pool"])
+        #expect(disagreement.text.hasPrefix("Sources don't agree on this."))
+        #expect(disagreement.text.contains("City of Riverside Parks says November 10, and theirs is the newer page."))
+        #expect(disagreement.text.contains("Riverside Gazette says November 3."))
+        // The point leads with the newer page, and lists both sides.
+        #expect(point.text.contains("November 10"))
+        #expect(Set(point.sourceIDs) == Set(disagreement.sourceIDs))
+        #expect(summary.overview.contains("They don't agree on one thing, so I marked it."))
+    }
+
+    @Test func sourcesThatAgreeShowNoDisagreement() throws {
+        let summary = try Self.summary(SampleSources.libraryTopic)
+        #expect(summary.disagreements.isEmpty)
+        #expect(!summary.overview.contains("agree"))
+    }
+
+    @Test func oldSourcesAreNamed() throws {
+        let summary = try Self.summary(SampleSources.poolTopic)
+        #expect(summary.oldSources.map(\.id) == ["sample:council-pool"])
+        #expect(summary.overview.contains("One of them is more than a year old."))
+        #expect(summary.gatheredAt == Self.readOn)
+    }
+
+    @Test func theGatheredLineSaysWhen() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Toronto")!
+        let now = Self.readOn
+        #expect(ReconWords.gathered(now - 60, now: now, calendar: calendar).hasPrefix("Gathered today at "))
+        #expect(ReconWords.gathered(now - 86_400, now: now, calendar: calendar).hasPrefix("Gathered yesterday at "))
+        #expect(ReconWords.gathered(now - 5 * 86_400, now: now, calendar: calendar).hasPrefix("Gathered on "))
+    }
+
+    @Test func dateAndPriceValuesAreRead() {
+        let values = ReconText.values(in: "Opens November 3, 2026 for 6 dollars, or $4.50 at 9.")
+        #expect(values.map(\.text) == ["November 3, 2026", "6 dollars", "$4.50", "9"])
+        #expect(ReconText.differ(ReconText.values(in: "on November 3"), ReconText.values(in: "on November 10")))
+        #expect(!ReconText.differ(ReconText.values(in: "on November 3"), ReconText.values(in: "November 3 and 10 dollars")))
+        #expect(!ReconText.differ(ReconText.values(in: "at 9"), ReconText.values(in: "at 10")))
+    }
+
+    // MARK: On the task engine
+
+    @Test func aReconPlaysItsStepsOnTheEngine() throws {
+        let start = Self.readOn
+        let engine = LocalFakeEngine(rule: .isolated(), origin: start)
+        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let id = try #require(runner.lookInto(SampleSources.poolTopic))
+        #expect(runner.isRecon(id))
+        func shown() throws -> AgentTask { try #require(runner.tasks.first { $0.id == id }) }
+        #expect(try shown().title == "Look into the Riverside pool reopening")
+        #expect(try shown().step == "Planning a few questions")
+        #expect(try shown().state == .running)
+        engine.advance(by: 3)
+        #expect(try shown().step == "Reading 4 sources")
+        engine.advance(by: 6)
+        #expect(try shown().step == "Checking the dates")
+        engine.advance(by: 3)
+        #expect(try shown().step == "Putting it together")
+        #expect(runner.summary(for: id) == nil)
+        engine.advance(by: 3)
+        #expect(try shown().state == .done)
+        #expect(try shown().step == ReconWords.doneLine)
+        let summary = try #require(runner.summary(for: id))
+        #expect(summary.id == id)
+        // Read when the person asked, by the engine's own clock.
+        #expect(summary.gatheredAt == start)
+        #expect(try shown().result == summary.plainText)
+        // Sample sources make the card an example.
+        #expect(runner.isSample)
+    }
+
+    @Test func theCardStaysLiveUntilTheSummaryIsIn() async throws {
+        let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
+        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let gate = Gate()
+        let id = try #require(runner.lookInto(SampleSources.poolTopic, with: GatedSummarizer(gate: gate)))
+        engine.advance(by: 60)
+        #expect(engine.tasks.first?.state == .done)
+        let waiting = try #require(runner.tasks.first { $0.id == id })
+        #expect(waiting.state == .running)
+        #expect(waiting.step == ReconWords.puttingTogether)
+        #expect(waiting.progress == .indeterminate)
+        #expect(runner.summary(for: id) == nil)
+        await gate.open()
+        await runner.settle(id)
+        #expect(runner.tasks.first { $0.id == id }?.state == .done)
+        #expect(runner.summary(for: id) != nil)
+    }
+
+    @Test func stoppingAReconKeepsNoSummary() async throws {
+        let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
+        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let gate = Gate()
+        let id = try #require(runner.lookInto(SampleSources.poolTopic, with: GatedSummarizer(gate: gate)))
+        engine.advance(by: 4)
+        #expect(runner.stop(id))
+        await gate.open()
+        await runner.settle(id)
+        engine.advance(by: 60)
+        #expect(runner.tasks.first { $0.id == id }?.state == .stopped)
+        #expect(runner.summary(for: id) == nil)
+    }
+
+    @Test func aReconCantChangeCourseButOtherTasksCan() throws {
+        let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
+        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let recon = try #require(runner.lookInto(SampleSources.libraryTopic))
+        let plan = runner.start(TaskRequest(title: SampleTasks.planTitle))
+        #expect(!runner.redirect(recon, with: "Look at the museum instead"))
+        #expect(runner.redirect(plan, with: "Leave Friday free"))
+        #expect(!runner.isRecon(plan))
+    }
+
+    @Test func nothingFoundStillEndsWithASourcedCard() throws {
+        let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
+        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let id = try #require(runner.lookInto("volcanoes on Mars"))
+        #expect(runner.tasks.first?.step == ReconWords.planning)
+        engine.advance(by: 3)
+        #expect(runner.tasks.first?.step == ReconWords.looking)
+        engine.advance(by: 10)
+        let summary = try #require(runner.summary(for: id))
+        #expect(summary.points.isEmpty)
+        #expect(runner.tasks.first?.step == ReconWords.nothingFoundLine)
+    }
+
+    // MARK: Nothing leaves the device
+
+    @Test func aProviderOffTheDeviceIsNeverAsked() {
+        let provider = RecordingProvider()
+        let runner = ReconRunner(engine: LocalFakeEngine(rule: .isolated()), provider: provider)
+        #expect(runner.lookInto(SampleSources.poolTopic) == nil)
+        #expect(provider.asked == 0)
+        #expect(runner.tasks.isEmpty)
+    }
+
+    @Test func theSampleSourcesStayOnTheDevice() {
+        #expect(SampleSources().runsOnDevice)
+        for source in SampleSources.all {
+            // Domains kept for examples, so nothing real is ever named.
+            #expect(source.url.host?.hasSuffix("example.org") == true)
+        }
+    }
+
+    // MARK: Memory
+
+    @Test func aPointBecomesANoteWithWhereItCameFrom() throws {
+        let summary = try Self.summary(SampleSources.libraryTopic)
+        let point = try #require(summary.points.first)
+        let note = summary.note(for: point)
+        #expect(note.hasPrefix(point.text))
+        #expect(note.contains("Riverside Public Library"))
+        #expect(note.count <= MemoryStore.maxLength)
+    }
+
+    @Test func aLookedUpNoteKeepsItsSourceOnDisk() throws {
+        let data = try JSONEncoder().encode(MemorySource.lookedUp("Riverside Gazette"))
+        #expect(String(decoding: data, as: UTF8.self).contains("\"kind\":\"lookedUp\""))
+        #expect(try JSONDecoder().decode(MemorySource.self, from: data) == .lookedUp("Riverside Gazette"))
+        #expect(MemorySource.lookedUp("Riverside Gazette").label == "From Riverside Gazette")
+        #expect(MemorySource.lookedUp(" ").label == "From something I looked into")
+    }
+
+    @Test func reconWordsAreCalmAndUseNoDashes() {
+        for line in ReconWords.all {
+            #expect(!line.contains("\u{2014}") && !line.contains("\u{2013}"), "dash in: \(line)")
+            #expect(!line.contains("!"), "exclamation in: \(line)")
+        }
+    }
+}
+
+/// Holds a summary back until the test lets it go.
+actor Gate {
+    private var isOpen = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        for continuation in waiting { continuation.resume() }
+        waiting = []
+    }
+}
+
+struct GatedSummarizer: ReconSummarizer {
+    let gate: Gate
+
+    func summarize(_ task: ReconTask, id: String, sources: [ReconSource], gatheredAt: Date) async -> ReconSummary {
+        await gate.wait()
+        return LocalReconSummarizer().summary(task, id: id, sources: sources, gatheredAt: gatheredAt)
+    }
+}
+
+/// A provider that would leave the device. Counts every time it is asked.
+final class RecordingProvider: SourceProvider, @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var asked: Int { lock.lock(); defer { lock.unlock() }; return count }
+
+    func sources(for task: ReconTask) throws -> [ReconSource] {
+        lock.lock(); count += 1; lock.unlock()
+        return SampleSources.all
+    }
+}

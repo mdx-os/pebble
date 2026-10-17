@@ -37,7 +37,10 @@ public struct HomeView: View {
     #endif
 
     /// `feed` is where finished work comes from. Questions come only from
-    /// `needsYou`, which asks through `AskFirst`.
+    /// `needsYou` and `tasks`, which both ask through `AskFirst`. `tasks`
+    /// shows long work on live cards. Without one, looking into something
+    /// plays on the scripted engine with the sample sources, labelled as
+    /// examples.
     public init(
         brand: Brand,
         model: any ModelClient,
@@ -47,11 +50,12 @@ public struct HomeView: View {
         looks: UserDefaults = .standard,
         feed: [any FeedSource] = [EmptyFeedSource()],
         needsYou: NeedsYou = NeedsYou(),
+        tasks: (any TaskEngine)? = nil,
         cloud: CloudHelp? = nil
     ) {
         self.init(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                   looks: looks, conversation: nil, section: .today, feed: feed, needsYou: needsYou,
-                  cloud: cloud)
+                  tasks: tasks, cloud: cloud)
     }
 
     /// Opens on a given conversation, section and feed, for screenshots and tests.
@@ -68,8 +72,13 @@ public struct HomeView: View {
         // No default: screenshots and tests pass their own rule, so they
         // never touch the app's `AskFirst.shared`.
         needsYou: NeedsYou,
+        tasks: (any TaskEngine)? = nil,
+        drivesTasks: Bool = false,
+        sources: any SourceProvider = SampleSources(),
         now: @escaping () -> Date = { Date() },
-        cloud: CloudHelp? = nil
+        cloud: CloudHelp? = nil,
+        // Said in the chat as it opens, for screenshots of what follows.
+        chatLine: String? = nil
     ) {
         self.brand = brand
         self.model = model
@@ -79,15 +88,33 @@ public struct HomeView: View {
         self.looks = looks
         self.cloud = cloud
         let chatModel = cloud?.chatModel(local: model) ?? model
-        _feed = StateObject(wrappedValue: FeedModel(sources: feed, needsYou: needsYou, now: now))
+        // Every task, a recon's included, runs through one runner. With no
+        // engine given, the scripted one plays in real time.
+        let engine = tasks ?? LocalFakeEngine(rule: needsYou.rule)
+        let runner = (engine as? ReconRunner) ?? ReconRunner(engine: engine, provider: sources)
+        let feedModel = FeedModel(sources: feed, needsYou: needsYou, tasks: runner,
+                                  drivesTasks: drivesTasks || tasks == nil, memory: memory, now: now)
+        // Asked at each start, so turning the cloud on or off counts from
+        // the next one, as it does for chats.
+        feedModel.summarizer = { ReconSummarizers.choose(for: cloud?.chatModel(local: model) ?? model) }
+        _feed = StateObject(wrappedValue: feedModel)
         let needed = OnboardingFlow.isNeeded(store: onboarding, names: names)
         // People who named their agent before the first run existed count as finished.
         if !needed, !onboarding.hasFinished() { onboarding.markFinished() }
         _finished = State(initialValue: !needed)
         // The chat starts after the first run so it opens with the chosen name.
-        _chat = State(initialValue: needed ? nil
-            : ChatController.make(brand: brand, model: chatModel, names: names, conversation: conversation))
+        let chat = needed ? nil
+            : Self.wired(ChatController.make(brand: brand, model: chatModel, names: names, conversation: conversation),
+                         to: feedModel)
+        if let chatLine { chat?.submit(chatLine, byHand: false) }
+        _chat = State(initialValue: chat)
         _section = State(initialValue: section)
+    }
+
+    /// Lets a chat offer to look into something. It starts only on the person's tap.
+    private static func wired(_ chat: ChatController, to feed: FeedModel) -> ChatController {
+        chat.lookInto = { [weak feed] topic in feed?.lookInto(topic) ?? false }
+        return chat
     }
 
     /// The model a new chat gets. A chat keeps the model it started with,
@@ -123,7 +150,8 @@ public struct HomeView: View {
                 OnboardingView(brand: brand, names: names, store: onboarding, looks: looks,
                                onDevice: newChatModel.runsOnDevice) { line in
                     firstMessage = line
-                    chat = ChatController.make(brand: brand, model: newChatModel, names: names, conversation: nil)
+                    chat = Self.wired(ChatController.make(brand: brand, model: newChatModel, names: names, conversation: nil),
+                                      to: feed)
                     withAnimation(.easeInOut(duration: 0.4)) { finished = true }
                 }
                 .transition(.opacity)
@@ -158,6 +186,27 @@ public struct HomeView: View {
         }
         .sheet(item: $feed.reading) { item in
             FeedReader(item: item, time: feed.timeLabel(for: item.time), isSample: feed.isSample(item))
+        }
+        .sheet(item: $feed.readingSources) { summary in
+            ReconSourcesSheet(summary: summary, isSample: feed.recon?.provider.isSample == true)
+        }
+        .sheet(item: $feed.choosingPoint) { summary in
+            ReconRememberSheet(model: feed, summary: summary)
+        }
+        // What would leave the device, shown over whichever screen asked:
+        // the chat, or Today when a summary is put together in the cloud.
+        .cloudPreview(cloud?.review)
+        .task(id: feed.drivesTasks) {
+            // Scripted tasks play in real time, wherever the person is.
+            guard feed.drivesTasks else { return }
+            var last = ContinuousClock.now
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+                let now = ContinuousClock.now
+                let step = now - last
+                last = now
+                feed.tick(Double(step.components.seconds) + Double(step.components.attoseconds) / 1e18)
+            }
         }
         // An alert, not a popover, so both choices show on iPad and Esc keeps the chat.
         .alert(HomeWords.newChatQuestion, isPresented: $asksNewChat) {
@@ -210,11 +259,13 @@ public struct HomeView: View {
     private func afterClosingSheets(_ then: @escaping () -> Void) {
         guard feed.reviewing == nil else { return }
         let memorySheetOpen = !usesSidebar && section == .memory
-        let readerOpen = feed.reading != nil
+        let readerOpen = feed.reading != nil || feed.readingSources != nil || feed.choosingPoint != nil
         guard memorySheetOpen || showsShortcuts || readerOpen else { return then() }
         if memorySheetOpen { section = memoryOverChat ? .chat : .today }
         showsShortcuts = false
         feed.reading = nil
+        feed.readingSources = nil
+        feed.choosingPoint = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { then() }
     }
 
@@ -222,7 +273,8 @@ public struct HomeView: View {
         guard finished else { return }
         chat?.stopReplying()
         firstMessage = nil
-        chat = ChatController.make(brand: brand, model: newChatModel, names: names, conversation: nil)
+        chat = Self.wired(ChatController.make(brand: brand, model: newChatModel, names: names, conversation: nil),
+                          to: feed)
         section = .chat
     }
 
@@ -296,8 +348,6 @@ public struct HomeView: View {
         ChatView(controller: chat, look: AgentLook.load(from: looks), firstMessage: firstMessage,
                  onFirstMessageSent: { firstMessage = nil })
             .background(Backdrop())
-            // What would leave the device, shown over the chat that asked.
-            .cloudPreview(cloud?.review)
             // A new chat is a new conversation, so it starts fresh on screen too.
             // Load-bearing: ChatView keeps its controller in a StateObject, so
             // without this id a new controller would never reach the screen.

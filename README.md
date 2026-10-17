@@ -74,6 +74,26 @@ chooses one.
   chats that promised to stay on the device are never sent. Sign-in is a
   `CloudAuth` hook that adds nothing by default; no keys live in the repo.
 
+## Looking into things
+
+Say "look into ..." (or "research ...", "find out about ...") in the chat
+and the agent offers to do it; nothing starts until you tap Look into it. A
+feed card can offer the same with one tap. Words of crisis always get care
+first and never become a task.
+
+The request runs as a task (`ReconTask`, run by `ReconRunner` on the task
+engine): plan a few questions, read the sources, check their dates, put a
+summary together. It lands in Today as a card with a short summary, a few
+key points, every point marked with its sources, a plain line wherever the
+sources disagree, and when it was gathered. From the card you can open the
+sources, ask a follow-up in the chat, or pick a point to remember.
+
+Sources come through `SourceProvider`. The only one so far is
+`SampleSources`, a set of made up documents kept on the device, so results
+are labelled as examples. With the cloud off, the summary is put together on
+the device. With it on, the request goes through the same redaction and
+preview as a chat, and choosing not to send keeps it on the device.
+
 ## The agent's name
 
 The product name is set in `Config/Brand.xcconfig`. The name you call your

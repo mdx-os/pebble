@@ -61,6 +61,16 @@ public struct Conversation: Sendable, Equatable {
         return next
     }
 
+    /// Adds a line the agent says on this device without asking a model,
+    /// such as an offer to look into something.
+    public func appendingAgent(_ text: String, id: UUID = UUID()) throws -> Conversation {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw ConversationError.blank }
+        var next = self
+        next.turns.append(ChatTurn(id: id, speaker: .agent, text: trimmed))
+        return next
+    }
+
     /// Asks `model` to answer the turns so far and appends that reply.
     /// Words of crisis get a caring reply before any device check, so a
     /// remote model never blocks 988.

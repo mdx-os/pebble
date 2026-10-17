@@ -42,6 +42,13 @@ struct CopyDashTests {
       + FeedWords.all
       + CloudWords.all
       + Redaction.Kind.allCases.flatMap { [$0.mask, $0.counted(1), $0.counted(2)] }
+      + TaskState.allCases.map(\.label)
+      + [TaskWords.workingHeading, TaskWords.workingDetail, TaskWords.stalled, TaskWords.retrying,
+         TaskWords.stuck, TaskWords.waitingForYes, TaskWords.redirected, TaskWords.stopped, TaskWords.failed,
+         TaskWords.keptNothing, TaskWords.approveTitle, TaskWords.redirectTitle, TaskWords.redirectPlaceholder,
+         TaskWords.redirectSendTitle, TaskWords.redirectCancelTitle, TaskWords.stopTitle, TaskWords.tryAgainTitle]
+      + ReconWords.all
+      + [MemorySource.lookedUp("Riverside Gazette").label, MemorySource.lookedUp("").label]
 
     @Test func noScreenWordsUseADash() {
         for line in Self.copy {

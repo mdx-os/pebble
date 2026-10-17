@@ -92,6 +92,12 @@ public struct ChatView: View {
                             .padding(.bottom, 8)
                     }
                     transcript
+                    if controller.reconOffer != nil {
+                        ReconOfferButtons(onYes: { controller.acceptReconOffer() },
+                                          onNo: { controller.declineReconOffer() })
+                            .id(Self.offerID)
+                            .transition(Motion.arrival(reduceMotion: reduceMotion))
+                    }
                     if controller.conversation.isWaitingForPerson {
                         starterJobs
                     }
@@ -114,11 +120,11 @@ public struct ChatView: View {
             .onAppear {
                 // Wait one pass so layout is done before jumping to the end.
                 DispatchQueue.main.async {
-                    Self.scrollToLatest(controller.conversation, with: scroller, animated: false)
+                    Self.scrollToLatest(controller, with: scroller, animated: false)
                 }
             }
             .onChange(of: controller.conversation.turns.count) {
-                Self.scrollToLatest(controller.conversation, with: scroller, animated: !reduceMotion)
+                Self.scrollToLatest(controller, with: scroller, animated: !reduceMotion)
                 if let line = Self.announcement(for: controller.conversation) {
                     AccessibilityNotification.Announcement(line).post()
                 }
@@ -240,14 +246,25 @@ public struct ChatView: View {
     }
 
     /// New replies land below the fold on small screens, so follow them.
-    private static func scrollToLatest(_ conversation: Conversation, with scroller: ScrollViewProxy, animated: Bool) {
-        guard let last = conversation.turns.last?.id else { return }
-        if animated {
-            withAnimation(.easeOut(duration: 0.25)) { scroller.scrollTo(last, anchor: .bottom) }
+    /// An offer's buttons sit under its line, so they come into view too.
+    private static func scrollToLatest(_ controller: ChatController, with scroller: ScrollViewProxy, animated: Bool) {
+        let target: AnyHashable
+        if controller.reconOffer != nil {
+            target = offerID
+        } else if let last = controller.conversation.turns.last?.id {
+            target = last
         } else {
-            scroller.scrollTo(last, anchor: .bottom)
+            return
+        }
+        if animated {
+            withAnimation(.easeOut(duration: 0.25)) { scroller.scrollTo(target, anchor: .bottom) }
+        } else {
+            scroller.scrollTo(target, anchor: .bottom)
         }
     }
+
+    /// Where an offer's buttons sit, so the chat can follow them.
+    static let offerID = "reconOffer"
 
     /// Where the thinking dots sit, so the chat can follow them.
     static let thinkingID = "thinking"
@@ -412,6 +429,12 @@ final class ChatController: ObservableObject {
     @Published var failure: String?
     /// Goes up by one each time the person sends something.
     @Published private(set) var sentCount = 0
+    /// An offer to look into something, waiting for the person's tap.
+    @Published private(set) var reconOffer: ReconOffer?
+    /// Starts looking into a topic, after the person taps Look into it.
+    /// Returns false when nothing started. Nil means this chat can't start
+    /// one, so it never offers.
+    var lookInto: ((String) -> Bool)?
     /// The shortest time the thinking dots show, so a quick reply settles
     /// in after a calm beat instead of snapping onto the screen.
     let replyBeat: Duration
@@ -492,6 +515,17 @@ final class ChatController: ObservableObject {
         }
         if byHand { sentCount += 1 }
         failure = nil
+        // Saying something else lets an old offer go.
+        reconOffer = nil
+        // Care comes first: only a message that gets no care reply can be
+        // an offer, and the offer starts nothing until the person taps it.
+        if lookInto != nil, !CareCheck.answersWithCare(conversation.turns),
+           let topic = ReconIntent.topic(in: trimmed),
+           let offered = try? conversation.appendingAgent(ReconWords.offer(topic)) {
+            conversation = offered
+            reconOffer = ReconOffer(topic: topic, turnID: offered.turns.last?.id)
+            return
+        }
         isReplying = true
         replyGeneration += 1
         let generation = replyGeneration
@@ -541,6 +575,25 @@ final class ChatController: ObservableObject {
         }
     }
 
+    /// The person tapped Look into it. Starts it once, and says so.
+    func acceptReconOffer() {
+        guard let offer = reconOffer else { return }
+        reconOffer = nil
+        let started = lookInto?(offer.topic) ?? false
+        if let next = try? conversation.appendingAgent(started ? ReconWords.started : ReconWords.couldNotStart) {
+            conversation = next
+        }
+    }
+
+    /// The person tapped Not now. Nothing starts.
+    func declineReconOffer() {
+        guard reconOffer != nil else { return }
+        reconOffer = nil
+        if let next = try? conversation.appendingAgent(ReconWords.offerDeclined) {
+            conversation = next
+        }
+    }
+
     /// Stops a reply that is still coming, as when a new chat replaces this
     /// one. Nothing it would have said is added.
     func stopReplying() {
@@ -548,6 +601,38 @@ final class ChatController: ObservableObject {
         replyTask = nil
         replyGeneration += 1
         isReplying = false
+    }
+}
+
+/// An offer in the chat to look into something.
+struct ReconOffer: Equatable {
+    let topic: String
+    /// The agent's line that made the offer.
+    let turnID: UUID?
+}
+
+/// The two choices under an offer to look into something. Nothing starts
+/// until Look into it is tapped.
+struct ReconOfferButtons: View {
+    let onYes: () -> Void
+    let onNo: () -> Void
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) { buttons }
+            VStack(alignment: .leading, spacing: 8) { buttons }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("reconOffer")
+    }
+
+    @ViewBuilder
+    private var buttons: some View {
+        Button(ReconWords.offerYes, action: onYes)
+            .buttonStyle(CardButtonStyle(kind: .primary))
+            .accessibilityIdentifier("reconOfferYes")
+        Button(ReconWords.offerNo, action: onNo)
+            .buttonStyle(CardButtonStyle(kind: .quiet))
     }
 }
 

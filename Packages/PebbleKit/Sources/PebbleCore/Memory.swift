@@ -34,15 +34,18 @@ public struct MemoryNote: Identifiable, Codable, Sendable, Equatable {
 
 /// Where a memory came from.
 ///
-/// On disk this is `{"kind":"toldMe"}`, `{"kind":"fromApp","app":"Calendar"}`
-/// or `{"kind":"inferred"}`. `MemorySourceTests` pins that format. An unknown
-/// kind reads as `inferred`, the least trusted label, rather than breaking
-/// the file.
+/// On disk this is `{"kind":"toldMe"}`, `{"kind":"fromApp","app":"Calendar"}`,
+/// `{"kind":"lookedUp","app":"Riverside Gazette"}` or `{"kind":"inferred"}`.
+/// `MemorySourceTests` pins that format. An unknown kind reads as
+/// `inferred`, the least trusted label, rather than breaking the file.
 public enum MemorySource: Codable, Sendable, Equatable, Hashable {
     /// The person said or typed it.
     case toldMe
     /// Read from a connected app, such as Calendar.
     case fromApp(String)
+    /// A point from something the agent looked into, kept because the
+    /// person tapped Remember. Names the source, such as "Riverside Gazette".
+    case lookedUp(String)
     /// The agent worked it out. It may be wrong.
     case inferred
 
@@ -55,6 +58,7 @@ public enum MemorySource: Codable, Sendable, Equatable, Hashable {
         switch try c.decodeIfPresent(String.self, forKey: .kind) {
         case "toldMe": self = .toldMe
         case "fromApp": self = .fromApp(try c.decodeIfPresent(String.self, forKey: .app) ?? "")
+        case "lookedUp": self = .lookedUp(try c.decodeIfPresent(String.self, forKey: .app) ?? "")
         default: self = .inferred
         }
     }
@@ -66,6 +70,9 @@ public enum MemorySource: Codable, Sendable, Equatable, Hashable {
         case .fromApp(let app):
             try c.encode("fromApp", forKey: .kind)
             try c.encode(app, forKey: .app)
+        case .lookedUp(let source):
+            try c.encode("lookedUp", forKey: .kind)
+            try c.encode(source, forKey: .app)
         case .inferred: try c.encode("inferred", forKey: .kind)
         }
     }
@@ -75,11 +82,19 @@ public enum MemorySource: Codable, Sendable, Equatable, Hashable {
         switch self {
         case .toldMe: return "You told me"
         case .fromApp(let name):
-            let tidy = name.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
-            guard !tidy.isEmpty else { return "From an app" }
-            return "From \(tidy.count > Self.maxAppNameLength ? String(tidy.prefix(Self.maxAppNameLength)) + "..." : tidy)"
+            guard let tidy = Self.tidy(name) else { return "From an app" }
+            return "From \(tidy)"
+        case .lookedUp(let source):
+            guard let tidy = Self.tidy(source) else { return "From something I looked into" }
+            return "From \(tidy)"
         case .inferred: return "My guess"
         }
+    }
+
+    private static func tidy(_ name: String) -> String? {
+        let tidy = name.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
+        guard !tidy.isEmpty else { return nil }
+        return tidy.count > Self.maxAppNameLength ? String(tidy.prefix(Self.maxAppNameLength)) + "..." : tidy
     }
 
     /// SF Symbol for the label.
@@ -87,6 +102,7 @@ public enum MemorySource: Codable, Sendable, Equatable, Hashable {
         switch self {
         case .toldMe: return "person.wave.2"
         case .fromApp: return "app.connected.to.app.below.fill"
+        case .lookedUp: return "doc.text.magnifyingglass"
         case .inferred: return "sparkles"
         }
     }

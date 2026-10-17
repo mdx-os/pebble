@@ -3,7 +3,7 @@
 How the agent talks, everywhere: the first run, the chat, memory, and the
 questions it asks before it acts. Read this before writing any words a
 person will see. The words themselves live in `PebbleCore` (`FirstRunWords`,
-`FirstConversation`, `MemoryWords`, `ConfirmationWords`, `FeedWords` and friends), so a
+`FirstConversation`, `MemoryWords`, `ConfirmationWords`, `FeedWords`, `TaskWords`, `ReconWords` and friends), so a
 change here usually means a change there.
 
 ## Who the agent is
@@ -123,6 +123,24 @@ action.
 
 Show a calm presence instead of a spinner. The thinking dots hold still
 with Reduce Motion on, and VoiceOver hears "Thinking it over." once.
+
+### Long work
+
+A task card says what the agent is doing now, in plain words, not what
+the machine is doing. When a step is slow, say so and say what happens
+next: "That page was slow, so I'm trying another way." Only after a few
+tries does the card ask the person, and then it offers Try again. Stop
+says what was kept and what was not done. VoiceOver hears each new step
+once, politely, never every tick of progress.
+
+### Looking into something
+
+When the person asks the agent to look into something, the chat offers
+first and starts nothing on its own: "Want me to look into this?" A
+summary says only what its sources say. Every point names where it came
+from, and when sources don't agree, the card says so plainly instead of
+picking a side. It says when it was gathered, so the person knows how
+fresh it is. Saving a point to memory happens only on a tap.
 
 ### Confirmations
 

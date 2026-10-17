@@ -15,33 +15,99 @@ final class FeedModel: ObservableObject {
     @Published var reviewing: ConfirmationRequest?
     /// The result open to read.
     @Published var reading: FeedItem?
+    /// A summary whose sources are open to read.
+    @Published var readingSources: ReconSummary?
+    /// A summary whose points are open to choose one to remember.
+    @Published var choosingPoint: ReconSummary?
+    /// Points kept in memory from this screen, by `rememberKey`.
+    @Published private(set) var remembered: Set<String> = []
+    /// What happened to the last Remember tap, such as "Saved. It stays on this device."
+    @Published private(set) var rememberStatus: String?
 
     let needsYou: NeedsYou
+    /// Runs "look into this" as tasks. The same object as `tasks` when set.
+    let recon: ReconRunner?
+    /// Where a point goes when the person taps Remember. Nothing is saved any other way.
+    private let memory: MemoryStore?
+    /// Chooses how the next summary is put together: on this device, or
+    /// through the cloud's preview when the person turned the cloud on.
+    var summarizer: @MainActor () -> any ReconSummarizer = { LocalReconSummarizer() }
+    /// Long work shown on live task cards. Nil when nothing is running. Its
+    /// questions reach the feed only when it asks through the rule of
+    /// `needsYou`.
+    let tasks: (any TaskEngine)?
+    /// Moves a scripted engine's clock with real time, for the live showcase.
+    let drivesTasks: Bool
     private let sources: [any FeedSource]
     private let calendar: Calendar
     let now: () -> Date
+    private var watching: TaskObservation?
+    private var announcer = TaskAnnouncer()
+    private let clock: () -> ContinuousClock.Instant
+    /// Says a line to VoiceOver. Tests replace it to hear what would be said.
+    var announce: @MainActor (TaskAnnouncer.Line) -> Void = FeedModel.post
 
-    init(sources: [any FeedSource], needsYou: NeedsYou, calendar: Calendar = .current,
-         now: @escaping () -> Date = { Date() }) {
+    init(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)? = nil,
+         drivesTasks: Bool = false, memory: MemoryStore? = nil, calendar: Calendar = .current,
+         now: @escaping () -> Date = { Date() },
+         clock: @escaping () -> ContinuousClock.Instant = { ContinuousClock.now }) {
         self.sources = sources
         self.needsYou = needsYou
+        self.tasks = tasks
+        self.recon = tasks as? ReconRunner
+        self.memory = memory
+        self.drivesTasks = drivesTasks
         self.calendar = calendar
         self.now = now
-        feed = Feed.build(from: sources, needsYou: needsYou, now: now(), calendar: calendar)
+        self.clock = clock
+        feed = Feed.build(from: sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
+        _ = announcer.lines(for: tasks?.tasks ?? [], at: clock())
+        watching = tasks?.observe { [weak self] list in
+            // Engines tell us on whatever thread they run. Hop to the main
+            // one, without a wait when already there.
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { self?.tasksChanged(list) }
+            } else {
+                Task { @MainActor in self?.tasksChanged(list) }
+            }
+        }
     }
 
-    var isSample: Bool { sources.contains { $0.isSample } }
+    var isSample: Bool { sources.contains { $0.isSample } || tasks?.isSample == true }
 
-    /// True when this card came from an example source.
+    /// True when this card came from an example source or a scripted engine.
     func isSample(_ item: FeedItem) -> Bool {
-        sources.contains { $0.isSample && $0.items(now: now()).contains { $0.id == item.id } }
+        if let tasks, tasks.isSample, tasks.tasks.contains(where: { $0.id == item.id }) { return true }
+        return sources.contains { $0.isSample && $0.items(now: now()).contains { $0.id == item.id } }
     }
+
+    /// The rule for every question in the sheet, a task's included.
     var rule: AskFirst { needsYou.rule }
 
     /// Builds the feed again. Questions that timed out drop away here.
     func refresh() {
-        let next = Feed.build(from: sources, needsYou: needsYou, now: now(), calendar: calendar)
+        tasks?.refresh()
+        rebuild()
+    }
+
+    private func rebuild() {
+        let next = Feed.build(from: sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
         if next != feed { feed = next }
+    }
+
+    /// Moves a scripted engine along, for the live showcase and for recons
+    /// played on the scripted engine.
+    func tick(_ seconds: TimeInterval) {
+        if let recon {
+            recon.advance(by: seconds)
+        } else {
+            (tasks as? LocalFakeEngine)?.advance(by: seconds)
+        }
+    }
+
+    private func tasksChanged(_ list: [AgentTask]) {
+        rebuild()
+        for line in announcer.lines(for: list, at: clock()) { announce(line) }
     }
 
     /// What a card's button does. Talking is handed to the screen around
@@ -53,13 +119,137 @@ final class FeedModel: ObservableObject {
             if feed.needsYou.contains(where: { $0.request?.id == request.id }) { reviewing = request }
         case .open: reading = item
         case .talk(let line): talk(line)
+        case .task(let task):
+            if task.question != nil { review(task) } else { open(task) }
+        case .lookInto(let topic):
+            // Without a runner, the chat offers it instead, still one tap away.
+            if recon == nil || !lookInto(topic) { talk(ReconWords.askLine(topic)) }
         case nil: break
         }
     }
 
-    /// The sheet said yes. The card goes and the approval is handed on.
+    // MARK: Looking into something
+
+    /// Starts looking into `topic`, after the person's tap. False when
+    /// nothing started, as for words of crisis.
+    @discardableResult
+    func lookInto(_ topic: String) -> Bool {
+        guard let recon, recon.lookInto(topic, with: summarizer()) != nil else { return false }
+        refresh()
+        return true
+    }
+
+    /// The summary a finished recon card shows.
+    func summary(for task: AgentTask) -> ReconSummary? {
+        recon?.summary(for: task.id)
+    }
+
+    /// A recon reads for one topic, so its card offers Stop but not Change course.
+    func canRedirect(_ task: AgentTask) -> Bool {
+        recon?.isRecon(task.id) != true
+    }
+
+    /// Opens the chat with a follow-up ready. Nothing is sent until the person sends it.
+    func followUp(_ summary: ReconSummary, talk: (String) -> Void) {
+        talk(ReconWords.followUpDraft(summary.topic))
+    }
+
+    static func rememberKey(_ summary: ReconSummary, _ point: ReconPoint) -> String {
+        "\(summary.id)/\(point.id)"
+    }
+
+    func isRemembered(_ point: ReconPoint, in summary: ReconSummary) -> Bool {
+        remembered.contains(Self.rememberKey(summary, point))
+    }
+
+    /// Keeps one point in memory, with where it came from, through the same
+    /// store the memory screen uses. Only a tap on Remember this calls it.
+    @discardableResult
+    func remember(_ point: ReconPoint, in summary: ReconSummary) -> Bool {
+        guard summary.points.contains(point), !isRemembered(point, in: summary) else { return false }
+        guard let memory else {
+            rememberStatus = MemoryWords.couldNotOpen
+            return false
+        }
+        let publisher = point.sourceIDs.first.flatMap(summary.source)?.publisher ?? ""
+        do {
+            switch try memory.remember(summary.note(for: point), source: .lookedUp(publisher)) {
+            case .saved:
+                remembered.insert(Self.rememberKey(summary, point))
+                rememberStatus = MemoryWords.saved
+                return true
+            case .tooLong:
+                rememberStatus = MemoryWords.tooLong
+            case .needsWords, .notFound:
+                rememberStatus = MemoryWords.needsWords
+            }
+        } catch is MemoryStore.Unavailable {
+            rememberStatus = MemoryWords.unavailable
+        } catch is MemoryStore.Unreadable {
+            rememberStatus = MemoryWords.unreadable
+        } catch {
+            rememberStatus = MemoryWords.couldNotOpen
+        }
+        return false
+    }
+
+    func clearRememberStatus() {
+        rememberStatus = nil
+    }
+
+    // MARK: Task cards
+
+    /// Approve opens the same question sheet as any other question, with the
+    /// rule of `needsYou`. Only the engine's own task, with its question
+    /// pinned in Needs you, opens it. Only a yes there, checked by
+    /// `AskFirst`, lets the task go on.
+    func review(_ task: AgentTask) {
+        guard let question = current(task)?.question,
+              feed.needsYou.contains(where: { $0.task?.question?.id == question.id }) else { return }
+        reviewing = question
+    }
+
+    /// New instructions. Never needs a yes. Any open question is withdrawn.
+    @discardableResult
+    func redirect(_ task: AgentTask, with words: String) -> Bool {
+        let done = tasks?.redirect(task.id, with: words) ?? false
+        if let reviewing, reviewing.id == task.question?.id { self.reviewing = nil }
+        refresh()
+        return done
+    }
+
+    /// Stops at once. Never needs a yes.
+    func stop(_ task: AgentTask) {
+        tasks?.stop(task.id)
+        if let reviewing, reviewing.id == task.question?.id { self.reviewing = nil }
+        refresh()
+    }
+
+    func retry(_ task: AgentTask) {
+        tasks?.retry(task.id)
+        refresh()
+    }
+
+    /// The finished result, in the same reader as other results.
+    func open(_ task: AgentTask) {
+        guard let result = task.result else { return }
+        reading = FeedItem(id: task.id, kind: .ready, time: task.updatedAt, title: task.title,
+                           body: task.step, action: .open(result))
+    }
+
+    private func current(_ task: AgentTask) -> AgentTask? {
+        tasks?.tasks.first { $0.id == task.id }
+    }
+
+    /// The sheet said yes. The card goes and the approval is handed on:
+    /// to the task that asked, which checks it with `AskFirst`, or to
+    /// `NeedsYou`.
     func approved(_ approval: Approval) {
-        needsYou.approved(approval)
+        if let task = tasks?.tasks.first(where: { $0.question?.id == approval.id }) {
+            _ = tasks?.resume(task.id, with: approval)
+        } else {
+            needsYou.approved(approval)
+        }
         reviewing = nil
         refresh()
     }
@@ -68,8 +258,17 @@ final class FeedModel: ObservableObject {
     /// The sheet has already withdrawn the question.
     func closedQuestion(_ request: ConfirmationRequest) {
         needsYou.dismissed(request)
+        tasks?.questionClosed(request)
         if reviewing?.id == request.id { reviewing = nil }
         refresh()
+    }
+
+    /// Posts a line to VoiceOver: politely for a new step, so it waits its
+    /// turn, and at the usual priority when the person is needed or a task ends.
+    static func post(_ line: TaskAnnouncer.Line) {
+        var text = AttributedString(line.text)
+        text.accessibilitySpeechAnnouncementPriority = line.urgent ? .default : .low
+        AccessibilityNotification.Announcement(text).post()
     }
 
     /// "8:52 AM" today, "Yesterday", then the day of the week in the past
@@ -145,6 +344,13 @@ struct FeedView: View {
                             .accessibilityIdentifier("needsYou")
                             .transition(Motion.arrival(reduceMotion: reduceMotion))
                     }
+                    if model.feed.showsWorking {
+                        section(TaskWords.workingHeading, detail: TaskWords.workingDetail,
+                                items: model.feed.working, columns: columns)
+                            .accessibilityElement(children: .contain)
+                            .accessibilityIdentifier("working")
+                            .transition(Motion.arrival(reduceMotion: reduceMotion))
+                    }
                     ForEach(model.feed.groups) { group in
                         section(group.title, detail: nil, items: group.items, columns: columns)
                     }
@@ -207,8 +413,26 @@ struct FeedView: View {
             }
             LazyVGrid(columns: columns, alignment: .leading, spacing: Self.cardSpacing) {
                 ForEach(items) { item in
-                    FeedCard(item: item, time: model.timeLabel(for: item.time)) {
-                        model.perform(item, talk: onTalk)
+                    Group {
+                        if let task = item.task, let summary = model.summary(for: task) {
+                            ReconCard(summary: summary, time: model.timeLabel(for: item.time),
+                                      gathered: ReconWords.gathered(summary.gatheredAt, now: model.now()),
+                                      onOpenSources: { model.readingSources = summary },
+                                      onFollowUp: { model.followUp(summary, talk: onTalk) },
+                                      onRemember: { model.choosingPoint = summary })
+                        } else if let task = item.task {
+                            TaskCard(task: task, time: model.timeLabel(for: item.time),
+                                     canRedirect: model.canRedirect(task),
+                                     onApprove: { model.review(task) },
+                                     onRedirect: { model.redirect(task, with: $0) },
+                                     onStop: { model.stop(task) },
+                                     onRetry: { model.retry(task) },
+                                     onOpen: { model.open(task) })
+                        } else {
+                            FeedCard(item: item, time: model.timeLabel(for: item.time)) {
+                                model.perform(item, talk: onTalk)
+                            }
+                        }
                     }
                     .transition(Motion.arrival(reduceMotion: reduceMotion))
                 }
@@ -331,6 +555,7 @@ struct FeedCard: View {
         case .ready: "doc.text.fill"
         case .noticed: "lightbulb.fill"
         case .needsYou: "hand.raised.fill"
+        case .task: "circle.fill"
         }
     }
 }

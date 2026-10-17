@@ -12,6 +12,8 @@ public struct FeedItem: Identifiable, Sendable, Equatable {
         case noticed
         /// A question waiting for the person's yes or no.
         case needsYou
+        /// Longer work, shown live on a task card.
+        case task
     }
 
     public let id: String
@@ -38,6 +40,12 @@ public struct FeedItem: Identifiable, Sendable, Equatable {
         return nil
     }
 
+    /// The task this card shows, when it is a task card.
+    public var task: AgentTask? {
+        if kind == .task, case .task(let task) = action { return task }
+        return nil
+    }
+
     /// What VoiceOver says first, so each card reads as one thought.
     public var spokenKind: String {
         switch kind {
@@ -45,6 +53,7 @@ public struct FeedItem: Identifiable, Sendable, Equatable {
         case .ready: FeedWords.readyLabel
         case .noticed: FeedWords.noticedLabel
         case .needsYou: FeedWords.needsYouHeading
+        case .task: task?.state.label ?? TaskWords.runningLabel
         }
     }
 }
@@ -60,12 +69,21 @@ public enum FeedAction: Sendable, Equatable {
     /// buys or shares. Only `NeedsYou` makes these, from a question
     /// `AskFirst` agreed to ask.
     case review(ConfirmationRequest)
+    /// A live task card, with its own buttons. Its Approve opens the same
+    /// question sheet as `review`, for the question the task's engine asked
+    /// through `AskFirst`.
+    case task(AgentTask)
+    /// Starts looking into this topic, as a task that lands back in the
+    /// feed. The tap is the person's go ahead; nothing starts without it.
+    case lookInto(String)
 
     public var title: String {
         switch self {
         case .open: FeedWords.openTitle
         case .talk: FeedWords.talkTitle
         case .review: FeedWords.reviewTitle
+        case .task(let task): task.waitsForApproval ? TaskWords.approveTitle : FeedWords.openTitle
+        case .lookInto: ReconWords.lookIntoTitle
         }
     }
 
@@ -75,6 +93,8 @@ public enum FeedAction: Sendable, Equatable {
         case .open: FeedWords.openHint
         case .talk: FeedWords.talkHint
         case .review: FeedWords.reviewHint
+        case .task(let task): task.waitsForApproval ? FeedWords.reviewHint : FeedWords.openHint
+        case .lookInto: ReconWords.lookIntoHint
         }
     }
 }
@@ -134,6 +154,12 @@ public struct SampleFeedSource: FeedSource {
                 title: "Sam's birthday is coming up",
                 body: "It's on \((now + 12 * day).formatted(.dateTime.month(.wide).day())), and Sam loves lemon cake. Want a few ideas?",
                 action: .talk("Help me plan something for Sam's birthday.")
+            ),
+            FeedItem(
+                id: "sample:pool", kind: .noticed, time: now - 3.1 * hour,
+                title: "The Riverside pool may be reopening soon",
+                body: "You asked about swim lessons last week. Want me to look into when it opens?",
+                action: .lookInto(SampleSources.poolTopic)
             ),
             FeedItem(
                 id: "sample:grocery-list", kind: .did, time: now - day + 7.5 * hour,
@@ -256,6 +282,30 @@ public final class NeedsYou: FeedSource, @unchecked Sendable {
     }
 }
 
+/// Tasks from an engine, as live cards. `Feed.build` places them: a task
+/// that needs the person is pinned in Needs you, one still going sits in
+/// Working on it, and one that ended joins the rest of the feed at the
+/// time it ended. Passed as a plain source it adds nothing.
+public struct TaskFeed: FeedSource {
+    public let engine: any TaskEngine
+
+    public init(engine: any TaskEngine) {
+        self.engine = engine
+    }
+
+    /// Scripted tasks are examples, labelled like every other example.
+    public var isSample: Bool { engine.isSample }
+
+    public func items(now: Date) -> [FeedItem] {
+        engine.tasks.map(Self.item)
+    }
+
+    public static func item(_ task: AgentTask) -> FeedItem {
+        FeedItem(id: task.id, kind: .task, time: task.isActive ? task.startedAt : task.updatedAt,
+                 title: task.title, body: task.step, action: .task(task))
+    }
+}
+
 /// When a card happened, as the feed groups it.
 public enum FeedPeriod: Sendable, Equatable, Hashable, CaseIterable {
     case thisEvening, thisAfternoon, thisMorning, earlier
@@ -296,39 +346,63 @@ public struct Feed: Sendable, Equatable {
     /// Questions waiting for the person, the one that will time out first on
     /// top. Empty means the section is not shown at all.
     public let needsYou: [FeedItem]
+    /// Tasks still going, newest first, shown under Needs you.
+    public let working: [FeedItem]
     public let groups: [FeedGroup]
 
-    public var isEmpty: Bool { needsYou.isEmpty && groups.isEmpty }
+    public var isEmpty: Bool { needsYou.isEmpty && working.isEmpty && groups.isEmpty }
     public var showsNeedsYou: Bool { !needsYou.isEmpty }
-    public var count: Int { needsYou.count + groups.reduce(0) { $0 + $1.items.count } }
+    public var showsWorking: Bool { !working.isEmpty }
+    public var count: Int { needsYou.count + working.count + groups.reduce(0) { $0 + $1.items.count } }
 
-    /// `items` can never ask anything: question cards and questions hidden
-    /// in other cards are dropped. Only `questions`, from `NeedsYou`, are
-    /// pinned, in the order given, and only while `isClosed` says the rule
-    /// still holds them open.
-    public static func build(_ items: [FeedItem], questions: [FeedItem] = [],
+    /// `items` can never ask anything: question cards, task cards and
+    /// questions hidden in other cards are dropped. Only `questions`, from
+    /// `NeedsYou`, are pinned, in the order given, and only while
+    /// `isClosed` says the rule still holds them open.
+    ///
+    /// `tasks` come only from the feed's own engine. A task waiting on a yes
+    /// is pinned after the questions, oldest first, only while `isClosed`
+    /// says the same rule holds its question open. A stuck task, which asks
+    /// nothing, is pinned too. A task still going sits in Working on it,
+    /// and one that ended joins the time groups.
+    public static func build(_ items: [FeedItem], questions: [FeedItem] = [], tasks: [FeedItem] = [],
                              isClosed: (ConfirmationRequest) -> Bool = { _ in true },
                              now: Date, calendar: Calendar = .current) -> Feed {
         let pinned = questions.filter { item in
             guard item.kind == .needsYou, let request = item.request else { return false }
             return !isClosed(request)
         }
-        let rest = items
-            .filter { $0.kind != .needsYou && $0.request == nil }
+        let tasks = tasks.filter { $0.task != nil }
+        let waiting = tasks
+            .filter { item in
+                guard let task = item.task, task.state == .waitingOnYou else { return false }
+                return task.question.map { !isClosed($0) } ?? true
+            }
+            .sorted { ($0.time, $0.id) < ($1.time, $1.id) }
+        let working = tasks
+            .filter { item in item.task?.isActive == true && !waiting.contains { $0.id == item.id } }
+            .sorted { ($0.time, $0.id) > ($1.time, $1.id) }
+        let ended = tasks.filter { $0.task?.isActive == false }
+        let rest = (items.filter { $0.kind != .needsYou && $0.kind != .task && $0.request == nil } + ended)
             .sorted { ($0.time, $0.id) > ($1.time, $1.id) }
         let byPeriod = Dictionary(grouping: rest) { FeedPeriod.of($0.time, now: now, calendar: calendar) }
         let groups = FeedPeriod.allCases.compactMap { period in
             byPeriod[period].map { FeedGroup(period: period, items: $0) }
         }
-        return Feed(needsYou: pinned, groups: groups)
+        return Feed(needsYou: pinned + waiting, working: working, groups: groups)
     }
 
-    /// The feed from its sources, with questions taken only from `needsYou`.
-    /// A `NeedsYou` passed among the sources asks nothing.
+    /// The feed from its sources, with questions taken only from `needsYou`
+    /// and task cards only from `tasks`. A `NeedsYou` or `TaskFeed` passed
+    /// among the sources adds nothing. A task's question is pinned only
+    /// when the engine asked it through the rule of `needsYou`, so its
+    /// Approve opens the same sheet, with the same rule, as any question.
     public static func build(from sources: [any FeedSource], needsYou: NeedsYou? = nil,
+                             tasks: (any TaskEngine)? = nil,
                              now: Date, calendar: Calendar = .current) -> Feed {
         build(sources.flatMap { $0.items(now: now) },
               questions: needsYou?.items(now: now) ?? [],
+              tasks: tasks.map { TaskFeed(engine: $0).items(now: now) } ?? [],
               isClosed: { needsYou?.rule.isClosed($0) ?? true },
               now: now, calendar: calendar)
     }
