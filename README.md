@@ -9,8 +9,11 @@ in one place, `Config/Brand.xcconfig`, so the product can be renamed without
 touching code.
 
 Status: the app opens a first conversation on Mac, iPhone, and iPad. You can
-name your agent on the device. Replies come from an on-device placeholder
-until a local model adapter is plugged in. See [the roadmap](#roadmap).
+name your agent on the device. After the first run, home is Today: a feed of
+what the agent did, made and noticed, with any question that needs your yes
+pinned on top. The feed shows sample cards only in the showcase screens.
+Replies come from an on-device placeholder until a local model adapter is
+plugged in. See [the roadmap](#roadmap).
 
 ## Build it
 

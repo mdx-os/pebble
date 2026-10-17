@@ -2,7 +2,8 @@
 # Captures showcase screens on several simulators, in portrait and landscape.
 # Usage: scripts/device-screenshots.sh [output-dir]   (default: build/screenshots/devices)
 # Writes <output-dir>/<device>/<screen>-<orientation>.png.
-# Override with PEBBLE_DEVICES (device names, one per line) and PEBBLE_SCREENS.
+# Override with PEBBLE_DEVICES (device names, one per line or separated by
+# commas) and PEBBLE_SCREENS.
 # The simulator can only be turned from a UI test, so the shots are taken by
 # the ShowcaseShots test in AppUITests.
 set -eu
@@ -19,7 +20,7 @@ iPhone 17 Pro}"
 stamp="$(mktemp)"
 trap 'rm -f "$stamp"' EXIT
 
-echo "$devices" | while IFS= read -r device; do
+echo "$devices" | tr ',' '\n' | while IFS= read -r device; do
   [ -n "$device" ] || continue
   echo "device-screenshots: $device"
   # TEST_RUNNER_ variables reach the test as PEBBLE_SHOTS and PEBBLE_SCREENS.

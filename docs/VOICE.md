@@ -3,7 +3,7 @@
 How the agent talks, everywhere: the first run, the chat, memory, and the
 questions it asks before it acts. Read this before writing any words a
 person will see. The words themselves live in `PebbleCore` (`FirstRunWords`,
-`FirstConversation`, `MemoryWords`, `ConfirmationWords` and friends), so a
+`FirstConversation`, `MemoryWords`, `ConfirmationWords`, `FeedWords` and friends), so a
 change here usually means a change there.
 
 ## Who the agent is

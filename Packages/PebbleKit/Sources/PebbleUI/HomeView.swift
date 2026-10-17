@@ -3,14 +3,15 @@ import PebbleModel
 #if canImport(SwiftUI)
 import SwiftUI
 
-/// The app's root: the guided first run until it's finished, then the chat
-/// with a way to see what the agent remembers.
+/// The app's root: the guided first run until it's finished, then Today,
+/// with the chat one tap away and a way to see what the agent remembers.
 ///
-/// On a wide window (an iPad in full screen or a wide Split View) the chat
-/// and the memory sit side by side with a sidebar. On a narrow one (iPhone,
-/// Slide Over, a narrow Split View) the chat is home and the memory opens
-/// over it. The conversation is kept here, so changing the window's shape
-/// never loses it.
+/// On a wide window (an iPad in full screen or a wide Split View) Today,
+/// the chat and the memory sit in a sidebar, with Today chosen first. On a
+/// narrow one (iPhone, Slide Over, a narrow Split View) Today is home, the
+/// chat opens on top of it, and the memory opens over either. The
+/// conversation and the feed are kept here, so changing the window's shape
+/// never loses them.
 public struct HomeView: View {
     let brand: Brand
     let model: any ModelClient
@@ -23,25 +24,33 @@ public struct HomeView: View {
     @State private var firstMessage: String?
     @State private var chat: ChatController?
     @State private var section: HomeSection?
+    /// On a narrow screen, whether the memory was opened from the chat, so
+    /// closing it goes back there rather than to Today.
+    @State private var memoryOverChat = false
     @State private var showsShortcuts = false
     @State private var asksNewChat = false
+    @StateObject private var feed: FeedModel
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
 
+    /// `feed` is where finished work comes from. Questions come only from
+    /// `needsYou`, which asks through `AskFirst`.
     public init(
         brand: Brand,
         model: any ModelClient,
         names: any AgentNameStoring,
         onboarding: any OnboardingStoring,
         memory: MemoryStore?,
-        looks: UserDefaults = .standard
+        looks: UserDefaults = .standard,
+        feed: [any FeedSource] = [EmptyFeedSource()],
+        needsYou: NeedsYou = NeedsYou()
     ) {
         self.init(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
-                  looks: looks, conversation: nil, section: .chat)
+                  looks: looks, conversation: nil, section: .today, feed: feed, needsYou: needsYou)
     }
 
-    /// Opens on a given conversation and section, for screenshots and tests.
+    /// Opens on a given conversation, section and feed, for screenshots and tests.
     package init(
         brand: Brand,
         model: any ModelClient,
@@ -50,7 +59,12 @@ public struct HomeView: View {
         memory: MemoryStore?,
         looks: UserDefaults,
         conversation: Conversation?,
-        section: HomeSection
+        section: HomeSection,
+        feed: [any FeedSource] = [EmptyFeedSource()],
+        // No default: screenshots and tests pass their own rule, so they
+        // never touch the app's `AskFirst.shared`.
+        needsYou: NeedsYou,
+        now: @escaping () -> Date = { Date() }
     ) {
         self.brand = brand
         self.model = model
@@ -58,6 +72,7 @@ public struct HomeView: View {
         self.onboarding = onboarding
         self.memory = memory
         self.looks = looks
+        _feed = StateObject(wrappedValue: FeedModel(sources: feed, needsYou: needsYou, now: now))
         let needed = OnboardingFlow.isNeeded(store: onboarding, names: names)
         // People who named their agent before the first run existed count as finished.
         if !needed, !onboarding.hasFinished() { onboarding.markFinished() }
@@ -82,7 +97,8 @@ public struct HomeView: View {
             if finished, let chat {
                 Group {
                     if usesSidebar {
-                        HomeSplit(chat: chat, section: $section, chatScreen: chatScreen(chat),
+                        HomeSplit(chat: chat, section: $section, needsYouCount: feed.feed.needsYou.count,
+                                  todayScreen: todayScreen(chat), chatScreen: chatScreen(chat),
                                   memoryScreen: memoryScreen, newChat: startNewChat)
                     } else {
                         stack(chat)
@@ -102,8 +118,32 @@ public struct HomeView: View {
         .tint(Theme.accent)
         // The live app plays entrances; still renders show everything at once.
         .environment(\.animatesEntrances, true)
+        // A question on screen waits for its answer; Command Return can't
+        // send a chat line from behind it.
+        .environment(\.sendsFromKeyboard, feed.reviewing == nil)
+        .onChange(of: section) { old, new in
+            // The sidebar can change places without `go`, so keep where the
+            // memory was opened from true, and forget it once the memory
+            // closes. A later narrow window then never reopens a stale place.
+            if new == .memory, old != .memory {
+                memoryOverChat = old == .chat
+            } else if new != .memory {
+                memoryOverChat = false
+            }
+        }
         .sheet(isPresented: $showsShortcuts) {
             KeyboardShortcutsView()
+        }
+        // The same question sheet as everywhere else, with the rule that
+        // asked. Closing it any way but yes withdraws the question.
+        .sheet(item: $feed.reviewing, onDismiss: { feed.refresh() }) { request in
+            ConfirmationSheet(request: request, look: AgentLook.load(from: looks), rule: feed.rule,
+                              onApprove: { feed.approved($0) },
+                              onDecline: { feed.closedQuestion(request) })
+                .onDisappear { feed.closedQuestion(request) }
+        }
+        .sheet(item: $feed.reading) { item in
+            FeedReader(item: item, time: feed.timeLabel(for: item.time), isSample: feed.isSample(item))
         }
         // An alert, not a popover, so both choices show on iPad and Esc keeps the chat.
         .alert(HomeWords.newChatQuestion, isPresented: $asksNewChat) {
@@ -113,11 +153,27 @@ public struct HomeView: View {
             Text(HomeWords.newChatDetail)
         }
         .focusedSceneValue(\.homeActions, HomeActions(
-            canNavigate: finished,
+            // A question on screen waits for its answer; no shortcut sweeps it away.
+            canNavigate: finished && feed.reviewing == nil,
             newChat: startNewChat,
-            show: { section = $0 },
+            show: { place in afterClosingSheets { go(place) } },
             showShortcuts: { afterClosingSheets { showsShortcuts = true } }
         ))
+    }
+
+    /// Moves to a place. On a narrow screen the memory opens over whatever
+    /// is showing and closing it goes back there.
+    private func go(_ place: HomeSection) {
+        if place == .memory, section != .memory { memoryOverChat = section == .chat }
+        section = place
+    }
+
+    /// Opens the chat with a line ready to send. Words the person already
+    /// typed are never replaced.
+    private func talk(about line: String) {
+        guard let chat else { return }
+        if chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { chat.draft = line }
+        go(.chat)
     }
 
     /// Chats aren't kept yet, so starting over asks first once the person
@@ -136,11 +192,15 @@ public struct HomeView: View {
 
     /// A question can't show over a sheet, so close any sheet first and ask
     /// once it has gone. Nothing open means no wait.
+    /// A question on screen is never closed for this; it waits for its answer.
     private func afterClosingSheets(_ then: @escaping () -> Void) {
+        guard feed.reviewing == nil else { return }
         let memorySheetOpen = !usesSidebar && section == .memory
-        guard memorySheetOpen || showsShortcuts else { return then() }
-        if memorySheetOpen { section = .chat }
+        let readerOpen = feed.reading != nil
+        guard memorySheetOpen || showsShortcuts || readerOpen else { return then() }
+        if memorySheetOpen { section = memoryOverChat ? .chat : .today }
         showsShortcuts = false
+        feed.reading = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { then() }
     }
 
@@ -152,33 +212,70 @@ public struct HomeView: View {
         section = .chat
     }
 
-    /// One column: the chat, with the memory opening over it.
+    /// One column: Today, with the chat opening on top of it and the memory
+    /// opening over either.
     private func stack(_ chat: ChatController) -> some View {
-        NavigationStack {
-            chatScreen(chat)
+        NavigationStack(path: Binding(
+            get: { section == .chat || (section == .memory && memoryOverChat) ? [HomeSection.chat] : [] },
+            set: { path in
+                if path.isEmpty {
+                    section = .today
+                    memoryOverChat = false
+                } else {
+                    section = .chat
+                }
+            }
+        )) {
+            todayScreen(chat)
                 .toolbar {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button { section = .memory } label: {
-                            Label(MemoryWords.title, systemImage: HomeSection.memory.symbol)
-                        }
+                    ToolbarItem(placement: .primaryAction) { memoryButton }
+                }
+                .safeAreaInset(edge: .bottom) {
+                    // An empty Today offers the chat itself, so one button is enough.
+                    if !feed.feed.isEmpty {
+                        ChatButton(name: chat.displayName.text) { go(.chat) }
+                            .padding(.horizontal, Theme.gutter)
+                            .padding(.bottom, 8)
                     }
+                }
+                .navigationDestination(for: HomeSection.self) { _ in
+                    chatScreen(chat)
+                        .toolbar {
+                            ToolbarItem(placement: .primaryAction) { memoryButton }
+                        }
+                        #if os(iOS)
+                        .navigationBarTitleDisplayMode(.inline)
+                        #endif
                 }
         }
         .sheet(isPresented: Binding(
             get: { section == .memory },
-            set: { if !$0 { section = .chat } }
+            // Only a swipe down still has the memory chosen. Done has
+            // already gone back, and where it came from is forgotten by now.
+            set: { if !$0, section == .memory { section = memoryOverChat ? .chat : .today } }
         )) {
             NavigationStack {
                 memoryScreen
                     .presentationDragIndicator(.visible)
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
-                            Button(MemoryWords.doneTitle) { section = .chat }
+                            Button(MemoryWords.doneTitle) { section = memoryOverChat ? .chat : .today }
                                 .keyboardShortcut(.cancelAction)
                         }
                     }
             }
         }
+    }
+
+    private var memoryButton: some View {
+        Button { go(.memory) } label: {
+            Label(MemoryWords.title, systemImage: HomeSection.memory.symbol)
+        }
+    }
+
+    private func todayScreen(_ chat: ChatController) -> some View {
+        FeedView(model: feed, look: AgentLook.load(from: looks),
+                 onTalk: { talk(about: $0) }, onChat: { go(.chat) })
     }
 
     private func chatScreen(_ chat: ChatController) -> some View {
@@ -208,10 +305,72 @@ public struct HomeView: View {
     }
 }
 
+/// The chat, one tap from Today on a narrow screen. It sits at the bottom,
+/// where a thumb reaches it.
+/// With little height, as on a phone turned sideways, it shrinks to a small
+/// pill in the corner so the cards keep the room.
+struct ChatButton: View {
+    let name: String
+    let action: () -> Void
+    #if os(iOS)
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    #endif
+
+    private var isShort: Bool {
+        #if os(iOS)
+        verticalSizeClass == .compact
+        #else
+        false
+        #endif
+    }
+
+    var body: some View {
+        Group {
+            if isShort {
+                Button(action: action) { label }
+                    .buttonStyle(PillButtonStyle())
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            } else {
+                Button(action: action) { label }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .frame(maxWidth: Theme.readableWidth)
+            }
+        }
+        .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
+        .pointerHover(in: Capsule())
+        .accessibilityIdentifier("chatButton")
+    }
+
+    private var label: some View {
+        Label(FeedWords.chatWith(name), systemImage: HomeSection.chat.symbol)
+            .labelStyle(.titleAndIcon)
+    }
+}
+
+/// The primary button's look at the size of its words.
+struct PillButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(Theme.onAccent)
+            .padding(.horizontal, 18)
+            .frame(minHeight: 44)
+            .background(Theme.accent, in: Capsule())
+            .scaleEffect(configuration.isPressed ? Motion.pressedScale(reduceMotion: reduceMotion) : 1)
+            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
+            .contentShape(Capsule())
+    }
+}
+
 /// The wide layout: a sidebar of places, and the chosen one beside it.
-struct HomeSplit<ChatScreen: View, MemoryScreen: View>: View {
+struct HomeSplit<TodayScreen: View, ChatScreen: View, MemoryScreen: View>: View {
     @ObservedObject var chat: ChatController
     @Binding var section: HomeSection?
+    /// Shown beside Today while questions wait, so they are seen from anywhere.
+    var needsYouCount = 0
+    let todayScreen: TodayScreen
     let chatScreen: ChatScreen
     let memoryScreen: MemoryScreen
     let newChat: () -> Void
@@ -223,12 +382,15 @@ struct HomeSplit<ChatScreen: View, MemoryScreen: View>: View {
                     NavigationLink(value: place) {
                         Label(place.title, systemImage: place.symbol)
                     }
+                    .badge(place == .today ? needsYouCount : 0)
                 }
             }
             .navigationTitle(chat.displayName.text)
         } detail: {
             NavigationStack {
-                switch section ?? .chat {
+                switch section ?? .today {
+                case .today:
+                    todayScreen
                 case .chat:
                     chatScreen
                         .toolbar {
@@ -261,6 +423,12 @@ extension FocusedValues {
     @Entry public var homeActions: HomeActions?
 }
 
+extension EnvironmentValues {
+    /// Whether Command Return may send the chat line. Off while a question
+    /// sheet waits for its answer, like the other shortcuts.
+    @Entry var sendsFromKeyboard = true
+}
+
 /// The app's menu commands. On iPad, holding Command shows them with their
 /// shortcuts, and a hardware keyboard can reach every one.
 public struct HomeCommands: Commands {
@@ -275,12 +443,12 @@ public struct HomeCommands: Commands {
                 .disabled(actions?.canNavigate != true)
         }
         CommandMenu(HomeWords.goMenuTitle) {
-            Button(HomeSection.chat.title) { actions?.show(.chat) }
-                .keyboardShortcut("1")
-                .disabled(actions?.canNavigate != true)
-            Button(HomeSection.memory.title) { actions?.show(.memory) }
-                .keyboardShortcut("2")
-                .disabled(actions?.canNavigate != true)
+            // Numbered in sidebar order, the way Apple's apps do it.
+            ForEach(Array(HomeSection.allCases.enumerated()), id: \.element) { index, place in
+                Button(place.title) { actions?.show(place) }
+                    .keyboardShortcut(KeyEquivalent(Character(String(index + 1))))
+                    .disabled(actions?.canNavigate != true)
+            }
         }
         CommandGroup(replacing: .help) {
             Button(HomeWords.shortcutsTitle) { actions?.showShortcuts() }

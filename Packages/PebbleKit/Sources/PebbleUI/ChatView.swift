@@ -11,6 +11,7 @@ public struct ChatView: View {
     @StateObject private var controller: ChatController
     @FocusState private var nameFieldFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.sendsFromKeyboard) private var sendsFromKeyboard
     /// The pending "thinking" announcement, cancelled if the reply lands first.
     @State private var thinkingNotice: Task<Void, Never>?
     #if os(iOS)
@@ -353,7 +354,7 @@ public struct ChatView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(.orange)
-            .keyboardShortcut(.return, modifiers: .command)
+            .keyboardShortcut(sendsFromKeyboard ? KeyboardShortcut(.return, modifiers: .command) : nil)
             .disabled(controller.isReplying || controller.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }

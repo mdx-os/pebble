@@ -34,9 +34,11 @@ ui-screenshots: generate
 	PEBBLE_IPHONE="$(or $(DEVICE),iPhone 17 Pro)" PEBBLE_SCREENS="$(SCREENS)" sh scripts/ui-screenshots.sh $(or $(OUT),build/screenshots/ui)
 
 ## device-screenshots: showcase screens on iPad Pro 13-inch, iPad mini and iPhone,
-## portrait and landscape, written to build/screenshots/devices (or OUT=dir)
+## portrait and landscape, written to build/screenshots/devices (or OUT=dir).
+## DEVICES= names the simulators (separated by commas), SCREENS= the screens.
 device-screenshots: generate
-	sh scripts/device-screenshots.sh $(or $(OUT),build/screenshots/devices)
+	PEBBLE_DEVICES="$(DEVICES)" PEBBLE_SCREENS="$(SCREENS)" \
+		sh scripts/device-screenshots.sh $(or $(OUT),build/screenshots/devices)
 
 ## ui-test: drive the app in the Simulator: the iPad sidebar, Return to send,
 ## and the keyboard shortcuts, on an iPad and an iPhone
