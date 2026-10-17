@@ -253,6 +253,21 @@ struct WarmthTests {
         #expect(HomeView.chatIsCovered(usesSidebar: false, section: .memory, showsShortcuts: false))
         #expect(!HomeView.chatIsCovered(usesSidebar: false, section: .chat, showsShortcuts: false))
         #expect(!HomeView.chatIsCovered(usesSidebar: true, section: .chat, showsShortcuts: false))
+        // A question or a result opened from Today covers it too.
+        #expect(HomeView.chatIsCovered(usesSidebar: true, section: .chat, showsShortcuts: false, feedSheetOpen: true))
+        #expect(HomeView.chatIsCovered(usesSidebar: false, section: .chat, showsShortcuts: false, feedSheetOpen: true))
+    }
+
+    /// The example note says "this device" only when the model keeps every
+    /// word here, and the feed takes its place from the model, not a flag
+    /// of its own.
+    @Test func theExampleNoteFollowsThePrivacyPlace() {
+        #expect(FeedWords.sampleNote(.onDevice).contains("this device"))
+        #expect(!FeedWords.sampleNote(.mayLeaveDevice).localizedCaseInsensitiveContains("device"))
+        for place in [PrivacyPlace.onDevice, .mayLeaveDevice] {
+            let model = FeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()), place: place)
+            #expect(model.place == place)
+        }
     }
 
     @Test func unreadableNotesTurnOffAddingAndStayOnDisk() throws {

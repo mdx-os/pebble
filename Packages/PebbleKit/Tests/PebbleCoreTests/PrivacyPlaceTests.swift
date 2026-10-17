@@ -13,6 +13,7 @@ struct PrivacyPlaceTests {
             FirstConversation.presence(place),
             FirstConversation.opening(named: "Pip", onDevice: place.staysOnDevice),
             FirstRunWords.helloDetail(onDevice: place.staysOnDevice),
+            FeedWords.sampleNote(place),
         ]
     }
 

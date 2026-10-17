@@ -62,6 +62,8 @@ public struct MemoryView: View {
                         Button(role: .destructive) { model.askForgetEverything = true } label: {
                             Text(MemoryWords.forgetEverythingTitle)
                                 .font(.subheadline.weight(.semibold))
+                                // The system red is about 3.6 to 1 on white.
+                                .foregroundStyle(Theme.dangerText)
                                 .frame(maxWidth: .infinity, minHeight: 44)
                         }
                         .padding(.top, 8)
@@ -69,7 +71,7 @@ public struct MemoryView: View {
                     if let status = model.status {
                         Text(status)
                             .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.secondaryText)
                             .frame(maxWidth: .infinity)
                             .accessibilityAddTraits(.updatesFrequently)
                     }
@@ -121,7 +123,7 @@ public struct MemoryView: View {
                 .accessibilityAddTraits(.isHeader)
             Label(MemoryWords.privacyNote(model.place), systemImage: "lock.fill")
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
         }
     }
 
@@ -135,7 +137,7 @@ public struct MemoryView: View {
             Button { model.add() } label: {
                 Image(systemName: "plus")
                     .font(.headline)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.onAccent)
                     .frame(width: 36, height: 36)
                     .background(Theme.accent, in: Circle())
                     .pointerHover(in: Circle())
@@ -191,7 +193,7 @@ struct MemoryRow: View {
                     Spacer()
                     Button(MemoryWords.saveTitle, action: onSave)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Theme.accent)
+                        .foregroundStyle(Theme.accentText)
                         .frame(minHeight: 44)
                 }
             } else {
@@ -204,14 +206,14 @@ struct MemoryRow: View {
                         SourceLabel(source: note.source)
                         Text(note.savedAt, format: .dateTime.month(.abbreviated).day())
                             .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(Theme.secondaryText)
                     }
                     // At large text sizes the source gets its own line so it never clips.
                     VStack(alignment: .leading, spacing: 4) {
                         SourceLabel(source: note.source)
                         Text(note.savedAt, format: .dateTime.month(.abbreviated).day())
                             .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(Theme.secondaryText)
                     }
                 }
                     Spacer(minLength: 0)
@@ -229,7 +231,7 @@ struct MemoryRow: View {
                         .accessibilityLabel(MemoryWords.forgetTitle)
                 }
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 .buttonStyle(.plain)
             }
         }
@@ -252,16 +254,16 @@ struct SourceLabel: View {
     var body: some View {
         Label {
             Text(source.label)
-                .foregroundStyle(source == .inferred ? Color.primary : Color.secondary)
+                .foregroundStyle(source == .inferred ? AnyShapeStyle(.primary) : AnyShapeStyle(Theme.secondaryText))
         } icon: {
             Image(systemName: source.symbol)
-                .foregroundStyle(source == .inferred ? Theme.accent : .secondary)
+                .foregroundStyle(source == .inferred ? AnyShapeStyle(Theme.accentSymbol) : AnyShapeStyle(Theme.secondaryText))
         }
             .font(.caption.weight(.medium))
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(
-                (source == .inferred ? Theme.accent : Color.secondary).opacity(0.12),
+                source == .inferred ? Theme.accent.opacity(Theme.accentWash) : Color.primary.opacity(Theme.fieldTint),
                 in: Capsule()
             )
             .fixedSize(horizontal: false, vertical: true)

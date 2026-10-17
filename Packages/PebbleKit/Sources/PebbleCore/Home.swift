@@ -1,11 +1,12 @@
 /// The places a person can go once the first run is done. On a wide screen
-/// they sit in a sidebar; on a narrow one, the chat is home and the memory
-/// opens over it.
+/// they sit in a sidebar with Today first; on a narrow one, Today is home,
+/// the chat opens on top of it, and the memory opens over either.
 public enum HomeSection: String, CaseIterable, Hashable, Sendable {
-    case chat, memory
+    case today, chat, memory
 
     public var title: String {
         switch self {
+        case .today: FeedWords.title
         case .chat: HomeWords.chatTitle
         case .memory: MemoryWords.title
         }
@@ -13,6 +14,7 @@ public enum HomeSection: String, CaseIterable, Hashable, Sendable {
 
     public var symbol: String {
         switch self {
+        case .today: "sun.max"
         case .chat: "bubble.left.and.bubble.right"
         case .memory: "heart.text.square"
         }
@@ -48,8 +50,9 @@ public enum HomeWords {
         ("Shift Return", newLineShortcut),
         ("⌘ Return", sendFromAnywhereShortcut),
         ("⌘ N", newChatTitle),
-        ("⌘ 1", chatTitle),
-        ("⌘ 2", MemoryWords.title),
+        ("⌘ 1", FeedWords.title),
+        ("⌘ 2", chatTitle),
+        ("⌘ 3", MemoryWords.title),
         ("⌘ /", shortcutsTitle),
         ("Esc", closeShortcut),
     ]

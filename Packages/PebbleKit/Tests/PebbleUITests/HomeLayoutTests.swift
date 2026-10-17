@@ -23,12 +23,18 @@ struct HomeLayoutTests {
         CGSize(width: 1133, height: 744),  // iPad mini, landscape
         CGSize(width: 678, height: 1032),  // half of a 13-inch in Split View
         CGSize(width: 500, height: 600),   // a small Stage Manager window
-    ], [HomeSection.chat, .memory])
+    ], HomeSection.allCases)
     func theSidebarLayoutRendersAtEachSize(size: CGSize, section: HomeSection) throws {
         let controller = chat()
+        let feed = FeedModel(sources: [SampleFeedSource()], needsYou: ShowcaseScene.sampleQuestion(), place: .onDevice)
         let view = HomeSplit(
             chat: controller,
             section: .constant(section),
+            needsYouCount: feed.feed.needsYou.count,
+            todayScreen: FeedView(model: feed, look: .startingPoint, onTalk: { _ in })
+                .safeAreaInset(edge: .bottom) {
+                    TodayComposer(chat: controller, keyboardSends: true, send: { _ in })
+                },
             chatScreen: ChatView(controller: controller, look: .startingPoint, firstMessage: nil),
             memoryScreen: MemoryView(store: ShowcaseScene.sampleMemory(), place: .onDevice),
             newChat: {}

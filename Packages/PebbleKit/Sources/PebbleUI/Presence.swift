@@ -169,19 +169,18 @@ struct EmptyState: View {
         VStack(spacing: 12) {
             Image(systemName: symbol)
                 .font(.largeTitle)
-                .foregroundStyle(Theme.accent)
+                .foregroundStyle(Theme.accentSymbol)
                 .accessibilityHidden(true)
             Text(title)
                 .font(.system(.title3, design: .rounded).weight(.semibold))
                 .multilineTextAlignment(.center)
             Text(detail)
                 .font(.body)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
             Button(actionTitle, action: action)
-                .buttonStyle(.bordered)
-                .tint(Theme.accent)
+                .buttonStyle(SoftButtonStyle())
                 .padding(.top, 4)
         }
         .frame(maxWidth: .infinity)
@@ -203,14 +202,12 @@ struct GentleNotice: View {
             Label {
                 Text(text).fixedSize(horizontal: false, vertical: true)
             } icon: {
-                Image(systemName: "info.circle").foregroundStyle(Theme.accent)
+                Image(systemName: "info.circle").foregroundStyle(Theme.accentSymbol)
             }
             .font(.subheadline)
             if let actionTitle, let action {
                 Button(actionTitle, action: action)
-                    .font(.subheadline.weight(.semibold))
-                    .buttonStyle(.bordered)
-                    .tint(Theme.accent)
+                    .buttonStyle(SoftButtonStyle())
             }
         }
         .padding(14)

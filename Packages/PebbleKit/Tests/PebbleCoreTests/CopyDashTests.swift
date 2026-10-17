@@ -44,6 +44,7 @@ struct CopyDashTests {
       + Proactivity.allCases.flatMap { [$0.title, $0.detail] }
       + AgentLook.allCases.map(\.title)
       + HomeWords.shortcuts.flatMap { [$0.keys, $0.action] }
+      + FeedWords.all
 
     @Test func noScreenWordsUseADash() {
         for line in Self.copy {

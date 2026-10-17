@@ -136,7 +136,7 @@ struct FirstRunScreensTests {
 
     @Test func extraApprovalsFromOneQuestionAreRefused() {
         let action = ProposedAction(kind: .purchase,
-                                    recipient: Recipient(id: "merchant:1", displayName: "Rise Bakery", handle: "risebakery.ca"),
+                                    recipient: Recipient(id: "merchant:1", displayName: "Rise Bakery", handle: "risebakery.example"),
                                     details: "Sourdough", price: Price(minorUnits: 1450, currency: "CAD"))
         let rule = AskFirst.isolated()
         var approvals: [Approval] = []

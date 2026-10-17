@@ -3,7 +3,7 @@
 How the agent talks, everywhere: the first run, the chat, memory, and the
 questions it asks before it acts. Read this before writing any words a
 person will see. The words themselves live in `PebbleCore` (`FirstRunWords`,
-`FirstConversation`, `MemoryWords`, `ConfirmationWords` and friends), so a
+`FirstConversation`, `MemoryWords`, `ConfirmationWords`, `FeedWords` and friends), so a
 change here usually means a change there.
 
 ## Who the agent is
@@ -73,8 +73,8 @@ when the code makes them true.
   from the active model's `runsOnDevice` through `ModelClient.privacyPlace`
   and passed down by the app. There is no second flag. Every device line
   takes it: `FirstConversation.opening` and `presence`,
-  `FirstRunWords.helloDetail`, and `MemoryWords.empty`, `saved` and
-  `privacyNote`. Memory lines follow it too: notes never reach a model,
+  `FirstRunWords.helloDetail`, `MemoryWords.empty`, `saved` and
+  `privacyNote`, and `FeedWords.sampleNote`. Memory lines follow it too: notes never reach a model,
   but with a cloud model the chat does leave the device, so a promise on
   the memory screen would mislead. `PrivacyPlaceTests` pins every line.
 - When the flag is off, say nothing about the device. Drop the sentence
@@ -123,6 +123,24 @@ action.
   a model that leaves the device, the device sentence goes: "You can
   change or remove it anytime."
 - Bad: "No data."
+
+An empty state promises only what exists today. Today's empty state says
+"It's just us for now. Write to me below, and we'll start a chat." with the
+composer under it, and says nothing about work done in the background until
+a real feed source ships.
+
+Examples are always labeled. Sample cards start with "Example" for
+VoiceOver, and a sample opened to read or a sample question says "This is
+an example. Nothing here was really done."
+
+### Readable words
+
+Words a person reads clear 4.5 to 1 against what they sit on, in light and
+dark. Use `Theme.accentText` for words in the accent's warmth,
+`Theme.secondaryText` for quieter words, and `Theme.onAccent` on the accent
+fill. The raw accent and the system grays are too faint for words.
+`ContrastGuardTests` checks every pair in `Theme.textPairs` and scans the
+screens for colors outside them.
 
 ### Waiting
 

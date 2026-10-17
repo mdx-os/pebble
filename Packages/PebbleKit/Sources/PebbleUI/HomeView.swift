@@ -3,14 +3,15 @@ import PebbleModel
 #if canImport(SwiftUI)
 import SwiftUI
 
-/// The app's root: the guided first run until it's finished, then the chat
-/// with a way to see what the agent remembers.
+/// The app's root: the guided first run until it's finished, then Today,
+/// with the chat one tap away and a way to see what the agent remembers.
 ///
-/// On a wide window (an iPad in full screen or a wide Split View) the chat
-/// and the memory sit side by side with a sidebar. On a narrow one (iPhone,
-/// Slide Over, a narrow Split View) the chat is home and the memory opens
-/// over it. The conversation is kept here, so changing the window's shape
-/// never loses it.
+/// On a wide window (an iPad in full screen or a wide Split View) Today,
+/// the chat and the memory sit in a sidebar, with Today chosen first. On a
+/// narrow one (iPhone, Slide Over, a narrow Split View) Today is home, the
+/// chat opens on top of it, and the memory opens over either. The
+/// conversation and the feed are kept here, so changing the window's shape
+/// never loses them.
 public struct HomeView: View {
     let brand: Brand
     let model: any ModelClient
@@ -23,25 +24,36 @@ public struct HomeView: View {
     @State private var firstMessage: String?
     @State private var chat: ChatController?
     @State private var section: HomeSection?
+    /// On a narrow screen, whether the memory was opened from the chat, so
+    /// closing it goes back there rather than to Today.
+    @State private var memoryOverChat = false
     @State private var showsShortcuts = false
     @State private var asksNewChat = false
+    /// What to do once the open sheet has finished closing.
+    @State private var handoff = SheetHandoff()
+    @StateObject private var feed: FeedModel
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
+    @Environment(\.scenePhase) private var scenePhase
 
+    /// `feed` is where finished work comes from. Questions come only from
+    /// `needsYou`, which asks through `AskFirst`.
     public init(
         brand: Brand,
         model: any ModelClient,
         names: any AgentNameStoring,
         onboarding: any OnboardingStoring,
         memory: MemoryStore?,
-        looks: UserDefaults = .standard
+        looks: UserDefaults = .standard,
+        feed: [any FeedSource] = [EmptyFeedSource()],
+        needsYou: NeedsYou = NeedsYou()
     ) {
         self.init(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
-                  looks: looks, conversation: nil, section: .chat)
+                  looks: looks, conversation: nil, section: .today, feed: feed, needsYou: needsYou)
     }
 
-    /// Opens on a given conversation and section, for screenshots and tests.
+    /// Opens on a given conversation, section and feed, for screenshots and tests.
     package init(
         brand: Brand,
         model: any ModelClient,
@@ -50,7 +62,12 @@ public struct HomeView: View {
         memory: MemoryStore?,
         looks: UserDefaults,
         conversation: Conversation?,
-        section: HomeSection
+        section: HomeSection,
+        feed: [any FeedSource] = [EmptyFeedSource()],
+        // No default: screenshots and tests pass their own rule, so they
+        // never touch the app's `AskFirst.shared`.
+        needsYou: NeedsYou,
+        now: @escaping () -> Date = { Date() }
     ) {
         self.brand = brand
         self.model = model
@@ -58,6 +75,8 @@ public struct HomeView: View {
         self.onboarding = onboarding
         self.memory = memory
         self.looks = looks
+        _feed = StateObject(wrappedValue: FeedModel(sources: feed, needsYou: needsYou,
+                                                    place: model.privacyPlace, now: now))
         let needed = OnboardingFlow.isNeeded(store: onboarding, names: names)
         // People who named their agent before the first run existed count as finished.
         if !needed, !onboarding.hasFinished() { onboarding.markFinished() }
@@ -82,7 +101,8 @@ public struct HomeView: View {
             if finished, let chat {
                 Group {
                     if usesSidebar {
-                        HomeSplit(chat: chat, section: $section, chatScreen: chatScreen(chat),
+                        HomeSplit(chat: chat, section: $section, needsYouCount: feed.feed.needsYou.count,
+                                  todayScreen: todayScreen(chat), chatScreen: chatScreen(chat),
                                   memoryScreen: memoryScreen, newChat: startNewChat)
                     } else {
                         stack(chat)
@@ -99,11 +119,44 @@ public struct HomeView: View {
                 .transition(.opacity)
             }
         }
-        .tint(Theme.accent)
+        // System controls write their words in the tint, so it is the
+        // readable accent, not the brand fill.
+        .tint(Theme.accentText)
         // The live app plays entrances; still renders show everything at once.
         .environment(\.animatesEntrances, true)
-        .sheet(isPresented: $showsShortcuts) {
+        // Questions time out on their own. Looked after here, above Today,
+        // so the count beside Today stays true from any place.
+        .task { await feed.keepFresh() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { feed.refresh() }
+        }
+        // A question on screen waits for its answer; Command Return can't
+        // send a chat line from behind it.
+        .environment(\.sendsFromKeyboard, feed.reviewing == nil)
+        .onChange(of: section) { old, new in
+            // The sidebar can change places without `go`, so keep where the
+            // memory was opened from true, and forget it once the memory
+            // closes. A later narrow window then never reopens a stale place.
+            if new == .memory, old != .memory {
+                memoryOverChat = old == .chat
+            } else if new != .memory {
+                memoryOverChat = false
+            }
+        }
+        .sheet(isPresented: $showsShortcuts, onDismiss: sheetClosed) {
             KeyboardShortcutsView()
+        }
+        // The same question sheet as everywhere else, with the rule that
+        // asked. Closing it any way but yes withdraws the question.
+        .sheet(item: $feed.reviewing, onDismiss: { feed.refresh() }) { request in
+            ConfirmationSheet(request: request, look: AgentLook.load(from: looks), rule: feed.rule,
+                              isExample: feed.needsYou.isSample,
+                              onApprove: { feed.approved($0) },
+                              onDecline: { feed.closedQuestion(request) })
+                .onDisappear { feed.closedQuestion(request) }
+        }
+        .sheet(item: $feed.reading, onDismiss: sheetClosed) { item in
+            FeedReader(item: item, time: feed.timeLabel(for: item.time), isSample: feed.isSample(item))
         }
         // An alert, not a popover, so both choices show on iPad and Esc keeps the chat.
         .alert(HomeWords.newChatQuestion, isPresented: $asksNewChat) {
@@ -113,11 +166,44 @@ public struct HomeView: View {
             Text(HomeWords.newChatDetail)
         }
         .focusedSceneValue(\.homeActions, HomeActions(
-            canNavigate: finished,
+            // A question on screen waits for its answer; no shortcut sweeps it away.
+            canNavigate: finished && feed.reviewing == nil,
             newChat: startNewChat,
-            show: { section = $0 },
+            show: { place in afterClosingSheets { go(place) } },
             showShortcuts: { afterClosingSheets { showsShortcuts = true } }
         ))
+    }
+
+    /// Moves to a place. On a narrow screen the memory opens over whatever
+    /// is showing and closing it goes back there.
+    private func go(_ place: HomeSection) {
+        if place == .memory, section != .memory { memoryOverChat = section == .chat }
+        section = place
+    }
+
+    /// Opens the chat with a line ready to send. Words the person already
+    /// typed are never replaced.
+    private func talk(about line: String) {
+        guard let chat else { return }
+        if chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { chat.draft = line }
+        go(.chat)
+    }
+
+    /// Today's composer sends the way the chat's does, through
+    /// `ChatController.send` into the same conversation, so care comes
+    /// first and nothing can act without asking. Then the chat opens on it.
+    private func send(fromToday line: String) {
+        guard let chat, feed.reviewing == nil, Self.sendsFromToday(line, chat: chat) else { return }
+        // The person's own words went first, so a line picked during the
+        // first run is no longer waiting to be sent.
+        firstMessage = nil
+        go(.chat)
+    }
+
+    /// The send itself, apart from moving, so tests can drive it.
+    @discardableResult
+    static func sendsFromToday(_ line: String, chat: ChatController) -> Bool {
+        chat.send(line)
     }
 
     /// Chats aren't kept yet, so starting over asks first once the person
@@ -136,12 +222,25 @@ public struct HomeView: View {
 
     /// A question can't show over a sheet, so close any sheet first and ask
     /// once it has gone. Nothing open means no wait.
+    /// A question on screen is never closed for this; it waits for its answer.
     private func afterClosingSheets(_ then: @escaping () -> Void) {
-        let memorySheetOpen = !usesSidebar && section == .memory
-        guard memorySheetOpen || showsShortcuts else { return then() }
-        if memorySheetOpen { section = .chat }
+        guard feed.reviewing == nil else { return }
+        guard anySheetOpen else { return then() }
+        // Run once the sheet has finished closing, not after a guessed time.
+        handoff.hold(then)
+        if !usesSidebar && section == .memory { section = memoryOverChat ? .chat : .today }
         showsShortcuts = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { then() }
+        feed.reading = nil
+    }
+
+    private var anySheetOpen: Bool {
+        (!usesSidebar && section == .memory) || showsShortcuts || feed.reading != nil
+    }
+
+    /// A sheet finished closing. What was waiting runs only if nothing is
+    /// open now and no question has opened in the meantime.
+    private func sheetClosed() {
+        handoff.sheetClosed(stillOpen: anySheetOpen, questionOpen: feed.reviewing != nil)?()
     }
 
     private func resetChat() {
@@ -152,28 +251,49 @@ public struct HomeView: View {
         section = .chat
     }
 
-    /// One column: the chat, with the memory opening over it.
+    /// One column: Today, with the chat opening on top of it and the memory
+    /// opening over either.
     private func stack(_ chat: ChatController) -> some View {
-        NavigationStack {
-            chatScreen(chat)
+        NavigationStack(path: Binding(
+            get: { section == .chat || (section == .memory && memoryOverChat) ? [HomeSection.chat] : [] },
+            set: { path in
+                if path.isEmpty {
+                    section = .today
+                    memoryOverChat = false
+                } else {
+                    section = .chat
+                }
+            }
+        )) {
+            todayScreen(chat)
                 .toolbar {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button { section = .memory } label: {
-                            Label(MemoryWords.title, systemImage: HomeSection.memory.symbol)
+                    // The chat as it was, one tap away, for when there is
+                    // nothing new to type.
+                    ToolbarItem(placement: .primaryAction) { ChatToolbarButton(chat: chat) { go(.chat) } }
+                    ToolbarItem(placement: .primaryAction) { memoryButton }
+                }
+                .navigationDestination(for: HomeSection.self) { _ in
+                    chatScreen(chat)
+                        .toolbar {
+                            ToolbarItem(placement: .primaryAction) { memoryButton }
                         }
-                    }
+                        #if os(iOS)
+                        .navigationBarTitleDisplayMode(.inline)
+                        #endif
                 }
         }
         .sheet(isPresented: Binding(
             get: { section == .memory },
-            set: { if !$0 { section = .chat } }
-        )) {
+            // Only a swipe down still has the memory chosen. Done has
+            // already gone back, and where it came from is forgotten by now.
+            set: { if !$0, section == .memory { section = memoryOverChat ? .chat : .today } }
+        ), onDismiss: sheetClosed) {
             NavigationStack {
                 memoryScreen
                     .presentationDragIndicator(.visible)
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
-                            Button(MemoryWords.doneTitle) { section = .chat }
+                            Button(MemoryWords.doneTitle) { section = memoryOverChat ? .chat : .today }
                                 .keyboardShortcut(.cancelAction)
                         }
                     }
@@ -181,15 +301,35 @@ public struct HomeView: View {
         }
     }
 
-    /// True while a sheet sits over the chat: the shortcuts, or the memory
-    /// on a narrow window. The chat says nothing aloud while covered.
-    static func chatIsCovered(usesSidebar: Bool, section: HomeSection?, showsShortcuts: Bool) -> Bool {
-        showsShortcuts || (!usesSidebar && section == .memory)
+    /// True while a sheet sits over the chat: the shortcuts, a question or
+    /// a finished piece of work from Today, or the memory on a narrow
+    /// window. The chat says nothing aloud while covered.
+    static func chatIsCovered(usesSidebar: Bool, section: HomeSection?, showsShortcuts: Bool,
+                              feedSheetOpen: Bool = false) -> Bool {
+        showsShortcuts || feedSheetOpen || (!usesSidebar && section == .memory)
+    }
+
+    private var memoryButton: some View {
+        Button { go(.memory) } label: {
+            Label(MemoryWords.title, systemImage: HomeSection.memory.symbol)
+        }
+    }
+
+    /// Today, with the chat's composer right on it: type and go.
+    private func todayScreen(_ chat: ChatController) -> some View {
+        FeedView(model: feed, look: AgentLook.load(from: looks), onTalk: { talk(about: $0) })
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                // Command Return belongs to whichever composer is in front.
+                TodayComposer(chat: chat, keyboardSends: feed.reviewing == nil && section == .today) {
+                    send(fromToday: $0)
+                }
+            }
     }
 
     private func chatScreen(_ chat: ChatController) -> some View {
         ChatView(controller: chat, look: AgentLook.load(from: looks), firstMessage: firstMessage,
-                 covered: Self.chatIsCovered(usesSidebar: usesSidebar, section: section, showsShortcuts: showsShortcuts),
+                 covered: Self.chatIsCovered(usesSidebar: usesSidebar, section: section, showsShortcuts: showsShortcuts,
+                                             feedSheetOpen: feed.reviewing != nil || feed.reading != nil),
                  onFirstMessageSent: { firstMessage = nil })
             .background(Backdrop())
             // A new chat is a new conversation, so it starts fresh on screen too.
@@ -215,10 +355,70 @@ public struct HomeView: View {
     }
 }
 
+/// The chat's composer, at the foot of Today. It shares the chat's draft,
+/// so words typed here are still there in the chat, and the other way round.
+struct TodayComposer: View {
+    @ObservedObject var chat: ChatController
+    let keyboardSends: Bool
+    let send: (String) -> Void
+    @Environment(\.colorScheme) private var scheme
+    @ScaledMetric(relativeTo: .body) private var columnWidth: CGFloat = Theme.chatWidth
+
+    var body: some View {
+        Composer(draft: $chat.draft, isBusy: chat.isReplying, keyboardSends: keyboardSends,
+                 identifier: "todayComposer", lines: 1...4, send: send)
+            .padding(.vertical, 12)
+            .readableColumn(columnWidth)
+            .background {
+                // Solid, so cards scrolling under it never show through the words.
+                Theme.backdropEnds(scheme).bottom.color
+                    .ignoresSafeArea(edges: .bottom)
+                    .overlay(alignment: .top) { Rectangle().fill(Theme.hairline(scheme)).frame(height: 1) }
+            }
+    }
+}
+
+/// The chat, one tap from Today on a narrow screen, for when there is
+/// nothing new to type.
+struct ChatToolbarButton: View {
+    @ObservedObject var chat: ChatController
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(FeedWords.chatWith(chat.displayName.text), systemImage: HomeSection.chat.symbol)
+        }
+        .help(FeedWords.chatWith(chat.displayName.text))
+        .accessibilityIdentifier("chatButton")
+    }
+}
+
+/// Something to do once the open sheet has finished closing, such as
+/// showing the shortcuts. It waits for the sheet to say it has gone, not
+/// for a guessed time, and is dropped if a question opened meanwhile,
+/// since a question waits for its answer.
+struct SheetHandoff {
+    private(set) var waiting: (() -> Void)?
+
+    mutating func hold(_ then: @escaping () -> Void) {
+        waiting = then
+    }
+
+    /// A sheet has gone. What to run now, if anything.
+    mutating func sheetClosed(stillOpen: Bool, questionOpen: Bool) -> (() -> Void)? {
+        guard let then = waiting, !stillOpen else { return nil }
+        waiting = nil
+        return questionOpen ? nil : then
+    }
+}
+
 /// The wide layout: a sidebar of places, and the chosen one beside it.
-struct HomeSplit<ChatScreen: View, MemoryScreen: View>: View {
+struct HomeSplit<TodayScreen: View, ChatScreen: View, MemoryScreen: View>: View {
     @ObservedObject var chat: ChatController
     @Binding var section: HomeSection?
+    /// Shown beside Today while questions wait, so they are seen from anywhere.
+    var needsYouCount = 0
+    let todayScreen: TodayScreen
     let chatScreen: ChatScreen
     let memoryScreen: MemoryScreen
     let newChat: () -> Void
@@ -230,12 +430,15 @@ struct HomeSplit<ChatScreen: View, MemoryScreen: View>: View {
                     NavigationLink(value: place) {
                         Label(place.title, systemImage: place.symbol)
                     }
+                    .badge(place == .today ? needsYouCount : 0)
                 }
             }
             .navigationTitle(chat.displayName.text)
         } detail: {
             NavigationStack {
-                switch section ?? .chat {
+                switch section ?? .today {
+                case .today:
+                    todayScreen
                 case .chat:
                     chatScreen
                         .toolbar {
@@ -268,6 +471,12 @@ extension FocusedValues {
     @Entry public var homeActions: HomeActions?
 }
 
+extension EnvironmentValues {
+    /// Whether Command Return may send the chat line. Off while a question
+    /// sheet waits for its answer, like the other shortcuts.
+    @Entry var sendsFromKeyboard = true
+}
+
 /// The app's menu commands. On iPad, holding Command shows them with their
 /// shortcuts, and a hardware keyboard can reach every one.
 public struct HomeCommands: Commands {
@@ -282,12 +491,12 @@ public struct HomeCommands: Commands {
                 .disabled(actions?.canNavigate != true)
         }
         CommandMenu(HomeWords.goMenuTitle) {
-            Button(HomeSection.chat.title) { actions?.show(.chat) }
-                .keyboardShortcut("1")
-                .disabled(actions?.canNavigate != true)
-            Button(HomeSection.memory.title) { actions?.show(.memory) }
-                .keyboardShortcut("2")
-                .disabled(actions?.canNavigate != true)
+            // Numbered in sidebar order, the way Apple's apps do it.
+            ForEach(Array(HomeSection.allCases.enumerated()), id: \.element) { index, place in
+                Button(place.title) { actions?.show(place) }
+                    .keyboardShortcut(KeyEquivalent(Character(String(index + 1))))
+                    .disabled(actions?.canNavigate != true)
+            }
         }
         CommandGroup(replacing: .help) {
             Button(HomeWords.shortcutsTitle) { actions?.showShortcuts() }
@@ -309,7 +518,7 @@ struct KeyboardShortcutsView: View {
                     LabeledContent(shortcut.action) {
                         Text(shortcut.keys)
                             .font(.body.monospaced())
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.secondaryText)
                     }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("\(shortcut.action), \(HomeWords.spoken(shortcut.keys))")

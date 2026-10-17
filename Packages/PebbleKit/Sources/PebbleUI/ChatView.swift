@@ -2,15 +2,13 @@ import PebbleCore
 import PebbleModel
 #if canImport(SwiftUI)
 import SwiftUI
-#if os(iOS)
-import GameController
-#endif
 
 /// The first screen: the agent has a face, a name, and a conversation.
 public struct ChatView: View {
     @StateObject private var controller: ChatController
     @FocusState private var nameFieldFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.sendsFromKeyboard) private var sendsFromKeyboard
     /// The pending "thinking" announcement, cancelled if the reply lands first.
     @State private var thinkingNotice: Task<Void, Never>?
     #if os(iOS)
@@ -192,12 +190,12 @@ public struct ChatView: View {
                 .multilineTextAlignment(.center)
             Text(FirstConversation.presence(controller.privacyPlace))
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 .multilineTextAlignment(.center)
             if controller.showsNameInvitation {
                 Text(FirstConversation.nameInvitation)
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.secondaryText)
                     .multilineTextAlignment(.center)
             }
             renameControl
@@ -228,19 +226,18 @@ public struct ChatView: View {
                 if let nameHint = controller.nameHint {
                     Text(nameHint)
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.secondaryText)
                         .multilineTextAlignment(.center)
                 }
                 HStack(spacing: 8) {
                     Button(FirstConversation.cancelNameTitle) {
                         controller.cancelRename()
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(SoftButtonStyle(neutral: true))
                     Button(FirstConversation.confirmNameTitle) {
                         controller.commitName()
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.orange)
+                    .buttonStyle(AccentButtonStyle())
                     .disabled(controller.nameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
@@ -248,8 +245,7 @@ public struct ChatView: View {
             Button(controller.renameTitle) {
                 controller.beginRename()
             }
-            .buttonStyle(.bordered)
-            .tint(.orange)
+            .buttonStyle(SoftButtonStyle())
         }
     }
 
@@ -318,7 +314,7 @@ public struct ChatView: View {
         case .agent:
             Color.primary.opacity(Theme.bubbleTint)
         case .person:
-            Color.orange.opacity(0.18)
+            Theme.accent.opacity(Theme.personBubbleWash)
         }
     }
 
@@ -328,7 +324,7 @@ public struct ChatView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(FirstConversation.startersHeading)
                 .font(.subheadline.weight(.medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 .accessibilityAddTraits(.isHeader)
                 .padding(.top, 4)
             ForEach(Array(FirstConversation.jobs.enumerated()), id: \.element.id) { index, job in
@@ -341,76 +337,9 @@ public struct ChatView: View {
     }
 
     private var composer: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            // Return sends and Shift Return starts a new line. The field
-            // stays open while a reply comes, so a keyboard never loses its
-            // place; sending waits until the reply is in.
-            TextField(FirstConversation.composerPlaceholder, text: composerText, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...6)
-                .submitLabel(.send)
-                .accessibilityIdentifier("composer")
-                // Keyboards are reported a moment after first asking, so ask early.
-                .onAppear { _ = Self.shiftIsDown }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
-                // One send path per platform: the draft binding reads a lone
-                // Return as Send on iOS, and onKeyPress handles it on the Mac.
-                #if os(macOS)
-                .onKeyPress(.return, phases: .down) { press in
-                    if press.modifiers.contains(.shift) {
-                        addLine()
-                        return .handled
-                    }
-                    controller.submit(controller.draft)
-                    return .handled
-                }
-                #endif
-            Button(FirstConversation.sendTitle) {
-                controller.submit(controller.draft)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.orange)
-            .keyboardShortcut(.return, modifiers: .command)
-            .disabled(controller.isReplying || controller.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        Composer(draft: $controller.draft, isBusy: controller.isReplying, keyboardSends: sendsFromKeyboard) {
+            controller.send($0)
         }
-    }
-
-    #if os(macOS)
-    /// Shift Return on the Mac. The break goes at the end, where the cursor
-    /// almost always is while writing.
-    private func addLine() {
-        controller.draft += "\n"
-    }
-    #endif
-
-    /// True while Shift is held on a hardware keyboard.
-    private static var shiftIsDown: Bool {
-        #if os(iOS)
-        guard let keys = GCKeyboard.coalesced?.keyboardInput else { return false }
-        return keys.button(forKeyCode: .leftShift)?.isPressed == true
-            || keys.button(forKeyCode: .rightShift)?.isPressed == true
-        #else
-        false
-        #endif
-    }
-
-    /// The draft, with a lone Return read as Send. On iPad the field types
-    /// Return and Shift Return alike as a line break, so the Shift key is
-    /// checked here. See `ComposerReturn`.
-    private var composerText: Binding<String> {
-        Binding(
-            get: { controller.draft },
-            set: { new in
-                if !Self.shiftIsDown, let text = ComposerReturn.textToSend(old: controller.draft, new: new) {
-                    controller.draft = text
-                    controller.submit(text)
-                } else {
-                    controller.draft = new
-                }
-            }
-        )
     }
 }
 
@@ -496,6 +425,17 @@ final class ChatController: ObservableObject {
         naming = next
         names.saveDisplayName(name.text)
         conversation = conversation.renamingAgent(to: name)
+    }
+
+    /// What both composers call, in the chat and on Today: the same care
+    /// check, the same conversation and the same rules either way. True
+    /// when the line went out, false when there was nothing to send or a
+    /// reply was still coming.
+    @discardableResult
+    func send(_ text: String) -> Bool {
+        let before = sentCount
+        submit(text)
+        return sentCount != before
     }
 
     /// Sends `text`. `byHand` is false for the line the first run sends on
@@ -595,7 +535,7 @@ struct StarterChip: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
-                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+                .background(Theme.accent.opacity(Theme.accentWash), in: RoundedRectangle(cornerRadius: 14))
                 .contentShape(RoundedRectangle(cornerRadius: 14))
                 .pointerHover(in: RoundedRectangle(cornerRadius: 14))
         }
@@ -621,12 +561,12 @@ struct AvatarView: View {
 
     var body: some View {
         Circle()
-            .fill(Color.orange.gradient)
+            .fill(Theme.accent.gradient)
             .frame(width: 88, height: 88)
             .overlay {
                 Text(initial)
                     .font(.system(size: 40, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.onAccent)
             }
             .accessibilityHidden(true)
     }

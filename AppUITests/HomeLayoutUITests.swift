@@ -64,7 +64,115 @@ final class HomeLayoutUITests: XCTestCase {
         XCTAssertFalse((field.value as? String ?? "").contains("Pack lunches"))
     }
 
-    /// Command N starts a new chat; Command 2 and Command 1 move between places.
+    /// Today is home. On iPad it is the first place in the sidebar, chosen
+    /// first; on iPhone the chat is one tap away at the bottom.
+    func testTodayIsHomeAndTheChatIsOneTapAway() throws {
+        let app = launch("today")
+        // Examples say so first, to VoiceOver too.
+        let card = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Example. Done. Your morning plan is set")).firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["Needs you"].exists)
+        if isPad {
+            XCTAssertTrue(app.buttons["Today"].firstMatch.exists)
+            app.buttons["Chat"].firstMatch.tap()
+            XCTAssertTrue(composer(in: app).waitForExistence(timeout: 5))
+            app.buttons["Today"].firstMatch.tap()
+        } else {
+            app.buttons["chatButton"].tap()
+            XCTAssertTrue(composer(in: app).waitForExistence(timeout: 5))
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+        }
+        XCTAssertTrue(card.waitForExistence(timeout: 5))
+
+        // The examples say so on the first screen, above every card.
+        let sampleNote = app.staticTexts["sampleNote"]
+        XCTAssertTrue(sampleNote.exists)
+        XCTAssertTrue(sampleNote.isHittable)
+        XCTAssertLessThan(sampleNote.frame.minY, card.frame.minY)
+
+        // A result opens to read, says it is an example, and Done closes it.
+        card.tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "School drop off")).firstMatch
+            .waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["sampleLabel"].exists)
+        app.buttons["Done"].firstMatch.tap()
+
+        // Something spotted opens the chat with a line ready, not sent.
+        let spotted = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Example. Noticed. Sam's birthday")).firstMatch
+        XCTAssertTrue(spotted.waitForExistence(timeout: 5))
+        spotted.tap()
+        let field = composer(in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertEqual(field.value as? String, "Help me plan something for Sam's birthday.")
+        XCTAssertFalse(app.staticTexts["Help me plan something for Sam's birthday."].exists)
+    }
+
+    /// A question waiting is pinned on top and opens the usual question
+    /// sheet. Not now withdraws it, and the section goes away.
+    func testNeedsYouOpensTheQuestionSheet() throws {
+        let app = launch("todayNeedsYou")
+        XCTAssertTrue(app.staticTexts["Needs you"].waitForExistence(timeout: 10))
+        let question = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Example. Needs you. Pay")).firstMatch
+        XCTAssertTrue(question.exists)
+        question.tap()
+        XCTAssertTrue(app.buttons["Yes, go ahead"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Checking with you first"].exists)
+        // The sample payment says it is an example.
+        XCTAssertTrue(app.staticTexts["sampleLabel"].exists)
+        app.buttons["Not now"].tap()
+        XCTAssertTrue(app.staticTexts["Needs you"].waitForNonExistence(timeout: 5))
+        XCTAssertFalse(question.exists)
+    }
+
+    /// A brand new person sees a kind empty state, no Needs you section,
+    /// and the composer right there: type, Return, and the chat opens with
+    /// the line sent.
+    func testABrandNewPersonCanTypeAndGoFromToday() throws {
+        let app = launch("todayEmpty")
+        XCTAssertTrue(app.staticTexts["A quiet start"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["Needs you"].exists)
+        XCTAssertFalse(app.buttons["Say hello"].exists)
+        let today = app.descendants(matching: .any).matching(identifier: "todayComposer").firstMatch
+        XCTAssertTrue(today.exists)
+        today.tap()
+        today.typeText("Pack lunches")
+        today.typeText("\n")
+        let field = composer(in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Pack lunches"].waitForExistence(timeout: 5))
+        XCTAssertFalse((field.value as? String ?? "").contains("Pack lunches"))
+    }
+
+    /// Typing on Today and pressing Command 2 still goes to the chat, and
+    /// the words come along.
+    func testCommandTwoGoesToTheChatFromTodaysComposer() throws {
+        try XCTSkipUnless(isPad, "hardware keyboard shortcuts are an iPad feature")
+        let app = launch("todayEmpty")
+        let today = app.descendants(matching: .any).matching(identifier: "todayComposer").firstMatch
+        XCTAssertTrue(today.waitForExistence(timeout: 10))
+        // Menu commands can take a moment to attach after launch, and a
+        // press that early reaches a focused field as a typed "2". Wait for
+        // them with nothing focused: Command 3 opens the memory once they
+        // are there, and Command 1 comes back.
+        let note = app.staticTexts["Prefers tea in the afternoon"]
+        for _ in 0..<3 where !note.exists {
+            app.typeKey("3", modifierFlags: .command)
+            _ = note.waitForExistence(timeout: 3)
+        }
+        XCTAssertTrue(note.exists)
+        app.typeKey("1", modifierFlags: .command)
+        XCTAssertTrue(today.waitForExistence(timeout: 5))
+        today.tap()
+        today.typeText("Half typed")
+        app.typeKey("2", modifierFlags: .command)
+        let field = composer(in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertEqual(field.value as? String, "Half typed")
+        XCTAssertFalse(app.staticTexts["Half typed"].exists)
+    }
+
+    /// Command N starts a new chat; Command 1, 2 and 3 move between places
+    /// in sidebar order.
     func testCommandShortcuts() throws {
         try XCTSkipUnless(isPad, "hardware keyboard shortcuts are an iPad feature")
         let app = launch("home")
@@ -76,11 +184,13 @@ final class HomeLayoutUITests: XCTestCase {
         // to the window, and a press that early is dropped. Try a few times.
         let note = app.staticTexts["Prefers tea in the afternoon"]
         for _ in 0..<3 where !note.exists {
-            app.typeKey("2", modifierFlags: .command)
+            app.typeKey("3", modifierFlags: .command)
             _ = note.waitForExistence(timeout: 3)
         }
         XCTAssertTrue(note.exists)
         app.typeKey("1", modifierFlags: .command)
+        XCTAssertTrue(app.staticTexts["A quiet start"].waitForExistence(timeout: 5))
+        app.typeKey("2", modifierFlags: .command)
         XCTAssertTrue(composer(in: app).waitForExistence(timeout: 5))
 
         // The person has spoken in this chat, so a new one asks first.
@@ -125,7 +235,7 @@ final class ShowcaseShots: XCTestCase {
         let out = URL(fileURLWithPath: folder).appendingPathComponent(device)
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
         let screens = (env["PEBBLE_SCREENS"].flatMap { $0.isEmpty ? nil : $0 }
-                       ?? "home homeMemory shortcuts hello ideas firstChat confirm")
+                       ?? "today todayNeedsYou todayEmpty home homeMemory shortcuts hello ideas firstChat confirm")
             .split(separator: " ").map(String.init)
 
         for (name, orientation) in [("portrait", UIDeviceOrientation.portrait), ("landscape", .landscapeLeft)] {
