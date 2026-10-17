@@ -11,8 +11,10 @@ public struct MemoryView: View {
     @Environment(\.scenePhase) private var scenePhase
     @FocusState private var addFocused: Bool
 
-    public init(store: MemoryStore) {
-        _model = StateObject(wrappedValue: MemoryModel(store: store))
+    /// `onForgetEverything` runs with Forget everything, so whatever else the
+    /// agent holds about the person, such as its tasks, goes too.
+    public init(store: MemoryStore, onForgetEverything: @escaping @MainActor () -> Void = {}) {
+        _model = StateObject(wrappedValue: MemoryModel(store: store, onForgetEverything: onForgetEverything))
     }
 
     public var body: some View {
@@ -286,8 +288,12 @@ final class MemoryModel: ObservableObject {
     @Published private(set) var savedCount = 0
     @Published private(set) var forgottenCount = 0
 
-    init(store: MemoryStore) {
+    /// Forgets what lives outside the memory file, such as tasks.
+    private let onForgetEverything: @MainActor () -> Void
+
+    init(store: MemoryStore, onForgetEverything: @escaping @MainActor () -> Void = {}) {
         self.store = store
+        self.onForgetEverything = onForgetEverything
         refresh()
     }
 
@@ -347,6 +353,9 @@ final class MemoryModel: ObservableObject {
 
     func forgetEverything() {
         cancelEdit()
+        // First, and even if the file can't be erased: the person asked to
+        // forget, and nothing here depends on the file.
+        onForgetEverything()
         do {
             try store.forgetEverything()
             status = MemoryWords.forgotten

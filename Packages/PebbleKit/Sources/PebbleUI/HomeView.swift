@@ -296,7 +296,7 @@ public struct HomeView: View {
     @ViewBuilder
     private var memoryScreen: some View {
         if let memory {
-            MemoryView(store: memory)
+            MemoryView(store: memory, onForgetEverything: { feed.forgetTasks() })
         } else {
             // The store couldn't be opened. Say so rather than hide memory.
             // It is only opened again at launch, so the words say that.

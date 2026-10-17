@@ -18,6 +18,14 @@ private final class Seen: @unchecked Sendable {
     }
 }
 
+/// Collects each snapshot's number.
+private final class Numbers: @unchecked Sendable {
+    private let lock = NSLock()
+    private var numbers: [Int] = []
+    func add(_ number: Int) { lock.lock(); numbers.append(number); lock.unlock() }
+    var list: [Int] { lock.lock(); defer { lock.unlock() }; return numbers }
+}
+
 /// The scripted engine, driven by a clock the tests move. Nothing sleeps.
 struct TaskEngineTests {
     let origin = Date(timeIntervalSinceReferenceDate: 813_000_000)
@@ -74,7 +82,7 @@ struct TaskEngineTests {
         let rule = AskFirst.isolated()
         let engine = engine(rule)
         let seen = Seen()
-        let watch = engine.observe { seen.add($0) }
+        let watch = engine.observe { seen.add($0.tasks) }
         let id = engine.start(SampleTasks.dentist)
         for _ in 0..<50 { engine.advance(by: 1) }
         #expect(seen.states(id) == [.running, .stalled, .retrying, .running, .waitingOnYou])
@@ -367,18 +375,46 @@ struct TaskEngineTests {
         #expect(said.count <= "You said: ".count + LocalFakeEngine.maxInstructionLength + 3)
     }
 
-    @Test func redirectWhileWaitingWithdrawsTheQuestionAndAsksAfresh() throws {
+    /// The script can't change what it asks, so a redirect at an ask step
+    /// leaves the step undone and says so. It never says the change was
+    /// taken and then asks the old thing again.
+    @Test func redirectAtAnAskStepLeavesItUndoneAndSaysSo() throws {
         let rule = AskFirst.isolated()
         let engine = engine(rule)
         let id = engine.start(SampleTasks.dentist)
         engine.advance(by: 45)
         let old = try #require(engine.task(id)?.question)
+        guard case .ask(_, let askLine) = SampleTasks.dentist.steps[3].kind else { Issue.record("not an ask"); return }
+        #expect(engine.task(id)?.step == askLine)
         #expect(engine.redirect(id, with: "Make it 11 instead"))
         #expect(rule.isClosed(old))
-        let fresh = try #require(engine.task(id)?.question)
-        #expect(fresh.id != old.id)
-        // The old yes can't be used for the new question.
+        let task = try #require(engine.task(id))
+        #expect(task.step != askLine)
+        #expect(task.step != TaskWords.redirected)
+        #expect(task.question == nil)
+        #expect(!task.waitsForApproval)
+        #expect(task.history.suffix(2).map(\.text) == [
+            "You said: Make it 11 instead", "You changed course, so I didn't hold a Saturday visit.",
+        ])
+        #expect(task.wrapUp?.notDone == ["hold a Saturday visit"])
+        // The old yes can't be used for anything.
         #expect(engine.resume(id, with: old.approve()) == .refused)
+    }
+
+    /// An ask step with more to do after it goes on to the next step.
+    @Test func redirectAtAnAskStepGoesOnToTheNextStep() throws {
+        let engine = engine()
+        let id = engine.start(TaskScript(title: "Hold and remind", steps: [
+            .init("Holding a visit", kind: .ask(SampleTasks.holdVisit, askLine: "I'll wait for your yes."),
+                  todo: "hold a visit"),
+            .init("Setting a reminder", duration: 2, todo: "set a reminder"),
+        ], doneLine: "Done."))
+        #expect(engine.task(id)?.step == "I'll wait for your yes.")
+        engine.redirect(id, with: "Later in the day")
+        let task = try #require(engine.task(id))
+        #expect(task.state == .running)
+        #expect(task.step == "Setting a reminder")
+        #expect(task.question == nil)
     }
 
     @Test func redirectGetsAStuckTaskGoing() {
@@ -466,7 +502,7 @@ struct TaskEngineTests {
         #expect(rule.isClosed(question))
         let task = try #require(engine.task(id))
         #expect(task.state == .done)
-        #expect(task.history.last?.text == "You said not now, so I didn't hold a Saturday visit.")
+        #expect(task.history.last?.text == "You closed the question, so I didn't hold a Saturday visit.")
         #expect(task.wrapUp?.notDoneLine == "I didn't hold a Saturday visit.")
     }
 
@@ -499,7 +535,7 @@ struct TaskEngineTests {
     @Test func observersHearChangesUntilTheyCancel() {
         let engine = engine()
         let seen = Seen()
-        let watch = engine.observe { seen.add($0) }
+        let watch = engine.observe { seen.add($0.tasks) }
         #expect(seen.snapshots.count == 1, "told at once")
         engine.start(Self.quick)
         engine.advance(by: 1)
@@ -513,6 +549,101 @@ struct TaskEngineTests {
         #expect(seen.snapshots.count == heard)
     }
 
+    /// Each snapshot is numbered higher than the last, so a listener that
+    /// hops threads can tell a late one.
+    @Test func snapshotsAreNumberedInOrder() {
+        let engine = engine()
+        let numbers = Numbers()
+        let watch = engine.observe { numbers.add($0.sequence) }
+        engine.start(Self.quick)
+        for _ in 0..<8 { engine.advance(by: 1) }
+        engine.refresh()
+        let seen = numbers.list
+        // Told at once, at the start, and at each tick until done at 6 seconds.
+        #expect(seen.count == 8)
+        #expect(zip(seen, seen.dropFirst()).allSatisfy { $0 < $1 })
+        watch.cancel()
+    }
+
+    // MARK: Letting go
+
+    @Test func anEndedTaskCanBeClearedAwayWithWhatItHeld() throws {
+        let engine = engine()
+        let id = engine.start(Self.quick)
+        #expect(!engine.dismiss(id), "a task still going is stopped first")
+        engine.redirect(id, with: "My sister's address is 12 Elm")
+        engine.stop(id)
+        #expect(engine.dismiss(id))
+        #expect(engine.task(id) == nil)
+        #expect(engine.tasks.isEmpty)
+        #expect(!engine.dismiss(id))
+    }
+
+    @Test func clearForgetsEveryTaskAndWithdrawsItsQuestion() throws {
+        let rule = AskFirst.isolated()
+        let engine = engine(rule)
+        let waiting = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        let question = try #require(engine.task(waiting)?.question)
+        engine.start(Self.quick)
+        let seen = Seen()
+        let watch = engine.observe { seen.add($0.tasks) }
+        engine.clear()
+        #expect(engine.tasks.isEmpty)
+        #expect(rule.isClosed(question))
+        #expect(seen.snapshots.last == [])
+        // A yes for it now does nothing, and nothing comes back.
+        #expect(engine.resume(waiting, with: question.approve()) == .refused)
+        engine.advance(by: 600)
+        #expect(engine.tasks.isEmpty)
+        watch.cancel()
+    }
+
+    @Test func endedTasksAreCappedAndTasksStillGoingAreKept() throws {
+        let engine = engine()
+        let going = engine.start(SampleTasks.lunch)
+        engine.advance(by: 66)
+        #expect(engine.task(going)?.isStuck == true)
+        var ids: [String] = []
+        for _ in 0..<(LocalFakeEngine.endedLimit + 5) {
+            ids.append(engine.start(Self.quick))
+            engine.advance(by: 10)
+        }
+        let ended = engine.tasks.filter { !$0.isActive }
+        #expect(ended.count == LocalFakeEngine.endedLimit)
+        // The newest are kept, and the stuck one is never dropped.
+        #expect(Set(ended.map(\.id)) == Set(ids.suffix(LocalFakeEngine.endedLimit)))
+        #expect(engine.task(going) != nil)
+    }
+
+    /// The feed holds a task without its live progress, so a tick never
+    /// changes the feed.
+    @Test func aTickDoesNotChangeTheFeed() throws {
+        let engine = engine()
+        let id = engine.start(Self.quick)
+        let before = Feed.build(from: [], tasks: engine, now: origin)
+        engine.advance(by: 0.5)
+        engine.advance(by: 0.5)
+        #expect(engine.task(id)?.progress != .fraction(0))
+        #expect(Feed.build(from: [], tasks: engine, now: origin) == before)
+        // A new step does change it.
+        engine.advance(by: 1)
+        #expect(Feed.build(from: [], tasks: engine, now: origin) != before)
+        #expect(TaskFeed.item(try #require(engine.task(id))).task?.progress == .fraction(0))
+        #expect(engine.task(id)?.card.step == engine.task(id)?.step)
+    }
+
+    @Test func historyRowsKeepTheirIdsAsStepsPushIn() throws {
+        let engine = engine()
+        let id = engine.start(Self.quick)
+        engine.advance(by: 2)
+        let first = try #require(engine.task(id)?.history.last)
+        engine.advance(by: 2)
+        let task = try #require(engine.task(id))
+        #expect(task.history.first?.id == first.id)
+        #expect(Set(task.history.map(\.id)).count == task.history.count)
+    }
+
     // MARK: Words
 
     @Test func taskWordsAreWarmAndPlain() {
@@ -524,7 +655,7 @@ struct TaskEngineTests {
             TaskWords.redirectTitle, TaskWords.redirectPlaceholder, TaskWords.redirectSendTitle,
             TaskWords.redirectCancelTitle, TaskWords.stopTitle, TaskWords.tryAgainTitle, TaskWords.youSaidYes,
             TaskWords.youSaid("x"), TaskWords.tookAnotherWay("x"), TaskWords.declined("x"), TaskWords.timedOut("x"),
-            TaskWords.couldNotAsk("x"), TaskWords.percentDone(40), TaskWords.kept(["a", "b"]), TaskWords.notDone(["a"]),
+            TaskWords.couldNotAsk("x"), TaskWords.changedCourse("x"), TaskWords.dismissTitle, TaskWords.percentDone(40), TaskWords.kept(["a", "b"]), TaskWords.notDone(["a"]),
         ] + TaskState.allCases.map(\.label)
         for script in SampleTasks.all {
             lines += [script.title, script.doneLine, script.result ?? ""]

@@ -98,15 +98,71 @@ struct TaskCardTests {
     @Test func approveShowsOnlyWhileWaitingOnAYes() throws {
         let engine = LocalFakeEngine(rule: .isolated())
         let id = engine.start(SampleTasks.dentist)
-        func actions() -> [TaskCard.Action] { TaskCard(task: engine.task(id)!, time: "9:40 AM").actions }
+        func actions(pinned: Bool = true) -> [TaskCard.Action] {
+            TaskCard(task: engine.task(id)!, time: "9:40 AM", canApprove: pinned).actions
+        }
         #expect(actions() == [.redirect, .stop])
         engine.advance(by: 27)
         #expect(engine.task(id)?.state == .stalled)
         #expect(actions() == [.redirect, .stop])
         engine.advance(by: 20)
         #expect(actions() == [.approval, .redirect, .stop])
+        // Not pinned in Needs you: the waiting line, and no button that does nothing.
+        #expect(actions(pinned: false) == [.redirect, .stop])
         engine.stop(id)
-        #expect(actions().isEmpty)
+        #expect(actions() == [.dismiss])
+    }
+
+    /// The engine asked through another rule, so its question is never
+    /// pinned. The card shows no Approve, and says it is waiting.
+    @Test func noApproveWhenTheQuestionIsAskedThroughAnotherRule() throws {
+        let engine = LocalFakeEngine(rule: .isolated())
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: engine,
+                              now: { ShowcaseScene.morning })
+        let item = try #require(model.feed.working.first { $0.id == id })
+        let task = try #require(item.task)
+        #expect(task.waitsForApproval)
+        #expect(!model.canApprove(task))
+        let card = TaskCard(task: task, time: "", canApprove: model.canApprove(task))
+        #expect(!card.actions.contains(.approval))
+        guard case .ask(_, let askLine) = SampleTasks.dentist.steps[3].kind else { Issue.record("not an ask"); return }
+        #expect(task.step == askLine)
+        model.review(task)
+        #expect(model.reviewing == nil)
+    }
+
+    /// The rule closed the question before the engine settled it. Approve
+    /// goes at once, and comes back for no one.
+    @Test func noApproveOnceTheQuestionClosesBeforeTheEngineNotices() throws {
+        let rule = AskFirst.isolated()
+        let engine = LocalFakeEngine(rule: rule)
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        let model = model(engine)
+        let pinned = try #require(model.feed.needsYou.first { $0.id == id }?.task)
+        #expect(model.canApprove(pinned))
+        #expect(TaskCard(task: pinned, time: "", canApprove: model.canApprove(pinned)).actions.first == .approval)
+        let question = try #require(pinned.question)
+        rule.withdraw(question)
+        // The engine hasn't looked again, so it still thinks it waits.
+        #expect(engine.task(id)?.waitsForApproval == true)
+        // The feed on screen still has it pinned, but the button goes.
+        #expect(model.feed.needsYou.contains { $0.id == id })
+        #expect(!model.canApprove(pinned))
+        #expect(!TaskCard(task: pinned, time: "", canApprove: model.canApprove(pinned)).actions.contains(.approval))
+        model.review(pinned)
+        #expect(model.reviewing == nil)
+        // A feed built now has it in Working on it, still without Approve.
+        let fresh = self.model(engine)
+        #expect(!fresh.feed.needsYou.contains { $0.id == id })
+        let card = try #require(fresh.feed.working.first { $0.id == id }?.task)
+        #expect(card.waitsForApproval)
+        #expect(!fresh.canApprove(card))
+        #expect(!TaskCard(task: card, time: "", canApprove: fresh.canApprove(card)).actions.contains(.approval))
+        fresh.review(card)
+        #expect(fresh.reviewing == nil)
     }
 
     @Test func aStuckCardOffersTryAgainNotApprove() {
@@ -121,7 +177,7 @@ struct TaskCardTests {
         let id = engine.start(SampleTasks.plan)
         engine.advance(by: 30)
         let task = try #require(engine.task(id))
-        #expect(TaskCard(task: task, time: "").actions == [.open])
+        #expect(TaskCard(task: task, time: "").actions == [.open, .dismiss])
         let model = model(engine)
         model.open(task)
         guard case .open(let text) = model.reading?.action else { Issue.record("not opened"); return }
@@ -135,10 +191,134 @@ struct TaskCardTests {
         let id = engine.start(SampleTasks.dentist)
         engine.advance(by: 3)
         let card = TaskCard(task: try #require(engine.task(id)), time: "9:40 AM")
-        #expect(card.spoken == "Working on it. Find a dentist near you open Saturdays. Looking at dentists near you. 9:40 AM")
+        #expect(card.spoken == "On it. Find a dentist near you open Saturdays. Looking at dentists near you. 9:40 AM")
         #expect(card.spokenValue == "13 percent done")
         engine.stop(id)
         #expect(TaskCard(task: try #require(engine.task(id)), time: "").spokenValue == nil)
+    }
+
+    /// The heading and the card's label differ, so VoiceOver never says
+    /// "Working on it" twice in a row.
+    @Test func theRunningLabelIsNotTheHeading() {
+        #expect(TaskState.running.label != TaskWords.workingHeading)
+    }
+
+    /// The feed card has no live progress; the card reads it from the model.
+    @Test func theCardReadsLiveProgressFromTheModel() throws {
+        let engine = LocalFakeEngine(rule: .isolated())
+        let id = engine.start(SampleTasks.dentist)
+        let model = model(engine)
+        let item = try #require(model.feed.working.first { $0.id == id }?.task)
+        let live = model.liveProgress(id)
+        engine.advance(by: 3)
+        let card = TaskCard(task: item, time: "", progress: live)
+        #expect(card.spokenValue == "13 percent done")
+        #expect(model.liveProgress(id) === live)
+    }
+
+    // MARK: A tick never republishes the feed
+
+    @Test func aTickDoesNotChangeTheFeed() throws {
+        let engine = LocalFakeEngine(rule: .isolated())
+        let id = engine.start(SampleTasks.dentist)
+        let model = model(engine)
+        let live = model.liveProgress(id)
+        var published = 0
+        let watch = model.$feed.dropFirst().sink { _ in published += 1 }
+        defer { watch.cancel() }
+        let before = model.feed
+        for _ in 0..<5 { engine.advance(by: 1) }
+        #expect(model.feed == before)
+        #expect(published == 0)
+        #expect(abs((live.value.fraction ?? 0) - 5.0 / 24) < 0.001)
+        // A new step is a real change.
+        engine.advance(by: 1)
+        #expect(model.feed != before)
+        #expect(published == 1)
+    }
+
+    /// A snapshot that arrives after a newer one is dropped, so neither the
+    /// feed nor VoiceOver goes back in time.
+    @Test func aLateSnapshotIsDropped() throws {
+        let engine = LocalFakeEngine(rule: .isolated())
+        let model = model(engine)
+        var heard: [TaskAnnouncer.Line] = []
+        model.announce = { heard.append($0) }
+        let old = TaskSnapshot(sequence: 0, tasks: engine.tasks)
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 6)
+        let now = model.feed
+        let said = heard
+        #expect(now.working.contains { $0.id == id })
+        model.tasksChanged(old)
+        #expect(model.feed == now)
+        #expect(heard == said)
+    }
+
+    // MARK: Letting go
+
+    @Test func anEndedCardCanBeCleared() throws {
+        let engine = LocalFakeEngine(rule: .isolated())
+        let id = engine.start(SampleTasks.plan)
+        engine.advance(by: 30)
+        let model = model(engine)
+        let task = try #require(engine.task(id))
+        model.open(task)
+        #expect(model.reading != nil)
+        model.dismiss(task)
+        #expect(engine.task(id) == nil)
+        #expect(model.reading == nil)
+        #expect(!model.feed.groups.flatMap(\.items).contains { $0.id == id })
+        // A task still going can't be cleared away.
+        let going = engine.start(SampleTasks.dentist)
+        model.dismiss(try #require(engine.task(going)))
+        #expect(engine.task(going) != nil)
+    }
+
+    @Test func forgetEverythingInMemoryForgetsTasksToo() throws {
+        let rule = AskFirst.isolated()
+        let engine = LocalFakeEngine(rule: rule)
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        engine.start(SampleTasks.plan)
+        let model = model(engine)
+        let task = try #require(engine.task(id))
+        model.review(task)
+        let question = try #require(model.reviewing)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("pebble-tasks-\(UUID().uuidString).json")
+        let store = MemoryStore(fileURL: url)
+        defer { try? store.forgetEverything() }
+        let memory = MemoryModel(store: store, onForgetEverything: { model.forgetTasks() })
+        memory.newNote = "Prefers mornings"
+        memory.add()
+        memory.forgetEverything()
+        #expect(memory.notes.isEmpty)
+        #expect(engine.tasks.isEmpty)
+        #expect(model.feed.needsYou.isEmpty && model.feed.working.isEmpty)
+        #expect(model.reviewing == nil)
+        #expect(rule.isClosed(question))
+    }
+
+    /// A yes for a question opened from a task card goes back to that task,
+    /// even after it moved on, and never to `NeedsYou`.
+    @Test func aTaskYesGoesBackToItsTask() throws {
+        let rule = AskFirst.isolated()
+        let engine = LocalFakeEngine(rule: rule)
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        let asks = NeedsYou(rule: rule)
+        let note = ProposedAction(kind: .send, recipient: Recipient(id: "c:1", displayName: "Sam", handle: "416 555 0101"),
+                                  details: "Running late")
+        let noteQuestion = try #require(asks.ask(note))
+        let model = FeedModel(sources: [], needsYou: asks, tasks: engine, now: { ShowcaseScene.morning })
+        model.review(try #require(engine.task(id)))
+        let request = try #require(model.reviewing)
+        let sheet = ConfirmationState(request: request, rule: model.rule,
+                                      onApprove: { model.approved($0) }, onDecline: { model.closedQuestion(request) })
+        #expect(sheet.tapPrimary() == .approved)
+        #expect(engine.task(id)?.history.last?.mark == .approved)
+        // The feed's own question is untouched.
+        #expect(model.feed.needsYou.contains { $0.request == noteQuestion })
     }
 
     @Test func stepChangesAreAnnouncedPolitelyAndTicksAreNot() throws {
@@ -240,12 +420,17 @@ struct TaskCardTests {
         engine.advance(by: 45)
         let model = model(engine)
         let task = try #require(engine.task(id))
+        model.review(task)
+        #expect(model.reviewing != nil)
         #expect(model.redirect(task, with: "Only ones near the school"))
         #expect(model.reviewing == nil)
-        model.stop(try #require(engine.task(id)))
-        #expect(model.reviewing == nil)
-        #expect(engine.task(id)?.state == .stopped)
+        // The ask step is left undone, not asked again as it was.
+        #expect(engine.task(id)?.waitsForApproval == false)
         #expect(model.feed.needsYou.isEmpty)
+        let other = engine.start(SampleTasks.plan)
+        model.stop(try #require(engine.task(other)))
+        #expect(model.reviewing == nil)
+        #expect(engine.task(other)?.state == .stopped)
     }
 
     /// An engine that asks through a rule other than the feed's can't open

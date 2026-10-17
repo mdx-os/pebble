@@ -122,8 +122,14 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
     private let lock = NSLock()
     private var elapsed: TimeInterval = 0
     private var runs: [Run] = []
-    private var observers: [UUID: @Sendable ([AgentTask]) -> Void] = [:]
+    private var observers: [UUID: @Sendable (TaskSnapshot) -> Void] = [:]
     private var made = 0
+    /// Goes up with every change observers hear about.
+    private var sequence = 0
+
+    /// Ended tasks kept at most. Past this the oldest ended ones go, so what
+    /// a task held never piles up. Tasks still going are never dropped.
+    public static let endedLimit = 12
 
     /// `scripts` are matched to `start` by title; anything else gets a short
     /// generic script. `origin` is the wall time the clock starts at, used
@@ -177,11 +183,11 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
         return id
     }
 
-    public func observe(_ onChange: @escaping @Sendable ([AgentTask]) -> Void) -> TaskObservation {
+    public func observe(_ onChange: @escaping @Sendable (TaskSnapshot) -> Void) -> TaskObservation {
         let key = UUID()
         lock.lock()
         observers[key] = onChange
-        let snapshot = runs.reversed().map(\.task)
+        let snapshot = TaskSnapshot(sequence: sequence, tasks: runs.reversed().map(\.task))
         lock.unlock()
         onChange(snapshot)
         return TaskObservation { [weak self] in
@@ -224,7 +230,15 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
             guard let index = runs.firstIndex(where: { $0.task.id == id }), runs[index].task.isActive else { return false }
             withdrawQuestion(&runs[index])
             runs[index].task.record(TaskStep(TaskWords.youSaid(said), mark: .redirected, at: date))
-            begin(&runs[index], line: TaskWords.redirected)
+            let run = runs[index]
+            if run.index < run.script.steps.count, case .ask = run.script.steps[run.index].kind {
+                // A script can't change what it asks, so the question would
+                // come back as it was. Leave the step undone and say so,
+                // rather than say the change was taken and ask the old thing.
+                skip(&runs[index], line: TaskWords.changedCourse(run.script.steps[run.index].todo))
+            } else {
+                begin(&runs[index], line: TaskWords.redirected)
+            }
             return true
         }
     }
@@ -241,6 +255,22 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
             end(&runs[index], as: .stopped, line: TaskWords.stopped,
                 wrapUp: TaskWrapUp(kept: run.kept, notDone: run.notDone + left))
             return true
+        }
+    }
+
+    @discardableResult
+    public func dismiss(_ id: String) -> Bool {
+        mutate {
+            guard let index = runs.firstIndex(where: { $0.task.id == id }), !runs[index].task.isActive else { return false }
+            runs.remove(at: index)
+            return true
+        }
+    }
+
+    public func clear() {
+        mutate {
+            for index in runs.indices { withdrawQuestion(&runs[index]) }
+            runs.removeAll()
         }
     }
 
@@ -432,12 +462,23 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
         lock.lock()
         let before = runs.map(\.task)
         let value = change()
+        dropOldEnded()
         let after = runs.map(\.task)
-        let snapshot = Array(after.reversed())
-        let listeners = before == after ? [] : Array(observers.values)
+        let changed = before != after
+        if changed { sequence += 1 }
+        let snapshot = TaskSnapshot(sequence: sequence, tasks: Array(after.reversed()))
+        let listeners = changed ? Array(observers.values) : []
         lock.unlock()
         for listener in listeners { listener(snapshot) }
         return value
+    }
+
+    /// Keeps at most `endedLimit` ended tasks, the newest.
+    private func dropOldEnded() {
+        // Runs are oldest first.
+        let ended = runs.indices.filter { !runs[$0].task.isActive }
+        guard ended.count > Self.endedLimit else { return }
+        for index in ended.prefix(ended.count - Self.endedLimit).reversed() { runs.remove(at: index) }
     }
 
     /// For a request no script covers: a few plain steps.

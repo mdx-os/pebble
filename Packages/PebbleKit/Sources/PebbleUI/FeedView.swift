@@ -28,6 +28,19 @@ final class FeedModel: ObservableObject {
     let now: () -> Date
     private var watching: TaskObservation?
     private var announcer = TaskAnnouncer()
+    /// The newest snapshot taken in, so one that arrives late is dropped.
+    private var seen = -1
+    /// Live progress for each task's card, by id. Kept out of `feed`, so a
+    /// tick redraws only the card it belongs to.
+    private var progress: [String: LiveProgress] = [:]
+    /// The tasks as the feed holds them, without progress, to tell a real
+    /// change from a tick.
+    private var cards: [AgentTask] = []
+    /// Ids of every task, so `isSample` needn't ask the engine.
+    private var taskIDs: Set<String> = []
+    /// Which task asked each question opened from a task card, so a yes goes
+    /// back where it came from.
+    private var askedBy: [UUID: String] = [:]
     private let clock: () -> ContinuousClock.Instant
     /// Says a line to VoiceOver. Tests replace it to hear what would be said.
     var announce: @MainActor (TaskAnnouncer.Line) -> Void = FeedModel.post
@@ -44,14 +57,17 @@ final class FeedModel: ObservableObject {
         self.now = now
         self.clock = clock
         feed = Feed.build(from: sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
-        _ = announcer.lines(for: tasks?.tasks ?? [], at: clock())
-        watching = tasks?.observe { [weak self] list in
+        let list = tasks?.tasks ?? []
+        track(list)
+        _ = announcer.lines(for: list, at: clock())
+        watching = tasks?.observe { [weak self] snapshot in
             // Engines tell us on whatever thread they run. Hop to the main
-            // one, without a wait when already there.
+            // one, without a wait when already there. A hop doesn't promise
+            // order, so `tasksChanged` drops a snapshot older than one it took.
             if Thread.isMainThread {
-                MainActor.assumeIsolated { self?.tasksChanged(list) }
+                MainActor.assumeIsolated { self?.tasksChanged(snapshot) }
             } else {
-                Task { @MainActor in self?.tasksChanged(list) }
+                Task { @MainActor in self?.tasksChanged(snapshot) }
             }
         }
     }
@@ -60,8 +76,25 @@ final class FeedModel: ObservableObject {
 
     /// True when this card came from an example source or a scripted engine.
     func isSample(_ item: FeedItem) -> Bool {
-        if let tasks, tasks.isSample, tasks.tasks.contains(where: { $0.id == item.id }) { return true }
+        if let tasks, tasks.isSample, taskIDs.contains(item.id) { return true }
         return sources.contains { $0.isSample && $0.items(now: now()).contains { $0.id == item.id } }
+    }
+
+    /// The live progress a task's card reads. Ticks change it, never `feed`.
+    func liveProgress(_ id: String) -> LiveProgress {
+        if let live = progress[id] { return live }
+        let live = LiveProgress(tasks?.tasks.first { $0.id == id }?.progress ?? .indeterminate)
+        progress[id] = live
+        return live
+    }
+
+    /// True only while this task's question is pinned in Needs you, the one
+    /// place its Approve can open the sheet. A question asked through
+    /// another rule, or one the rule closed before the engine noticed,
+    /// shows the waiting line with no button.
+    func canApprove(_ task: AgentTask) -> Bool {
+        guard let question = task.question, !rule.isClosed(question) else { return false }
+        return feed.needsYou.contains { $0.task?.question?.id == question.id }
     }
 
     /// The rule for every question in the sheet, a task's included.
@@ -83,9 +116,26 @@ final class FeedModel: ObservableObject {
         (tasks as? LocalFakeEngine)?.advance(by: seconds)
     }
 
-    private func tasksChanged(_ list: [AgentTask]) {
-        rebuild()
-        for line in announcer.lines(for: list, at: clock()) { announce(line) }
+    func tasksChanged(_ snapshot: TaskSnapshot) {
+        guard snapshot.sequence > seen else { return }
+        seen = snapshot.sequence
+        if track(snapshot.tasks) { rebuild() }
+        for line in announcer.lines(for: snapshot.tasks, at: clock()) { announce(line) }
+    }
+
+    /// Moves each card's live progress along. True when anything but
+    /// progress changed, so the feed needs building again.
+    @discardableResult
+    private func track(_ list: [AgentTask]) -> Bool {
+        for task in list {
+            if let live = progress[task.id], live.value != task.progress { live.value = task.progress }
+        }
+        let ids = Set(list.map(\.id))
+        progress = progress.filter { ids.contains($0.key) }
+        taskIDs = ids
+        let next = list.map(\.card)
+        defer { cards = next }
+        return next != cards
     }
 
     /// What a card's button does. Talking is handed to the screen around
@@ -110,8 +160,8 @@ final class FeedModel: ObservableObject {
     /// pinned in Needs you, opens it. Only a yes there, checked by
     /// `AskFirst`, lets the task go on.
     func review(_ task: AgentTask) {
-        guard let question = current(task)?.question,
-              feed.needsYou.contains(where: { $0.task?.question?.id == question.id }) else { return }
+        guard let live = current(task), canApprove(live), let question = live.question else { return }
+        askedBy[question.id] = live.id
         reviewing = question
     }
 
@@ -119,6 +169,7 @@ final class FeedModel: ObservableObject {
     @discardableResult
     func redirect(_ task: AgentTask, with words: String) -> Bool {
         let done = tasks?.redirect(task.id, with: words) ?? false
+        if let question = task.question { askedBy[question.id] = nil }
         if let reviewing, reviewing.id == task.question?.id { self.reviewing = nil }
         refresh()
         return done
@@ -127,12 +178,33 @@ final class FeedModel: ObservableObject {
     /// Stops at once. Never needs a yes.
     func stop(_ task: AgentTask) {
         tasks?.stop(task.id)
+        if let question = task.question { askedBy[question.id] = nil }
         if let reviewing, reviewing.id == task.question?.id { self.reviewing = nil }
         refresh()
     }
 
     func retry(_ task: AgentTask) {
         tasks?.retry(task.id)
+        refresh()
+    }
+
+    /// Takes an ended card away, and everything the task held.
+    func dismiss(_ task: AgentTask) {
+        guard tasks?.dismiss(task.id) == true else { return }
+        if reading?.id == task.id { reading = nil }
+        refresh()
+    }
+
+    /// Forget everything: every task goes, with its steps and the words the
+    /// person gave it. Any open task question is withdrawn and its sheet closed.
+    func forgetTasks() {
+        guard let tasks else { return }
+        if let reviewing, askedBy[reviewing.id] != nil || tasks.tasks.contains(where: { $0.question?.id == reviewing.id }) {
+            self.reviewing = nil
+        }
+        if let reading, taskIDs.contains(reading.id) { self.reading = nil }
+        askedBy.removeAll()
+        tasks.clear()
         refresh()
     }
 
@@ -147,12 +219,13 @@ final class FeedModel: ObservableObject {
         tasks?.tasks.first { $0.id == task.id }
     }
 
-    /// The sheet said yes. The card goes and the approval is handed on:
-    /// to the task that asked, which checks it with `AskFirst`, or to
-    /// `NeedsYou`.
+    /// The sheet said yes. The card goes and the approval is handed back to
+    /// where the question came from: the task whose card opened it, which
+    /// checks it with `AskFirst`, or else `NeedsYou`. A task's yes never
+    /// falls through to `NeedsYou`, even if the task has moved on.
     func approved(_ approval: Approval) {
-        if let task = tasks?.tasks.first(where: { $0.question?.id == approval.id }) {
-            _ = tasks?.resume(task.id, with: approval)
+        if let id = askedBy.removeValue(forKey: approval.id) {
+            _ = tasks?.resume(id, with: approval)
         } else {
             needsYou.approved(approval)
         }
@@ -163,6 +236,7 @@ final class FeedModel: ObservableObject {
     /// The sheet closed without a yes, by Not now, Close, or going away.
     /// The sheet has already withdrawn the question.
     func closedQuestion(_ request: ConfirmationRequest) {
+        askedBy[request.id] = nil
         needsYou.dismissed(request)
         tasks?.questionClosed(request)
         if reviewing?.id == request.id { reviewing = nil }
@@ -333,12 +407,17 @@ struct FeedView: View {
                 ForEach(items) { item in
                     Group {
                         if let task = item.task {
+                            // Keyed by the task's id, reading live progress
+                            // from the model, so a tick redraws only this card.
                             TaskCard(task: task, time: model.timeLabel(for: item.time),
+                                     progress: model.liveProgress(task.id),
+                                     canApprove: model.canApprove(task),
                                      onApprove: { model.review(task) },
                                      onRedirect: { model.redirect(task, with: $0) },
                                      onStop: { model.stop(task) },
                                      onRetry: { model.retry(task) },
-                                     onOpen: { model.open(task) })
+                                     onOpen: { model.open(task) },
+                                     onDismiss: { model.dismiss(task) })
                         } else {
                             FeedCard(item: item, time: model.timeLabel(for: item.time)) {
                                 model.perform(item, talk: onTalk)

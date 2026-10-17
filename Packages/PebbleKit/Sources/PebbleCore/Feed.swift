@@ -71,7 +71,7 @@ public enum FeedAction: Sendable, Equatable {
     case review(ConfirmationRequest)
     /// A live task card, with its own buttons. Its Approve opens the same
     /// question sheet as `review`, for the question the task's engine asked
-    /// through `AskFirst`.
+    /// through `AskFirst`. Holds the task without live progress.
     case task(AgentTask)
 
     public var title: String {
@@ -289,9 +289,12 @@ public struct TaskFeed: FeedSource {
         engine.tasks.map(Self.item)
     }
 
+    /// Holds the task without its live progress (`AgentTask.card`), so a
+    /// tick of progress never changes the feed. The card reads progress
+    /// from the engine.
     public static func item(_ task: AgentTask) -> FeedItem {
         FeedItem(id: task.id, kind: .task, time: task.isActive ? task.startedAt : task.updatedAt,
-                 title: task.title, body: task.step, action: .task(task))
+                 title: task.title, body: task.step, action: .task(task.card))
     }
 }
 

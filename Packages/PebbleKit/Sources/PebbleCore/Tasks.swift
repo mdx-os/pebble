@@ -59,6 +59,16 @@ public struct AgentTask: Identifiable, Sendable, Equatable {
     /// Stuck after its retries ran out, so the card offers Try again.
     public var isStuck: Bool { state == .waitingOnYou && question == nil }
 
+    /// The task as the feed holds it: everything but live progress, which a
+    /// card reads from the engine. A tick of progress then never changes the
+    /// feed, so it never redraws every card. Keeps only whether progress can
+    /// be told at all.
+    public var card: AgentTask {
+        var card = self
+        card.progress = progress.fraction == nil ? .indeterminate : .fraction(0)
+        return card
+    }
+
     /// How VoiceOver reads the progress.
     public var spokenProgress: String {
         switch progress {
@@ -114,8 +124,8 @@ public enum TaskState: String, Sendable, Equatable, CaseIterable {
 }
 
 /// One line in a task's history.
-public struct TaskStep: Sendable, Equatable {
-    public enum Mark: String, Sendable, Equatable {
+public struct TaskStep: Sendable, Hashable {
+    public enum Mark: String, Sendable, Hashable {
         /// A step finished.
         case done
         /// A step finished, after it was slow and the agent tried another way.
@@ -127,6 +137,10 @@ public struct TaskStep: Sendable, Equatable {
         /// The person said yes.
         case approved
     }
+
+    /// Steady while newer steps push in, so a list keyed by it never shows
+    /// one step's words in another step's place.
+    public var id: String { "\(at.timeIntervalSinceReferenceDate)|\(text)" }
 
     public let text: String
     public let mark: Mark
@@ -206,12 +220,15 @@ public protocol TaskEngine: AnyObject, Sendable {
     func start(_ request: TaskRequest) -> String
 
     /// Calls `onChange` now and after every change, until the observation
-    /// is cancelled or released.
-    func observe(_ onChange: @escaping @Sendable ([AgentTask]) -> Void) -> TaskObservation
+    /// is cancelled or released. Each snapshot's `sequence` is higher than
+    /// the one before, so a listener that hops threads can drop one that
+    /// arrives late.
+    func observe(_ onChange: @escaping @Sendable (TaskSnapshot) -> Void) -> TaskObservation
 
-    /// New instructions for a task still going. Never needs a yes. Any
-    /// question it was waiting on is withdrawn, so a later step asks afresh.
-    /// False when the task has ended or the words are empty.
+    /// New instructions for a task still going. Never needs a yes. A step
+    /// waiting on a yes is withdrawn and left undone, since the question no
+    /// longer matches what the person asked for; it is never asked again
+    /// unchanged. False when the task has ended or the words are empty.
     @discardableResult
     func redirect(_ id: String, with instructions: String) -> Bool
 
@@ -219,6 +236,17 @@ public protocol TaskEngine: AnyObject, Sendable {
     /// question is withdrawn. False when the task had already ended.
     @discardableResult
     func stop(_ id: String) -> Bool
+
+    /// Takes an ended task away, with everything it held: its steps, the
+    /// words the person gave it and what it kept. False while it is still
+    /// going, so it is stopped first.
+    @discardableResult
+    func dismiss(_ id: String) -> Bool
+
+    /// Forgets every task at once. Anything still going stops, any open
+    /// question is withdrawn, and nothing a task held is kept. Wired to the
+    /// same Forget everything as memory.
+    func clear()
 
     /// Tries a stuck task again. False unless it was stuck.
     @discardableResult
@@ -244,6 +272,19 @@ public protocol TaskEngine: AnyObject, Sendable {
 
 extension TaskEngine {
     public var isSample: Bool { false }
+}
+
+/// Every task at one moment, numbered so a late arrival can be told apart.
+public struct TaskSnapshot: Sendable, Equatable {
+    /// Goes up with every change the engine reports.
+    public let sequence: Int
+    /// Every task, newest first.
+    public let tasks: [AgentTask]
+
+    public init(sequence: Int, tasks: [AgentTask]) {
+        self.sequence = sequence
+        self.tasks = tasks
+    }
 }
 
 /// Keeps an observation alive. Cancelling, or letting it go, stops the calls.
@@ -348,7 +389,8 @@ public struct TaskAnnouncer: Sendable {
 public enum TaskWords {
     public static let workingHeading = "Working on it"
     public static let workingDetail = "You can change course or stop me at any time."
-    public static let runningLabel = "Working on it"
+    /// Not the same as `workingHeading`, so VoiceOver doesn't say it twice in a row.
+    public static let runningLabel = "On it"
     public static let stalledLabel = "Taking a moment"
     public static let retryingLabel = "Trying another way"
     public static let stoppedLabel = "Stopped"
@@ -371,13 +413,19 @@ public enum TaskWords {
     public static let redirectCancelTitle = "Cancel"
     public static let stopTitle = "Stop"
     public static let tryAgainTitle = "Try again"
+    /// Takes an ended card away, with everything it held.
+    public static let dismissTitle = "Clear"
 
     /// The history line for new instructions.
     public static func youSaid(_ words: String) -> String { "You said: \(words)" }
     public static let youSaidYes = "You said yes."
     /// A step that finished after a slow try, such as "Found another way to check Saturday hours."
     public static func tookAnotherWay(_ todo: String) -> String { "Found another way to \(todo)." }
-    public static func declined(_ todo: String) -> String { "You said not now, so I didn't \(todo)." }
+    /// True for Not now and for a sheet swiped away alike.
+    public static func declined(_ todo: String) -> String { "You closed the question, so I didn't \(todo)." }
+    /// A step that needed a yes, left undone for new instructions rather
+    /// than asked as it was.
+    public static func changedCourse(_ todo: String) -> String { "You changed course, so I didn't \(todo)." }
     public static func timedOut(_ todo: String) -> String { "That question timed out, so I didn't \(todo)." }
     public static func couldNotAsk(_ todo: String) -> String { "I couldn't ask about this clearly, so I didn't \(todo)." }
 

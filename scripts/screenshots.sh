@@ -23,7 +23,8 @@ print(match[0]["udid"])
 }
 
 built_app() {
-  find "$derived/Build/Products/$1" -maxdepth 1 -name '*.app' | head -n 1
+  # Not the UI test runner, which `make ui-test` leaves beside the app.
+  find "$derived/Build/Products/$1" -maxdepth 1 -name '*.app' ! -name '*-Runner.app' | head -n 1
 }
 
 echo "screenshots: building for iOS Simulator"

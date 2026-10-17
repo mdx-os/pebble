@@ -45,6 +45,9 @@ struct CopyDashTests {
          TaskWords.stuck, TaskWords.waitingForYes, TaskWords.redirected, TaskWords.stopped, TaskWords.failed,
          TaskWords.keptNothing, TaskWords.approveTitle, TaskWords.redirectTitle, TaskWords.redirectPlaceholder,
          TaskWords.redirectSendTitle, TaskWords.redirectCancelTitle, TaskWords.stopTitle, TaskWords.tryAgainTitle]
+      + taskEndings
+
+    static let taskEndings: [String] = [TaskWords.dismissTitle, TaskWords.declined("x"), TaskWords.changedCourse("x")]
 
     @Test func noScreenWordsUseADash() {
         for line in Self.copy {

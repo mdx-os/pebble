@@ -127,7 +127,11 @@ the machine is doing. When a step is slow, say so and say what happens
 next: "That page was slow, so I'm trying another way." Only after a few
 tries does the card ask the person, and then it offers Try again. Stop
 says what was kept and what was not done. VoiceOver hears each new step
-once, politely, never every tick of progress.
+once, politely, never every tick of progress. Never say a change was
+taken and then ask about the old thing: a step that can't change is left
+undone, and the card says so ("You changed course, so I didn't hold a
+Saturday visit."). A closed question says "You closed the question", which
+is true for Not now and a sheet swiped away alike.
 
 ### Confirmations
 

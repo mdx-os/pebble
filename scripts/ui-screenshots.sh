@@ -11,7 +11,7 @@ derived="build/DerivedData"
 bundle_id="com.mdxos.pebble"
 mkdir -p "$out"
 
-app="$(find "$derived/Build/Products/Debug-iphonesimulator" -maxdepth 1 -name '*.app' | head -n 1)"
+app="$(find "$derived/Build/Products/Debug-iphonesimulator" -maxdepth 1 -name '*.app' ! -name '*-Runner.app' | head -n 1)"
 udid="$(xcrun simctl list devices available -j | python3 -c '
 import json, sys
 wanted = sys.argv[1]
