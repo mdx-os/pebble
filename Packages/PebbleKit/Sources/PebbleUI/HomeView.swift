@@ -143,6 +143,7 @@ public struct HomeView: View {
 
     private func resetChat() {
         guard finished else { return }
+        chat?.stopReplying()
         firstMessage = nil
         chat = ChatController.make(brand: brand, model: model, names: names, conversation: nil)
         section = .chat
@@ -182,6 +183,8 @@ public struct HomeView: View {
                  onFirstMessageSent: { firstMessage = nil })
             .background(Backdrop())
             // A new chat is a new conversation, so it starts fresh on screen too.
+            // Load-bearing: ChatView keeps its controller in a StateObject, so
+            // without this id a new controller would never reach the screen.
             .id(ObjectIdentifier(chat))
     }
 

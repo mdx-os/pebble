@@ -364,6 +364,7 @@ final class ChatController: ObservableObject {
     @Published var conversation: Conversation
     @Published var draft = ""
     @Published var isReplying = false
+    private var replyTask: Task<Void, Never>?
     @Published var failure: String?
 
     init(brand: Brand, model: any ModelClient, names: any AgentNameStoring) {
@@ -440,14 +441,21 @@ final class ChatController: ObservableObject {
         isReplying = true
         let snapshot = conversation
         let client = model
-        Task {
+        replyTask = Task {
             do {
-                conversation = try await snapshot.appendingReply(from: client)
+                let answered = try await snapshot.appendingReply(from: client)
+                if !Task.isCancelled { conversation = answered }
             } catch {
-                failure = FirstConversation.couldNotAnswer
+                if !Task.isCancelled { failure = FirstConversation.couldNotAnswer }
             }
             isReplying = false
         }
+    }
+
+    /// Stops a reply that is still coming, as when a new chat replaces this
+    /// one. Nothing it would have said is added.
+    func stopReplying() {
+        replyTask?.cancel()
     }
 }
 

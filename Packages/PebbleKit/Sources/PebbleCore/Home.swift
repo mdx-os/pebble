@@ -75,7 +75,8 @@ public enum NewChatRule {
 public enum ComposerReturn {
     /// The text to send when `new` is `old` with a single line break typed
     /// into it, or nil when the edit was anything else (typing, pasting,
-    /// deleting, or a line break the person asked for).
+    /// deleting, or a line break the person asked for). A pasted lone line
+    /// break looks the same as a typed one, so it sends too.
     public static func textToSend(old: String, new: String) -> String? {
         if let typed = loneBreak(old: old, new: new) { return typed }
         return breakAfterAutocorrect(old: old, new: new)
