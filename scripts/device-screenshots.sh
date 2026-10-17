@@ -15,6 +15,10 @@ devices="${PEBBLE_DEVICES:-iPad Pro 13-inch (M5)
 iPad mini (A17 Pro)
 iPhone 17 Pro}"
 
+# Only shots written by this run get turned, so older ones aren't turned again.
+stamp="$(mktemp)"
+trap 'rm -f "$stamp"' EXIT
+
 echo "$devices" | while IFS= read -r device; do
   [ -n "$device" ] || continue
   echo "device-screenshots: $device"
@@ -26,5 +30,5 @@ echo "$devices" | while IFS= read -r device; do
 done
 # Screenshots come out in the panel's own portrait frame; stand the
 # landscape ones upright.
-find "$out" -name '*-landscape.png' -exec sips -r 270 {} \; >/dev/null
+find "$out" -name '*-landscape.png' -newer "$stamp" -exec sips -r 270 {} \; >/dev/null
 find "$out" -name '*.png' | sort

@@ -23,8 +23,9 @@ final class HomeLayoutUITests: XCTestCase {
     }
 
     /// On a full screen iPad the places sit in a sidebar beside the chat,
-    /// in both orientations. On iPhone the chat is alone and the memory
-    /// opens over it.
+    /// in both orientations. On a standard size iPhone the chat is alone and
+    /// the memory opens over it. (Larger iPhones are regular width in
+    /// landscape, so they get the sidebar there too.)
     func testTheSidebarShowsOnIPadAndNotOnIPhone() throws {
         for orientation in [UIDeviceOrientation.portrait, .landscapeLeft] {
             XCUIDevice.shared.orientation = orientation
@@ -82,9 +83,25 @@ final class HomeLayoutUITests: XCTestCase {
         app.typeKey("1", modifierFlags: .command)
         XCTAssertTrue(composer(in: app).waitForExistence(timeout: 5))
 
+        // The person has spoken in this chat, so a new one asks first.
         app.typeKey("n", modifierFlags: .command)
+        let keep = app.alerts.buttons["Keep this chat"]
+        XCTAssertTrue(keep.waitForExistence(timeout: 5))
+        keep.tap()
+        XCTAssertTrue(earlier.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Plan my morning"].exists)
+
+        app.typeKey("n", modifierFlags: .command)
+        let start = app.alerts.buttons["Start new chat"]
+        XCTAssertTrue(start.waitForExistence(timeout: 5))
+        start.tap()
         XCTAssertTrue(app.buttons["Plan my morning"].waitForExistence(timeout: 5))
         XCTAssertFalse(earlier.exists)
+
+        // An untouched chat starts over without asking.
+        app.typeKey("n", modifierFlags: .command)
+        XCTAssertFalse(app.alerts.firstMatch.waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["Plan my morning"].exists)
 
         app.typeKey("/", modifierFlags: .command)
         XCTAssertTrue(app.navigationBars["Keyboard shortcuts"].waitForExistence(timeout: 5))

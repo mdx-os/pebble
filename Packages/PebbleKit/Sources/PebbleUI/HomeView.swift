@@ -102,7 +102,8 @@ public struct HomeView: View {
         .sheet(isPresented: $showsShortcuts) {
             KeyboardShortcutsView()
         }
-        .confirmationDialog(HomeWords.newChatQuestion, isPresented: $asksNewChat, titleVisibility: .visible) {
+        // An alert, not a popover, so both choices show on iPad and Esc keeps the chat.
+        .alert(HomeWords.newChatQuestion, isPresented: $asksNewChat) {
             Button(HomeWords.newChatConfirm, role: .destructive) { resetChat() }
             Button(HomeWords.cancelTitle, role: .cancel) {}
         } message: {
@@ -112,19 +113,32 @@ public struct HomeView: View {
             canNavigate: finished,
             newChat: startNewChat,
             show: { section = $0 },
-            showShortcuts: { showsShortcuts = true }
+            showShortcuts: { afterClosingSheets { showsShortcuts = true } }
         ))
     }
 
     /// Chats aren't kept yet, so starting over asks first once the person
     /// has said anything. An untouched chat just starts fresh.
     private func startNewChat() {
-        guard finished else { return }
-        if let chat, chat.conversation.turns.contains(where: { $0.speaker == .person }) || !chat.draft.isEmpty {
-            asksNewChat = true
-        } else {
-            resetChat()
+        guard finished, let chat else { return }
+        let asks = NewChatRule.asksFirst(
+            personHasSpoken: chat.conversation.turns.contains { $0.speaker == .person },
+            draft: chat.draft,
+            pendingLine: firstMessage
+        )
+        afterClosingSheets {
+            if asks { asksNewChat = true } else { resetChat() }
         }
+    }
+
+    /// A question can't show over a sheet, so close any sheet first and ask
+    /// once it has gone. Nothing open means no wait.
+    private func afterClosingSheets(_ then: @escaping () -> Void) {
+        let memorySheetOpen = !usesSidebar && section == .memory
+        guard memorySheetOpen || showsShortcuts else { return then() }
+        if memorySheetOpen { section = .chat }
+        showsShortcuts = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { then() }
     }
 
     private func resetChat() {
@@ -283,7 +297,8 @@ struct KeyboardShortcutsView: View {
                             .font(.body.monospaced())
                             .foregroundStyle(.secondary)
                     }
-                    .accessibilityElement(children: .combine)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(shortcut.action), \(HomeWords.spoken(shortcut.keys))")
                 }
             }
             .navigationTitle(HomeWords.shortcutsTitle)

@@ -34,6 +34,13 @@ public enum HomeWords {
     public static let newChatConfirm = "Start new chat"
     public static let cancelTitle = "Keep this chat"
 
+    /// Keys spelled out for VoiceOver, which reads the Command glyph as
+    /// "place of interest sign".
+    public static func spoken(_ keys: String) -> String {
+        keys.replacingOccurrences(of: "⌘", with: "Command")
+            .replacingOccurrences(of: "Esc", with: "Escape")
+    }
+
     /// What each shortcut does, in the order the help screen lists them.
     /// Keys are written the way Apple's menus write them.
     public static let shortcuts: [(keys: String, action: String)] = [
@@ -46,6 +53,17 @@ public enum HomeWords {
         ("⌘ /", shortcutsTitle),
         ("Esc", closeShortcut),
     ]
+}
+
+/// When starting a new chat should ask first. Chats aren't kept yet, so a
+/// new one drops the current conversation; once the person has said
+/// anything, or has words waiting to go, that needs a yes.
+public enum NewChatRule {
+    public static func asksFirst(personHasSpoken: Bool, draft: String, pendingLine: String?) -> Bool {
+        personHasSpoken
+            || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !(pendingLine ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 }
 
 /// What the Return key means in the chat composer.

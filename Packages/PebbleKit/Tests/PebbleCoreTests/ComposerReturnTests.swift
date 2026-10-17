@@ -43,6 +43,26 @@ struct ComposerReturnTests {
         #expect(ComposerReturn.textToSend(old: old, new: new) == nil)
     }
 
+    @Test func aNewChatAsksOnceThePersonHasSaidAnything() {
+        #expect(NewChatRule.asksFirst(personHasSpoken: true, draft: "", pendingLine: nil))
+        #expect(NewChatRule.asksFirst(personHasSpoken: false, draft: "half a thought", pendingLine: nil))
+        #expect(NewChatRule.asksFirst(personHasSpoken: false, draft: "", pendingLine: "Help me plan my morning"))
+    }
+
+    @Test func anUntouchedChatStartsOverWithoutAsking() {
+        #expect(!NewChatRule.asksFirst(personHasSpoken: false, draft: "", pendingLine: nil))
+        #expect(!NewChatRule.asksFirst(personHasSpoken: false, draft: "  \n", pendingLine: ""))
+    }
+
+    @Test func shortcutKeysAreSpokenInWords() {
+        #expect(HomeWords.spoken("⌘ N") == "Command N")
+        #expect(HomeWords.spoken("Esc") == "Escape")
+        #expect(HomeWords.spoken("Shift Return") == "Shift Return")
+        for shortcut in HomeWords.shortcuts {
+            #expect(!HomeWords.spoken(shortcut.keys).contains("⌘"))
+        }
+    }
+
     @Test func newChatWordsHaveNoDashes() {
         for line in [HomeWords.newChatQuestion, HomeWords.newChatDetail, HomeWords.newChatConfirm, HomeWords.cancelTitle] {
             #expect(!line.isEmpty && !line.contains("\u{2014}") && !line.contains("\u{2013}"), "\(line)")
