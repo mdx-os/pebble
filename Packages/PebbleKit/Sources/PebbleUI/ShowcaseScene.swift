@@ -36,7 +36,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     looks: looks, conversation: Self.sampleFirstChat(),
                     section: self == .home ? .chat : .memory,
                     // Its own rule, so the showcase never touches the app's.
-                    needsYou: NeedsYou(rule: .isolated())
+                    needsYou: needsYou(at: morning) ?? NeedsYou(rule: .isolated())
                 )
             case .today, .todayNeedsYou, .todayEmpty:
                 HomeView(
@@ -44,7 +44,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     onboarding: InMemoryOnboardingStore(finished: true), memory: Self.sampleMemory(),
                     looks: looks, conversation: Self.sampleFirstChat(), section: .today,
                     feed: self == .todayEmpty ? [EmptyFeedSource()] : [SampleFeedSource()],
-                    needsYou: self == .todayNeedsYou ? Self.sampleQuestion(at: morning) : NeedsYou(rule: .isolated()),
+                    needsYou: needsYou(at: morning) ?? NeedsYou(rule: .isolated()),
                     now: { morning }
                 )
             case .shortcuts:
@@ -84,19 +84,55 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
             case .confirm, .confirmTimedOut:
                 ZStack {
                     Backdrop()
-                    // The timed out scene uses a window that has already passed.
-                    let rule = AskFirst.isolated(window: self == .confirmTimedOut ? -1 : AskFirst.defaultWindow)
-                    if let request = rule.ask(ProposedAction(
-                            kind: .purchase,
-                            recipient: Recipient(id: "merchant:sample-bakery", displayName: "Rise Bakery", handle: "risebakery.example"),
-                            details: "Sourdough loaf and two croissants, pickup at 9",
-                            price: Price(minorUnits: 1450, currency: "CAD")
-                        )) {
-                        ConfirmationSheet(request: request, rule: rule, onApprove: { _ in }, onDecline: {})
+                    if let sheet = sampleSheet {
+                        ConfirmationSheet(request: sheet.request, rule: sheet.rule, isExample: sheet.isExample,
+                                          onApprove: { _ in }, onDecline: {})
                     }
                 }
             }
         }
+    }
+
+    /// A sample question shown in a confirmation sheet of its own.
+    struct SampleSheet {
+        let request: ConfirmationRequest
+        let rule: AskFirst
+        /// Always true: a sample sheet says it is an example.
+        let isExample: Bool
+    }
+
+    /// The sheet the question scenes show, asked through a rule of its own.
+    /// The timed out scene uses a window that has already passed.
+    var sampleSheet: SampleSheet? {
+        guard self == .confirm || self == .confirmTimedOut else { return nil }
+        let rule = AskFirst.isolated(window: self == .confirmTimedOut ? -1 : AskFirst.defaultWindow)
+        guard let request = rule.ask(ProposedAction(
+            kind: .purchase,
+            recipient: Recipient(id: "merchant:sample-bakery", displayName: "Rise Bakery", handle: "risebakery.example"),
+            details: "Sourdough loaf and two croissants, pickup at 9",
+            price: Price(minorUnits: 1450, currency: "CAD")
+        )) else { return nil }
+        return SampleSheet(request: request, rule: rule, isExample: true)
+    }
+
+    /// The questions a home screen scene has waiting, which Today's cards
+    /// open in the confirmation sheet. Nil for scenes without a home screen.
+    func needsYou(at now: Date = morning) -> NeedsYou? {
+        switch self {
+        case .todayNeedsYou: Self.sampleQuestion(at: now)
+        case .today, .todayEmpty, .home, .homeMemory: NeedsYou(rule: .isolated())
+        default: nil
+        }
+    }
+
+    /// Whether every confirmation sheet this scene can show says it is an
+    /// example: its own sample sheet, or the sheet a waiting question opens
+    /// from Today, which follows `NeedsYou.isSample`. Nil when the scene can
+    /// show no question at all.
+    var confirmationSheetsAreExamples: Bool? {
+        if let sheet = sampleSheet { return sheet.isExample }
+        if let asks = needsYou(), !asks.items(now: Self.morning).isEmpty { return asks.isSample }
+        return nil
     }
 
     /// Today at 9:40, so the feed's times sit just before the 9:41 the

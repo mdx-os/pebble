@@ -125,9 +125,10 @@ action.
 - Bad: "No data."
 
 An empty state promises only what exists today. Today's empty state says
-"It's just us for now. Write to me below, and we'll start a chat." with the
-composer under it, and says nothing about work done in the background until
-a real feed source ships.
+"It's just us for now. Write to me below, and I'll answer in the chat." with
+the composer under it. It is true whether or not a chat is already going, so
+it never promises a new one, and it says nothing about work done in the
+background until a real feed source ships.
 
 Examples are always labeled. Sample cards start with "Example" for
 VoiceOver, and a sample opened to read or a sample question says "This is
@@ -137,8 +138,10 @@ an example. Nothing here was really done."
 
 Words a person reads clear 4.5 to 1 against what they sit on, in light and
 dark. Use `Theme.accentText` for words in the accent's warmth,
-`Theme.secondaryText` for quieter words, and `Theme.onAccent` on the accent
-fill. The raw accent and the system grays are too faint for words.
+`Theme.secondaryText` for quieter words and placeholders, and `Theme.onAccent`
+on the accent fill. A system control that fills with the tint and writes
+white on it (the selected sidebar row, Done) takes `Theme.tintFill`. The raw
+accent and the system grays are too faint for words.
 `ContrastGuardTests` checks every pair in `Theme.textPairs` and scans the
 screens for colors outside them.
 

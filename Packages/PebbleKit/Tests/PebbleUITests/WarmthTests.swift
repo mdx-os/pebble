@@ -360,7 +360,7 @@ struct WarmthTests {
     /// The words come back into Today's composer, and the failure shows
     /// right above it, so the line never reappears unexplained. It is
     /// spoken only while Today is in front.
-    @Test func aFailedReplySentFromTodayIsExplainedOnToday() async {
+    @Test func aFailedReplySentFromTodayIsExplainedOnToday() async throws {
         let gate = Gate()
         let controller = ChatController(brand: brand, model: GatedModel(gate: gate, fails: true),
                                         names: InMemoryAgentNameStore(), replyBeat: .zero)
@@ -372,10 +372,233 @@ struct WarmthTests {
         await settle(controller)
         #expect(controller.draft == "Plan my day")
         #expect(today.failure == FirstConversation.couldNotAnswer)
-        #expect(TodayComposer.spokenFailure(today.failure, inFront: true) == FirstConversation.couldNotAnswer)
-        #expect(TodayComposer.spokenFailure(today.failure, inFront: false) == nil)
-        let renderer = ImageRenderer(content: today.frame(width: 393))
-        #expect(renderer.cgImage != nil)
+        // Behind the chat or a sheet, Today keeps quiet and leaves it waiting.
+        #expect(TodayComposer.spokenFailure(controller, inFront: false) == nil)
+        #expect(TodayComposer.spokenFailure(controller, inFront: true) == FirstConversation.couldNotAnswer)
+        // Read once: neither Today again nor the chat reads it a second time.
+        #expect(TodayComposer.spokenFailure(controller, inFront: true) == nil)
+        #expect(ChatView.arrival(for: controller, covered: false) == .nothing)
+        // Still shown, though: heard is not the same as gone.
+        #expect(today.failure == FirstConversation.couldNotAnswer)
+        try smokeRender(today.frame(width: 393))
+    }
+
+    // MARK: Spoken once, never dropped
+
+    /// What VoiceOver hears, played the way the screens play it: each
+    /// change the chat or Today sees, in order, and every line posted.
+    @MainActor
+    private final class Ear {
+        var heard: [String] = []
+        func chat(_ arrival: ChatView.Arrival) {
+            switch arrival {
+            case .reply(let line), .failure(let line): heard.append(line)
+            case .thinking, .nothing: break
+            }
+        }
+        func post(_ line: String?) { if let line { heard.append(line) } }
+    }
+
+    /// Covered, a reply lands, then the cover lifts: exactly one
+    /// announcement, whichever order the chat sees the two changes in.
+    @Test(arguments: [false, true])
+    func coveredThenALandingReplyThenUncoveredIsReadExactlyOnce(turnSeenAfterUncover: Bool) async throws {
+        let gate = Gate()
+        let controller = ChatController(brand: brand, model: GatedModel(gate: gate),
+                                        names: InMemoryAgentNameStore(stored: "Pip"), replyBeat: .zero)
+        let ear = Ear()
+        controller.submit("Plan my day")
+        ear.post(ChatView.replyLanded(in: controller, covered: false))
+        // A sheet comes over the chat; the reply lands under it.
+        ear.chat(ChatView.arrival(for: controller, covered: true))
+        await gate.release()
+        await settle(controller)
+        let reply = try #require(controller.conversation.turns.last)
+        #expect(reply.speaker == .agent)
+        if turnSeenAfterUncover {
+            // The chat sees the cover lift first, then the turn count.
+            ear.chat(ChatView.arrival(for: controller, covered: false))
+            ear.post(ChatView.replyLanded(in: controller, covered: false))
+        } else {
+            ear.post(ChatView.replyLanded(in: controller, covered: true))
+            #expect(ear.heard.isEmpty, "nothing over the sheet")
+            #expect(controller.unheardReply == reply.text, "kept while covered, never cleared")
+            ear.chat(ChatView.arrival(for: controller, covered: false))
+        }
+        // The screen comes and goes again, and another sheet comes and goes.
+        ear.chat(ChatView.arrival(for: controller, covered: false))
+        ear.chat(ChatView.arrival(for: controller, covered: true))
+        ear.chat(ChatView.arrival(for: controller, covered: false))
+        #expect(ear.heard == [reply.text])
+    }
+
+    /// Covered the whole time a reply lands, any number of looks while
+    /// covered never use it up, so it is never silently dropped.
+    @Test func aReplyUnderASheetIsNeverDroppedWhileCovered() async throws {
+        let controller = ChatController(brand: brand, model: LocalStubModel(),
+                                        names: InMemoryAgentNameStore(stored: "Pip"), replyBeat: .zero)
+        controller.submit("Help me plan my morning.")
+        await settle(controller)
+        let reply = try #require(controller.conversation.turns.last?.text)
+        for _ in 0..<3 {
+            #expect(ChatView.replyLanded(in: controller, covered: true) == nil)
+            #expect(ChatView.arrival(for: controller, covered: true) == .nothing)
+            #expect(controller.unheardReply == reply)
+        }
+        #expect(ChatView.arrival(for: controller, covered: false) == .reply(reply))
+    }
+
+    /// A failure line that lands under a sheet is read once the sheet goes,
+    /// once, by the chat; Today, coming back later, has nothing left to say.
+    @Test func aFailureUnderASheetIsReadOnceWhenUncovered() async {
+        let gate = Gate()
+        let controller = ChatController(brand: brand, model: GatedModel(gate: gate, fails: true),
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
+        let ear = Ear()
+        controller.draft = "Plan my day"
+        controller.submit(controller.draft)
+        await gate.release()
+        await settle(controller)
+        #expect(controller.failure == FirstConversation.couldNotAnswer)
+        ear.post(ChatView.failureLanded(in: controller, covered: true))
+        #expect(ear.heard.isEmpty)
+        #expect(controller.unheardFailure == FirstConversation.couldNotAnswer)
+        ear.chat(ChatView.arrival(for: controller, covered: false))
+        ear.chat(ChatView.arrival(for: controller, covered: false))
+        ear.post(TodayComposer.spokenFailure(controller, inFront: true))
+        #expect(ear.heard == [FirstConversation.couldNotAnswer])
+    }
+
+    /// A failure that lands while Today is behind the chat on a narrow
+    /// window, with the chat itself covered, is read by Today when it comes
+    /// back in front, once.
+    @Test func aFailureWhileTodayIsBehindIsReadWhenTodayIsInFront() async {
+        let gate = Gate()
+        let controller = ChatController(brand: brand, model: GatedModel(gate: gate, fails: true),
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
+        let ear = Ear()
+        HomeView.sendsFromToday("Plan my day", chat: controller)
+        await gate.release()
+        await settle(controller)
+        ear.post(TodayComposer.spokenFailure(controller, inFront: false))
+        ear.post(ChatView.failureLanded(in: controller, covered: true))
+        #expect(ear.heard.isEmpty)
+        // Back on Today, in front.
+        ear.post(TodayComposer.spokenFailure(controller, inFront: true))
+        ear.post(TodayComposer.spokenFailure(controller, inFront: true))
+        ear.chat(ChatView.arrival(for: controller, covered: false))
+        #expect(ear.heard == [FirstConversation.couldNotAnswer])
+    }
+
+    /// A failure line cleared before anyone could hear it is never read
+    /// later: it is no longer true.
+    @Test func aFailureClearedBeforeItIsHeardIsNotReadLater() async {
+        let gate = Gate()
+        let controller = ChatController(brand: brand, model: GatedModel(gate: gate, fails: true),
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
+        controller.draft = "Plan my day"
+        controller.submit(controller.draft)
+        await gate.release()
+        await settle(controller)
+        controller.draft = ""
+        #expect(controller.failure == nil)
+        #expect(ChatView.arrival(for: controller, covered: false) == .nothing)
+        #expect(TodayComposer.spokenFailure(controller, inFront: true) == nil)
+    }
+
+    // MARK: A failed reply, then sending again
+
+    /// A failed reply keeps the person's line in the chat, and a newer
+    /// draft is left exactly as it was.
+    @Test func aFailedReplyKeepsTheTurnAndTheDraft() async throws {
+        let gate = Gate()
+        let controller = ChatController(brand: brand, model: GatedModel(gate: gate, fails: true),
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
+        let before = controller.conversation.turns.count
+        controller.submit("Plan my day")
+        controller.draft = "And my evening"
+        await gate.release()
+        await settle(controller)
+        #expect(controller.conversation.turns.count == before + 1)
+        let kept = try #require(controller.conversation.turns.last)
+        #expect(kept.speaker == .person && kept.text == "Plan my day")
+        #expect(controller.draft == "And my evening")
+    }
+
+    /// The words came back into an empty composer. Sending them again asks
+    /// again for the same line; the chat never shows it twice.
+    @Test func sendingTheRestoredWordsAgainDoesNotDuplicateTheLine() async throws {
+        let gate = Gate()
+        let controller = ChatController(brand: brand, model: GatedModel(gate: gate, fails: true),
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
+        controller.draft = "Plan my day"
+        controller.submit(controller.draft)
+        await gate.release()
+        await settle(controller)
+        #expect(controller.draft == "Plan my day")
+        let turns = controller.conversation.turns.count
+        #expect(controller.send(controller.draft))
+        #expect(controller.draft.isEmpty)
+        #expect(controller.isReplying)
+        #expect(controller.conversation.turns.count == turns)
+        #expect(controller.conversation.turns.filter { $0.text == "Plan my day" }.count == 1)
+        await settle(controller)
+        #expect(controller.conversation.turns.filter { $0.text == "Plan my day" }.count == 1)
+        // A different line after a failure is a new line, as always.
+        #expect(controller.send("Plan my week"))
+        await settle(controller)
+        #expect(controller.conversation.turns.filter { $0.speaker == .person }.map(\.text) == ["Plan my day", "Plan my week"])
+    }
+
+    /// Sending again from Today after a failure doesn't duplicate it either.
+    @Test func resendingFromTodayDoesNotDuplicateTheLine() async throws {
+        let gate = Gate()
+        let controller = ChatController(brand: brand, model: GatedModel(gate: gate),
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
+        // Where a failed reply leaves things: the line unanswered, last.
+        controller.conversation = try controller.conversation.appendingPerson("Plan my day")
+        controller.draft = "Plan my day"
+        #expect(HomeView.sendsFromToday(controller.draft, chat: controller))
+        await gate.release()
+        await settle(controller)
+        #expect(controller.conversation.turns.filter { $0.text == "Plan my day" }.count == 1)
+        #expect(controller.conversation.turns.last?.text == "Here's a plan")
+    }
+
+    // MARK: The tap for a send
+
+    /// Each send is felt once, from the screen it was sent from: Today's
+    /// own send taps on Today even though the chat opens on it, and the
+    /// chat never taps for it as well.
+    @Test func theSendTapComesFromTheScreenThatSent() async {
+        let controller = ChatController(brand: brand, model: LocalStubModel(),
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
+        #expect(!controller.sent.tapsAt(.today) && !controller.sent.tapsAt(.chat), "nothing sent yet")
+        HomeView.sendsFromToday("Help me plan my morning.", chat: controller)
+        #expect(controller.sent.tapsAt(.today))
+        #expect(!controller.sent.tapsAt(.chat))
+        await settle(controller)
+        controller.send("gym, groceries")
+        #expect(controller.sent.tapsAt(.chat))
+        #expect(!controller.sent.tapsAt(.today))
+        await settle(controller)
+        // The first run's own line is no press, so no tap anywhere.
+        let first = ChatController(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(), replyBeat: .zero)
+        first.submit("Help me plan my morning.", byHand: false)
+        #expect(!first.sent.tapsAt(.chat) && !first.sent.tapsAt(.today))
+        await settle(first)
+        // And it is felt only on a phone.
+        #expect(Haptic.sent.feedback(on: .phone) != nil)
+        #expect(Haptic.sent.feedback(on: .pad) == nil)
+    }
+
+    /// Both screens attach the tap, each for its own sends.
+    @Test func bothComposersAttachTheSendTap() throws {
+        let sources = try ContrastGuardTests.sources()
+        let home = try #require(sources.first { $0.name == "HomeView.swift" }?.text)
+        let chat = try #require(sources.first { $0.name == "ChatView.swift" }?.text)
+        #expect(home.contains(".haptic(.sent, trigger: chat.sent, when: { $0.tapsAt(.today) })"))
+        #expect(chat.contains(".haptic(.sent, trigger: controller.sent, when: { $0.tapsAt(.chat) })"))
     }
 
     /// "What you wrote is still here" goes once the person clears the words
@@ -567,20 +790,18 @@ struct WarmthTests {
         #expect(Motion.entranceOffset(reduceMotion: false) > 0)
     }
 
-    @Test(arguments: [true, false], [ColorScheme.light, .dark])
-    func theThinkingDotsRender(reduceMotion: Bool, scheme: ColorScheme) throws {
-        let renderer = ImageRenderer(content: ThinkingDots(stillOverride: reduceMotion)
-            .environment(\.colorScheme, scheme))
-        #expect(try #require(renderer.cgImage).width > 0)
+    @Test("Smoke: the thinking dots draw", arguments: [true, false], [ColorScheme.light, .dark])
+    func smokeTheThinkingDots(reduceMotion: Bool, scheme: ColorScheme) throws {
+        try smokeRender(ThinkingDots(stillOverride: reduceMotion).environment(\.colorScheme, scheme))
     }
 
-    @Test(arguments: [CGSize(width: 393, height: 852), CGSize(width: 1032, height: 1376)], [ColorScheme.light, .dark])
-    func emptyStatesRender(size: CGSize, scheme: ColorScheme) throws {
+    @Test("Smoke: the empty states draw",
+          arguments: [CGSize(width: 393, height: 852), CGSize(width: 1032, height: 1376)], [ColorScheme.light, .dark])
+    func smokeEmptyStates(size: CGSize, scheme: ColorScheme) throws {
         for scene in [ShowcaseScene.memoryEmpty, .newChat, .thinking] {
-            let renderer = ImageRenderer(content: scene.view(brand: brand)
+            try smokeRender(scene.view(brand: brand)
                 .environment(\.colorScheme, scheme)
                 .frame(width: size.width, height: size.height))
-            #expect(try #require(renderer.cgImage).width == Int(size.width * renderer.scale))
         }
     }
 
@@ -654,12 +875,11 @@ struct WarmthTests {
         #expect(Motion.dot(1, at: 0, reduceMotion: true, increasedContrast: true).opacity == 1)
     }
 
-    @Test(arguments: [ColorScheme.light, .dark])
-    func theDotsRenderWithIncreasedContrast(scheme: ColorScheme) throws {
-        let renderer = ImageRenderer(content: ThinkingDots(stillOverride: true)
+    @Test("Smoke: the dots draw with Increase Contrast", arguments: [ColorScheme.light, .dark])
+    func smokeTheDotsWithIncreasedContrast(scheme: ColorScheme) throws {
+        try smokeRender(ThinkingDots(stillOverride: true)
             .environment(\.colorScheme, scheme)
             .environment(\._colorSchemeContrast, .increased))
-        #expect(try #require(renderer.cgImage).width > 0)
     }
 
     // MARK: Privacy
@@ -716,8 +936,9 @@ struct WarmthTests {
         #expect(model.status == "Saved.")
     }
 
+    /// What the scene holds is checked; the drawing is a smoke check.
     @Test(arguments: [ColorScheme.light, .dark])
-    func theSavedNoteSceneRenders(scheme: ColorScheme) throws {
+    func theSavedNoteSceneHoldsOneSavedNote(scheme: ColorScheme) throws {
         let model = ShowcaseScene.savedNoteMemory(place: .onDevice)
         #expect(model.status == MemoryWords.saved(.onDevice))
         #expect(model.notes.count == 1)
@@ -727,10 +948,9 @@ struct WarmthTests {
         #expect(model.hasStoredFile)
         #expect(!model.store.hasStoredFile)
         #expect(ShowcaseScene.emptyMemory().notes().isEmpty)
-        let renderer = ImageRenderer(content: ShowcaseScene.memorySaved.view(brand: brand)
+        try smokeRender(ShowcaseScene.memorySaved.view(brand: brand)
             .environment(\.colorScheme, scheme)
             .frame(width: 393, height: 852))
-        #expect(try #require(renderer.cgImage).width > 0)
     }
 }
 #endif

@@ -406,7 +406,9 @@ public enum FeedWords {
     public static let emptyTitle = "A quiet start"
     /// Only what is true today: the chat is right below. Nothing here says
     /// the agent works in the background until a real feed source does.
-    public static let empty = "It's just us for now. Write to me below, and we'll start a chat."
+    /// True whether or not a chat is already going, so it never promises a
+    /// new one: a line sent from here joins the chat there is.
+    public static let empty = "It's just us for now. Write to me below, and I'll answer in the chat."
     /// VoiceOver's hint on Today's composer, which shares the chat's
     /// placeholder, so the person knows where the words go.
     public static let composerHint = "Sends to the chat and opens it."

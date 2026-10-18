@@ -75,8 +75,7 @@ public struct HomeView: View {
         self.onboarding = onboarding
         self.memory = memory
         self.looks = looks
-        _feed = StateObject(wrappedValue: FeedModel(sources: feed, needsYou: needsYou,
-                                                    place: model.privacyPlace, now: now))
+        _feed = StateObject(wrappedValue: Self.feedModel(sources: feed, needsYou: needsYou, model: model, now: now))
         let needed = OnboardingFlow.isNeeded(store: onboarding, names: names)
         // People who named their agent before the first run existed count as finished.
         if !needed, !onboarding.hasFinished() { onboarding.markFinished() }
@@ -85,6 +84,19 @@ public struct HomeView: View {
         _chat = State(initialValue: needed ? nil
             : ChatController.make(brand: brand, model: model, names: names, conversation: conversation))
         _section = State(initialValue: section)
+    }
+
+    /// Today's model, which takes its privacy place from the active model,
+    /// so the example note never promises the device when words may leave.
+    static func feedModel(sources: [any FeedSource], needsYou: NeedsYou, model: any ModelClient,
+                          now: @escaping () -> Date) -> FeedModel {
+        FeedModel(sources: sources, needsYou: needsYou, place: model.privacyPlace, now: now)
+    }
+
+    /// The memory screen's model, with its privacy place from the active
+    /// model, the same way.
+    static func memoryModel(store: MemoryStore, model: any ModelClient) -> MemoryModel {
+        MemoryModel(store: store, place: model.privacyPlace)
     }
 
     /// True when the window is wide enough for a sidebar.
@@ -120,7 +132,9 @@ public struct HomeView: View {
             }
         }
         // System controls write their words in the tint, so it is the
-        // readable accent, not the brand fill.
+        // readable accent, not the brand fill. Controls that fill with the
+        // tint and write white on it (the sidebar's selected row, Done)
+        // take `Theme.tintFill` instead.
         .tint(Theme.accentText)
         // The live app plays entrances; still renders show everything at once.
         .environment(\.animatesEntrances, true)
@@ -207,7 +221,7 @@ public struct HomeView: View {
     /// The send itself, apart from moving, so tests can drive it.
     @discardableResult
     static func sendsFromToday(_ line: String, chat: ChatController) -> Bool {
-        chat.send(line)
+        chat.send(line, from: .today)
     }
 
     /// Chats aren't kept yet, so starting over asks first once the person
@@ -305,8 +319,7 @@ public struct HomeView: View {
                     .presentationDragIndicator(.visible)
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
-                            Button(MemoryWords.doneTitle) { section = memoryOverChat ? .chat : .today }
-                                .keyboardShortcut(.cancelAction)
+                            DoneButton { section = memoryOverChat ? .chat : .today }
                         }
                     }
             }
@@ -344,7 +357,7 @@ public struct HomeView: View {
     @ViewBuilder
     private var memoryScreen: some View {
         if let memory {
-            MemoryView(store: memory, place: model.privacyPlace)
+            MemoryView(model: Self.memoryModel(store: memory, model: model))
         } else {
             // The store couldn't be opened. Say so rather than hide memory.
             // It is only opened again at launch, so the words say that.
@@ -383,9 +396,17 @@ struct TodayComposer: View {
     var failure: String? { chat.failure }
 
     /// The failure is read aloud here only while Today is in front, so it
-    /// is never spoken twice or over a sheet.
-    static func spokenFailure(_ failure: String?, inFront: Bool) -> String? {
-        inFront ? failure : nil
+    /// is never spoken over a sheet. It is taken from the chat, so whichever
+    /// screen speaks it first, here or the chat, is the only one that does.
+    /// One that landed while Today was behind is read when Today comes back.
+    static func spokenFailure(_ chat: ChatController, inFront: Bool) -> String? {
+        inFront ? chat.takeUnheardFailure() : nil
+    }
+
+    private func speakFailure() {
+        if let line = Self.spokenFailure(chat, inFront: inFront) {
+            AccessibilityNotification.Announcement(line).post()
+        }
     }
 
     var body: some View {
@@ -399,11 +420,12 @@ struct TodayComposer: View {
         }
         .padding(.vertical, 12)
         .readableColumn(columnWidth)
-        .onChange(of: chat.failure) { _, failure in
-            if let line = Self.spokenFailure(failure, inFront: inFront) {
-                AccessibilityNotification.Announcement(line).post()
-            }
-        }
+        .onChange(of: chat.failure) { speakFailure() }
+        .onChange(of: inFront) { speakFailure() }
+        .onAppear { speakFailure() }
+        // Sending from here moves to the chat at once, so the tap is played
+        // here, where the person pressed, not by the chat.
+        .haptic(.sent, trigger: chat.sent, when: { $0.tapsAt(.today) })
         .background {
             // Solid, so cards scrolling under it never show through the words.
             Theme.backdropEnds(scheme).bottom.color
@@ -534,6 +556,10 @@ struct HomeSplit<TodayScreen: View, ChatScreen: View, MemoryScreen: View>: View 
                     .badge(place == .today ? needsYouCount : 0)
                 }
             }
+            // The selected row is filled with the tint and its words turn
+            // white, so the sidebar takes the deep fill tint, not the root's
+            // `accentText`, which is too light under white in dark mode.
+            .tint(Theme.tintFill)
             .navigationTitle(chat.displayName.text)
         } detail: {
             NavigationStack {
@@ -629,8 +655,7 @@ struct KeyboardShortcutsView: View {
             .navigationTitle(HomeWords.shortcutsTitle)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(MemoryWords.doneTitle) { dismiss() }
-                        .keyboardShortcut(.cancelAction)
+                    DoneButton { dismiss() }
                 }
             }
         }

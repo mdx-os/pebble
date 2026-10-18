@@ -139,15 +139,15 @@ public struct ChatView: View {
                     withAnimation(.easeOut(duration: 0.25)) { scroller.scrollTo(Self.thinkingID, anchor: .bottom) }
                 }
             }
-            .onChange(of: controller.failure) { _, failure in
-                if let failure, Self.speaks(covered: covered) {
-                    AccessibilityNotification.Announcement(failure).post()
+            .onChange(of: controller.failure) {
+                if let line = Self.failureLanded(in: controller, covered: covered) {
+                    AccessibilityNotification.Announcement(line).post()
                 }
             }
             .onChange(of: covered) { _, covered in
                 // A sheet came over the chat, so a pending "thinking" stays
-                // quiet. When it goes, a reply that landed under it is read
-                // once, or "thinking" follows a reply still on its way.
+                // quiet. When it goes, a reply or a failure that landed under
+                // it is read once, or "thinking" follows a reply still coming.
                 thinkingNotice?.cancel()
                 thinkingNotice = nil
                 speak(Self.arrival(for: controller, covered: covered))
@@ -160,7 +160,8 @@ public struct ChatView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.4, dampingFraction: 0.85),
                    value: controller.conversation.turns.count)
-        .haptic(.sent, trigger: controller.sentCount)
+        // A line sent from Today is felt there; this is for the chat's own.
+        .haptic(.sent, trigger: controller.sent, when: { $0.tapsAt(.chat) })
         .onAppear {
             // Sent from Today, the line may be answered, or still on its
             // way, before this screen was here to see it change.
@@ -273,7 +274,7 @@ public struct ChatView: View {
 
     private func speak(_ arrival: Arrival) {
         switch arrival {
-        case .reply(let line): AccessibilityNotification.Announcement(line).post()
+        case .reply(let line), .failure(let line): AccessibilityNotification.Announcement(line).post()
         case .thinking: sayThinkingSoon()
         case .nothing: break
         }
@@ -282,20 +283,25 @@ public struct ChatView: View {
     /// What the chat says as it comes on screen, or as a sheet over it goes.
     enum Arrival: Equatable {
         case nothing
-        /// A reply that landed while no chat was on screen.
+        /// A reply that landed while no chat could speak it.
         case reply(String)
+        /// A failure line that landed while no chat could speak it.
+        case failure(String)
         /// A reply still on its way, so "thinking" follows as usual.
         case thinking
     }
 
     /// A line sent from Today may be answered, or still coming, before the
     /// chat opens, and then the chat never sees the change it speaks on.
-    /// So it looks as it arrives. A reply nobody heard is read once, and
-    /// covered means quiet with the reply kept for later.
+    /// So it looks as it arrives, and again each time a sheet over it goes.
+    /// The one rule: while covered, nothing is taken; once uncovered, what
+    /// nobody heard is taken and read, once.
     static func arrival(for controller: ChatController, covered: Bool) -> Arrival {
         guard speaks(covered: covered) else { return .nothing }
         if controller.isReplying { return .thinking }
-        return controller.takeUnheardReply().map { .reply($0) } ?? .nothing
+        if let reply = controller.takeUnheardReply() { return .reply(reply) }
+        if let failure = controller.takeUnheardFailure() { return .failure(failure) }
+        return .nothing
     }
 
     /// Where the thinking dots sit, so the chat can follow them.
@@ -312,24 +318,18 @@ public struct ChatView: View {
     /// while the chat is in front. Another sheet over it means quiet.
     static func speaks(covered: Bool) -> Bool { !covered }
 
-    /// New lines from the agent are read out, since they may land offscreen,
-    /// but never over a sheet that covers the chat. The reply stays in the
-    /// transcript, so it is still there to read once the sheet goes.
-    static func announcement(for conversation: Conversation, covered: Bool) -> String? {
-        guard speaks(covered: covered), let last = conversation.turns.last, last.speaker == .agent,
-              !conversation.isWaitingForPerson else {
-            return nil
-        }
-        return last.text
+    /// A new turn landed in the chat. What is spoken is only ever what
+    /// `takeUnheardReply` hands over, so a reply is read exactly once
+    /// however the turn, the cover and the screen change. Covered, nothing
+    /// is taken, and the reply waits for the sheet to go.
+    static func replyLanded(in controller: ChatController, covered: Bool) -> String? {
+        speaks(covered: covered) ? controller.takeUnheardReply() : nil
     }
 
-    /// A new turn landed in the chat. The reply is marked heard only when it
-    /// is actually spoken, so one that lands under a sheet is kept and read
-    /// once the sheet goes.
-    static func replyLanded(in controller: ChatController, covered: Bool) -> String? {
-        guard let line = announcement(for: controller.conversation, covered: covered) else { return nil }
-        controller.replyWasSeen()
-        return line
+    /// The failure line changed. Spoken the same way as a reply: taken only
+    /// when the chat can speak, so one that lands under a sheet waits.
+    static func failureLanded(in controller: ChatController, covered: Bool) -> String? {
+        speaks(covered: covered) ? controller.takeUnheardFailure() : nil
     }
 
     private var transcript: some View {
@@ -417,13 +417,40 @@ final class ChatController: ObservableObject {
     /// Goes up with each reply asked for and each stop, so a late reply
     /// can tell it is no longer the current one.
     private var replyGeneration = 0
-    @Published var failure: String?
-    /// The newest reply, until a chat on screen has seen it land. A line
-    /// sent from Today can be answered before the chat has opened, so the
-    /// chat reads this as it arrives instead of relying on seeing it change.
+    @Published var failure: String? {
+        didSet {
+            // A new line is waiting to be heard; a line that went was never
+            // heard and now never will be.
+            if failure != oldValue { unheardFailure = failure }
+        }
+    }
+    /// The newest reply, until it has been read aloud. A line sent from
+    /// Today can be answered before the chat has opened, or while a sheet
+    /// covers it, so it waits here and is read once, by whichever screen
+    /// can speak first. Only `takeUnheardReply` reads it, and that clears it.
     private(set) var unheardReply: String?
+    /// The failure line, until it has been read aloud, the same way: it can
+    /// land under a sheet, or while Today is behind the chat.
+    private(set) var unheardFailure: String?
+
+    /// Where a line was sent from, so the tap is felt from the screen the
+    /// person pressed.
+    enum SendPlace: Equatable { case chat, today }
+
+    /// How many lines the person has sent, and where the newest came from.
+    struct Sent: Equatable {
+        var count = 0
+        var from = SendPlace.chat
+
+        /// Whether the screen at `place` plays the light tap for this send:
+        /// only the one it was sent from, so a send is never felt twice and
+        /// never missed when the sender leaves the screen as it sends.
+        func tapsAt(_ place: SendPlace) -> Bool { count > 0 && from == place }
+    }
+
+    @Published private(set) var sent = Sent()
     /// Goes up by one each time the person sends something.
-    @Published private(set) var sentCount = 0
+    var sentCount: Int { sent.count }
     /// The shortest time the thinking dots show, so a quick reply settles
     /// in after a calm beat instead of snapping onto the screen.
     let replyBeat: Duration
@@ -496,27 +523,32 @@ final class ChatController: ObservableObject {
     /// when the line went out, false when there was nothing to send or a
     /// reply was still coming.
     @discardableResult
-    func send(_ text: String) -> Bool {
+    func send(_ text: String, from place: SendPlace = .chat) -> Bool {
         let before = sentCount
-        submit(text)
+        submit(text, from: place)
         return sentCount != before
     }
 
     /// Sends `text`. `byHand` is false for the line the first run sends on
     /// its own, which gets no tap since the person didn't just press anything.
-    func submit(_ text: String, byHand: Bool = true) {
+    func submit(_ text: String, byHand: Bool = true, from place: SendPlace = .chat) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isReplying else { return }
         let clearsDraft = trimmed == draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        do {
-            conversation = try conversation.appendingPerson(trimmed)
-        } catch {
-            return
+        // The same words sent again after their reply failed are already
+        // the last line of the chat, so they are asked again, not added twice.
+        let isRetry = conversation.turns.last.map { $0.speaker == .person && $0.text == trimmed } ?? false
+        if !isRetry {
+            do {
+                conversation = try conversation.appendingPerson(trimmed)
+            } catch {
+                return
+            }
         }
         if clearsDraft {
             draft = ""
         }
-        if byHand { sentCount += 1 }
+        if byHand { sent = Sent(count: sent.count + 1, from: place) }
         failure = nil
         unheardReply = nil
         isReplying = true
@@ -565,17 +597,17 @@ final class ChatController: ObservableObject {
         isReplying = false
     }
 
-    /// A chat on screen read the newest reply aloud, so it is never read
-    /// again later.
-    func replyWasSeen() {
-        unheardReply = nil
-    }
-
-    /// The reply that landed before any chat was on screen, handed over
-    /// once.
+    /// The reply nobody has heard yet, handed over once. Whoever takes it
+    /// reads it aloud; nothing else clears it but a new send.
     func takeUnheardReply() -> String? {
         defer { unheardReply = nil }
         return unheardReply
+    }
+
+    /// The failure line nobody has heard yet, handed over once.
+    func takeUnheardFailure() -> String? {
+        defer { unheardFailure = nil }
+        return unheardFailure
     }
 }
 

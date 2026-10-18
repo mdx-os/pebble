@@ -5,6 +5,7 @@ import PebbleModel
 import SwiftUI
 import Testing
 @testable import PebbleUI
+import SourceScan
 
 /// A monotonic clock tests can move forward.
 private final class Clock: @unchecked Sendable {
@@ -81,16 +82,25 @@ struct TodayFollowupsTests {
 
     /// The empty Today says only what is true now and has no button of its
     /// own: the composer is the way in.
-    @Test func theEmptyTodayPromisesOnlyWhatExists() {
-        for promise in ["finish", "background", "while you", "show up here", "I'll only ask"] {
+    @Test func theEmptyTodayPromisesOnlyWhatExists() throws {
+        for promise in ["finish", "background", "while you", "show up here", "I'll only ask",
+                        // A chat may already be going, so it never promises a new one.
+                        "start a chat", "new chat", "we'll start"] {
             #expect(!FeedWords.empty.localizedCaseInsensitiveContains(promise), "\(promise)")
         }
+        #expect(FeedWords.empty == "It's just us for now. Write to me below, and I'll answer in the chat.")
         #expect(FeedWords.empty.contains("below"))
+        // The voice guide quotes it word for word.
+        let guide = SwiftSource.repositoryRoot(from: #filePath).appendingPathComponent("docs/VOICE.md")
+        let text = try String(contentsOf: guide, encoding: .utf8)
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        #expect(text.contains("\"\(FeedWords.empty)\""))
     }
 
     /// Today with its composer, at every text size, on a phone and a big iPad.
-    @Test(arguments: [DynamicTypeSize.xSmall, .large, .accessibility3, .accessibility5], [ColorScheme.light, .dark])
-    func todayWithItsComposerRenders(text: DynamicTypeSize, scheme: ColorScheme) throws {
+    @Test("Smoke: Today with its composer draws",
+          arguments: [DynamicTypeSize.xSmall, .large, .accessibility3, .accessibility5], [ColorScheme.light, .dark])
+    func smokeTodayWithItsComposer(text: DynamicTypeSize, scheme: ColorScheme) throws {
         let chat = chat()
         for size in [CGSize(width: 393, height: 852), CGSize(width: 1032, height: 1376)] {
             for sources in [[EmptyFeedSource()], [SampleFeedSource()]] as [[any FeedSource]] {
@@ -100,11 +110,10 @@ struct TodayFollowupsTests {
                     FeedView(model: model, look: .startingPoint, onTalk: { _ in })
                         .safeAreaInset(edge: .bottom) { TodayComposer(chat: chat, inFront: true, send: { _ in }) }
                 }
-                let renderer = ImageRenderer(content: view
+                try smokeRender(view
                     .environment(\.dynamicTypeSize, text)
                     .environment(\.colorScheme, scheme)
                     .frame(width: size.width, height: size.height))
-                #expect(try #require(renderer.cgImage).width == Int(size.width * renderer.scale))
             }
         }
     }
@@ -118,6 +127,7 @@ struct TodayFollowupsTests {
         let asks = NeedsYou(rule: .isolated(now: clock.now))
         let model = FeedModel(sources: [EmptyFeedSource()], needsYou: asks, place: .onDevice)
         _ = try #require(asks.ask(note))
+        await model.settled()
         #expect(model.feed.needsYou.count == 1)
         let naps = Naps()
         await model.keepFresh { wait in
@@ -146,8 +156,9 @@ struct TodayFollowupsTests {
         #expect(model.feed.needsYou.count == 1)
     }
 
-    /// Asking, a yes and a dismissal each show at once, with no refresh.
-    @Test func eachChangeToTheQuestionsShowsAtOnce() throws {
+    /// Asking, a yes and a dismissal each show on the next turn of the main
+    /// actor, with no refresh asked for.
+    @Test func eachChangeToTheQuestionsShowsAtOnce() async throws {
         let rule = AskFirst.isolated()
         let asks = NeedsYou(rule: rule)
         let model = FeedModel(sources: [EmptyFeedSource()], needsYou: asks, place: .onDevice)
@@ -156,14 +167,18 @@ struct TodayFollowupsTests {
         _ = counted.observe { MainActor.assumeIsolated { calls.count += 1 } }
 
         let first = try #require(asks.ask(note))
+        await model.settled()
         #expect(model.feed.needsYou.count == 1)
         let yes = ConfirmationState(request: first, rule: rule, onApprove: { asks.approved($0) }, onDecline: {})
         #expect(yes.tapPrimary() == .approved)
+        await model.settled()
         #expect(model.feed.needsYou.isEmpty)
 
         let second = try #require(asks.ask(note))
+        await model.settled()
         #expect(model.feed.needsYou.count == 1)
         asks.dismissed(second)
+        await model.settled()
         #expect(model.feed.needsYou.isEmpty)
 
         // The hook fires once for each, and not for a dismissal of nothing.
@@ -176,32 +191,84 @@ struct TodayFollowupsTests {
     /// Two windows, two Todays, one set of questions. A yes or a dismissal
     /// in either shows in both at once, and a window that closes stops
     /// watching, so the one left keeps hearing every change.
-    @Test func everyWindowsTodayHearsEachChange() throws {
+    @Test func everyWindowsTodayHearsEachChange() async throws {
         let rule = AskFirst.isolated()
         let asks = NeedsYou(rule: rule)
         let first = FeedModel(sources: [EmptyFeedSource()], needsYou: asks, place: .onDevice)
         var second: FeedModel? = FeedModel(sources: [EmptyFeedSource()], needsYou: asks, place: .onDevice)
         #expect(asks.observerCount == 2)
+        func settled() async {
+            await first.settled()
+            await second?.settled()
+        }
 
         let asked = try #require(asks.ask(note))
+        await settled()
         #expect(first.feed.needsYou.count == 1)
         #expect(second?.feed.needsYou.count == 1)
         // Yes in the second window; the first one, made earlier, drops it too.
         let yes = ConfirmationState(request: asked, rule: rule, onApprove: { asks.approved($0) }, onDecline: {})
         #expect(yes.tapPrimary() == .approved)
+        await settled()
         #expect(first.feed.needsYou.isEmpty)
         #expect(second?.feed.needsYou.isEmpty == true)
 
         let again = try #require(asks.ask(note))
         asks.dismissed(again)
+        await settled()
         #expect(first.feed.needsYou.isEmpty)
         #expect(second?.feed.needsYou.isEmpty == true)
 
         // The second window closes. The first still hears the next question.
+        await second?.settled()
         second = nil
         #expect(asks.observerCount == 1)
         _ = try #require(asks.ask(note))
+        await first.settled()
         #expect(first.feed.needsYou.count == 1)
+    }
+
+    /// A change to the questions can arrive in the middle of a view update,
+    /// such as a sheet's yes. The feed never publishes right then: the
+    /// refresh waits for the next turn of the main actor.
+    @Test func aChangeNeverPublishesInsideTheCallThatMadeIt() async throws {
+        let asks = NeedsYou(rule: .isolated())
+        let model = FeedModel(sources: [EmptyFeedSource()], needsYou: asks, place: .onDevice)
+        _ = try #require(asks.ask(note))
+        // Still the same turn: nothing published yet.
+        #expect(model.feed.needsYou.isEmpty)
+        await model.settled()
+        #expect(model.feed.needsYou.count == 1)
+    }
+
+    // MARK: The privacy place, from the model the home screen is given
+
+    /// A model that does not run here, like a cloud model would.
+    private struct RemoteModel: ModelClient {
+        func reply(to transcript: [ChatTurn]) async throws -> String { "From afar." }
+    }
+
+    /// HomeView builds Today's model and the memory's from the model it is
+    /// given, so with a cloud model neither promises the device.
+    @Test func theHomeScreenPassesTheModelsPrivacyPlace() throws {
+        let store = ShowcaseScene.emptyMemory()
+        for (model, place) in [(RemoteModel() as any ModelClient, PrivacyPlace.mayLeaveDevice),
+                               (LocalStubModel(), .onDevice)] {
+            let feed = HomeView.feedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()),
+                                          model: model, now: { ShowcaseScene.morning })
+            #expect(feed.place == place)
+            #expect(FeedWords.sampleNote(feed.place).contains("this device") == (place == .onDevice))
+            let memory = HomeView.memoryModel(store: store, model: model)
+            #expect(memory.place == place)
+            #expect(MemoryWords.privacyNote(memory.place).contains("this device") == (place == .onDevice))
+        }
+        // And HomeView builds them no other way.
+        let home = try #require(try ContrastGuardTests.sources().first { $0.name == "HomeView.swift" }?.text)
+        let source = SwiftSource(home)
+        #expect(source.calls(named: ["FeedModel"]).count == 1)
+        #expect(source.calls(named: ["MemoryModel"]).count == 1)
+        #expect(source.calls(named: ["MemoryView"]).allSatisfy { $0.arguments.hasPrefix("model: Self.memoryModel(") })
+        #expect(source.calls(named: ["feedModel"]).count == 2, "declared once and used once, in init")
     }
 
     // MARK: Closing a sheet, then moving on
@@ -370,16 +437,55 @@ struct TodayFollowupsTests {
         #expect(!FeedCard(item: question, time: "9:36 AM", isSample: false, perform: {}).spoken.contains(FeedWords.exampleMarker))
     }
 
-    @Test(arguments: [ColorScheme.light, .dark])
-    func theSamplePaymentSheetShowsTheExampleLabel(scheme: ColorScheme) throws {
+    /// The sample payment sheet, from Today's sample question and from the
+    /// question scenes, is built as an example, so it shows the label.
+    @Test func theSamplePaymentSheetIsAnExample() throws {
         let asks = ShowcaseScene.sampleQuestion()
         #expect(asks.isSample)
         let request = try #require(asks.items(now: Date()).first?.request)
-        let renderer = ImageRenderer(content: ConfirmationSheet(request: request, rule: asks.rule, isExample: true,
-                                                                onApprove: { _ in }, onDecline: {})
-            .environment(\.colorScheme, scheme)
-            .frame(width: 393, height: 852))
-        #expect(try #require(renderer.cgImage).width > 0)
+        // What HomeView passes: the sheet is an example when the questions are.
+        let fromToday = ConfirmationSheet(request: request, rule: asks.rule, isExample: asks.isSample,
+                                          onApprove: { _ in }, onDecline: {})
+        #expect(fromToday.isExample)
+        for scene in [ShowcaseScene.confirm, .confirmTimedOut] {
+            let sheet = try #require(scene.sampleSheet)
+            #expect(sheet.isExample, "\(scene)")
+        }
+        // A real question is not.
+        #expect(!ConfirmationSheet(request: request, rule: asks.rule, onApprove: { _ in }, onDecline: {}).isExample)
+    }
+
+    // MARK: Every sample sheet says it is an example
+
+    /// PERMANENT GUARD. Every showcase scene that can show a confirmation
+    /// sheet marks it as an example. A new scene that shows one is counted
+    /// here, so it can't slip by unmarked.
+    @Test func everyShowcaseSheetIsMarkedAsAnExample() {
+        var showing: [ShowcaseScene] = []
+        for scene in ShowcaseScene.allCases {
+            guard let examples = scene.confirmationSheetsAreExamples else { continue }
+            showing.append(scene)
+            #expect(examples, "\(scene) shows a sample question not marked as an example")
+        }
+        #expect(Set(showing) == [.confirm, .confirmTimedOut, .todayNeedsYou])
+    }
+
+    /// The showcase builds a sheet only from what the guard above reads: no
+    /// `ConfirmationSheet(` there that doesn't pass the sample's own flag,
+    /// and the Today scenes take their questions from `needsYou(at:)`.
+    @Test func theShowcaseBuildsSheetsOnlyFromWhatTheGuardReads() throws {
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        let text = try String(contentsOf: root.appendingPathComponent("Packages/PebbleKit/Sources/PebbleUI/ShowcaseScene.swift"),
+                              encoding: .utf8)
+        let source = SwiftSource(text)
+        let sheets = source.calls(named: ["ConfirmationSheet"])
+        #expect(!sheets.isEmpty)
+        for sheet in sheets {
+            #expect(sheet.arguments.contains("isExample: sheet.isExample"), "line \(sheet.line): \(sheet.arguments)")
+        }
+        for home in source.calls(named: ["HomeView"]) {
+            #expect(home.arguments.contains("needsYou: needsYou(at: morning)"), "line \(home.line)")
+        }
     }
 
     @Test func theShowcaseBakeryUsesAnExampleDomain() throws {
