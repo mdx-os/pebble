@@ -30,16 +30,29 @@ public struct CloudRequest: Sendable, Equatable {
         Self.shownText(method: method, url: url, headers: headers, body: body)
     }
 
-    /// Every header line the preview shows, in name order: `headers`, and
-    /// the Host and Content-Length URLSession adds from the address and the
-    /// body. `CloudHeaders` refuses both from anywhere else, so these are
-    /// the only values they can have.
+    /// Every header line the preview shows, in name order: `headers`, the
+    /// Host and Content-Length URLSession adds from the address and the
+    /// body, and the lines it adds to every request (`systemLines`).
+    /// `CloudHeaders` refuses all of those names from anywhere else, so
+    /// these are the only values they can have.
     public static func shownHeaders(url: URL, headers: [String: String], body: Data) -> [(name: String, value: String)] {
-        var all = headers
+        var all = headers.merging(systemLines) { _, system in system }
         all["Host"] = hostLine(for: url)
         all["Content-Length"] = String(body.count)
         return all.sorted { $0.key.lowercased() < $1.key.lowercased() }.map { (name: $0.key, value: $0.value) }
     }
+
+    /// The lines URLSession adds to every request whatever it is given, as
+    /// a listener on this Mac's loopback address sees them
+    /// (`theWireCarriesExactlyTheHeaderLinesTheCardShows`): no-cache, from
+    /// the request's cache policy, and keep-alive. Neither says anything
+    /// of the person or the device, and both are shown, so the card holds
+    /// every line that goes. Over HTTP/2 the connection line is left out,
+    /// which only means the card shows one line more than went.
+    public static let systemLines: [String: String] = [
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+    ]
 
     /// The Host header as URLSession writes it: an IPv6 address in
     /// brackets, and the port only when it isn't the scheme's own.
@@ -98,15 +111,32 @@ public enum CloudHeaders {
     /// shows.
     public static let reserved: Set<String> = [
         "authorization", "proxy-authorization", "proxy-authenticate", "www-authenticate",
-        "host", "content-length", "connection", "transfer-encoding", "cookie",
+        "host", "content-length", "connection", "transfer-encoding", "cookie", "cache-control",
     ]
 
     /// `auth`'s headers with the fixed ones on top. A sign-in header can't
     /// replace a fixed one, in any letter case, and a reserved name is
-    /// refused outright, so nothing is sent.
+    /// refused outright, so nothing is sent. So is a header URLSession
+    /// could send differently from how the card draws it
+    /// (`signInHeaderRefused`): a name that isn't a short token
+    /// (`CloudSignIn.isToken`), two names that differ only in letter case,
+    /// which would show as two lines and go as one, or a value with a line
+    /// break in it, which the system drops or refuses.
     public static func merged(with auth: [String: String]) throws -> [String: String] {
         if let name = auth.keys.sorted().first(where: { reserved.contains($0.lowercased()) }) {
             throw CloudTransportError.reservedHeader(name)
+        }
+        if let name = auth.keys.sorted().first(where: { !CloudSignIn.isToken($0) }) {
+            throw CloudTransportError.signInHeaderRefused(name)
+        }
+        var seen: Set<String> = []
+        for name in auth.keys.sorted() where !seen.insert(name.lowercased()).inserted {
+            throw CloudTransportError.signInHeaderRefused(name)
+        }
+        if let name = auth.keys.sorted().first(where: { name in
+            auth[name]?.unicodeScalars.contains { $0 == "\r" || $0 == "\n" } == true
+        }) {
+            throw CloudTransportError.signInHeaderRefused(name)
         }
         let fixedNames = Set(fixed.keys.map { $0.lowercased() })
         var all = auth.filter { !fixedNames.contains($0.key.lowercased()) }
@@ -120,9 +150,10 @@ public enum CloudHeaders {
 ///
 /// When the cloud needs a sign-in first, that hop is part of the same
 /// preview, shown above the message, and the one yes sends both, sign-in
-/// first. No header of ours goes that isn't on this screen; URLSession adds
-/// only its own connection handling, which carries nothing of the person:
-/// its session keeps no cookie, cache or saved password and adds none
+/// first. No header goes that isn't on this screen: the lines URLSession
+/// adds itself are shown too (`CloudRequest.systemLines`), and carry
+/// nothing of the person. Its session keeps no cookie, cache or saved
+/// password and adds none
 /// (`URLSessionCloudTransport.makeSession`), so a cookie set by a sign-in
 /// answer never rides on the message.
 public struct CloudPreview: Sendable, Equatable, Identifiable {
@@ -189,19 +220,50 @@ public struct CloudSignIn: Sendable, Equatable {
         self.body = body
     }
 
-    /// The longest value a sign-in body may hold, in characters.
+    /// The longest value a sign-in body may hold, in characters. Only a
+    /// bound on shape: a value this long with no name in it passes the
+    /// redactor, so what keeps it to a credential is `CloudAuth`'s
+    /// contract.
     public static let maxValueLength = 512
 
-    /// The body's values as text, when it is a flat JSON object whose
-    /// values are each a string or a number of at most `maxValueLength`
-    /// characters. Nil for anything else: a nested object or list, a true
-    /// or false, a null, or a body that isn't a JSON object at all. Only
-    /// such a body is sent; a sign-in carries a credential or a device
-    /// token, never a document.
-    public var plainValues: [String]? {
+    /// The longest name a sign-in body part or header may have.
+    public static let maxNameLength = 64
+
+    /// True for a name a sign-in may use, as a body part or a header: one
+    /// to `maxNameLength` ASCII letters, digits, `-` or `_`. Nothing else,
+    /// so a name can't hold a sentence, and can't draw a line of its own
+    /// on the card.
+    public static func isToken(_ name: String) -> Bool {
+        (1...maxNameLength).contains(name.unicodeScalars.count) && name.unicodeScalars.allSatisfy {
+            ("a"..."z").contains($0) || ("A"..."Z").contains($0) || ("0"..."9").contains($0) || $0 == "-" || $0 == "_"
+        }
+    }
+
+    /// The body as it is checked, shown and sent: each part's name and its
+    /// value as text, when the body is a flat JSON object whose names are
+    /// tokens (`isToken`) and whose values are each a string or a number
+    /// of at most `maxValueLength` characters. Nil for anything else: a
+    /// nested object or list, a true or false, a null, or a body that
+    /// isn't a JSON object at all. A sign-in carries a credential or a
+    /// device token, never a document.
+    ///
+    /// `body` itself is never sent. What goes is `encoded(fields)`, built
+    /// from these very values, so a duplicate name or a number the system
+    /// would write another way can't send anything that wasn't checked.
+    public var fields: [String: String]? {
         guard let object = try? JSONDecoder().decode([String: PlainValue].self, from: body) else { return nil }
-        let values = object.keys.sorted().compactMap { object[$0]?.text }
-        return values.allSatisfy({ $0.count <= Self.maxValueLength }) ? values : nil
+        let fields = object.mapValues(\.text)
+        guard fields.keys.allSatisfy(Self.isToken),
+              fields.values.allSatisfy({ $0.count <= Self.maxValueLength }) else { return nil }
+        return fields
+    }
+
+    /// `fields` as the bytes that go: a flat JSON object of strings, its
+    /// names in order. A number goes as the text it was checked as.
+    public static func encoded(_ fields: [String: String]) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return try encoder.encode(fields)
     }
 
     /// One value of a sign-in body: a string, or a number as text. Anything
@@ -245,9 +307,17 @@ public struct CloudSignIn: Sendable, Equatable {
 /// secrets, so the person can't read them. That is why they may carry only
 /// credentials or a device token, never anything from a chat, the notes or
 /// the private words (`CloudWords.askPoints` promises it). `CloudModel`
-/// holds every implementation to it: a value the current `Redactor` would
-/// change, or a sign-in body that isn't a flat object of short values
-/// (`CloudSignIn.plainValues`), is refused before anything is shown or sent.
+/// holds every implementation to it as far as it can see: a value or a
+/// name the current `Redactor` would change, a name that isn't a short
+/// token, or a sign-in body that isn't a flat object of short values
+/// (`CloudSignIn.fields`), is refused before anything is shown or sent.
+///
+/// Those checks catch what the redactor knows, not everything. A value of
+/// up to `CloudSignIn.maxValueLength` characters with no known name,
+/// private word or detail in it passes, and so does another spelling of a
+/// private word. That a value is only ever a credential or a device token
+/// is this protocol's contract, kept by the first-party code that
+/// implements it.
 public protocol CloudAuth: Sendable {
     /// Headers for a message, asked while its preview is built. Every one
     /// is shown in the preview, its value covered. A reserved name
@@ -265,10 +335,12 @@ public protocol CloudAuth: Sendable {
     /// this device for the next message's headers, which that message's own
     /// preview shows. A header learned here never changes the message the
     /// same yes sends, since that message was shown before it was learned.
-    /// Only handed over while the chat is still open and the cloud still on,
-    /// checked under the chat's lock (`CloudChatSession.handOver`), so a
-    /// switch off or Forget everything that ends the chat is never followed
-    /// by a late hand over that `forget()` would miss.
+    /// Only handed over while the cloud is still on and the chat still
+    /// open, the second checked under the chat's lock
+    /// (`CloudChatSession.handOver`). A switch off and Forget everything
+    /// each end the chat before `forget()`, so neither is ever followed by
+    /// a late hand over that `forget()` would miss. Called with the chat's
+    /// lock held, so it must not reach back into the chat.
     func signedIn(_ answer: Data)
 
     /// Lets go of everything `signedIn` kept, such as a token. Called when
@@ -369,9 +441,11 @@ public struct CloudModel: ModelClient {
 
     /// `redactor` is asked for each reply, so newly saved notes and private
     /// words count right away; it throws when they can't be read. `isOn` is
-    /// checked before building a request and again before each hop is sent,
-    /// so turning the setting off stops a reply already waiting in the
-    /// preview. It throws when the setting can't be read, which is not the
+    /// checked before building a request, again before each hop is sent and
+    /// before a sign-in answer is handed over, so turning the setting off
+    /// stops a reply already waiting in the preview. It is never called
+    /// with the chat's lock held, so it may read files or reach into the
+    /// chat. It throws when the setting can't be read, which is not the
     /// same as off: nothing is sent, and the chat says it couldn't read them.
     /// `session` is this chat's, so whoever made it can end the chat.
     public init(
@@ -415,26 +489,31 @@ public struct CloudModel: ModelClient {
             headers: auth.headers(for: Self.url(for: endpoint)), signIn: auth.signIn(for: endpoint)
         )
         guard await reviewer.review(preview) == .send else { throw CloudModelError.notSent }
-        // Each hop is the very request the person saw, unchanged, and each
-        // is checked again just before it goes.
-        if let signIn = preview.signIn {
-            try readyToSend()
-            let answer = try await session.send(signIn, through: transport)
-            // Forget everything or a switch off may have come while it was
-            // on the wire; then nothing it brought back is kept. Checked
-            // and handed over under the chat's lock, so neither can land
-            // between the check and the hand over.
-            try session.handOver {
+        // Under way from the yes until the reply is back, so Forget
+        // everything ends this chat even between sends, when nothing is on
+        // the wire and nothing may be hidden yet.
+        return try await session.replying {
+            // Each hop is the very request the person saw, unchanged, and
+            // each is checked again just before it goes.
+            if let signIn = preview.signIn {
+                try readyToSend()
+                let answer = try await session.send(signIn, through: transport)
+                // A switch off or Forget everything may have come while it
+                // was on the wire; then nothing it brought back is kept.
+                // `isOn` is read first, off the chat's lock, so it may take
+                // its time or touch the chat. Either one ends the chat
+                // before sign-in forgets, and the hand over checks that
+                // under the lock, so neither can land between the two.
                 try checkOn()
-                auth.signedIn(answer)
+                try session.handOver { auth.signedIn(answer) }
             }
+            try readyToSend()
+            let data = try await session.send(preview.request, through: transport)
+            guard let reply = try? JSONDecoder().decode(CloudPayload.Reply.self, from: data) else {
+                throw CloudModelError.unreadableReply
+            }
+            return reply.reply
         }
-        try readyToSend()
-        let data = try await session.send(preview.request, through: transport)
-        guard let reply = try? JSONDecoder().decode(CloudPayload.Reply.self, from: data) else {
-            throw CloudModelError.unreadableReply
-        }
-        return reply.reply
     }
 
     /// Still asked for, still on, and the chat still open.
@@ -463,12 +542,17 @@ public struct CloudModel: ModelClient {
     /// Builds the request for `transcript`, redacted, without sending it,
     /// and the `signIn` hop before it when there is one. Throws `staysHere`
     /// for anything touched by words of crisis, and refuses a reserved
-    /// header name in either. Refuses sign-in that may carry more than a
-    /// credential: a body that isn't a flat object of short values
-    /// (`signInBodyRefused`), or any sign-in value, in a header or the
-    /// body, that `redactor` would change (`signInCarriesPersonalDetails`).
-    /// Those values are covered on the card, so a name or private word in
-    /// one would go unseen.
+    /// header name in either, or a sign-in header that could go other than
+    /// it is drawn (`CloudHeaders.merged`). Refuses sign-in that may carry
+    /// more than a credential: a body that isn't a flat object of short
+    /// values (`signInBodyRefused`), or any sign-in name or value, in a
+    /// header or the body, that `redactor` would change
+    /// (`signInCarriesPersonalDetails`). The values are covered on the
+    /// card, so a name or private word in one would go unseen.
+    ///
+    /// The hop's body is `CloudSignIn.encoded` of the checked fields, not
+    /// the body sign-in handed over, so what is checked, what the card
+    /// draws and what goes are one thing.
     public static func preview(
         for transcript: [ChatTurn],
         endpoint: URL,
@@ -492,19 +576,23 @@ public struct CloudModel: ModelClient {
         // After redaction: masks must never turn into words of crisis either.
         if messages.contains(where: { CareCheck.needsCare($0.text) }) { throw CloudModelError.staysHere }
         let body = try CloudPayload(messages: messages, version: CloudPayload.currentVersion).encoded()
-        var signInValues = Array(headers.values)
+        let messageHeaders = try CloudHeaders.merged(with: headers)
+        // Names as well as values: a name shows on the card, but it still
+        // goes, so a private word can't ride in one either.
+        var signInTexts = Array(headers.keys) + Array(headers.values)
         let signInRequest = try signIn.map {
             guard let url = $0.url(under: endpoint) else { throw CloudTransportError.signInPathRefused($0.path) }
-            guard let values = $0.plainValues else { throw CloudTransportError.signInBodyRefused }
-            signInValues += values + $0.headers.values
-            return CloudRequest(url: url, headers: try CloudHeaders.merged(with: $0.headers), body: $0.body)
+            guard let fields = $0.fields else { throw CloudTransportError.signInBodyRefused }
+            let hopHeaders = try CloudHeaders.merged(with: $0.headers)
+            signInTexts += Array(fields.keys) + Array(fields.values) + Array($0.headers.keys) + Array($0.headers.values)
+            return CloudRequest(url: url, headers: hopHeaders, body: try CloudSignIn.encoded(fields))
         }
-        if signInValues.contains(where: { !redactor.redact($0).isUnchanged }) {
+        if signInTexts.contains(where: { !redactor.redact($0).isUnchanged }) {
             throw CloudTransportError.signInCarriesPersonalDetails
         }
         return CloudPreview(
             signIn: signInRequest,
-            request: CloudRequest(url: url(for: endpoint), headers: try CloudHeaders.merged(with: headers), body: body),
+            request: CloudRequest(url: url(for: endpoint), headers: messageHeaders, body: body),
             hidden: hidden
         )
     }
@@ -556,10 +644,22 @@ public final class CloudChatSession: @unchecked Sendable {
     /// How many requests are on the wire now.
     package var sendsOnTheWire: Int { lock.withLock { onTheWire.count } }
 
-    /// True once the chat has hidden anything or has a send on the wire,
-    /// so ending it would let go of something.
+    /// True once the chat has hidden anything, or while a reply is under
+    /// way past its yes (`replying`), on the wire or between sends, so
+    /// ending it would let go of something.
     public var holdsAnything: Bool {
-        lock.withLock { !hidden.names.isEmpty || !hidden.privateWords.isEmpty || !onTheWire.isEmpty }
+        lock.withLock { !hidden.names.isEmpty || !hidden.privateWords.isEmpty || !onTheWire.isEmpty || replies > 0 }
+    }
+
+    /// Replies under way past their yes.
+    private var replies = 0
+
+    /// Runs `work`, a reply's sends and hand over, counted as under way
+    /// the whole time (`holdsAnything`).
+    package func replying<T>(_ work: () async throws -> T) async rethrows -> T {
+        lock.withLock { replies += 1 }
+        defer { lock.withLock { replies -= 1 } }
+        return try await work()
     }
 
     func checkOpen() throws {
@@ -567,8 +667,9 @@ public final class CloudChatSession: @unchecked Sendable {
     }
 
     /// Runs `handOver` under the chat's lock, unless the chat has ended, so
-    /// `end` can't come between what it checks and what it hands over.
-    func handOver(_ handOver: () throws -> Void) throws {
+    /// `end` can't come between the check and the hand over. `handOver`
+    /// runs with the lock held, so it must not touch this chat.
+    package func handOver(_ handOver: () throws -> Void) throws {
         try lock.withLock {
             if let endedBy { throw endedBy }
             try handOver()
@@ -586,7 +687,7 @@ public final class CloudChatSession: @unchecked Sendable {
 
     /// Hands `request` to `transport`, unless the chat has ended. Ending it
     /// cancels the send, as stopping the reply does.
-    func send(_ request: CloudRequest, through transport: any CloudTransport) async throws -> Data {
+    package func send(_ request: CloudRequest, through transport: any CloudTransport) async throws -> Data {
         let id = UUID()
         let task: Task<Data, Error> = try lock.withLock {
             if let endedBy { throw endedBy }
@@ -657,6 +758,9 @@ public enum ModelChoice {
 public struct URLSessionCloudTransport: CloudTransport {
     public typealias Load = @Sendable (URLRequest) async throws -> (Data, URLResponse)
     private let load: Load
+    /// Plain http to this Mac's own loopback address, for a test's local
+    /// listener. Only the test-only init below sets it.
+    private let allowsLoopbackHTTP: Bool
 
     public init() {
         self.init(load: Self.live)
@@ -665,17 +769,29 @@ public struct URLSessionCloudTransport: CloudTransport {
     /// Tests pass a fake `load` that records the URLRequest.
     package init(load: @escaping Load) {
         self.load = load
+        allowsLoopbackHTTP = false
     }
 
-    /// The real session, with `protocols` answering in place of the
-    /// network, one session for every send, so a test can see what the
-    /// system itself adds from one request to the next.
-    package init(answeringWith protocols: [AnyClass]) {
-        let session = Self.makeSession(protocols: protocols)
-        self.init(load: { request in try await session.data(for: request, delegate: RefusesRedirects()) })
+    /// The real session, one for every send, so a test can see what the
+    /// system itself adds from one request to the next. Takes plain http
+    /// to 127.0.0.1 too, which a test's local listener needs and nothing
+    /// else ever gets.
+    package init(loopbackForTests: Void) {
+        let session = Self.makeSession()
+        load = { request in try await session.data(for: request, delegate: RefusesRedirects()) }
+        allowsLoopbackHTTP = true
+    }
+
+    /// Only https leaves, whatever address a request was built for:
+    /// `CloudEndpoint` takes no other, and this holds even if something
+    /// skipped it.
+    package func isSecure(_ url: URL) -> Bool {
+        let scheme = url.scheme?.lowercased()
+        return scheme == "https" || (allowsLoopbackHTTP && scheme == "http" && url.host == "127.0.0.1")
     }
 
     public func send(_ request: CloudRequest) async throws -> Data {
+        guard isSecure(request.url) else { throw CloudTransportError.notSecure }
         // Without the fixed User-Agent and Accept-Language the system would
         // add its own, which name the device and the person's languages and
         // were never shown. Such a request is refused, not quietly fixed, so
@@ -698,11 +814,6 @@ public struct URLSessionCloudTransport: CloudTransport {
     /// saved passwords, no extra headers, and every redirect refused, so
     /// the request can't end up anywhere but the address shown.
     public static func makeSession() -> URLSession {
-        makeSession(protocols: [])
-    }
-
-    /// `protocols` go ahead of the system's own, for tests only.
-    static func makeSession(protocols: [AnyClass]) -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
@@ -710,9 +821,6 @@ public struct URLSessionCloudTransport: CloudTransport {
         configuration.urlCredentialStorage = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         configuration.httpAdditionalHeaders = nil
-        if !protocols.isEmpty {
-            configuration.protocolClasses = protocols + (configuration.protocolClasses ?? [])
-        }
         return URLSession(configuration: configuration, delegate: RefusesRedirects(), delegateQueue: nil)
     }
 
@@ -726,6 +834,8 @@ public struct URLSessionCloudTransport: CloudTransport {
 public enum CloudTransportError: Error, Equatable, Sendable {
     /// The request lacked the fixed headers. Nothing was sent.
     case headersNotShown
+    /// The request's address wasn't https. Nothing was sent.
+    case notSecure
     /// The request carried a name URLSession reserves
     /// (`CloudHeaders.reserved`), which could go differently from how it was
     /// shown. Nothing was sent.
@@ -733,9 +843,14 @@ public enum CloudTransportError: Error, Equatable, Sendable {
     /// A sign-in path that wasn't plain segments under the address
     /// (`CloudSignIn.path`). Nothing was shown or sent.
     case signInPathRefused(String)
-    /// A sign-in body that wasn't a flat object of short values
-    /// (`CloudSignIn.plainValues`). Nothing was shown or sent.
+    /// A sign-in body that wasn't a flat object of short values with token
+    /// names (`CloudSignIn.fields`). Nothing was shown or sent.
     case signInBodyRefused
+    /// A sign-in header that could go other than the card draws it: a
+    /// name that isn't a token, two names that differ only in letter case,
+    /// or a value with a line break (`CloudHeaders.merged`). Nothing was
+    /// shown or sent.
+    case signInHeaderRefused(String)
     /// A sign-in value the redactor would change: it holds a name, a
     /// private word or another personal detail. Nothing was shown or sent.
     case signInCarriesPersonalDetails

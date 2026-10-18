@@ -87,16 +87,22 @@ final class FakeWire: @unchecked Sendable {
 func finishes(within limit: Duration = .seconds(20), _ work: @escaping @Sendable () async -> Void) async -> Bool {
     await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
         let first = FirstAnswer(continuation)
+        let worker = Task {
+            await work()
+            first.give(true)
+        }
         // Stopped once the work is done, so no sleeper outlives the test.
+        // When the limit fires first, the work is cancelled, so whatever
+        // it waits on can let go of it.
         let limiter = Task {
             do {
                 try await Task.sleep(for: limit)
                 first.give(false)
+                worker.cancel()
             } catch {}
         }
         Task {
-            await work()
-            first.give(true)
+            await worker.value
             limiter.cancel()
         }
     }
@@ -137,8 +143,8 @@ final class TransportMaker: @unchecked Sendable {
     }
 }
 
-/// A made-up sign-in header, and, when asked, a made-up sign-in hop. Counts
-/// the answers it is handed, which only a sent hop brings.
+/// A made-up sign-in header, and, when asked, a made-up sign-in hop.
+/// Counts the sign-in answers it receives, and each forget.
 final class CountingAuth: CloudAuth, @unchecked Sendable {
     private let lock = NSLock()
     private var _signIns = 0
@@ -170,7 +176,10 @@ final class CountingAuth: CloudAuth, @unchecked Sendable {
     }
 }
 
-/// Scratch files a test made, removed when the test is done with them.
+/// Scratch files a test made, removed when the test is done with them,
+/// along with the copies the stores write beside one under its name: the
+/// staged next copy and the off mark, which may hold the same words or say
+/// something of them.
 final class ScratchFiles: @unchecked Sendable {
     private let lock = NSLock()
     private var urls: [URL] = []
@@ -180,17 +189,28 @@ final class ScratchFiles: @unchecked Sendable {
         return url
     }
 
+    /// `url` and every copy a store writes beside it.
+    static func withSiblings(_ url: URL) -> [URL] {
+        let folder = url.deletingLastPathComponent()
+        return [url] + [".next", ".off"].map { folder.appendingPathComponent("." + url.lastPathComponent + $0) }
+    }
+
     deinit {
-        for url in urls { try? FileManager.default.removeItem(at: url) }
+        for url in urls.flatMap(Self.withSiblings) { try? FileManager.default.removeItem(at: url) }
     }
 }
 
 /// Sign-in that says, each time it is told to forget, what `onForget`
-/// finds then.
+/// finds then. With `needsSignIn` it asks for a made-up hop, and counts
+/// the sign-in answers it receives.
 final class WitnessAuth: CloudAuth, @unchecked Sendable {
     private let lock = NSLock()
     private var _seen: [Bool] = []
     private var _onForget: (@Sendable () -> Bool)?
+    private var _signIns = 0
+    private let needsSignIn: Bool
+
+    init(needsSignIn: Bool = false) { self.needsSignIn = needsSignIn }
 
     var onForget: (@Sendable () -> Bool)? {
         get { lock.withLock { _onForget } }
@@ -200,11 +220,70 @@ final class WitnessAuth: CloudAuth, @unchecked Sendable {
     /// What `onForget` found at each forget.
     var forgotAfterEveryEnd: [Bool] { lock.withLock { _seen } }
 
+    var signIns: Int { lock.withLock { _signIns } }
+
     func headers(for url: URL) -> [String: String] { [:] }
+
+    func signIn(for endpoint: URL) -> CloudSignIn? {
+        needsSignIn ? CloudSignIn(path: "v1/sign-in", body: Data(#"{"device":"made-up"}"#.utf8)) : nil
+    }
+
+    func signedIn(_ answer: Data) {
+        lock.withLock { _signIns += 1 }
+    }
 
     func forget() {
         let found = onForget?() ?? false
         lock.withLock { _seen.append(found) }
+    }
+}
+
+/// Holds every send on the wire until the test lets it answer, whatever
+/// is cancelled meanwhile, as a slow server's answer that lands after a
+/// switch off would. Never touches the network.
+final class GatedTransport: CloudTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _sends = 0
+    private var held: [CheckedContinuation<Void, Never>] = []
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var open = false
+
+    var sends: Int { lock.withLock { _sends } }
+
+    /// Returns once a send is held.
+    func started() async {
+        await withCheckedContinuation { continuation in
+            let now = lock.withLock {
+                if _sends > 0 { return true }
+                startWaiters.append(continuation)
+                return false
+            }
+            if now { continuation.resume() }
+        }
+    }
+
+    /// Lets every held send answer, and every later one go straight on.
+    func answer() {
+        let waiting = lock.withLock {
+            open = true
+            defer { held = [] }
+            return held
+        }
+        for send in waiting { send.resume() }
+    }
+
+    func send(_ request: CloudRequest) async throws -> Data {
+        await withCheckedContinuation { continuation in
+            let (go, starters) = lock.withLock {
+                _sends += 1
+                if !open { held.append(continuation) }
+                defer { startWaiters = [] }
+                return (open, startWaiters)
+            }
+            for starter in starters { starter.resume() }
+            if go { continuation.resume() }
+        }
+        return Data(#"{"token":"made-up","reply":"Here's a short note."}"#.utf8)
     }
 }
 
@@ -317,6 +396,9 @@ final class FailingCloudStore: CloudHelpStoring, @unchecked Sendable {
         }
     }
 
+    /// Clears `loadFails` too, as the file store's erase does in effect:
+    /// once the file is gone there is nothing locked or damaged to read,
+    /// and the real store reads a missing file as off.
     func erase() throws {
         try lock.withLock {
             if _eraseFails { throw CocoaError(.fileWriteNoPermission) }
@@ -631,6 +713,14 @@ struct CloudHelpTests {
         #expect(help.status == nil)
     }
 
+    /// The unlock watch's name carries neither the product's name nor its
+    /// code name. On iPhone and iPad it is the system's own.
+    @Test func theUnlockWatchNamesNoProduct() {
+        let name = CloudHelp.unlocked.rawValue.lowercased()
+        #expect(!name.contains("pebble"), "\(name)")
+        #expect(!name.contains(brand.name.lowercased()), "\(name)")
+    }
+
     /// A word added or removed while the device is locked gets a calm line
     /// about the lock, not one that says the words can't be read.
     @Test func aPrivateWordWhileLockedSaysTheDeviceIsLocked() {
@@ -681,6 +771,37 @@ struct CloudHelpTests {
         #expect(maker.wire.sent.isEmpty)
     }
 
+    /// The sign-in hop is on the wire, held there, when the person turns
+    /// the cloud off, or separately when they forget everything. Only then
+    /// does its answer land. Sign-in is never handed it, it is told to
+    /// forget, and every forget comes after every cloud chat has ended.
+    @Test(arguments: [false, true])
+    func aSignInAnswerThatLandsAfterOffOrForgetIsNeverKept(forget: Bool) async throws {
+        let gate = GatedTransport()
+        let auth = WitnessAuth(needsSignIn: true)
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)),
+                              endpoint: endpoint, memory: scratchMemory(), auth: auth, transport: { gate })
+        let controller = chat(cloud)
+        let session = try #require(controller.cloudSession)
+        auth.onForget = { session.hasEnded }
+        let review = try #require(controller.review)
+        controller.submit("Plan my week")
+        review.answer(.send, for: await review.shown().id)
+        #expect(await finishes { await gate.started() }, "the hop never reached the wire")
+        if forget {
+            try cloud.forgetPrivateWords()
+        } else {
+            cloud.setOn(false)
+        }
+        #expect(session.hasEnded)
+        gate.answer()
+        #expect(await finishes { await controller.settled() }, "the reply never ended")
+        #expect(auth.signIns == 0, "the answer was handed over after \(forget ? "forget" : "off")")
+        #expect(auth.forgotAfterEveryEnd.count >= 1)
+        #expect(auth.forgotAfterEveryEnd.allSatisfy { $0 }, "sign-in forgot before the chat ended")
+        #expect(gate.sends == 1, "only the hop went")
+    }
+
     /// A sign-in hop that went counts as sent, so Forget everything never
     /// says "I no longer have it" after it: when the message after it fails
     /// on the wire, and when the cloud is turned off before the message.
@@ -709,7 +830,11 @@ struct CloudHelpTests {
     /// go covered on the card, unseen. It is refused: no preview, nothing
     /// on the wire, the words back in the composer and a plain line why.
     @Test(arguments: [SampleSignIn(device: "lemon cake"), SampleSignIn(device: "Sam"),
-                      SampleSignIn(device: "my lemon-cake order"), SampleSignIn(header: "Sam")])
+                      SampleSignIn(device: "my lemon-cake order"), SampleSignIn(header: "Sam"),
+                      SampleSignIn(device: "Lemon Cake"), SampleSignIn(device: "Sam's"),
+                      // The names go too, so the same holds for them.
+                      SampleSignIn(bodyKey: "Sam"), SampleSignIn(bodyKey: "lemon cake"),
+                      SampleSignIn(headerName: "X-Lemon-Cake")])
     func aSignInCarryingAPrivateWordOrANoteNameSendsNothing(auth: SampleSignIn) async throws {
         let maker = TransportMaker()
         let cloud = help(CloudHelpSettings(isOn: true, for: endpoint, privateWords: ["lemon cake"]), endpoint: endpoint,
@@ -718,9 +843,11 @@ struct CloudHelpTests {
         controller.submit("Plan my week")
         // A preview shown here would wait forever for an answer.
         #expect(await finishes { await controller.settled() }, "a preview was shown")
+        // Read before anything else touches the chat.
+        let failure = controller.failure
         controller.stopReplying()
         #expect(controller.review?.pending == nil)
-        #expect(controller.failure == CloudWords.signInRefused)
+        #expect(failure == CloudWords.signInRefused)
         #expect(controller.draft == "Plan my week")
         #expect(personTurns(controller).isEmpty)
         #expect(maker.wire.sent.isEmpty)
@@ -1529,6 +1656,10 @@ struct CloudHelpTests {
         #expect(ChatController.failureLine(for: CloudTransportError.signInBodyRefused) == CloudWords.signInRefused)
         #expect(ChatController.failureLine(for: CloudTransportError.signInCarriesPersonalDetails)
                 == CloudWords.signInRefused)
+        #expect(ChatController.failureLine(for: CloudTransportError.signInHeaderRefused("X Token"))
+                == CloudWords.signInRefused)
+        #expect(ChatController.nothingWasSent(CloudTransportError.signInHeaderRefused("X Token")))
+        #expect(ChatController.nothingWasSent(CloudTransportError.notSecure))
         // Only a reply that went out keeps the person's turn.
         #expect(!ChatController.nothingWasSent(CloudModelError.unreadableReply))
         #expect(!ChatController.nothingWasSent(URLError(.timedOut)))
@@ -1616,6 +1747,7 @@ struct CloudHelpTests {
         #expect(drawn == CloudWords.previewSignInFirst + "\n"
             + "POST https://cloud.example.com/v1/sign-in\n"
             + "Accept: application/json\nAccept-Encoding: identity\nAccept-Language: en\n"
+            + "Cache-Control: no-cache\nConnection: keep-alive\n"
             + "Content-Length: \(hop.body.count)\nContent-Type: application/json\nHost: cloud.example.com\n"
             + "User-Agent: agent\nX-Sample-Device: \(mask)\n\n"
             + "{\n  \"code\" : \(mask),\n  \"device\" : \(mask)\n}\n\n"
@@ -1636,6 +1768,12 @@ struct CloudHelpTests {
         // has nothing to cover.
         #expect(CloudPreviewSheet.maskedSignInBody(Data("token=made-up".utf8)) == mask)
         #expect(CloudPreviewSheet.maskedSignInBody(Data()) == "")
+        // A name that could draw a line of its own, such as a fake one
+        // with a value in the clear, is never drawn: the body is covered
+        // whole. `CloudModel.preview` refuses such a body before this.
+        let spoofing = Data(#"{"token\" : \"in the clear\",\n  \"x":"made-up"}"#.utf8)
+        #expect(CloudPreviewSheet.maskedSignInBody(spoofing) == mask)
+        #expect(CloudPreviewSheet.signInBodyNames(spoofing) == nil)
     }
 
     /// The sheet says values are covered whenever the card covers one: a
@@ -1652,6 +1790,16 @@ struct CloudHelpTests {
         #expect(!CloudPreviewSheet.coversAnything(plain))
         #expect(CloudPreviewSheet.coversAnything(labelled))
         #expect(CloudPreviewSheet.coversAnything(hop))
+        // Aloud too, in both cases, and never with nothing covered.
+        let spoken = { CloudPreviewSheet.spokenLines($0).filter { $0 == CloudWords.previewSignInCovered }.count }
+        #expect(spoken(plain) == 0)
+        #expect(spoken(labelled) == 1)
+        #expect(spoken(hop) == 1)
+        #expect(CloudPreviewSheet.spokenLines(labelled).first == CloudWords.previewSignInCovered)
+        // The line is true with a hop, a covered label on the message, or
+        // both: it says the values go when the person sends, not with what.
+        #expect(CloudWords.previewSignInCovered.hasSuffix("They still go when you send this."))
+        #expect(!CloudWords.previewSignInCovered.contains("with the sign-in"))
         // The title and detail claim nothing the covered card can't show.
         #expect(CloudWords.previewTitle == "Here is what leaves your device")
         for line in [CloudWords.previewTitle, CloudWords.previewDetail] {

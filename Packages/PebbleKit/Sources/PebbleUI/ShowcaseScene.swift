@@ -395,11 +395,13 @@ struct NoSendTransport: CloudTransport {
 struct SampleSignIn: CloudAuth {
     var header = "made-up-sample"
     var device = "made-up-sample-device"
+    var headerName = "X-Sample-Sign-In"
+    var bodyKey = "device"
 
-    func headers(for url: URL) -> [String: String] { ["X-Sample-Sign-In": header] }
+    func headers(for url: URL) -> [String: String] { [headerName: header] }
 
     func signIn(for endpoint: URL) -> CloudSignIn? {
-        let body = (try? JSONEncoder().encode(["device": device])) ?? Data()
+        let body = (try? JSONEncoder().encode([bodyKey: device])) ?? Data()
         return CloudSignIn(path: "v1/sign-in", body: body)
     }
 }

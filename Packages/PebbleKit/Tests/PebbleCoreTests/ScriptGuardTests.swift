@@ -141,6 +141,10 @@ struct ScriptGuardTests {
         #expect(try Self.run(["sh", check, repo.path], in: repo) == 0)
         try FileManager.default.removeItem(at: config)
         #expect(try Self.run(["sh", check, repo.path], in: repo) == 1)
+        // Root reads a file whatever its permissions say, so a runner that
+        // runs as root can't make one unreadable this way; there, the
+        // deleted file above is the check.
+        guard getuid() != 0 else { return }
         try Data("PEBBLE_CLOUD_ENDPOINT =\n".utf8).write(to: config)
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: config.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: config.path) }
@@ -391,17 +395,48 @@ struct ScriptGuardTests {
         try FileManager.default.copyItem(atPath: Self.script("comment-lint.sh"), toPath: lint.path)
         let code = folder.appendingPathComponent("Code.swift")
         try Data("/// Rounds to 4 places.\nlet x = 1\n".utf8).write(to: code)
-        let run = try Self.output(["env", "-u", "COMMENT_LINT_NAMES", "sh", lint.path, code.path], in: folder)
+        let unlisted = ["env", "-u", "COMMENT_LINT_NAMES", "-u", "CI", "-u", "COMMENT_LINT_NO_NAMES_REASON"]
+        let run = try Self.output(unlisted + ["sh", lint.path, code.path], in: folder)
         #expect(run.status == 0)
         #expect(run.text.contains("names weren't checked"))
+        // In CI with no list, names would go unchecked unseen, so it fails.
+        let inCI = try Self.output(unlisted + ["CI=true", "sh", lint.path, code.path], in: folder)
+        #expect(inCI.status == 1, "\(inCI.text)")
+        #expect(inCI.text.contains("CI gave no list of names"))
+        // A pull request from a fork, which gets no secrets, passes with a
+        // warning the pull request shows, and never a plain ok.
+        let fork = try Self.output(unlisted + ["CI=true", "COMMENT_LINT_NO_NAMES_REASON=a fork", "sh", lint.path, code.path],
+                                   in: folder)
+        #expect(fork.status == 0, "\(fork.text)")
+        #expect(fork.text.contains("::warning title=comment-lint::Names weren't checked: a fork."))
+        #expect(!fork.text.contains("comment-lint: ok"))
         // Built from pieces, so this file never holds what the lint looks for.
         let round = "round"
         try Data("/// Since \(round) 4.\n".utf8).write(to: code)
-        #expect(try Self.run(["env", "-u", "COMMENT_LINT_NAMES", "sh", lint.path, code.path], in: folder) == 1)
+        #expect(try Self.run(unlisted + ["sh", lint.path, code.path], in: folder) == 1)
+        #expect(try Self.run(unlisted + ["CI=true", "COMMENT_LINT_NO_NAMES_REASON=a fork", "sh", lint.path, code.path],
+                             in: folder) == 1, "review history is still checked on a fork")
         // With the local list beside it, names are checked.
         try Data("Quillon\n".utf8).write(to: folder.appendingPathComponent("Config/comment-lint-names.local.txt"))
         try Data("/// Quillon asked for this.\n".utf8).write(to: code)
-        #expect(try Self.run(["env", "-u", "COMMENT_LINT_NAMES", "sh", lint.path, code.path], in: folder) == 1)
+        #expect(try Self.run(unlisted + ["sh", lint.path, code.path], in: folder) == 1)
+        #expect(try Self.run(unlisted + ["CI=true", "sh", lint.path, "--self-test"], in: folder) == 0)
+    }
+
+    /// CI hands the lint its list from a secret, and says so for a pull
+    /// request from a fork, which gets none, so the lint can warn.
+    @Test func ciGivesTheCommentLintItsListOrSaysWhyNot() throws {
+        let workflow = try String(contentsOf: Self.root.appendingPathComponent(".github/workflows/ci.yml"), encoding: .utf8)
+        let names = try #require(workflow.range(of: "      - name: Names for the comment lint\n"))
+        let verify = try #require(workflow.range(of: "      - name: Verify\n"))
+        #expect(names.upperBound < verify.lowerBound, "the list is set up before verify runs")
+        let step = workflow[names.upperBound..<verify.lowerBound]
+        #expect(step.contains("NAMES: ${{ secrets.COMMENT_LINT_NAMES }}"))
+        #expect(step.contains(#"echo "COMMENT_LINT_NAMES=$RUNNER_TEMP/comment-lint-names.txt" >> "$GITHUB_ENV""#))
+        #expect(step.contains("FORK: ${{ github.event.pull_request.head.repo.fork }}"))
+        #expect(step.contains(#"elif [ "$FORK" = "true" ]; then"#))
+        #expect(step.contains("COMMENT_LINT_NO_NAMES_REASON="))
+        #expect(!step.contains("echo \"$NAMES\""), "the list is never printed to the log")
     }
 
     /// The lint looks at project.yml, the Makefile and the mutation
@@ -418,8 +453,9 @@ struct ScriptGuardTests {
     }
 
     /// `make verify` runs the lint, its self-test and the mutation check,
-    /// and the Release check by one rule: verify builds `build-release`,
-    /// whose first step is the check.
+    /// the Release check by one rule (verify builds `build-release`, whose
+    /// first step is the check, pinned in `everyReleaseBuildRunsTheCheck`),
+    /// and the tests that only a Release build can run.
     @Test func verifyRunsTheCommentLintAndTheMutationCheck() throws {
         let makefile = try String(contentsOf: Self.root.appendingPathComponent("Makefile"), encoding: .utf8)
         let verify = try #require(makefile.split(separator: "\n").first { $0.hasPrefix("verify:") })
@@ -427,8 +463,23 @@ struct ScriptGuardTests {
         #expect(steps.contains("comment-lint"))
         #expect(steps.contains("mutation-check"))
         #expect(steps.contains("build-release"))
-        #expect(makefile.contains("build-release: generate\n\tsh scripts/release-endpoint-check.sh\n"))
+        #expect(steps.contains("release-test"))
         #expect(makefile.contains("comment-lint:\n\tsh scripts/comment-lint.sh --self-test\n\tsh scripts/comment-lint.sh\n"))
+        #expect(makefile.contains("release-test:\n\tsh scripts/release-probe.sh\n"))
+    }
+
+    /// The release probe builds PebbleCore in Release, refuses to count a
+    /// Debug build, and fails on any address read, from the raw setting or
+    /// from Info.plist. `make release-test` runs it; this keeps it honest.
+    @Test func theReleaseProbeRunsTheShippedCode() throws {
+        let probe = try String(contentsOf: URL(fileURLWithPath: Self.script("release-probe.sh")), encoding: .utf8)
+        #expect(probe.contains(#"swift run --package-path "$probe" -c release"#))
+        #expect(probe.contains("#if DEBUG\nprint(\"release-probe: built as Debug, so it proves nothing\")\nexit(1)\n#else"))
+        #expect(probe.contains("if CloudEndpoint.url(from: raw) != nil || CloudEndpoint.url(infoDictionary: [CloudEndpoint.infoKey: raw]) != nil {"))
+        #expect(probe.contains("set -eu"))
+        for loophole in ["|| true", "exit 0"] {
+            #expect(!probe.contains(loophole), "\(loophole)")
+        }
     }
 
     // MARK: The mutation check
@@ -442,7 +493,7 @@ struct ScriptGuardTests {
     /// file `HELPERS` names, when it is set.
     func mutationRepo(manifest: String) throws -> (root: URL, environment: [String: String]) {
         let root = try scratchFolder()
-        for part in ["scripts", "App", "AppUITests", "Packages/PebbleKit/Sources/Fixture"] {
+        for part in ["scripts", "App", "AppUITests", ".github", "Packages/PebbleKit/Sources/Fixture"] {
             try FileManager.default.createDirectory(at: root.appendingPathComponent(part),
                                                     withIntermediateDirectories: true)
         }

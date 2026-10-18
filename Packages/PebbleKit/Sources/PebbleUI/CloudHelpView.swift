@@ -67,6 +67,17 @@ public final class CloudHelp: ObservableObject {
     var launchNotice: String? {
         fromLaunch && state == .offAtLaunchNotSaved ? state?.line : nil
     }
+    /// True once the launch line has been announced.
+    private var launchAnnounced = false
+
+    /// True the first time it is asked while there is a launch line, so
+    /// the home screen announces it once per launch, however often it
+    /// comes back to the front.
+    func claimLaunchAnnouncement() -> Bool {
+        guard launchNotice != nil, !launchAnnounced else { return false }
+        launchAnnounced = true
+        return true
+    }
     /// The window whose action the status answers. One setting serves every
     /// window, so only that one speaks it. Nil when no window acted, as for
     /// a line from launch or from the memory screen: then every window
@@ -190,8 +201,11 @@ public final class CloudHelp: ObservableObject {
         #if os(iOS)
         UIApplication.protectedDataDidBecomeAvailableNotification
         #else
-        // A Mac keeps no file locked away while the app runs.
-        Notification.Name("pebble.protectedDataDidBecomeAvailable")
+        // Nothing posts this on a Mac, which keeps no file locked away
+        // while the app runs, so there the watch never fires; only tests
+        // post it, to stand in for the iPhone's. A plain name, with no
+        // product or code name in it.
+        Notification.Name("CloudHelp.unlocked")
         #endif
     }
 
@@ -200,12 +214,14 @@ public final class CloudHelp: ObservableObject {
     /// be opened, which can still erase words kept from an earlier launch.
     /// `memory` is carried either way, with or without an address, so the
     /// memory screen always reads the same notes store the redactor does.
-    public static func forApp(memory: MemoryStore?, endpoint: URL?,
+    /// `auth` is carried either way too, so Forget everything tells sign-in
+    /// to forget even when the setting couldn't be opened.
+    public static func forApp(memory: MemoryStore?, endpoint: URL?, auth: any CloudAuth = NoCloudAuth(),
                               openStore: @escaping @Sendable () throws -> any CloudHelpStoring) -> CloudHelp {
         if memory != nil, let store = try? openStore() {
-            return CloudHelp(store: store, endpoint: endpoint, memory: memory)
+            return CloudHelp(store: store, endpoint: endpoint, memory: memory, auth: auth)
         }
-        return couldNotOpen(endpoint: endpoint, memory: memory, file: openStore)
+        return couldNotOpen(endpoint: endpoint, memory: memory, auth: auth, file: openStore)
     }
 
     /// The setting when its file couldn't be opened at launch. It reads as
@@ -214,10 +230,12 @@ public final class CloudHelp: ObservableObject {
     ///
     /// `file` reaches the file it would have read, so private words kept
     /// there from an earlier launch can still be erased. See
-    /// `forgetPrivateWords`.
-    public static func couldNotOpen(endpoint: URL?, memory: MemoryStore?,
+    /// `forgetPrivateWords`. `auth` is never asked to sign in from here,
+    /// since no chat uses the cloud, but it is told to forget, in case it
+    /// kept something from an earlier launch.
+    public static func couldNotOpen(endpoint: URL?, memory: MemoryStore?, auth: any CloudAuth = NoCloudAuth(),
                                     file: (@Sendable () throws -> any CloudHelpStoring)? = nil) -> CloudHelp {
-        CloudHelp(store: InMemoryCloudHelpStore(), endpoint: endpoint, memory: memory, auth: NoCloudAuth(),
+        CloudHelp(store: InMemoryCloudHelpStore(), endpoint: endpoint, memory: memory, auth: auth,
                   transport: { URLSessionCloudTransport() }, storeOpened: false, unopenedFile: file)
     }
 
@@ -791,8 +809,8 @@ public struct CloudHelpView: View {
 }
 
 /// The launch line (`CloudHelp.launchNotice`) at the top of Today, so a
-/// person who never opens the setting still hears it. Spoken once as it
-/// appears, and gone once the save is made.
+/// person who never opens the setting still hears it. Announced the first
+/// time it appears in this launch, and gone once the save is made.
 struct CloudLaunchNotice: View {
     @ObservedObject var help: CloudHelp
 
@@ -803,8 +821,13 @@ struct CloudLaunchNotice: View {
                 .padding(.top, 8)
                 .frame(maxWidth: Theme.readableWidth)
                 .frame(maxWidth: .infinity)
+                // One element that reads the line, nothing else.
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(line)
                 .accessibilityIdentifier("cloudLaunchNotice")
-                .onAppear { AccessibilityNotification.Announcement(line).post() }
+                // Today comes back to the front often; the line is said
+                // the first time only.
+                .onAppear { if help.claimLaunchAnnouncement() { AccessibilityNotification.Announcement(line).post() } }
         }
     }
 }
@@ -1045,9 +1068,14 @@ struct CloudPreviewSheet: View {
     static let signInMask = String(repeating: "\u{2022}", count: 8)
 
     /// The names of a sign-in body's parts, in name order, when it is a
-    /// JSON object. Nil for any other body.
+    /// JSON object whose names are all tokens (`CloudSignIn.isToken`). Nil
+    /// for any other body, so a name is never drawn that could make a line
+    /// of its own. `CloudModel.preview` already refuses such a body; this
+    /// keeps the card safe without leaning on that.
     static func signInBodyNames(_ body: Data) -> [String]? {
-        (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?.keys.sorted()
+        guard let names = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?.keys.sorted(),
+              names.allSatisfy(CloudSignIn.isToken) else { return nil }
+        return names
     }
 
     /// A sign-in body as the card shows it: each part's name with its value
@@ -1059,10 +1087,11 @@ struct CloudPreviewSheet: View {
         return "{\n" + names.map { "  \"\($0)\" : " + signInMask }.joined(separator: ",\n") + "\n}"
     }
 
-    /// A label that is neither fixed nor one the system adds from the
-    /// request is sign-in, and its value is a secret.
+    /// A label that is neither fixed nor one the system adds is sign-in,
+    /// and its value is a secret.
     static func isSignIn(_ name: String, _ value: String) -> Bool {
-        CloudHeaders.fixed[name] != value && name != "Host" && name != "Content-Length"
+        CloudHeaders.fixed[name] != value && CloudRequest.systemLines[name] != value
+            && name != "Host" && name != "Content-Length"
     }
 
     /// True when the card covers anything: a sign-in hop, or a sign-in
@@ -1081,8 +1110,14 @@ struct CloudPreviewSheet: View {
     /// What VoiceOver reads instead of the raw text: where it goes, the
     /// labels, then each message by who said it, with masks read as
     /// "hidden name" and the like.
+    /// Whenever the card covers anything, VoiceOver hears that it does, as
+    /// the sheet's line says: under "First, to sign in" with a hop, or
+    /// first of all when only the message has a sign-in label.
     static func spokenLines(_ preview: CloudPreview) -> [String] {
-        guard let signIn = preview.signIn else { return spokenLines(preview.request, isSignInHop: false) }
+        guard let signIn = preview.signIn else {
+            let covered = coversAnything(preview) ? [CloudWords.previewSignInCovered] : []
+            return covered + spokenLines(preview.request, isSignInHop: false)
+        }
         return [CloudWords.previewSignInFirst, CloudWords.previewSignInCovered]
             + spokenLines(signIn, isSignInHop: true)
             + [CloudWords.previewThenMessage] + spokenLines(preview.request, isSignInHop: false)

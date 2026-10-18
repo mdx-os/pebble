@@ -73,6 +73,16 @@ struct CopyDashTests {
         for line in lines {
             #expect(Self.copy.contains(line), "not in the copy lists: \(line)")
         }
+        // Each newer line is in `CloudWords.all` itself, the one list the
+        // dash and "only once" checks and the device sweep all read.
+        for line in [CloudWords.previewSignInCovered, CloudWords.previewSignInFirst, CloudWords.previewThenMessage,
+                     CloudWords.signInRefused, CloudWords.chatEnded, CloudWords.privateLocked,
+                     CloudWords.offUntilUnlocked, CloudWords.offSavedLater, CloudWords.privateOnlyPunctuation,
+                     CloudWords.forgotAfterSending, CloudWords.forgotAndCloudOffAfterSending,
+                     CloudWords.sentCantBeErased, CloudWords.offAtLaunchNotSaved,
+                     CloudWords.spokenSignInBody([]), CloudWords.spokenSignInBody(["device"])] {
+            #expect(CloudWords.all.contains(line), "not in CloudWords.all: \(line)")
+        }
         // Built with other words too, each stays free of dashes.
         for built in [CloudWords.spokenSignIn("X-Device"), CloudWords.spokenSignInBody(["code", "device"]),
                       CloudWords.spokenMessage(role: "other", text: "Hi")] {

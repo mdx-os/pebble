@@ -33,6 +33,22 @@ jobs:
       - name: Secrets check
         run: make secrets-check
 
+      # The comment lint's list of names comes from a secret, so no name is
+      # ever in the repository. A pull request from a fork gets no secrets:
+      # the lint then warns on the pull request that names weren't checked,
+      # rather than failing or passing quietly.
+      - name: Names for the comment lint
+        env:
+          NAMES: ${{ secrets.COMMENT_LINT_NAMES }}
+          FORK: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          if [ -n "$NAMES" ]; then
+            printf '%s\n' "$NAMES" > "$RUNNER_TEMP/comment-lint-names.txt"
+            echo "COMMENT_LINT_NAMES=$RUNNER_TEMP/comment-lint-names.txt" >> "$GITHUB_ENV"
+          elif [ "$FORK" = "true" ]; then
+            echo "COMMENT_LINT_NO_NAMES_REASON=a pull request from a fork gets no secrets" >> "$GITHUB_ENV"
+          fi
+
       - name: Verify
         run: make verify
 

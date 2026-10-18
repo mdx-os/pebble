@@ -323,8 +323,8 @@ struct CloudPromiseTests {
     /// each is named as nothing sent; a bad answer after the bytes left is
     /// not.
     @Test func eachTransportRefusalCountsAsNothingSent() {
-        for refused in [CloudTransportError.headersNotShown, .reservedHeader("Host"), .signInPathRefused("../x"),
-                        .signInBodyRefused, .signInCarriesPersonalDetails] {
+        for refused in [CloudTransportError.headersNotShown, .notSecure, .reservedHeader("Host"), .signInPathRefused("../x"),
+                        .signInBodyRefused, .signInHeaderRefused("X Token"), .signInCarriesPersonalDetails] {
             #expect(ChatController.nothingWasSent(refused), "\(refused)")
         }
         #expect(!ChatController.nothingWasSent(URLError(.badServerResponse)))
@@ -419,7 +419,7 @@ struct CloudPromiseTests {
     /// off. However often the app rebuilds it, the place it works out, and
     /// so its setting's words, never promise the device while that chat is
     /// open: "Off for new chats".
-    @Test func rebuildingTheHomeScreenKeepsAnOpenCloudChatsPlace() throws {
+    @Test(.tags(.realWindow)) func rebuildingTheHomeScreenKeepsAnOpenCloudChatsPlace() throws {
         let cloud = help(CloudHelpSettings(isOn: true, for: endpoint))
         let heard = PlacesHeard()
         let host = NSHostingView(rootView: rebuildHome(cloud) { heard.places.append($0) })
@@ -530,11 +530,14 @@ struct CloudPromiseTests {
         defer { try? FileManager.default.removeItem(at: folder) }
         let file = CloudHelpFileStore(fileURL: folder.appendingPathComponent("cloud-help.json"))
         try file.save(CloudHelpSettings(isOn: false, privateWords: ["lemon cake"]))
-        let cloud = CloudHelp.couldNotOpen(endpoint: endpoint, memory: nil, file: { file })
+        let auth = CountingAuth()
+        let cloud = CloudHelp.couldNotOpen(endpoint: endpoint, memory: nil, auth: auth, file: { file })
         var tasksGone = false
         let erased = HomeView.forgetWithoutNotes(cloud: cloud) { tasksGone = true }
         #expect(tasksGone)
         #expect(erased == .erased)
+        // Sign-in is told to forget here too, whatever it kept before.
+        #expect(auth.forgets == 1)
         #expect(!FileManager.default.fileExists(atPath: file.fileURL.path))
         #expect(try file.load() == .off)
         let view = MemoryUnavailableView(hasTasks: false, forgotten: true, wordsErased: erased, erasesWords: true,
@@ -565,8 +568,10 @@ struct CloudPromiseTests {
         // the whole file: the same line.
         let store = FailingCloudStore(CloudHelpSettings(isOn: true, for: endpoint, privateWords: ["lemon cake"]))
         store.savesToFail = .max
-        let opened = CloudHelp(store: store, endpoint: endpoint, memory: scratchMemory())
+        let auth = CountingAuth()
+        let opened = CloudHelp(store: store, endpoint: endpoint, memory: scratchMemory(), auth: auth)
         #expect(HomeView.forgetWithoutNotes(cloud: opened) {} == .erasedWithCloud)
+        #expect(auth.forgets == 1)
     }
 
     /// The words file can't be reached either: the tasks still go, and the
@@ -596,10 +601,20 @@ struct CloudPromiseTests {
         #expect(app.contains("openStore: { try CloudHelpFileStore.onDevice() }"))
         // The notes didn't open, so the setting isn't opened at launch.
         let file = InMemoryCloudHelpStore(CloudHelpSettings(privateWords: ["lemon cake"]))
-        let fallback = CloudHelp.forApp(memory: nil, endpoint: endpoint, openStore: { file })
+        let auth = CountingAuth()
+        let fallback = CloudHelp.forApp(memory: nil, endpoint: endpoint, auth: auth, openStore: { file })
         #expect(!fallback.storeOpened)
         #expect(fallback.eraseWordsWithoutNotes() == .erased)
         #expect(try file.load().privateWords.isEmpty)
+        // The app's sign-in reaches the fallback, so it forgets there too.
+        #expect(auth.forgets == 1)
+        // And through the setting that opened.
+        let openedAuth = CountingAuth()
+        let opened = CloudHelp.forApp(memory: scratchMemory(), endpoint: endpoint, auth: openedAuth,
+                                      openStore: { InMemoryCloudHelpStore() })
+        #expect(opened.storeOpened)
+        try opened.forgetPrivateWords()
+        #expect(openedAuth.forgets == 1)
     }
 
     // MARK: Forget everything when the setting's file couldn't be opened
@@ -615,12 +630,14 @@ struct CloudPromiseTests {
         let memory = scratchMemory("Sam's birthday is May 14.")
         for wasOn in [false, true] {
             try file.save(CloudHelpSettings(isOn: wasOn, privateWords: ["lemon cake"]))
-            let cloud = CloudHelp.couldNotOpen(endpoint: endpoint, memory: memory, file: { file })
+            let auth = CountingAuth()
+            let cloud = CloudHelp.couldNotOpen(endpoint: endpoint, memory: memory, auth: auth, file: { file })
             #expect(cloud.settings.privateWords.isEmpty)
             let model = MemoryModel(store: memory, place: .onDevice, alsoForget: { try cloud.forgetPrivateWords() })
             model.forgetEverything()
             #expect(!FileManager.default.fileExists(atPath: file.fileURL.path))
             #expect(model.status == (wasOn ? CloudWords.forgotAndCloudOff : MemoryWords.forgotten))
+            #expect(auth.forgets == 1)
         }
     }
 
@@ -749,7 +766,7 @@ struct CloudPromiseTests {
     /// Two windows show the one setting. Switching the toggle on in one
     /// opens the turn on question in that window only, and nothing is on
     /// until the yes.
-    @Test func theTurnOnQuestionIsForOneWindow() throws {
+    @Test(.tags(.realWindow)) func theTurnOnQuestionIsForOneWindow() throws {
         let cloud = help()
         func window() -> NSWindow {
             let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 700), styleMask: [.titled],
@@ -911,9 +928,11 @@ struct CloudPromiseTests {
         #expect(unsaved.status == CloudWords.offAtLaunchNotSaved)
         #expect(unsaved.statusCount == 1)
         #expect(unsaved.launchNotice == CloudWords.offAtLaunchNotSaved)
-        // Plain words: what it couldn't save, and where it tries again.
+        // Plain words: what it couldn't save, and where it tries again,
+        // named, since the line is read on Today and not in the setting.
         #expect(CloudWords.offAtLaunchNotSaved
-                == "Help from the cloud is off. I couldn't save that it's off, so I'll try again when you open this setting.")
+                == "Help from the cloud is off. I couldn't save that it's off, so I'll try again when you open the cloud setting.")
+        #expect(!CloudWords.offAtLaunchNotSaved.contains("this setting"))
         // Saving works again: the setting saves off, keeps the words, and
         // the home screen's line goes with the setting's.
         unmarked.savesToFail = 0
@@ -1090,6 +1109,34 @@ struct CloudPromiseTests {
         #expect(drawn(CloudHelp(store: unmarked, endpoint: nil, memory: scratchMemory())) == 0)
     }
 
+    /// The launch line is announced once a launch, not each time Today
+    /// comes back to the front, and VoiceOver reads it as one element
+    /// whose label is the line. With no line there is nothing to announce.
+    @Test func theLaunchLineIsAnnouncedOnceAsOneElement() throws {
+        let unmarked = FailingCloudStore(CloudHelpSettings(isOn: true, for: endpoint))
+        unmarked.savesToFail = .max
+        unmarked.markFails = true
+        let stuck = CloudHelp(store: unmarked, endpoint: nil, memory: scratchMemory())
+        #expect(stuck.launchNotice == CloudWords.offAtLaunchNotSaved)
+        #expect(stuck.claimLaunchAnnouncement())
+        #expect(!stuck.claimLaunchAnnouncement())
+        #expect(!stuck.claimLaunchAnnouncement())
+        #expect(!help().claimLaunchAnnouncement())
+        // A still render can't be asked what VoiceOver hears, so this
+        // reads the notice's own code: one element, labelled with the
+        // line, announced only when the claim says so.
+        let source = try String(contentsOf: Self.repo.appendingPathComponent(
+            "Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift"), encoding: .utf8)
+        let start = try #require(source.range(of: "struct CloudLaunchNotice: View {"))
+        let end = try #require(source.range(of: "\n}\n", range: start.upperBound..<source.endIndex))
+        let notice = source[start.lowerBound..<end.upperBound]
+        #expect(notice.contains(".accessibilityElement(children: .ignore)"))
+        #expect(notice.contains(".accessibilityLabel(line)"))
+        #expect(notice.contains("if help.claimLaunchAnnouncement() { AccessibilityNotification.Announcement(line).post() }"))
+        #expect(notice.components(separatedBy: "AccessibilityNotification.Announcement(").count == 2,
+                "announced only behind the claim")
+    }
+
     /// With nothing handed to the cloud this session, an open cloud chat
     /// still ends, and the line is the plain one.
     @Test func forgetEverythingWithNothingSentEndsTheChatAndSaysGone() async throws {
@@ -1221,6 +1268,12 @@ struct CloudPromiseTests {
 }
 
 /// Every place a hosted home screen reported.
+extension Tag {
+    /// Puts a real window on screen, so it needs a window server: a Mac
+    /// runner with no display can skip these by this tag.
+    @Tag static var realWindow: Self
+}
+
 @MainActor
 final class PlacesHeard {
     var places: [PrivacyPlace] = []

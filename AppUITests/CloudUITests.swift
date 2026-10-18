@@ -54,7 +54,11 @@ final class CloudUITests: XCTestCase {
         // The sign-in label is named, but its value, and even its length, is never spoken.
         XCTAssertTrue(labels.label.contains("X-Sample-Sign-In, sign-in value, hidden"))
         XCTAssertFalse(labels.label.contains("characters"))
-        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "made-up-sample")).count, 0)
+        // No sign-in value anywhere on screen or in what VoiceOver reads:
+        // every kind of element, by its label or its value.
+        let leaked = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "made-up-sample", "made-up-sample"))
+        XCTAssertEqual(leaked.count, 0)
         let said = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "You said: Help me write a note to hidden name")).firstMatch
         XCTAssertTrue(said.exists)
         XCTAssertFalse(said.label.contains("["))
@@ -145,7 +149,9 @@ final class CloudUITests: XCTestCase {
         // bars isn't either: on iPhone the home screen's bar is still there
         // under the sheet, and on iPad the sidebar has one of its own.
         if isPad {
-            // `backButton` needs the sidebar shown; say so plainly if it isn't.
+            // `backButton` needs the sidebar shown; say so plainly if it
+            // isn't. `memory` is the sidebar's own row, tapped above, so it
+            // can be reached only while the sidebar shows.
             XCTAssertTrue(memory.isHittable, "the iPad sidebar is hidden, so the leftmost bar button may be Show Sidebar")
         }
         try backButton(over: toggle, in: app).tap()
@@ -158,9 +164,12 @@ final class CloudUITests: XCTestCase {
         let app = launch("cloudAsk")
         XCTAssertTrue(app.staticTexts["Turn on help from the cloud?"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "I try to take out")).firstMatch.exists)
+        // On screen, not only in the tree: a line clipped off the bottom
+        // exists all the same, so the swipe goes until it can be reached.
         let signIn = app.staticTexts["Signing in never carries your chats, notes or private words."]
-        for _ in 0..<4 where !signIn.exists { app.swipeUp() }
         XCTAssertTrue(signIn.exists)
+        for _ in 0..<6 where !signIn.isHittable { app.swipeUp() }
+        XCTAssertTrue(signIn.isHittable)
         app.buttons["Not now"].tap()
         XCTAssertTrue(app.staticTexts["Off. Everything I do stays on this device."].waitForExistence(timeout: 5))
     }

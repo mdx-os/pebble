@@ -608,9 +608,10 @@ final class ChatController: ObservableObject {
 
     /// What to say when no reply came. Choosing not to send is not a failure.
     nonisolated static func failureLine(for error: Error?) -> String {
-        if let refused = error as? CloudTransportError, refused == .signInBodyRefused
-            || refused == .signInCarriesPersonalDetails {
+        switch error as? CloudTransportError {
+        case .signInBodyRefused?, .signInHeaderRefused?, .signInCarriesPersonalDetails?:
             return CloudWords.signInRefused
+        default: break
         }
         return switch error as? CloudModelError {
         case .notSent: CloudWords.notSent
@@ -651,14 +652,15 @@ final class ChatController: ObservableObject {
     /// after the bytes went, so the turn stays.
     nonisolated static func nothingWasSent(_ error: Error) -> Bool {
         if error is CancellationError { return true }
-        // Refused before sending: labels that weren't shown, a reserved
-        // one, or a sign-in path, body or value that may carry more than a
-        // credential. Each case is named, so a new one, which may come
+        // Refused before sending: labels that weren't shown, an address
+        // that isn't https, a reserved label, or a sign-in path, body,
+        // header or value that may carry more than a credential or go other
+        // than shown. Each case is named, so a new one, which may come
         // after the bytes left, must be decided here.
         if let refused = error as? CloudTransportError {
             return switch refused {
-            case .headersNotShown, .reservedHeader, .signInPathRefused, .signInBodyRefused,
-                 .signInCarriesPersonalDetails: true
+            case .headersNotShown, .notSecure, .reservedHeader, .signInPathRefused, .signInBodyRefused,
+                 .signInHeaderRefused, .signInCarriesPersonalDetails: true
             }
         }
         return switch error as? CloudModelError {

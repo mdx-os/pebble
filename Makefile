@@ -1,9 +1,9 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test repeat-test build build-release screenshots ui-screenshots device-screenshots ui-test brand-check local-config-check comment-lint mutation-check secrets-check pulse clean
+.PHONY: verify generate test release-test repeat-test build build-release screenshots ui-screenshots device-screenshots ui-test brand-check local-config-check comment-lint mutation-check secrets-check pulse clean
 
 ## verify: everything CI runs. Run this before every PR.
-verify: brand-check local-config-check comment-lint test mutation-check build build-release screenshots
+verify: brand-check local-config-check comment-lint test release-test mutation-check build build-release screenshots
 
 ## generate: create Pebble.xcodeproj from project.yml (the project file is not committed)
 generate:
@@ -12,6 +12,12 @@ generate:
 ## test: unit tests for the shared packages
 test:
 	swift test --package-path Packages/PebbleKit --quiet
+
+## release-test: run the promise that a shipped build reads no cloud
+## address in a Release build of PebbleCore, so what it checks is the code
+## that ships, not a Debug stand-in
+release-test:
+	sh scripts/release-probe.sh
 
 ## repeat-test: run the package tests N times (default 30) to catch a flaky
 ## test. FILTER= narrows the run; without it the whole suite runs each time.

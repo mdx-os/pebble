@@ -16,8 +16,10 @@ struct PebbleApp: App {
     @State private var cloud: CloudHelp
 
     /// The one notes store, shared by the memory screen and the cloud
-    /// redactor. Read from `cloud`, which is held once, so the two can
-    /// never hold different stores, however often the app is made again.
+    /// redactor. Read from `cloud`, so the two are always the same store.
+    /// SwiftUI may make the app again, and each time `init` opens a notes
+    /// store and builds a setting around it, but `State` keeps only the
+    /// first and the rest are dropped unused, so no screen ever reads one.
     private var memory: MemoryStore? { cloud.memory }
 
     init() {

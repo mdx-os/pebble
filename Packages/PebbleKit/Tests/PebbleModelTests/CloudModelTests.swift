@@ -122,7 +122,8 @@ struct CloudModelTests {
     }
 
     /// The preview is the whole request: the Host and Content-Length the
-    /// system adds are shown too, worked out from the address and the body.
+    /// system adds are shown too, worked out from the address and the body,
+    /// and the lines it adds to every request.
     @Test func theShownRequestHasTheMethodFullAddressEveryHeaderAndTheBody() throws {
         var turns = cloudChat().turns
         turns.append(ChatTurn(id: UUID(), speaker: .person, text: "Plan my week"))
@@ -134,6 +135,8 @@ struct CloudModelTests {
         Accept: application/json
         Accept-Encoding: identity
         Accept-Language: en
+        Cache-Control: no-cache
+        Connection: keep-alive
         Content-Length: \(preview.request.body.count)
         Content-Type: application/json
         Host: cloud.example.com
@@ -186,7 +189,7 @@ struct CloudModelTests {
 
     static let reservedNames = ["Authorization", "Proxy-Authorization", "Host", "Content-Length", "Connection",
                                 "Transfer-Encoding", "proxy-authenticate", "WWW-Authenticate", "AUTHORIZATION",
-                                "Cookie", "cookie"]
+                                "Cookie", "cookie", "Cache-Control"]
 
     /// Sign-in can't use a name URLSession may set, drop or overwrite, so
     /// what goes always matches what was shown. Refused, not dropped.
@@ -287,7 +290,7 @@ struct CloudModelTests {
         let endpoint = try #require(URL(string: "http://127.0.0.1:\(port)"))
         let reviewer = RecordingReviewer(answer: .send)
         let cloud = CloudModel(
-            endpoint: endpoint, transport: URLSessionCloudTransport(answeringWith: []), reviewer: reviewer,
+            endpoint: endpoint, transport: URLSessionCloudTransport(loopbackForTests: ()), reviewer: reviewer,
             auth: SampleAuth(signIn: CloudSignIn(path: "v1/sign-in", body: Data(#"{"device":"made-up"}"#.utf8)))
         )
         _ = try await cloudChat().sending("Plan my week", with: cloud)
@@ -300,6 +303,37 @@ struct CloudModelTests {
         let message = try #require(reviewer.seen.first?.request)
         #expect(seen.last?.headers["host"] == CloudRequest.hostLine(for: message.url))
         #expect(seen.last?.headers["content-length"] == String(message.body.count))
+    }
+
+    /// What reaches the wire is every header line the card draws and not
+    /// one more, for the sign-in hop and the message alike: the real
+    /// session, talking to a listener on this Mac's loopback address only.
+    /// Each line is held up as it arrived, name and value, against the
+    /// lines `CloudRequest.shownHeaders` gives the card, and the bodies
+    /// against the bodies shown.
+    @Test func theWireCarriesExactlyTheHeaderLinesTheCardShows() async throws {
+        let server = try LoopbackServer()
+        let port = await server.start()
+        defer { server.stop() }
+        let endpoint = try #require(URL(string: "http://127.0.0.1:\(port)"))
+        let reviewer = RecordingReviewer(answer: .send)
+        let cloud = CloudModel(
+            endpoint: endpoint, transport: URLSessionCloudTransport(loopbackForTests: ()), reviewer: reviewer,
+            auth: SampleAuth(headers: ["X-Sample-Sign-In": "made-up"],
+                             signIn: CloudSignIn(path: "v1/sign-in", headers: ["X-Sample-Device": "made-up"],
+                                                 body: Data(#"{"device":"made-up","build":7}"#.utf8)))
+        )
+        _ = try await cloudChat().sending("Plan my week", with: cloud)
+        let preview = try #require(reviewer.seen.first)
+        let seen = server.requests
+        #expect(seen.count == 2)
+        for (hop, wire) in zip(preview.hops, seen) {
+            let shown = CloudRequest.shownHeaders(url: hop.url, headers: hop.headers, body: hop.body)
+                .map { "\($0.name.lowercased()): \($0.value)" }.sorted()
+            #expect(wire.lines.sorted() == shown, "\(wire.path)")
+            #expect(wire.body == hop.body, "\(wire.path)")
+            #expect(wire.path == hop.url.path, "\(wire.path)")
+        }
     }
     #endif
 
@@ -436,6 +470,159 @@ struct CloudModelTests {
         #expect(transport.sent.isEmpty)
     }
 
+    /// What goes is what was checked: the hop's body is the checked fields
+    /// written again, never the bytes sign-in handed over. A name given
+    /// twice can't carry an unchecked value, whichever one a parser keeps,
+    /// and a number too big to read exactly goes as the text that was
+    /// checked, not as digits nobody checked.
+    @Test func theSignInBodyThatGoesIsTheOneThatWasChecked() async throws {
+        var turns = cloudChat().turns
+        turns.append(ChatTurn(id: UUID(), speaker: .person, text: "Plan my week"))
+        let redactor = Redactor(privateWords: ["lemon cake"])
+        for raw in [#"{"device":"made-up","device":"Sam lemon cake"}"#, #"{"device":"Sam lemon cake","device":"made-up"}"#,
+                    #"{"n":12345678901234567890}"#, #"{"device":"made-up","build":7,"scale":1.5}"#] {
+            let signIn = CloudSignIn(path: "v1/sign-in", body: Data(raw.utf8))
+            let preview: CloudPreview
+            do {
+                preview = try CloudModel.preview(for: turns, endpoint: endpoint, redactor: redactor, signIn: signIn)
+            } catch {
+                #expect(error as? CloudTransportError == .signInCarriesPersonalDetails, "\(raw)")
+                continue
+            }
+            let hop = try #require(preview.signIn)
+            let fields = try #require(signIn.fields)
+            #expect(hop.body == (try CloudSignIn.encoded(fields)), "\(raw)")
+            #expect(!hop.text.contains("lemon cake"), "\(raw)")
+            // Every value that goes, as it goes, is one the redactor saw.
+            let sent = try JSONDecoder().decode([String: String].self, from: hop.body)
+            #expect(sent == fields, "\(raw)")
+            #expect(sent.values.allSatisfy { redactor.redact($0).isUnchanged }, "\(raw)")
+        }
+        // The big number goes as it was checked.
+        let big = try CloudModel.preview(for: turns, endpoint: endpoint, redactor: redactor,
+                                         signIn: CloudSignIn(path: "v1/sign-in", body: Data(#"{"n":12345678901234567890}"#.utf8)))
+        #expect(try #require(big.signIn).text == #"{"n":"1.2345678901234567e+19"}"#)
+        // And through a reply, the wire gets those very bytes.
+        let transport = RecordingTransport()
+        let reviewer = RecordingReviewer(answer: .send)
+        let cloud = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer,
+                               auth: SampleAuth(signIn: CloudSignIn(path: "v1/sign-in",
+                                                                    body: Data(#"{ "build" : 7, "device" : "made-up" }"#.utf8))))
+        _ = try await cloudChat().sending("Plan my week", with: cloud)
+        #expect(transport.sent.first?.text == #"{"build":"7","device":"made-up"}"#)
+        #expect(transport.sent == reviewer.seen.first?.hops)
+    }
+
+    /// A name goes as surely as a value, shown in the clear, so it can't
+    /// hold a name from the notes, a private word or another detail either.
+    @Test(arguments: [
+        SampleAuth(signIn: CloudSignIn(path: "v1/sign-in", body: Data(#"{"Sam":"made-up"}"#.utf8))),
+        SampleAuth(signIn: CloudSignIn(path: "v1/sign-in", body: Data(#"{"lemon-cake":"made-up"}"#.utf8))),
+        SampleAuth(signIn: CloudSignIn(path: "v1/sign-in", headers: ["X-Lemon-Cake": "made-up"], body: Data("{}".utf8))),
+        SampleAuth(headers: ["Sam": "made-up"]),
+    ])
+    func aSignInNameWithAPersonalDetailIsRefusedAndNothingIsSent(auth: SampleAuth) async {
+        let transport = RecordingTransport()
+        let reviewer = RecordingReviewer(answer: .send)
+        let notes = notes
+        let cloud = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer, auth: auth,
+                               redactor: { Redactor(memory: notes, privateWords: ["lemon cake"]) })
+        await #expect(throws: CloudTransportError.signInCarriesPersonalDetails) {
+            try await cloudChat().sending("Plan my week", with: cloud)
+        }
+        #expect(reviewer.seen.isEmpty)
+        #expect(transport.sent.isEmpty)
+        #expect(auth.answers.isEmpty)
+    }
+
+    /// A body part's name is a short token, so it can't hold a sentence
+    /// and can't draw a line of its own on the card, such as a fake one
+    /// with a value in the clear.
+    @Test func aSignInNameThatIsNotATokenIsRefused() throws {
+        var turns = cloudChat().turns
+        turns.append(ChatTurn(id: UUID(), speaker: .person, text: "Plan my week"))
+        let longest = String(repeating: "a", count: CloudSignIn.maxNameLength)
+        for name in ["token\\\" : \\\"fine\\\",\\n  \\\"x", "lemon cake", "\(longest)a", "", "naïve", "a.b", "a:b"] {
+            let body = "{\"\(name)\":\"made-up\"}"
+            #expect(throws: CloudTransportError.signInBodyRefused, "\(name)") {
+                try CloudModel.preview(for: turns, endpoint: endpoint, redactor: Redactor(),
+                                       signIn: CloudSignIn(path: "v1/sign-in", body: Data(body.utf8)))
+            }
+        }
+        for name in [longest, "device", "device_id", "X-1"] {
+            #expect(CloudSignIn.isToken(name), "\(name)")
+            #expect(throws: Never.self, "\(name)") {
+                try CloudModel.preview(for: turns, endpoint: endpoint, redactor: Redactor(),
+                                       signIn: CloudSignIn(path: "v1/sign-in", body: Data("{\"\(name)\":\"made-up\"}".utf8)))
+            }
+        }
+    }
+
+    /// A sign-in header that URLSession could send other than the card
+    /// draws it is refused, on the hop and on the message: a name that
+    /// isn't a token, two names that differ only in letter case, or a
+    /// value with a line break in it.
+    @Test func aSignInHeaderThatCouldGoOtherThanShownIsRefused() throws {
+        var turns = cloudChat().turns
+        turns.append(ChatTurn(id: UUID(), speaker: .person, text: "Plan my week"))
+        let longest = String(repeating: "a", count: CloudSignIn.maxNameLength)
+        let refused: [([String: String], String)] = [
+            (["X Token": "made-up"], "X Token"),
+            (["X-Token:": "made-up"], "X-Token:"),
+            (["\(longest)a": "made-up"], "\(longest)a"),
+            (["X-Zoë": "made-up"], "X-Zoë"),
+            (["X-Token": "made-up", "x-token": "made-up-too"], "x-token"),
+            (["X-Token": "made-up\r\nX-Other: in the clear"], "X-Token"),
+            (["X-Token": "made-up\nX-Other: in the clear"], "X-Token"),
+            (["X-Token": "made-up\rX-Other: in the clear"], "X-Token"),
+        ]
+        for (headers, name) in refused {
+            #expect(throws: CloudTransportError.signInHeaderRefused(name), "\(headers)") {
+                try CloudModel.preview(for: turns, endpoint: endpoint, redactor: Redactor(), headers: headers)
+            }
+            #expect(throws: CloudTransportError.signInHeaderRefused(name), "\(headers)") {
+                try CloudModel.preview(for: turns, endpoint: endpoint, redactor: Redactor(),
+                                       signIn: CloudSignIn(path: "v1/sign-in", headers: headers, body: Data("{}".utf8)))
+            }
+        }
+        #expect(throws: Never.self) {
+            try CloudModel.preview(for: turns, endpoint: endpoint, redactor: Redactor(),
+                                   headers: ["X-Token": "made-up", "\(longest)": "made-up"])
+        }
+    }
+
+    /// The sign-in check matches whole words, as the message's does, so a
+    /// joined spelling of a private word in a covered value slips by. Kept
+    /// as a known gap, pinned so widening it is a decision; the promise
+    /// rests on `CloudAuth`'s contract, as its doc says.
+    @Test func aJoinedSpellingInASignInValueIsAKnownGap() throws {
+        var turns = cloudChat().turns
+        turns.append(ChatTurn(id: UUID(), speaker: .person, text: "Plan my week"))
+        let preview = try CloudModel.preview(
+            for: turns, endpoint: endpoint, redactor: Redactor(privateWords: ["lemon cake"]),
+            signIn: CloudSignIn(path: "v1/sign-in", body: Data(#"{"device":"lemoncake"}"#.utf8)))
+        #expect(preview.signIn?.text.contains("lemoncake") == true)
+    }
+
+    /// Only https leaves. The real transport refuses any other address
+    /// before anything goes, loopback included; only the test-only
+    /// transport takes plain http, and only to 127.0.0.1.
+    @Test func theTransportRefusesAnAddressThatIsNotHttps() async throws {
+        let loader = RecordingLoader()
+        let transport = URLSessionCloudTransport(load: loader.load)
+        for address in ["http://cloud.example.com/v1/reply", "http://127.0.0.1:8080/v1/reply", "ftp://cloud.example.com/x"] {
+            let request = CloudRequest(url: try #require(URL(string: address)), headers: CloudHeaders.fixed,
+                                       body: Data("{}".utf8))
+            await #expect(throws: CloudTransportError.notSecure, "\(address)") { try await transport.send(request) }
+        }
+        #expect(loader.requests.isEmpty)
+        let loopback = URLSessionCloudTransport(loopbackForTests: ())
+        #expect(loopback.isSecure(try #require(URL(string: "http://127.0.0.1:8080/v1/reply"))))
+        #expect(!loopback.isSecure(try #require(URL(string: "http://cloud.example.com/v1/reply"))))
+        #expect(!URLSessionCloudTransport().isSecure(try #require(URL(string: "http://127.0.0.1:8080/v1/reply"))))
+        #expect(URLSessionCloudTransport().isSecure(CloudModel.url(for: endpoint)))
+    }
+
     /// With the yes, the sign-in hop goes first and then the message, each
     /// exactly as shown, and sign-in is handed its answer.
     @Test func theYesSendsTheSignInHopThenTheMessageExactlyAsShown() async throws {
@@ -515,39 +702,90 @@ struct CloudModelTests {
         }
     }
 
-    /// Forget everything can start in the very window between the last
-    /// check and the hand over. The chat is ended under the same lock as
-    /// the hand over, so ending waits for it, and sign-in's `forget()`,
-    /// which comes after the end, always comes after the answer too. No
-    /// token outlives the forget.
+    /// Forget everything can land in the very window after the hop's
+    /// answer is off the wire and before it is handed over, in a chat that
+    /// has hidden nothing. It runs here inside that window, as the app runs
+    /// it: end every chat that holds anything, then tell sign-in to forget.
+    /// The chat counts as holding something for the whole reply, so it is
+    /// ended, the hand over is refused, and no token outlives the forget.
+    /// `isOn` is read off the chat's lock, so reaching into the chat from
+    /// it, as this does, can't stall or deadlock the end.
     @Test func aSignInAnswerNeverOutlivesTheForgetThatEndsTheChat() async throws {
         let session = CloudChatSession()
         let auth = KeepingAuth()
         let answered = Flag(false)
-        let forgetting = OnceInTheBackground()
+        let forgot = Flag(false)
         let transport = EndingTransport { answered.value = true }
         let cloud = CloudModel(
             endpoint: endpoint, transport: transport, reviewer: RecordingReviewer(answer: .send),
             auth: auth, redactor: { Redactor() },
             isOn: {
-                // The hop has answered, so this is the check just before
-                // the hand over. Forget everything starts on another
-                // thread now, and is given time to finish if nothing holds
-                // it back.
-                if answered.value, forgetting.start({ session.end(); auth.forget() }) {
-                    Thread.sleep(forTimeInterval: 0.3)
+                // The hop has answered, so this is the check before the
+                // hand over: Forget everything, as `CloudHelp` does it.
+                if answered.value, !forgot.value {
+                    forgot.value = true
+                    #expect(session.sendsOnTheWire == 0, "the hop is off the wire")
+                    if session.holdsAnything { session.end() }
+                    auth.forget()
                 }
                 return true
             },
             session: session
         )
-        // The message may or may not get out before the end lands; either
-        // way is fine here. What matters is the order of the hand over and
-        // the forget.
-        _ = try? await cloudChat().sending("Plan my week", with: cloud)
-        await forgetting.finished()
-        #expect(auth.handedOver == 1, "the answer was handed over before the chat ended")
+        let ended = Flag(false)
+        #expect(await finishes {
+            do {
+                _ = try await cloudChat().sending("Plan my week", with: cloud)
+            } catch {
+                ended.value = error as? CloudModelError == .ended
+            }
+        }, "reaching into the chat from isOn stalled the reply")
+        #expect(forgot.value)
+        #expect(ended.value, "the chat wasn't ended by the forget")
+        #expect(auth.handedOver == 0, "the answer was handed over after sign-in forgot")
         #expect(auth.token == nil, "a token was kept after sign-in forgot")
+        #expect(transport.sends == 1, "only the hop went")
+    }
+
+    /// An end that comes while a hand over is under way waits for it, so
+    /// sign-in's `forget()`, which comes after the end, comes after the
+    /// hand over too. The end is started from inside the hand over, which
+    /// waits until the other thread is on its way, then gives it time to
+    /// land; held off by the lock, it can't.
+    @Test func anEndWaitsForAHandOverUnderWay() throws {
+        let session = CloudChatSession()
+        let ending = DispatchSemaphore(value: 0)
+        let ended = Flag(false)
+        let done = DispatchGroup()
+        try session.handOver {
+            done.enter()
+            DispatchQueue.global().async {
+                ending.signal()
+                session.end()
+                ended.value = true
+                done.leave()
+            }
+            ending.wait()
+            Thread.sleep(forTimeInterval: 0.2)
+            #expect(!ended.value, "the chat ended in the middle of a hand over")
+        }
+        done.wait()
+        #expect(ended.value)
+        #expect(session.hasEnded)
+    }
+
+    /// A reply counts as holding something from its yes until it is back,
+    /// on the wire or between sends, so Forget everything always ends it.
+    @Test func aReplyUnderWayHoldsSomethingBetweenSends() async throws {
+        let session = CloudChatSession()
+        #expect(!session.holdsAnything)
+        let between = try await session.replying {
+            _ = try await session.send(CloudRequest(url: CloudModel.url(for: endpoint), headers: CloudHeaders.fixed,
+                                                    body: Data("{}".utf8)), through: RecordingTransport())
+            return (session.sendsOnTheWire, session.holdsAnything)
+        }
+        #expect(between == (0, true))
+        #expect(!session.holdsAnything)
     }
 
     /// The Host line is what URLSession writes: no port when it is the
@@ -753,6 +991,27 @@ struct CloudModelTests {
         #expect(!on.runsOnDevice)
     }
 
+    /// The routing gate holds a yes to its own address. On for one address
+    /// with the build pointing at another, or on with no address kept, as
+    /// in a file from before addresses were, every new chat stays on this
+    /// device, and no cloud model is made.
+    @Test func aYesForAnotherAddressOrNoneRoutesNothingToTheCloud() throws {
+        let other = try #require(URL(string: "https://other.example.com"))
+        for settings in [CloudHelpSettings(isOn: true, for: other), CloudHelpSettings(isOn: true)] {
+            #expect(settings.isOn, "the saved switch says on")
+            let made = Flag(false)
+            let model = ModelChoice.model(settings: settings, endpoint: endpoint, local: LocalStubModel()) { url in
+                made.value = true
+                return CloudModel(endpoint: url, transport: RecordingTransport(), reviewer: RecordingReviewer(answer: .cancel))
+            }
+            #expect(model.runsOnDevice)
+            #expect(!made.value, "a cloud model was made")
+            #expect(!ModelChoice.usesCloud(settings: settings, endpoint: endpoint))
+            #expect(ModelChoice.runsOnDevice(settings: settings, endpoint: endpoint, local: LocalStubModel()))
+            #expect(ModelChoice.privacyPlace(settings: settings, endpoint: endpoint, local: LocalStubModel()) == .onDevice)
+        }
+    }
+
     /// The onboarding hello asks this on every redraw, so it must agree
     /// with the model a chat would get without making one.
     @Test(arguments: [false, true], [false, true])
@@ -852,16 +1111,22 @@ struct CloudModelTests {
 func finishes(within limit: Duration = .seconds(20), _ work: @escaping @Sendable () async -> Void) async -> Bool {
     await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
         let first = FirstAnswer(continuation)
+        let worker = Task {
+            await work()
+            first.give(true)
+        }
         // Stopped once the work is done, so no sleeper outlives the test.
+        // When the limit fires first, the work is cancelled, so whatever
+        // it waits on can let go of it.
         let limiter = Task {
             do {
                 try await Task.sleep(for: limit)
                 first.give(false)
+                worker.cancel()
             } catch {}
         }
         Task {
-            await work()
-            first.give(true)
+            await worker.value
             limiter.cancel()
         }
     }
@@ -999,35 +1264,6 @@ final class KeepingAuth: CloudAuth, @unchecked Sendable {
     }
 }
 
-/// Runs one piece of work on another thread, the first time it is asked,
-/// and says when that work is done.
-final class OnceInTheBackground: @unchecked Sendable {
-    private let lock = NSLock()
-    private var started = false
-    private let group = DispatchGroup()
-
-    /// True only the first time, when `work` was started.
-    func start(_ work: @escaping @Sendable () -> Void) -> Bool {
-        let first = lock.withLock {
-            defer { started = true }
-            return !started
-        }
-        guard first else { return false }
-        group.enter()
-        DispatchQueue.global().async { [group] in
-            work()
-            group.leave()
-        }
-        return true
-    }
-
-    func finished() async {
-        await withCheckedContinuation { continuation in
-            group.notify(queue: .global()) { continuation.resume() }
-        }
-    }
-}
-
 #if canImport(Network)
 /// A tiny HTTP server on 127.0.0.1, so a test can see the bytes the real
 /// URLSession sends without anything leaving this Mac. It answers every
@@ -1038,6 +1274,10 @@ final class LoopbackServer: @unchecked Sendable {
         let path: String
         /// Header names in lower case.
         let headers: [String: String]
+        /// Every header line as it arrived, its name in lower case, so a
+        /// repeated name still counts as a line of its own.
+        let lines: [String]
+        let body: Data
     }
 
     private let listener: NWListener
@@ -1082,15 +1322,24 @@ final class LoopbackServer: @unchecked Sendable {
             if let end = buffer.range(of: Data("\r\n\r\n".utf8)) {
                 let head = String(decoding: buffer[..<end.lowerBound], as: UTF8.self).components(separatedBy: "\r\n")
                 var headers: [String: String] = [:]
+                var lines: [String] = []
                 for line in head.dropFirst() {
-                    guard let colon = line.firstIndex(of: ":") else { continue }
-                    headers[line[..<colon].lowercased()] = line[line.index(after: colon)...]
-                        .trimmingCharacters(in: .whitespaces)
+                    guard let colon = line.firstIndex(of: ":") else {
+                        lines.append(line)
+                        continue
+                    }
+                    let name = line[..<colon].lowercased()
+                    let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+                    headers[name] = value
+                    lines.append("\(name): \(value)")
                 }
                 let length = Int(headers["content-length"] ?? "0") ?? 0
                 if buffer.count - end.upperBound >= length {
                     let path = head.first?.split(separator: " ").dropFirst().first.map(String.init) ?? ""
-                    self.lock.withLock { self._requests.append(Seen(path: path, headers: headers)) }
+                    let body = Data(buffer[end.upperBound...].prefix(length))
+                    self.lock.withLock {
+                        self._requests.append(Seen(path: path, headers: headers, lines: lines, body: body))
+                    }
                     self.answer(connection, signIn: path.hasSuffix("/sign-in"))
                     return
                 }
@@ -1166,6 +1415,7 @@ final class HangingTransport: CloudTransport, @unchecked Sendable {
     private var _sends = 0
     private var _cancelled = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var cancelWaiters: [CheckedContinuation<Void, Never>] = []
 
     var sends: Int { lock.withLock { _sends } }
     var cancelled: Bool { lock.withLock { _cancelled } }
@@ -1181,8 +1431,6 @@ final class HangingTransport: CloudTransport, @unchecked Sendable {
             if now { continuation.resume() }
         }
     }
-
-    private var cancelWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// Returns once a send was cancelled.
     func whenCancelled() async {

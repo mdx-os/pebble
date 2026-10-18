@@ -25,6 +25,20 @@ public struct CloudHelpSettings: Sendable, Equatable, Codable {
         self.privateWords = privateWords
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case isOn, consentedEndpoint, privateWords
+    }
+
+    /// Read as saved, but for a private word `Redactor` can hide nothing
+    /// for, one of only hyphens, saved before such words were refused. It
+    /// is left out, so the list never shows a word as hidden that isn't.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        isOn = try container.decode(Bool.self, forKey: .isOn)
+        consentedEndpoint = try container.decodeIfPresent(String.self, forKey: .consentedEndpoint)
+        privateWords = try container.decode([String].self, forKey: .privateWords).filter(Redactor.canHide)
+    }
+
     /// Off, with nothing marked private.
     public static let off = CloudHelpSettings()
 
@@ -51,9 +65,12 @@ public struct CloudHelpSettings: Sendable, Equatable, Codable {
 
     /// Why a private word can't be added.
     public enum Refusal: Sendable, Equatable {
-        /// `onlyPunctuation` is a word of nothing but hyphens or other
-        /// punctuation, which `Redactor` can't match as a word, so it would
-        /// sit in the list looking hidden while hiding nothing.
+        /// `onlyPunctuation` is a word of nothing but punctuation. One of
+        /// only hyphens hides nothing at all, since `Redactor` leaves it
+        /// out, so it would sit in the list looking hidden. Others, such as
+        /// "...", are matched, but no person needs them hidden, so they are
+        /// refused the same way, with one plain line. A word of symbols,
+        /// such as "$$", is matched and is taken.
         case blank, onlyPunctuation, tooLong, full, alreadyThere
     }
 
@@ -180,7 +197,7 @@ public final class CloudHelpFileStore: CloudHelpStoring, @unchecked Sendable {
     /// made while the device is locked. A Mac reads that as protected until
     /// the first unlock after a restart, which an app already running has
     /// passed.
-    static let offMarkWriting: Data.WritingOptions = [.noFileProtection]
+    package static let offMarkWriting: Data.WritingOptions = [.noFileProtection]
 
     public func save(_ settings: CloudHelpSettings) throws {
         lock.lock()
@@ -294,7 +311,8 @@ public enum CloudEndpoint {
     /// in an encoded form that would read differently from the address in
     /// the preview, so it is refused rather than shown one way and sent
     /// another. So is https's own port written out (`:443`), which the
-    /// system leaves out of the Host line it sends.
+    /// system leaves out of the Host line it sends, and a host with capital
+    /// letters, which the system may send in lower case.
     ///
     /// Always nil outside a Debug build, whatever the build settings say,
     /// so a build that ships can't reach a cloud model even if the build
@@ -316,7 +334,7 @@ public enum CloudEndpoint {
         guard !text.isEmpty, !text.hasPrefix("$("), !text.contains(where: { "?#@".contains($0) }),
               text.allSatisfy({ $0.isASCII }),
               let url = URL(string: text), url.scheme?.lowercased() == "https",
-              let host = url.host, !host.isEmpty, url.port != 443,
+              let host = url.host, !host.isEmpty, host == host.lowercased(), url.port != 443,
               url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { return nil }
         return url
     }
@@ -354,14 +372,17 @@ public enum CloudWords {
         "I try to take out names from your notes, emails, phone numbers, addresses, card numbers and your private words first. Check what I show you, since I can miss things.",
         "Earlier messages in a chat go again with each new one, so you see them in every preview.",
         "The name you gave me goes too, in my first line of each chat.",
-        // True by construction: a sign-in is only ever a hop in a preview
+        // True by how it is built: a sign-in is only ever a hop in a preview
         // (`CloudPreview.signIn`), sent by the same yes as the message.
         // Its values are covered on screen, so it says labels, not values.
         "If that computer needs me to sign in, the sign-in is in the same preview, so you see where it goes and which labels it carries before anything leaves.",
-        // True by construction too: `CloudAuth` may supply only credentials
-        // or a device token, and `CloudModel.preview` refuses any sign-in
-        // value `Redactor` would change, or a body that isn't a flat object
-        // of short values, before anything is shown or sent.
+        // Held two ways. `CloudModel.preview` refuses, before anything is
+        // shown or sent, any sign-in name or value `Redactor` would change,
+        // a name that isn't a short token, and a body that isn't a flat
+        // object of short values; what goes is those checked fields, and
+        // nothing else. That catches only what the redactor knows, so the
+        // rest rests on `CloudAuth`'s contract: first-party sign-in that
+        // supplies only credentials or a device token.
         "Signing in never carries your chats, notes or private words.",
         "Your notes themselves never leave this device.",
         "Like any website, the computer it goes to can see this device's internet address.",
@@ -423,8 +444,9 @@ public enum CloudWords {
     /// At launch, a yes that no longer counts couldn't be saved off, nor
     /// marked off. It is off for this launch, and the next launch finds the
     /// same stale yes and reads it as off again. Shown on the home screen,
-    /// since the person did nothing to ask for it.
-    public static let offAtLaunchNotSaved = "Help from the cloud is off. I couldn't save that it's off, so I'll try again when you open this setting."
+    /// since the person did nothing to ask for it, so it names the setting
+    /// rather than saying "this".
+    public static let offAtLaunchNotSaved = "Help from the cloud is off. I couldn't save that it's off, so I'll try again when you open the cloud setting."
     /// Turning on couldn't be saved, so it is still off.
     public static let onNotSaved = "Sorry, I couldn't save that, so help from the cloud is still off. Please try again in a moment."
 
@@ -461,8 +483,10 @@ public enum CloudWords {
     }
     /// Said before the sign-in hop of a preview, on the card and aloud.
     public static let previewSignInFirst = "First, to sign in:"
-    /// Said under `previewSignInFirst`: the hop's values are covered.
-    public static let previewSignInCovered = "Sign-in values are covered with dots here, so they never show on screen. They still go with the sign-in."
+    /// Said whenever the card covers a sign-in value, on a sign-in hop, a
+    /// message's label, or both, on the card and aloud. It says they go
+    /// when the person sends, which is true of every one of those.
+    public static let previewSignInCovered = "Sign-in values are covered with dots here, so they never show on screen. They still go when you send this."
     /// Said before the message itself when a sign-in hop comes first.
     public static let previewThenMessage = "Then, your message:"
     public static func spokenMessage(role: String, text: String) -> String {

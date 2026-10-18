@@ -444,7 +444,7 @@ public struct Redactor: Sendable, Equatable {
     /// word at its apostrophe. Joined or other spellings still slip by,
     /// which is why the preview is the real safeguard.
     fileprivate static func wholeWord(_ word: String) -> NSRegularExpression? {
-        let parts = FoldedText.fold(word).split(whereSeparator: { $0.isWhitespace || $0.isNewline || $0 == "-" })
+        let parts = wordParts(word)
         // Nothing but hyphens would match the empty text everywhere.
         guard !parts.isEmpty else { return nil }
         let escaped = parts
@@ -452,6 +452,18 @@ public struct Redactor: Sendable, Equatable {
             .joined(separator: #"[\s\-]+"#)
             .replacingOccurrences(of: "'", with: "['\u{2019}\u{2018}\u{02BC}]")
         return regex(#"(?<![\p{L}\p{N}])"# + escaped + #"s?(?![\p{L}\p{N}])"#, caseInsensitive: true)
+    }
+
+    /// The parts `wholeWord` matches, split where any whitespace or hyphen
+    /// may stand between them.
+    private static func wordParts(_ word: String) -> [Substring] {
+        FoldedText.fold(word).split(whereSeparator: { $0.isWhitespace || $0.isNewline || $0 == "-" })
+    }
+
+    /// False for a word this redactor would hide nothing for, one of only
+    /// hyphens and spaces, which it leaves out of its patterns.
+    public static func canHide(_ word: String) -> Bool {
+        !wordParts(word).isEmpty
     }
 
     private static func find(_ expression: NSRegularExpression, in text: String) -> [NSRange] {

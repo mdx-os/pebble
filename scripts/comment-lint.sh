@@ -20,6 +20,12 @@
 # it, or else Config/comment-lint-names.local.txt, which git ignores. With
 # neither, only review history is checked, and the run says so.
 #
+# In CI (CI set) a missing list fails the run, since names would go
+# unchecked without anyone seeing it. The one way past is
+# COMMENT_LINT_NO_NAMES_REASON, which CI sets for a pull request from a
+# fork, as those get no secrets: then the run passes with a warning that
+# shows on the pull request, never with a plain ok.
+#
 # Usage: scripts/comment-lint.sh [path...]   (default: the code folders)
 #        scripts/comment-lint.sh --self-test
 # The self-test makes up a list of its own, so it never needs the real one.
@@ -37,6 +43,12 @@ elif [ -r "$local_names" ]; then
   names="$local_names"
 else
   names=/dev/null
+fi
+if [ "$names" = /dev/null ] && [ -n "${CI:-}" ] && [ -z "${COMMENT_LINT_NO_NAMES_REASON:-}" ] \
+  && [ "${1:-}" != "--self-test" ]; then
+  echo "comment-lint: CI gave no list of names (COMMENT_LINT_NAMES), so names can't be checked."
+  echo "comment-lint: add the list as the COMMENT_LINT_NAMES secret, or set COMMENT_LINT_NO_NAMES_REASON."
+  exit 1
 fi
 
 # Reads file names on stdin, one per line, and prints every comment that
@@ -66,6 +78,8 @@ scan() {
       my $kind = $file =~ /\.swift$/ ? "swift" : $file =~ /\.txt$/ ? "text" : "hash";
       open(my $fh, "<", $file) or do { print "comment-lint: can'"'"'t read $file\n"; exit 2 };
       my $block = 0;
+      # Inside a Swift string of several lines, between two """.
+      my $multi = 0;
       my $n = 0;
       while (my $line = <$fh>) {
         $n++;
@@ -73,6 +87,19 @@ scan() {
         my $comment = "";
         if ($kind eq "swift") {
           my $rest = $line;
+          if ($multi) {
+            if ($rest =~ /"""(.*)$/) { $rest = $1; $multi = 0 } else { $rest = "" }
+          }
+          # A """ outside a comment opens a string that runs to the next
+          # one, maybe lines on, and nothing in it is a comment.
+          if (!$block && $rest =~ /^(.*?)"""(.*)$/) {
+            my ($before, $after) = ($1, $2);
+            (my $code = $before) =~ s/$quoted/""/g;
+            unless ($code =~ m{//|/\*}) {
+              $rest = $before;
+              if ($after =~ /"""(.*)$/) { $rest .= " $1" } else { $multi = 1 }
+            }
+          }
           $rest =~ s/$quoted/""/g;
           while (length $rest) {
             if ($block) {
@@ -140,6 +167,8 @@ self_test() {
   printf 'let url = "https://example.com" // the sample address\n' > "$dir/good/url.swift"
   printf 'let url = "https://example.com/%s 3"\n' "$item" > "$dir/good/path.swift"
   printf 'let a = 2 * 3\n/* a\n * product */\n' > "$dir/good/product.swift"
+  printf 'let text = """\n  https://example.com/%s 3\n  """\n' "$item" > "$dir/good/multiline.swift"
+  printf 'let text = """\n  https://example.com\n  """ // since %s 4\n' "$round" > "$dir/bad/aftermultiline.swift"
   printf '# Retries round the clock, item by item.\nexit 0\n' > "$dir/good/script.sh"
   printf 'echo "%s %s 4"\n[ "$#" -gt 0 ] || echo "%s 5"\n' "$fix" "$round" "$item" > "$dir/good/quoted.sh"
   printf 'perl: s~%s %s 3~x~\n' "$fix" "$round" > "$dir/good/manifest.txt"
@@ -203,7 +232,10 @@ elif [ "$status" -ne 0 ]; then
   echo "comment-lint: couldn't read every file"
   exit 1
 fi
-if [ "$names" = /dev/null ]; then
+if [ "$names" = /dev/null ] && [ -n "${COMMENT_LINT_NO_NAMES_REASON:-}" ]; then
+  echo "::warning title=comment-lint::Names weren't checked: $COMMENT_LINT_NO_NAMES_REASON. Run the lint with the list before this merges."
+  echo "comment-lint: review history only; names weren't checked ($COMMENT_LINT_NO_NAMES_REASON)"
+elif [ "$names" = /dev/null ]; then
   echo "comment-lint: ok (review history only; no list of names, so names weren't checked)"
 else
   echo "comment-lint: ok"

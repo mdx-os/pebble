@@ -17,8 +17,9 @@ in lint, a skill, or CI.
 
 - `make verify`: everything CI runs (brand check, comment lint, tests, mutation check, builds, screenshots)
 - `make test`: package unit tests (Swift Testing)
-- `make mutation-check`: breaks the code each test in `scripts/mutation-manifest.txt` covers, on a copy in `build/mutation`, and requires the test to fail. Every new behavior test gets a manifest entry; a test that passes with its code broken protects nothing
-- `make comment-lint`: no review history ("fix round", "item 11", "round 4") or personal names in code comments, project.yml, the Makefile or the mutation manifest. Say what the code or test protects. The names it blocks are never committed: they live in the git-ignored `Config/comment-lint-names.local.txt`, or in the file `COMMENT_LINT_NAMES` names in CI
+- `make mutation-check`: breaks the code each test in `scripts/mutation-manifest.txt` covers, on a copy in `build/mutation`, and requires the test to fail. Every new package behavior test gets a manifest entry; a test that passes with its code broken protects nothing. The check runs only `swift test`, so a UI test that guards a promise needs a package twin pinning the same thing, with entries, listed at the top of the manifest
+- `make release-test`: runs the "a shipped build reads no cloud address" promise in a Release build of PebbleCore (part of verify). Package tests run in Debug, so they can't see that code
+- `make comment-lint`: no review history ("fix round", "item 11", "round 4") or personal names in code comments, project.yml, the Makefile or the mutation manifest. Say what the code or test protects. The names it blocks are never committed: they live in the git-ignored `Config/comment-lint-names.local.txt`, or in CI in the `COMMENT_LINT_NAMES` secret. In CI a missing list fails, except on a fork's pull request, which warns
 - `make build-release`: Release builds for macOS and the iOS Simulator (part of verify). Anything behind `#if DEBUG`, like the showcase, must only be used behind it too. Every build with a cloud address fails unless it is Debug and not an archive, whatever the configuration is called
 - `make pulse`: fetch the competitor watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
 - `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`
