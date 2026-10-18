@@ -62,7 +62,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     store: InMemoryOnboardingStore(),
                     looks: looks,
                     // The showcase plays the on-device model, as the app does.
-                    onDevice: LocalStubModel().privacyPlace.staysOnDevice,
+                    place: LocalStubModel().privacyPlace,
                     startAt: page,
                     draftName: self == .name || self == .look || self == .ideas ? "Pip" : ""
                 ) { _ in }
@@ -250,26 +250,26 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
 
     /// The morning starter played through the on-device model.
     static func sampleFirstChat() -> Conversation {
-        var turns = Conversation.firstRun(named: "Pip", onDevice: true).turns
+        var turns = Conversation.firstRun(named: "Pip", place: LocalStubModel().privacyPlace).turns
         let prompt = FirstConversation.jobs.first { $0.id == "morning" }?.prompt ?? ""
         for said in [prompt, "school drop off, gym, answer Priya, groceries"] {
             turns.append(ChatTurn(id: UUID(), speaker: .person, text: said))
             let reply = (try? LocalStubModel.answer(to: turns)) ?? LocalStubModel.fallback
             turns.append(ChatTurn(id: UUID(), speaker: .agent, text: reply))
         }
-        return Conversation(turns: turns, onDevice: true)
+        return Conversation(turns: turns, place: LocalStubModel().privacyPlace)
     }
 
     /// The person has just asked for a morning plan and the dots are showing.
     /// Nothing is sent to the model; the reply never comes.
     @MainActor
     static func thinkingChat(brand: Brand) -> ChatController {
-        var turns = Conversation.firstRun(named: "Pip", onDevice: true).turns
+        var turns = Conversation.firstRun(named: "Pip", place: LocalStubModel().privacyPlace).turns
         let prompt = FirstConversation.jobs.first { $0.id == "morning" }?.prompt ?? ""
         turns.append(ChatTurn(id: UUID(), speaker: .person, text: prompt))
         let controller = ChatController.make(brand: brand, model: LocalStubModel(),
                                              names: InMemoryAgentNameStore(stored: "Pip"),
-                                             conversation: Conversation(turns: turns, onDevice: true))
+                                             conversation: Conversation(turns: turns, place: LocalStubModel().privacyPlace))
         controller.isReplying = true
         return controller
     }

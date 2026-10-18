@@ -28,9 +28,12 @@ build: generate
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -destination 'platform=macOS,arch=arm64' -derivedDataPath $(DERIVED)
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -destination 'generic/platform=iOS Simulator' -derivedDataPath $(DERIVED) CODE_SIGNING_ALLOWED=NO
 
-## screenshots: first screen on iPhone, iPad and Mac, written to build/screenshots
+## screenshots: first screen on iPhone, iPad and Mac, written to build/screenshots,
+## plus the dark iPad sidebar and the sheets with Done. Fails unless the dark
+## shots show the orange fill with white words on it (scripts/check-screenshots.sh).
 screenshots: generate
 	sh scripts/screenshots.sh build/screenshots
+	sh scripts/check-screenshots.sh build/screenshots
 
 ## ui-screenshots: showcase screens in light and dark on one simulator, written to
 ## build/screenshots/ui (or OUT=dir). DEVICE= names the simulator, SCREENS= the screens.

@@ -11,8 +11,8 @@ struct PrivacyPlaceTests {
             MemoryWords.saved(place),
             MemoryWords.privacyNote(place),
             FirstConversation.presence(place),
-            FirstConversation.opening(named: "Pip", onDevice: place.staysOnDevice),
-            FirstRunWords.helloDetail(onDevice: place.staysOnDevice),
+            FirstConversation.opening(named: "Pip", place: place),
+            FirstRunWords.helloDetail(place),
             FeedWords.sampleNote(place),
         ]
     }

@@ -8,7 +8,7 @@ struct CopyDashTests {
 
     /// The words people see on each screen.
     static let copy: [String] = [
-        FirstRunWords.hello, FirstRunWords.helloDetail(onDevice: true), FirstRunWords.helloDetail(),
+        FirstRunWords.hello, FirstRunWords.helloDetail(.onDevice), FirstRunWords.helloDetail(),
         FirstRunWords.beginTitle,
         FirstRunWords.nameQuestion, FirstRunWords.nameDetail, FirstRunWords.lookQuestion,
         FirstRunWords.lookDetail, FirstRunWords.ideasDetail, FirstRunWords.justChatTitle,
@@ -22,7 +22,7 @@ struct CopyDashTests {
         FirstConversation.nameInvitation, FirstConversation.giveNameTitle, FirstConversation.changeNameTitle,
         FirstConversation.namePlaceholder, FirstConversation.confirmNameTitle, FirstConversation.cancelNameTitle,
         FirstConversation.needsAName, FirstConversation.nameTooLong,
-        FirstConversation.opening(named: "Pip", onDevice: true), FirstConversation.opening(named: "Pip"),
+        FirstConversation.opening(named: "Pip", place: .onDevice), FirstConversation.opening(named: "Pip"),
         MemoryWords.title, MemoryWords.emptyTitle, MemoryWords.emptyActionTitle,
         MemoryWords.empty(.onDevice), MemoryWords.empty(.mayLeaveDevice),
         MemoryWords.saved(.onDevice), MemoryWords.saved(.mayLeaveDevice),
@@ -87,11 +87,11 @@ struct CopyDashTests {
 
     /// Promises the warmth pass must keep word for word.
     @Test func privacyAndCarePromisesStand() {
-        #expect(FirstConversation.opening(named: "Pip", onDevice: true).contains("so what you tell me stays here"))
-        #expect(!FirstConversation.opening(named: "Pip", onDevice: false).contains("stays"))
+        #expect(FirstConversation.opening(named: "Pip", place: .onDevice).contains("so what you tell me stays here"))
+        #expect(!FirstConversation.opening(named: "Pip", place: .mayLeaveDevice).contains("stays"))
         // The hello only promises it when the model runs here, like the opening.
-        #expect(FirstRunWords.helloDetail(onDevice: true).contains("Everything you tell me stays on this device."))
-        #expect(!FirstRunWords.helloDetail(onDevice: false).contains("stays"))
+        #expect(FirstRunWords.helloDetail(.onDevice).contains("Everything you tell me stays on this device."))
+        #expect(!FirstRunWords.helloDetail(.mayLeaveDevice).contains("stays"))
         #expect(!FirstRunWords.helloDetail().contains("stays"))
         #expect(MemoryWords.privacyNote(.onDevice) == "Kept only on this device. Removing a note erases it.")
         #expect(MemoryWords.forgotten == "Gone. I no longer have it.")

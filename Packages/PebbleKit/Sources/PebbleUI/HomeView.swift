@@ -54,22 +54,23 @@ public struct HomeView: View {
         needsYou: NeedsYou,
         tasks: (any TaskEngine)? = nil,
         drivesTasks: Bool = false,
-        now: @escaping () -> Date = { Date() }
+        now: @escaping () -> Date = { Date() },
+        log: HomeScreenLog? = nil
     ) {
         screen = HomeScreen(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                             looks: looks, conversation: conversation, section: section, feed: feed,
-                            needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, now: now)
+                            needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, now: now, log: log)
     }
 
     /// Which model the screen was made for: its kind and where its words
     /// go. Either changing makes a new screen.
     struct ModelIdentity: Hashable {
         let kind: ObjectIdentifier
-        let staysOnDevice: Bool
+        let place: PrivacyPlace
     }
 
     static func identity(of model: any ModelClient) -> ModelIdentity {
-        ModelIdentity(kind: ObjectIdentifier(type(of: model)), staysOnDevice: model.privacyPlace.staysOnDevice)
+        ModelIdentity(kind: ObjectIdentifier(type(of: model)), place: model.privacyPlace)
     }
 
     public var body: some View {
@@ -89,9 +90,11 @@ public struct HomeView: View {
 
     /// The memory screen's model, with its privacy place from the active
     /// model, the same way. Forget everything forgets the tasks too.
-    static func memoryModel(store: MemoryStore, model: any ModelClient,
+    static func memoryModel(store: MemoryStore, model: any ModelClient, log: HomeScreenLog? = nil,
                             onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) -> MemoryModel {
-        MemoryModel(store: store, place: model.privacyPlace, onForgetEverything: onForgetEverything)
+        let memory = MemoryModel(store: store, place: model.privacyPlace, onForgetEverything: onForgetEverything)
+        log?.memories.append(memory)
+        return memory
     }
 
     /// The send itself, apart from moving, so tests can drive it.
@@ -99,6 +102,17 @@ public struct HomeView: View {
     static func sendsFromToday(_ line: String, chat: ChatController) -> Bool {
         chat.send(line)
     }
+}
+
+/// What a home screen made for itself, newest last: the chat it showed and
+/// each memory model. Only tests pass one, to see that another model makes
+/// all of it again.
+@MainActor
+package final class HomeScreenLog {
+    var chats: [ChatController] = []
+    var memories: [MemoryModel] = []
+
+    package init() {}
 }
 
 /// The home screen itself, for one model. See `HomeView`.
@@ -109,6 +123,7 @@ struct HomeScreen: View {
     let onboarding: any OnboardingStoring
     let memory: MemoryStore?
     let looks: UserDefaults
+    let log: HomeScreenLog?
 
     @State private var finished: Bool
     @State private var firstMessage: String?
@@ -140,7 +155,8 @@ struct HomeScreen: View {
         needsYou: NeedsYou,
         tasks: (any TaskEngine)?,
         drivesTasks: Bool,
-        now: @escaping () -> Date
+        now: @escaping () -> Date,
+        log: HomeScreenLog?
     ) {
         self.brand = brand
         self.model = model
@@ -148,6 +164,7 @@ struct HomeScreen: View {
         self.onboarding = onboarding
         self.memory = memory
         self.looks = looks
+        self.log = log
         _feed = StateObject(wrappedValue: HomeView.feedModel(sources: feed, needsYou: needsYou, tasks: tasks,
                                                              drivesTasks: drivesTasks, model: model, now: now))
         let needed = OnboardingFlow.isNeeded(store: onboarding, names: names)
@@ -186,9 +203,10 @@ struct HomeScreen: View {
                 // Today has moved to the chat.
                 .modifier(SendTap(chat: chat))
                 .transition(.opacity)
+                .onAppear { log?.chats.append(chat) }
             } else {
                 OnboardingView(brand: brand, names: names, store: onboarding, looks: looks,
-                               onDevice: model.privacyPlace.staysOnDevice) { line in
+                               place: model.privacyPlace) { line in
                     firstMessage = line
                     chat = ChatController.make(brand: brand, model: model, names: names, conversation: nil)
                     withAnimation(.easeInOut(duration: 0.4)) { finished = true }
@@ -418,7 +436,7 @@ struct HomeScreen: View {
         if let memory {
             // Built inside MemoryView's StateObject, once per screen, never
             // on each pass through here.
-            MemoryView(model: HomeView.memoryModel(store: memory, model: model,
+            MemoryView(model: HomeView.memoryModel(store: memory, model: model, log: log,
                                                    onForgetEverything: { feed.forgetTasks() }))
         } else {
             // The store couldn't be opened. Say so rather than hide memory.
@@ -621,15 +639,20 @@ struct HomeSplit<TodayScreen: View, ChatScreen: View, MemoryScreen: View>: View 
         NavigationSplitView {
             List(selection: $section) {
                 ForEach(HomeSection.allCases, id: \.self) { place in
+                    let chosen = place == (section ?? .today)
                     NavigationLink(value: place) {
                         Label(place.title, systemImage: place.symbol)
+                            .foregroundStyle(chosen ? AnyShapeStyle(Theme.onTintFill) : AnyShapeStyle(.primary))
                     }
                     .badge(place == .today ? needsYouCount : 0)
+                    // iOS 26 draws a chosen sidebar row in gray glass, whatever
+                    // the tint, so the row draws its own fill, with white words.
+                    .listRowBackground(chosen ? Capsule().fill(Theme.tintFill).padding(.horizontal, 10) : nil)
                 }
             }
-            // The selected row is filled with the tint and its words turn
-            // white, so the sidebar takes the deep fill tint, not the root's
-            // `accentText`, which is too light under white in dark mode.
+            // The deep fill tint, not the root's `accentText`, which is too
+            // light under white in dark mode, for anything the system still
+            // fills with the tint.
             .tint(Theme.tintFill)
             .navigationTitle(chat.displayName.text)
         } detail: {

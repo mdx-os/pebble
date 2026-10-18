@@ -22,6 +22,23 @@ print(match[0]["udid"])
 ' "$1" "${2:-}"
 }
 
+# A screenshot of simulator $1 once the screen has stopped changing, written
+# to $2. A fixed wait can catch a launch half drawn, or the home screen, on
+# a busy machine; two shots in a row that match mean it has settled.
+settled_shot() {
+  sleep 3
+  xcrun simctl io "$1" screenshot "$2" >/dev/null 2>&1
+  tries=0
+  while [ "$tries" -lt 15 ]; do
+    sleep 2
+    xcrun simctl io "$1" screenshot "$2.next.png" >/dev/null 2>&1
+    if cmp -s "$2" "$2.next.png"; then break; fi
+    mv "$2.next.png" "$2"
+    tries=$((tries + 1))
+  done
+  rm -f "$2.next.png"
+}
+
 # The app itself, never a UI test runner that `make ui-test` left beside it.
 built_app() {
   find "$derived/Build/Products/$1" -maxdepth 1 -name '*.app' ! -name '*-Runner.app' | head -n 1
@@ -44,9 +61,31 @@ for kind in iPhone iPad; do
   sleep 4
   file="$out/$(echo "$kind" | tr '[:upper:]' '[:lower:]').png"
   xcrun simctl io "$udid" screenshot "$file" >/dev/null
+  echo "screenshots: $file"
+  # In dark mode, where white words on the orange fill are hardest to
+  # read: the iPad sidebar with Today selected, and the memory sheet with
+  # its Done button on iPhone. scripts/check-screenshots.sh checks both.
+  if [ "$kind" = iPad ]; then
+    scene=today; file="$out/ipad-sidebar-dark.png"
+  else
+    scene=homeMemory; file="$out/iphone-sheet-dark.png"
+  fi
+  xcrun simctl terminate "$udid" "$bundle_id" 2>/dev/null || true
+  # Switching to dark can take an app launched at the same moment down with
+  # it, so let it finish, and launch again if the app isn't up once the
+  # screen settles.
+  xcrun simctl ui "$udid" appearance dark
+  sleep 3
+  for attempt in 1 2 3; do
+    xcrun simctl launch --terminate-running-process "$udid" "$bundle_id" -pebbleScreen "$scene" >/dev/null
+    settled_shot "$udid" "$file"
+    if xcrun simctl spawn "$udid" launchctl list | grep -q "$bundle_id"; then break; fi
+    echo "screenshots: the app wasn't up for $file, launching again"
+  done
+  xcrun simctl ui "$udid" appearance light
+  echo "screenshots: $file"
   xcrun simctl terminate "$udid" "$bundle_id" || true
   xcrun simctl shutdown "$udid" || true
-  echo "screenshots: $file"
 done
 
 echo "screenshots: building for macOS"
@@ -56,3 +95,10 @@ mac_app="$(built_app Debug)"
 exe="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$mac_app/Contents/Info.plist")"
 "$mac_app/Contents/MacOS/$exe" -snapshotPath "$PWD/$out/mac.png"
 echo "screenshots: $out/mac.png"
+# The memory sheet with its Done button, presented in a real window off
+# screen, in light and dark.
+"$mac_app/Contents/MacOS/$exe" -snapshotPath "$PWD/$out/mac-sheet.png" -pebbleScreen homeMemory -snapshotSheet YES
+echo "screenshots: $out/mac-sheet.png"
+"$mac_app/Contents/MacOS/$exe" -snapshotPath "$PWD/$out/mac-sheet-dark.png" -pebbleScreen homeMemory \
+  -snapshotSheet YES -snapshotDark YES
+echo "screenshots: $out/mac-sheet-dark.png"

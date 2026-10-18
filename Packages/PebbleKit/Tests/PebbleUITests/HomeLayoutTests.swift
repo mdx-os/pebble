@@ -75,7 +75,7 @@ struct HomeLayoutTests {
     }
 
     @Test func aKeptConversationIsUsedOnlyWhenItsPrivacyPromiseHolds() {
-        let offDevice = Conversation(turns: ShowcaseScene.sampleFirstChat().turns, onDevice: false)
+        let offDevice = Conversation(turns: ShowcaseScene.sampleFirstChat().turns, place: .mayLeaveDevice)
         let controller = ChatController.make(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(),
                                              conversation: offDevice)
         #expect(controller.conversation.turns.count == 1)

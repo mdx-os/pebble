@@ -125,6 +125,18 @@ struct ContrastGuardTests {
             "List { Text(\"a\") }\nText(\"b\").tint(Theme.tintFill)",
             "struct DoneButton: View { var body: some View { Button(\"Done\") {} } }\n"
                 + "struct Other: View { var body: some View { Text(\"x\").tint(Theme.tintFill) } }",
+            // The call's paren on the next line is still the call.
+            "Text(\"Open\")\n    .foregroundStyle\n    (Theme.accent)",
+            ".tint\n(.orange)",
+            // White in a branch of the argument.
+            #".foregroundStyle(flag ? .white : Theme.onAccent)"#,
+            #".foregroundStyle(flag ? Theme.onAccent : Color.white)"#,
+            // The fill tint on any list but the sidebar's.
+            "List(items) { item in\n    Button(item.title) {}\n}\n.tint(Theme.tintFill)",
+            "struct Other: View {\n    var body: some View {\n        List(selection: $picked) {\n            Text(\"a\")\n        }\n"
+                + "        .tint(Theme.tintFill)\n    }\n}",
+            "struct HomeSplit: View {\n    var body: some View {\n        List {\n            Text(\"a\")\n        }\n"
+                + "        .tint(Theme.tintFill)\n    }\n}",
         ]
         for line in wrong {
             #expect(!ContrastLint.problems(in: line).isEmpty, "missed: \(line)")
@@ -134,7 +146,8 @@ struct ContrastGuardTests {
             #".foregroundStyle(Theme.secondaryText)"#,
             #".background(Theme.accent, in: Capsule())"#,
             #".tint(Theme.accentText)"#,
-            "List(selection: $section) {\n    Text(\"a\")\n}\n// The sidebar.\n.tint(Theme.tintFill)",
+            "struct HomeSplit: View {\n    var body: some View {\n        List(selection: $section) {\n            Text(\"a\")\n"
+                + "        }\n        // The sidebar.\n        .tint(Theme.tintFill)\n    }\n}",
             "struct DoneButton: View {\n    var body: some View {\n        Button(\"Done\") {}\n            .tint(Theme.tintFill)\n    }\n}",
             "Image(systemName: \"sparkles\")\n    .font(.largeTitle)\n    .foregroundStyle(Theme.accentSymbol)",
             "// .foregroundStyle(Theme.accent) is wrong",
@@ -210,7 +223,9 @@ enum ContrastLint {
         (#"(^|[^A-Za-z]|\bColor)\.gray\b"#, "the system gray is too faint for words; use Theme.secondaryText"),
         (#"(^|[^A-Za-z]|\bColor)\.red\b"#, "the system red is too faint on a card; use Theme.dangerText"),
         (#"\.white\.opacity\("#, "faded white is too faint for words; use Theme.onAccent or the primary ink"),
-        (#"^(Color)?\.white$"#, "white is too faint on the accent; use Theme.onAccent"),
+        // Anywhere in the argument, so a branch of a ternary counts too.
+        // Faded white has its own rule above.
+        (#"(^|[^A-Za-z]|\bColor)\.white\b(?!\s*\.\s*opacity)"#, "white is too faint on the accent; use Theme.onAccent"),
     ]
 
     /// What may fill a surface: checked on every `fill(` and `background(`
@@ -258,7 +273,8 @@ enum ContrastLint {
         for call in source.calls(named: ["tint"]) where call.arguments == "Theme.tintFill" {
             if !tintsAFill(call, in: source) {
                 found.append(Problem(line: call.line,
-                                     reason: "Theme.tintFill is only for the sidebar List and DoneButton, where it is a fill"))
+                                     reason: "Theme.tintFill is only for the sidebar's List(selection:) in HomeSplit "
+                                        + "and DoneButton, where it is a fill"))
             }
         }
         // Anything else in tintFill is drawn in it, words or icons.
@@ -289,19 +305,31 @@ enum ContrastLint {
         return found.sorted { $0.line < $1.line }
     }
 
-    /// True when a `.tint(Theme.tintFill)` call is on a `List(` whose
-    /// closure it closes, or is in `DoneButton`'s body.
+    /// True when a `.tint(Theme.tintFill)` call is on the sidebar: a
+    /// `List(selection:` inside `HomeSplit`, whose closure it closes. Or it
+    /// is in `DoneButton`'s body. A selected row and Done fill with the tint
+    /// and write white on it; any other list or control would draw its
+    /// words or icons in the fill, too faint on dark.
     static func tintsAFill(_ call: SwiftSource.Call, in source: SwiftSource) -> Bool {
-        for list in source.calls(named: ["List"]) where list.offset < call.offset {
-            // Only white space and a `.` between the List's closure and the tint.
-            guard let braces = source.trailingClosureBraces(of: list), braces.upperBound < call.offset else { continue }
-            let between = String(source.code[(braces.upperBound + 1)..<call.offset])
-            if between.trimmingCharacters(in: .whitespacesAndNewlines) == "." { return true }
+        if inside("HomeSplit", call.offset, source) {
+            for list in source.calls(named: ["List"]) where list.offset < call.offset && list.arguments.hasPrefix("selection:") {
+                // Only white space and a `.` between the List's closure and the tint.
+                guard let braces = source.trailingClosureBraces(of: list), braces.upperBound < call.offset else { continue }
+                let between = String(source.code[(braces.upperBound + 1)..<call.offset])
+                if between.trimmingCharacters(in: .whitespacesAndNewlines) == "." { return true }
+            }
         }
-        let code = String(source.code[..<call.offset])
-        guard let done = code.range(of: "struct DoneButton", options: .backwards) else { return false }
-        // Still inside DoneButton: no other type starts between.
-        let after = code[done.upperBound...]
+        return inside("DoneButton", call.offset, source)
+    }
+
+    /// True when `offset` is after `struct name` with no other type
+    /// started between.
+    static func inside(_ name: String, _ offset: Int, _ source: SwiftSource) -> Bool {
+        let code = String(source.code[..<offset])
+        guard let start = code.range(of: #"\bstruct\s+\#(name)\b"#, options: [.regularExpression, .backwards]) else {
+            return false
+        }
+        let after = code[start.upperBound...]
         return after.range(of: #"\b(struct|class|enum|extension)\s"#, options: .regularExpression) == nil
     }
 }

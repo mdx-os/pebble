@@ -179,8 +179,8 @@ public struct SwiftSource: Sendable {
     }
 
     /// Every call to one of `names`, written `name(` with nothing but white
-    /// space between, and not part of a longer name. Arguments run to the
-    /// balanced closing paren, across lines.
+    /// space between, new lines included, and not part of a longer name.
+    /// Arguments run to the balanced closing paren, across lines.
     public func calls(named names: Set<String>) -> [Call] {
         var found: [Call] = []
         var i = 0
@@ -194,7 +194,7 @@ public struct SwiftSource: Sendable {
             while j < code.count, code[j].isLetter || code[j].isNumber || code[j] == "_" { j += 1 }
             let name = String(code[i..<j])
             var open = j
-            while open < code.count, code[open] == " " || code[open] == "\t" { open += 1 }
+            while open < code.count, code[open].isWhitespace { open += 1 }
             guard names.contains(name), open < code.count, code[open] == "(" else {
                 i = j
                 continue

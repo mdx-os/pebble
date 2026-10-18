@@ -171,6 +171,7 @@ public struct ChatView: View {
             // Never say "thinking" over another screen.
             thinkingNotice?.cancel()
             thinkingNotice = nil
+            Self.left(controller)
         }
         .task {
             if let firstMessage, controller.conversation.isWaitingForPerson {
@@ -304,6 +305,14 @@ public struct ChatView: View {
         return .nothing
     }
 
+    /// The person left the chat, back to Today or another place. A reply
+    /// they walked away from stays in the chat but is never read aloud
+    /// later, when they come back for something else: the one unheard now
+    /// is dropped, and so is the one still on its way.
+    static func left(_ controller: ChatController) {
+        controller.leftChat()
+    }
+
     /// Where the thinking dots sit, so the chat can follow them.
     static let thinkingID = "thinking"
 
@@ -432,6 +441,9 @@ final class ChatController: ObservableObject {
     /// The failure line, until it has been read aloud, the same way: it can
     /// land under a sheet, or while Today is behind the chat.
     private(set) var unheardFailure: String?
+    /// The reply the person left the chat while waiting for. It is kept in
+    /// the chat when it lands, but never waits to be heard.
+    private var leftGeneration: Int?
 
     /// Goes up by one each time the person sends something by hand, from
     /// the chat or from Today. `SendTap` plays the light tap for it.
@@ -454,7 +466,7 @@ final class ChatController: ObservableObject {
         naming = AgentRenameState(profile: profile)
         // The privacy line is decided once here. If the model can ever be
         // swapped, rebuild the opening so it never promises too much.
-        conversation = .firstRun(named: profile.displayName.text, onDevice: model.runsOnDevice)
+        conversation = .firstRun(named: profile.displayName.text, place: model.privacyPlace)
     }
 
     static func make(brand: Brand, model: any ModelClient, names: any AgentNameStoring,
@@ -462,7 +474,7 @@ final class ChatController: ObservableObject {
         let controller = ChatController(brand: brand, model: model, names: names)
         // A given conversation is used only when its privacy promise
         // matches the model; otherwise the honest opening stands.
-        if let conversation, conversation.onDevice == model.runsOnDevice {
+        if let conversation, conversation.place == model.privacyPlace {
             controller.conversation = conversation
         }
         return controller
@@ -568,7 +580,8 @@ final class ChatController: ObservableObject {
             // No reply means the person's line still waits for one.
             lastLineUnanswered = next == nil
             if let next {
-                unheardReply = next.turns.last.flatMap { $0.speaker == .agent ? $0.text : nil }
+                unheardReply = generation == leftGeneration ? nil
+                    : next.turns.last.flatMap { $0.speaker == .agent ? $0.text : nil }
                 conversation = next
             } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 // The failure line promises the words are back, ready to send.
@@ -597,6 +610,14 @@ final class ChatController: ObservableObject {
     func takeUnheardReply() -> String? {
         defer { unheardReply = nil }
         return unheardReply
+    }
+
+    /// The chat went off screen. The reply nobody heard is dropped, and one
+    /// still coming lands quietly. A new send is heard as usual. Failures
+    /// stay, since Today reads them above its own composer.
+    func leftChat() {
+        unheardReply = nil
+        if isReplying { leftGeneration = replyGeneration }
     }
 
     /// The failure line nobody has heard yet, handed over once.

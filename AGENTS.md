@@ -18,7 +18,10 @@ in lint, a skill, or CI.
 - `make verify`: everything CI runs (brand check, tests, builds, screenshots)
 - `make test`: package unit tests (Swift Testing)
 - `make pulse`: fetch the competitor watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
-- `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`
+- `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`, plus dark shots of the
+  orange fill that `scripts/check-screenshots.sh` checks. Worktrees share simulators and
+  the bundle ID, so when another session runs at once pass free ones:
+  `make verify PEBBLE_IPAD="iPad Air 13-inch (M4)" PEBBLE_IPHONE="iPhone 17e"`
 - `make generate`: regenerate `Pebble.xcodeproj` after editing `project.yml`
 - `make secrets-check`: gitleaks over git history
 

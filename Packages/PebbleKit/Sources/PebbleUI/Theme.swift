@@ -69,6 +69,10 @@ enum Theme {
     /// (about 2.5 to 1), so it is a deep brown of the same warmth, well over
     /// the 4.5 to 1 small text needs.
     static let onAccent = onAccentRGB.color
+
+    /// Words on `tintFill`, as on the sidebar's chosen row: white, which
+    /// reads at over 4.5 to 1 there in both schemes. Only ever on that fill.
+    static let onTintFill = RGB.white.color
     static let onAccentRGB = RGB(red: 0.20, green: 0.10, blue: 0.04)
 
     /// How strongly the accent tints a soft button, a chip or a pill.
@@ -298,19 +302,40 @@ struct QuietButtonStyle: ButtonStyle {
     }
 }
 
-/// Done, for a sheet's toolbar. A confirmation button is drawn filled with
-/// the tint and white words on it, on iOS 26 and on the Mac alike, so it
-/// takes `Theme.tintFill`, where white reads at over 4.5 to 1. Its words
-/// are never drawn in the tint itself. `ContrastGuardTests` makes every
-/// confirmation button one of these.
+/// Done, for a sheet's toolbar, filled with `Theme.tintFill` and written in
+/// white, where white reads at over 4.5 to 1. Its words are never drawn in
+/// the tint itself.
+///
+/// It draws its own fill. Left to the system, iOS 26 draws a plain glass
+/// capsule with the word in the tint, about 2 to 1 on a dark sheet; the
+/// prominent glass style fills it but picks black words, about 3 to 1, and
+/// ignores a foreground style; and the Mac draws it gray. `make
+/// screenshots` takes the dark sheet and `scripts/check-screenshots.sh`
+/// looks for the fill with white words on it.
+/// `ContrastGuardTests` makes every confirmation button one of these.
 struct DoneButton: View {
     var title = MemoryWords.doneTitle
     let action: () -> Void
 
     var body: some View {
         Button(title, action: action)
+            .buttonStyle(FillButtonStyle())
             .keyboardShortcut(.cancelAction)
             .tint(Theme.tintFill)
+    }
+}
+
+/// White words on a capsule of `Theme.tintFill`, for `DoneButton`.
+struct FillButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.body.weight(.semibold))
+            .foregroundStyle(Theme.onTintFill)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Theme.tintFill, in: Capsule())
+            .contentShape(Capsule())
+            .opacity(configuration.isPressed ? 0.7 : 1)
     }
 }
 

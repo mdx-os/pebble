@@ -82,7 +82,7 @@ struct ChatRenameTests {
         #expect(store.loadDisplayName() == "Pip")
         #expect(controller.displayName.text == "Pip")
         #expect(controller.brand.name == brand.name)
-        #expect(controller.conversation.turns.first?.text == FirstConversation.opening(named: "Pip", onDevice: true))
+        #expect(controller.conversation.turns.first?.text == FirstConversation.opening(named: "Pip", place: .onDevice))
         #expect(!controller.showsNameInvitation)
         #expect(controller.renameTitle == FirstConversation.changeNameTitle)
     }
@@ -96,7 +96,7 @@ struct ChatRenameTests {
         #expect(store.loadDisplayName() == nil)
         #expect(controller.nameHint == FirstConversation.needsAName)
         #expect(controller.isChoosingName)
-        #expect(controller.conversation.turns.first?.text == FirstConversation.opening(named: brand.name, onDevice: true))
+        #expect(controller.conversation.turns.first?.text == FirstConversation.opening(named: brand.name, place: .onDevice))
     }
 
     @Test func aNameChosenEarlierIsRestored() {
@@ -104,7 +104,7 @@ struct ChatRenameTests {
         let controller = ChatController(brand: brand, model: LocalStubModel(), names: store)
         #expect(controller.displayName.text == "Pip")
         #expect(controller.brand.name == brand.name)
-        #expect(controller.conversation.turns.first?.text == FirstConversation.opening(named: "Pip", onDevice: true))
+        #expect(controller.conversation.turns.first?.text == FirstConversation.opening(named: "Pip", place: .onDevice))
         #expect(!controller.showsNameInvitation)
     }
 

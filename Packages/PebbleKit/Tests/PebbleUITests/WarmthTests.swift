@@ -751,6 +751,39 @@ struct WarmthTests {
         #expect(ChatView.arrival(for: controller, covered: false) == .nothing)
     }
 
+    /// Sent from Today, the chat opens, and the person goes back to Today
+    /// before the reply lands. The reply is kept in the chat, but opening
+    /// the chat again later reads nothing: it would be a surprise, out of
+    /// its moment. A new line after that is heard as usual.
+    @Test("Left the chat, reply landed, chat reopened: silence")
+    func leftTheChatReplyLandedChatReopened() async throws {
+        let gate = Gate()
+        let controller = ChatController(brand: brand, model: GatedModel(gate: gate),
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
+        HomeView.sendsFromToday("Plan my day", chat: controller)
+        #expect(ChatView.arrival(for: controller, covered: false) == .thinking, "the chat opens on it")
+        ChatView.left(controller)
+        await gate.release()
+        await settle(controller)
+        #expect(controller.conversation.turns.last?.text == "Here's a plan", "the reply is kept")
+        #expect(controller.unheardReply == nil)
+        #expect(ChatView.arrival(for: controller, covered: false) == .nothing, "reopened: silence")
+        #expect(ChatView.replyLanded(in: controller, covered: false) == nil)
+        // A reply that had landed unheard, under a sheet, goes the same way.
+        controller.submit("And tomorrow")
+        await gate.release()
+        await settle(controller)
+        #expect(controller.unheardReply != nil, "heard as usual after a new send")
+        ChatView.left(controller)
+        #expect(ChatView.arrival(for: controller, covered: false) == .nothing)
+        // And the chat really does this as it goes off screen.
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        let text = try String(contentsOf: root.appendingPathComponent("Packages/PebbleKit/Sources/PebbleUI/ChatView.swift"),
+                              encoding: .utf8)
+        let code = String(SwiftSource(text).code)
+        #expect(code.range(of: #"\.onDisappear\s*\{[^}]*Self\.left\(controller\)"#, options: .regularExpression) != nil)
+    }
+
     /// A reply a chat on screen saw land is never read again on arrival.
     @Test func aReplySeenLandingIsNotReadAgain() async {
         let controller = ChatController(brand: brand, model: LocalStubModel(),
