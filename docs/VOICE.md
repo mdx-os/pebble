@@ -101,7 +101,9 @@ its own review.
 
 ## Asking before acting
 
-Before the agent sends, buys or shares anything, it asks. The question
+Before the agent sends, buys or shares anything, it asks. It asks too
+before it keeps something new in the person's notes that they didn't type,
+such as the weekly digest ("Keep this in What I remember?"). The question
 names exactly what will happen, to whom, and for how much. The buttons say
 what they do ("Yes, go ahead" and "Not now", from `ProposedAction.yesTitle`
 and `noTitle`; `CopyDashTests` checks they match), and the promise underneath
@@ -176,7 +178,9 @@ so on the card, so a tap is never met with silence, and so does an
 Approve tapped after its question timed out. Forget everything says it
 stops tasks still going. If a step said yes to was under way, a short line
 stays on Today to say it may be done, naming nothing the task held. A
-scripted task's card says "Example", like every other example.
+scripted task's card says "Example", like every other example. A real
+task that was going when the app closed comes back stopped and says so
+("I stopped when the app closed, so I didn't finish this."), never done.
 
 ### Confirmations
 

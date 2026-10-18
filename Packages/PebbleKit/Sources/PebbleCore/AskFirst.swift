@@ -9,6 +9,10 @@ public enum ConsequentialAction: String, CaseIterable, Codable, Sendable {
     case purchase
     /// Giving out the person's details, such as an address, phone number or health facts.
     case sharePersonalInfo
+    /// Keeping something new in the person's notes that they didn't type,
+    /// such as a task's digest. It stays with them, but it is theirs to
+    /// decide, so it is asked like the rest.
+    case save
 }
 
 /// Who an action goes to: a resolved contact, address or merchant `id`, plus
@@ -133,6 +137,7 @@ public struct ProposedAction: Sendable, Equatable, Hashable {
             guard let price else { return "Buy this from \(who)?" }
             return "Pay \(price.formatted(locale: locale)) to \(who)?"
         case .sharePersonalInfo: return "Share this with \(who)?"
+        case .save: return "Keep this in \(who)?"
         }
     }
 

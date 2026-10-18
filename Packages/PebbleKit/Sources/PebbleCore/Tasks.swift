@@ -320,10 +320,19 @@ public protocol TaskEngine: AnyObject, Sendable {
     /// True when the tasks are scripted examples and nothing is really
     /// done, so the feed labels them like every other example.
     var isSample: Bool { get }
+
+    /// The tasks this engine can start, for Today to offer.
+    var builtIns: [TaskRequest] { get }
+
+    /// True while the engine keeps a file of its tasks on disk, so Forget
+    /// everything is offered while there is anything to erase.
+    var hasStoredFile: Bool { get }
 }
 
 extension TaskEngine {
     public var isSample: Bool { false }
+    public var builtIns: [TaskRequest] { [] }
+    public var hasStoredFile: Bool { false }
 }
 
 /// What forgetting every task left behind: counts only, so nothing a task
@@ -333,10 +342,15 @@ public struct ClearedTasks: Sendable, Equatable {
     public let forgotten: Int
     /// Steps the person had said yes to that were under way, so may be done.
     public let underway: Int
+    /// False when the engine's file of tasks couldn't be erased. The tasks
+    /// stopped and left the screen, but may come back next launch, so the
+    /// person is told and can try again.
+    public let erased: Bool
 
-    public init(forgotten: Int = 0, underway: Int = 0) {
+    public init(forgotten: Int = 0, underway: Int = 0, erased: Bool = true) {
         self.forgotten = forgotten
         self.underway = underway
+        self.erased = erased
     }
 
     public static let none = ClearedTasks()
@@ -524,6 +538,10 @@ public enum TaskWords {
     public static let forgetTasksDetail = "This stops any task still going, and removes every task and what you told me for it from this device. It can't be undone. Your notes aren't touched."
     /// Said and shown once the tasks are gone.
     public static let tasksForgotten = "Your tasks are forgotten."
+    /// Forgetting tasks when their file couldn't be erased. They stopped
+    /// and left the screen, but may come back, so it says so.
+    public static let forgotNotesNotTasks = "Your notes are gone. I stopped your tasks, but I couldn't erase them just now. Please try Forget everything again in a moment."
+    public static let couldNotEraseTasks = "I stopped your tasks, but I couldn't erase them just now. Please try Forget everything again in a moment."
     /// Kept on Today after forgetting, while a step the person said yes to
     /// may have happened. Names nothing the task held.
     public static func forgotUnderway(_ count: Int) -> String {

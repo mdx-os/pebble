@@ -114,9 +114,10 @@ public struct HomeView: View {
     /// The same, from a place already worked out. With `cloud`, Forget
     /// everything erases the words always hidden too.
     static func memoryModel(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp? = nil,
-                            onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) -> MemoryModel {
+                            onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none },
+                            othersStored: @escaping @MainActor () -> Bool = { false }) -> MemoryModel {
         MemoryModel(store: store, place: place, alsoForget: MemoryView.alsoForget(cloud),
-                    onForgetEverything: onForgetEverything)
+                    onForgetEverything: onForgetEverything, othersStored: othersStored)
     }
 
     /// The send itself, apart from moving, so tests can drive it.
@@ -543,7 +544,8 @@ struct HomeScreen: View {
             // on each pass through here. `place` then keeps its words in
             // step with the cloud setting and the open chat.
             MemoryView(model: HomeView.memoryModel(store: memory, place: surfacePlace, cloud: cloud,
-                                                   onForgetEverything: { feed.forgetTasks() }),
+                                                   onForgetEverything: { feed.forgetTasks() },
+                                                   othersStored: { feed.tasksStored }),
                        place: surfacePlace, cloud: cloud)
         } else {
             // The store couldn't be opened. Say so rather than hide memory.

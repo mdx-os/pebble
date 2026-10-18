@@ -507,13 +507,18 @@ final class MemoryModel: ObservableObject {
 
     /// Forgets what lives outside the memory file, such as tasks.
     private let onForgetEverything: @MainActor () -> ClearedTasks
+    /// True while something else Forget everything erases is on disk, such
+    /// as the task engine's file, so the button stays while it is there.
+    private let othersStored: @MainActor () -> Bool
 
     init(store: MemoryStore, place: PrivacyPlace, alsoForget: (@MainActor () throws -> CloudHelp.Forgot)? = nil,
-         onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) {
+         onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none },
+         othersStored: @escaping @MainActor () -> Bool = { false }) {
         self.store = store
         self.place = place
         self.alsoForget = alsoForget
         self.onForgetEverything = onForgetEverything
+        self.othersStored = othersStored
         refresh()
     }
 
@@ -526,7 +531,7 @@ final class MemoryModel: ObservableObject {
         case .unavailable:
             notes = []; isUnreadable = false; isUnavailable = true
         }
-        hasStoredFile = store.hasStoredFile
+        hasStoredFile = store.hasStoredFile || othersStored()
     }
 
     /// False while the saved notes can't be read or opened, so they stay untouched.
@@ -588,10 +593,19 @@ final class MemoryModel: ObservableObject {
         let rest = alsoForget.map { forget in try? forget() }
         // A step said yes to may have happened, so the line says so here too.
         let underway = tasks.underwayLine.map { " " + $0 } ?? ""
-        status = Self.forgotLine(notesGone: notesGone, rest: rest, tasksGone: tasks.forgotten > 0) + underway
+        status = Self.forgotLineWithTasks(notesGone: notesGone, rest: rest, cleared: tasks) + underway
         let restGone = rest.map { $0 != nil } == true
-        if notesGone || restGone || tasks.forgotten > 0 { forgottenCount += 1 }
+        if notesGone || restGone || (tasks.forgotten > 0 && tasks.erased) { forgottenCount += 1 }
         refresh()
+    }
+
+    /// The same, with the tasks as the engine left them. Tasks whose file
+    /// couldn't be erased are never called gone: the line says so, after
+    /// what happened to everything else.
+    static func forgotLineWithTasks(notesGone: Bool, rest: CloudHelp.Forgot??, cleared tasks: ClearedTasks) -> String {
+        let line = forgotLine(notesGone: notesGone, rest: rest, tasksGone: tasks.forgotten > 0 && tasks.erased)
+        guard !tasks.erased else { return line }
+        return line == MemoryWords.forgotten ? TaskWords.forgotNotesNotTasks : line + " " + TaskWords.couldNotEraseTasks
     }
 
     /// What Forget everything says went, from what each part did. Tasks

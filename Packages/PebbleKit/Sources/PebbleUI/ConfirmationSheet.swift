@@ -160,6 +160,7 @@ public struct ConfirmationSheet: View {
         case .send: "paperplane.fill"
         case .purchase: "bag.fill"
         case .sharePersonalInfo: "person.text.rectangle.fill"
+        case .save: "note.text"
         }
     }
 

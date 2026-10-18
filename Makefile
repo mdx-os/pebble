@@ -52,13 +52,15 @@ device-screenshots: generate
 		sh scripts/device-screenshots.sh $(or $(OUT),build/screenshots/devices)
 
 ## ui-test: drive the app in the Simulator: the iPad sidebar, Return to send,
-## the keyboard shortcuts and the cloud screens, on an iPad and an iPhone
+## the keyboard shortcuts, the cloud screens and the weekly digest in the real
+## app, on an iPad and an iPhone
 ui-test: generate
 	xcodebuild test -quiet -project Pebble.xcodeproj -scheme Pebble -derivedDataPath $(DERIVED) \
 		-destination 'platform=iOS Simulator,name=$(or $(PEBBLE_IPAD),iPad Pro 13-inch (M5))' \
 		-destination 'platform=iOS Simulator,name=$(or $(PEBBLE_IPHONE),iPhone 17 Pro)' \
 		-only-testing:PebbleAppUITests/HomeLayoutUITests \
-		-only-testing:PebbleAppUITests/CloudUITests
+		-only-testing:PebbleAppUITests/CloudUITests \
+		-only-testing:PebbleAppUITests/DigestUITests
 
 ## brand-check: the product name must live only in Config/Brand.xcconfig
 brand-check:

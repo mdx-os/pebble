@@ -49,6 +49,7 @@ struct CopyDashTests {
       + CloudWords.all
       + Redaction.Kind.allCases.flatMap { [$0.mask, $0.counted(1), $0.counted(2)] }
       + TaskWords.all
+      + DigestWords.all
 
     @Test func noScreenWordsUseADash() {
         for line in Self.copy {
@@ -131,10 +132,20 @@ extension TaskWords {
          approveTitle, redirectTitle, redirectPlaceholder, redirectSendTitle, redirectCancelTitle, stopTitle,
          tryAgainTitle, dismissTitle, youSaidYes, finishingApproved, yesNotUsed,
          forgetTasksTitle, forgetTasksQuestion, forgetTasksDetail, questionTimedOut, tasksForgotten,
-         forgotUnderway(1), forgotUnderway(2), forgotUnderwayDismissTitle,
+         forgotUnderway(1), forgotUnderway(2), forgotUnderwayDismissTitle, couldNotEraseTasks, forgotNotesNotTasks,
          youSaid("x"), tookAnotherWay("x"), declined("x"), changedCourse("x"), timedOut("x"), couldNotAsk("x"),
          mayBeDone("x"), percentDone(40), kept(["a"]), kept(["a", "b", "c"]), notDone(["a", "b"]),
          TaskWrapUp(kept: [], notDone: []).keptLine]
         + TaskState.allCases.map(\.label)
+    }
+}
+
+extension DigestWords {
+    /// Every line the digest task and its offer can show or say.
+    static var all: [String] {
+        [offerHeading, offerDetail, startTitle, startHint, reading, picking, writing, askLine, saving, done,
+         nothingThisWeek, couldNotRead, couldNotSave, cantSteer, cantDoThatYet, stoppedWhenClosed, yourNotes,
+         heading, andMore(1), andMore(3), DigestTask.keep("x").question, TaskWords.declined(DigestTask.saveTodo),
+         TaskWrapUp(kept: [], notDone: [DigestTask.saveTodo]).notDoneLine ?? ""]
     }
 }

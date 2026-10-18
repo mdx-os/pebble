@@ -11,6 +11,8 @@ import SwiftUI
 @MainActor
 final class FeedModel: ObservableObject {
     @Published private(set) var feed: Feed
+    /// Tasks the engine can start that aren't going now, offered on Today.
+    @Published private(set) var offers: [TaskRequest] = []
     /// The question open in the confirmation sheet.
     @Published var reviewing: ConfirmationRequest?
     /// The result open to read.
@@ -85,6 +87,7 @@ final class FeedModel: ObservableObject {
         self.now = now
         self.clock = clock
         feed = Feed.build(from: sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
+        offers = Self.offers(from: tasks)
         let list = tasks?.tasks ?? []
         track(list)
         sections = Self.sections(of: feed)
@@ -188,8 +191,29 @@ final class FeedModel: ObservableObject {
     private func rebuild() {
         let next = Feed.build(from: sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
         if next != feed { feed = next }
+        let offered = Self.offers(from: tasks)
+        if offered != offers { offers = offered }
         followCards()
     }
+
+    /// What the engine can start, less any already going, so a task is
+    /// never offered twice at once.
+    static func offers(from tasks: (any TaskEngine)?) -> [TaskRequest] {
+        guard let tasks else { return [] }
+        let going = Set(tasks.tasks.filter(\.isActive).map(\.title))
+        return tasks.builtIns.filter { !going.contains($0.title) }
+    }
+
+    /// Starts one of the engine's own tasks from its offer on Today.
+    func start(_ request: TaskRequest) {
+        guard let tasks, tasks.builtIns.contains(request) else { return }
+        tasks.start(request)
+        refresh()
+    }
+
+    /// True while the engine keeps a file of its tasks, so Forget
+    /// everything is offered even with no notes left.
+    var tasksStored: Bool { tasks?.hasStoredFile == true }
 
     /// Each task card's section: Needs you, Working on it, or a time group.
     static func sections(of feed: Feed) -> [String: String] {
@@ -360,7 +384,9 @@ final class FeedModel: ObservableObject {
         askedBy.removeAll()
         let cleared = tasks.clear()
         refresh()
-        if cleared.forgotten > 0 { tasksForgotten = true }
+        // Only once the file has gone too, so nothing says they are
+        // forgotten while they may come back.
+        if cleared.forgotten > 0 && cleared.erased { tasksForgotten = true }
         if let line = cleared.underwayLine {
             forgotUnderway = line
             announce(TaskAnnouncer.Line(text: line, urgent: true))
@@ -548,6 +574,10 @@ struct FeedView: View {
                             .accessibilityIdentifier("working")
                             .transition(Motion.arrival(reduceMotion: reduceMotion))
                     }
+                    if !model.offers.isEmpty {
+                        offers(columns: columns)
+                            .transition(Motion.arrival(reduceMotion: reduceMotion))
+                    }
                     ForEach(model.feed.groups) { group in
                         section(group.title, detail: nil, items: group.items, columns: columns)
                     }
@@ -642,6 +672,28 @@ struct FeedView: View {
                 }
             }
         }
+    }
+
+    /// What the engine can start, one card each.
+    private func offers(columns: [GridItem]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(DigestWords.offerHeading)
+                    .font(.system(.title3, design: .rounded).weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
+                Text(DigestWords.offerDetail)
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            LazyVGrid(columns: columns, alignment: .leading, spacing: Self.cardSpacing) {
+                ForEach(model.offers, id: \.title) { request in
+                    TaskOfferCard(request: request) { model.start(request) }
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("offers")
     }
 
     private var empty: some View {
@@ -765,6 +817,58 @@ struct FeedCard: View {
         // symbol by state. Here only so the switch is complete.
         case .task: "circle.fill"
         }
+    }
+}
+
+/// A task the agent can start, offered on Today. One button: VoiceOver
+/// hears the title, then that it starts.
+struct TaskOfferCard: View {
+    let request: TaskRequest
+    let start: () -> Void
+    @Environment(\.colorScheme) private var scheme
+
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: Theme.corner, style: .continuous)
+    }
+
+    var body: some View {
+        Button(action: start) {
+            VStack(alignment: .leading, spacing: 10) {
+                Label {
+                    Text(DigestWords.offerHeading)
+                } icon: {
+                    Image(systemName: "sparkles")
+                        .foregroundStyle(Theme.accentSymbol)
+                }
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Theme.secondaryText)
+                Text(request.title)
+                    .font(.system(.headline, design: .rounded))
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(DigestWords.startTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.accentText)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Theme.accent.opacity(Theme.accentWash), in: Capsule())
+                    .padding(.top, 2)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.card(scheme), in: shape)
+            .overlay(shape.stroke(Theme.hairline(scheme), lineWidth: 1))
+            .contentShape(shape)
+        }
+        .buttonStyle(SoftPressStyle())
+        .pointerHover(in: shape)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(request.title)
+        .accessibilityHint(DigestWords.startHint)
+        .accessibilityInputLabels([Text(DigestWords.startTitle), Text(request.title)])
+        .accessibilityAddTraits(.isButton)
+        .accessibilityIdentifier("offer")
     }
 }
 

@@ -9,6 +9,11 @@ struct PebbleApp: App {
     /// The one notes store, shared by the memory screen and the cloud
     /// redactor, so both always see the same notes.
     private let memory: MemoryStore?
+    /// The model that runs here. The task engine takes its place from it.
+    private let model = LocalStubModel()
+    /// The real task engine: on this device only, reading the same notes,
+    /// its tasks kept next to them. None when the notes can't be opened.
+    private let tasks: DeviceTaskEngine?
     /// Off until the person turns it on, and unavailable while
     /// Config/Cloud.local.xcconfig has no address. Its settings and private
     /// words are kept next to the notes, out of backups.
@@ -25,6 +30,8 @@ struct PebbleApp: App {
         self.brand = brand
         let memory = try? MemoryStore.onDevice()
         self.memory = memory
+        let model = self.model
+        tasks = memory.flatMap { OnDeviceTasks.engine(model: model, notes: $0) }
         let endpoint = CloudEndpoint.url(infoDictionary: Bundle.main.infoDictionary)
         // The setting is kept next to the notes. If either can't be opened,
         // nothing typed into the setting could be kept, so it reads as off,
@@ -61,10 +68,11 @@ struct PebbleApp: App {
     private var home: some View {
         HomeView(
             brand: brand,
-            model: LocalStubModel(),
+            model: model,
             names: UserDefaultsAgentNameStore(),
             onboarding: UserDefaultsOnboardingStore(),
             memory: memory,
+            tasks: tasks,
             cloud: cloud
         )
     }
