@@ -820,19 +820,20 @@ struct HomeSplit<TodayScreen: View, ChatScreen: View, MemoryScreen: View>: View 
                     let chosen = Self.isChosen(place, section: section, regular: isRegular) && Self.drawsOwnFill
                     let count = place == .today ? needsYouCount : 0
                     NavigationLink(value: place) {
-                        HStack {
-                            Label(place.title, systemImage: place.symbol)
-                            // The system's badge is in its secondary ink,
-                            // faint on the fill, so the chosen row draws its own.
-                            if chosen, count > 0 {
-                                Spacer()
-                                Text(count, format: .number)
-                                    .monospacedDigit()
-                                    // Heard as what it counts, not a bare number.
-                                    .accessibilityLabel(Self.spokenCount(count))
+                        Self.ink(chosen: chosen) {
+                            HStack {
+                                Label(place.title, systemImage: place.symbol)
+                                // The system's badge is in its secondary ink,
+                                // faint on the fill, so the chosen row draws its own.
+                                if chosen, count > 0 {
+                                    Spacer()
+                                    Text(count, format: .number)
+                                        .monospacedDigit()
+                                        // Heard as what it counts, not a bare number.
+                                        .accessibilityLabel(Self.spokenCount(count))
+                                }
                             }
                         }
-                        .foregroundStyle(chosen ? AnyShapeStyle(Theme.onTintFill) : AnyShapeStyle(.primary))
                     }
                     // Heard the same way as the count the chosen row draws.
                     .badge(chosen || count == 0 ? nil
@@ -842,7 +843,7 @@ struct HomeSplit<TodayScreen: View, ChatScreen: View, MemoryScreen: View>: View 
                     .listRowBackground(chosen ? Capsule().fill(Theme.tintFill).padding(.horizontal, 10) : nil)
                     // Today is drawn chosen beside its own screen before the
                     // list has a selection, so VoiceOver hears it chosen too.
-                    .accessibilityAddTraits(Self.traits(place, section: section, regular: isRegular))
+                    .accessibilityAddTraits(Self.traits(place, section: section, regular: isRegular, ownFill: Self.drawsOwnFill))
                 }
             }
             // The deep fill tint, not the root's `accentText`, which is too
@@ -902,9 +903,24 @@ struct HomeSplit<TodayScreen: View, ChatScreen: View, MemoryScreen: View>: View 
         HomeWords.waiting(count)
     }
 
-    /// What VoiceOver hears of a row: chosen exactly when it is drawn so.
-    static func traits(_ place: HomeSection, section: HomeSection?, regular: Bool) -> AccessibilityTraits {
-        isChosen(place, section: section, regular: regular) ? .isSelected : []
+    /// White words on the chosen row's own fill. Every other row, and the
+    /// system's selection where it draws one, keeps the sidebar's own
+    /// colors, its tinted icons included.
+    @ViewBuilder
+    static func ink(chosen: Bool, @ViewBuilder row: () -> some View) -> some View {
+        if chosen {
+            row().foregroundStyle(Theme.onTintFill)
+        } else {
+            row()
+        }
+    }
+
+    /// What VoiceOver adds to a row: chosen exactly when this code draws it
+    /// so. Where the system draws the selection (`ownFill` false, as on the
+    /// Mac) it gives the trait itself, for the row it really selected, so
+    /// nothing is added.
+    static func traits(_ place: HomeSection, section: HomeSection?, regular: Bool, ownFill: Bool) -> AccessibilityTraits {
+        ownFill && isChosen(place, section: section, regular: regular) ? .isSelected : []
     }
 
     private var newChatButton: some View {

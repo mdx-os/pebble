@@ -347,24 +347,36 @@ struct DoneButton: View {
 /// and takes the iPad pointer's highlight.
 struct FillButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.isFocused) private var isFocused
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.body.weight(.semibold))
-            .foregroundStyle(isEnabled ? AnyShapeStyle(Theme.onTintFill) : AnyShapeStyle(Theme.secondaryText))
-            .padding(.horizontal, 16)
-            .frame(minHeight: 44)
-            .background(isEnabled ? AnyShapeStyle(Theme.tintFill) : AnyShapeStyle(Color.primary.opacity(Theme.disabledTint)),
-                        in: Capsule())
-            .overlay {
-                if isFocused {
-                    Capsule().strokeBorder(Theme.tintFill, lineWidth: 2).padding(-4)
-                }
+        FocusRing {
+            configuration.label
+                .font(.body.weight(.semibold))
+                .foregroundStyle(isEnabled ? AnyShapeStyle(Theme.onTintFill) : AnyShapeStyle(Theme.secondaryText))
+                .padding(.horizontal, 16)
+                .frame(minHeight: 44)
+                .background(isEnabled ? AnyShapeStyle(Theme.tintFill) : AnyShapeStyle(Color.primary.opacity(Theme.disabledTint)),
+                            in: Capsule())
+        }
+        .contentShape(Capsule())
+        .pointerHover(in: Capsule())
+        .opacity(configuration.isPressed ? 0.7 : 1)
+    }
+}
+
+/// A ring of `Theme.tintFill` around a capsule button while the keyboard is
+/// on it. A view of its own inside the button, because `isFocused` read on
+/// the style itself is resolved outside the button and stays false.
+struct FocusRing<Content: View>: View {
+    @Environment(\.isFocused) private var isFocused
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        content.overlay {
+            if isFocused {
+                Capsule().strokeBorder(Theme.tintFill, lineWidth: 2).padding(-4)
             }
-            .contentShape(Capsule())
-            .pointerHover(in: Capsule())
-            .opacity(configuration.isPressed ? 0.7 : 1)
+        }
     }
 }
 

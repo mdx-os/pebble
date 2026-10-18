@@ -145,6 +145,15 @@ struct ContrastGuardTests {
             "struct HomeSplit: View {\n    var body: some View {\n"
                 + "        Text(\"a\").foregroundStyle(chosen ? AnyShapeStyle(.primary) : AnyShapeStyle(Theme.onTintFill))\n    }\n}",
             "struct HomeSplit: View {\n    var body: some View {\n        Text(\"a\").tint(flag ? Theme.onTintFill : .primary)\n    }\n}",
+            // A ternary styles every other row too, over their tinted icons.
+            "struct HomeSplit: View {\n    var body: some View {\n        HStack { Text(\"a\"); Text(\"3\") }\n"
+                + "            .foregroundStyle(chosen ? AnyShapeStyle(Theme.onTintFill) : AnyShapeStyle(.primary))\n    }\n}",
+            "struct HomeSplit: View {\n    func ink() -> some View {\n        if !chosen {\n            row().foregroundStyle(Theme.onTintFill)\n"
+                + "        }\n    }\n}",
+            "struct HomeSplit: View {\n    func ink() -> some View {\n        if chosen {\n            row()\n        } else {\n"
+                + "            row().foregroundStyle(Theme.onTintFill)\n        }\n    }\n}",
+            "struct HomeSplit: View {\n    func ink() -> some View {\n        if chosen {\n            row().overlay {\n"
+                + "                Text(\"a\").foregroundStyle(Theme.onTintFill)\n            }\n        }\n    }\n}",
             "struct FillButtonStyle: ButtonStyle {}\nstruct Other: View {\n"
                 + "    var body: some View { Text(\"a\").foregroundStyle(Theme.onTintFill) }\n}",
             "let ink = Theme.onTintFill",
@@ -171,8 +180,9 @@ struct ContrastGuardTests {
             // Art, not words: the character's highlights.
             #".fill(.white.opacity(0.35))"#,
             // White on the fill: the chosen sidebar row, its badge, and Done.
-            "struct HomeSplit: View {\n    var body: some View {\n        HStack { Text(\"a\"); Text(\"3\") }\n"
-                + "            .foregroundStyle(chosen ? AnyShapeStyle(Theme.onTintFill) : AnyShapeStyle(.primary))\n    }\n}",
+            "struct HomeSplit: View {\n    static func ink(chosen: Bool, row: () -> some View) -> some View {\n"
+                + "        if chosen {\n            row().foregroundStyle(Theme.onTintFill)\n        } else {\n            row()\n"
+                + "        }\n    }\n}",
             "struct FillButtonStyle: ButtonStyle {\n    func makeBody(configuration: Configuration) -> some View {\n"
                 + "        configuration.label.foregroundStyle(Theme.onTintFill)\n    }\n}",
             "static let onTintFill = RGB.white.color",
@@ -355,17 +365,29 @@ enum ContrastLint {
     }
 
     /// True when `onTintFill` at `offset` has `tintFill` under it: anywhere
-    /// in `FillButtonStyle`, which draws that fill, or in HomeSplit as the
-    /// chosen branch of a `foregroundStyle(chosen ? ...)`, where the chosen
-    /// row draws it.
+    /// in `FillButtonStyle`, which draws that fill, or in HomeSplit inside
+    /// an `if chosen {` branch, where the chosen row draws it. A ternary
+    /// such as `chosen ? onTintFill : .primary` is not enough: it sets a
+    /// style on every other row too, and covers their tinted icons and the
+    /// system's own selection.
     static func onTheFill(_ offset: Int, in source: SwiftSource) -> Bool {
         if inside("FillButtonStyle", offset, source) { return true }
         guard inside("HomeSplit", offset, source) else { return false }
-        return source.calls(named: ["foregroundStyle"]).contains { call in
-            guard call.offset < offset, offset < call.end,
-                  let branches = call.arguments.wholeMatch(of: #/chosen\s*\?\s*(.*?)\s*:\s*(.*)/#) else { return false }
-            return branches.1.contains("onTintFill") && !branches.2.contains("onTintFill")
+        // The innermost brace still open at `offset`.
+        var depth = 0
+        var at = offset
+        while at > 0 {
+            at -= 1
+            let character = source.code[at]
+            if character == "}" { depth += 1 }
+            if character == "{" {
+                if depth == 0 { break }
+                depth -= 1
+            }
         }
+        guard at >= 0, source.code[at] == "{" else { return false }
+        let before = String(source.code[..<at])
+        return before.range(of: #"\bif\s+chosen\s*\z"#, options: .regularExpression) != nil
     }
 
     /// True when `offset` is after `struct name` with no other type

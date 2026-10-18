@@ -26,7 +26,7 @@ public struct ChatView: View {
 
     public init(
         brand: Brand,
-        model: any ModelClient = LocalStubModel(),
+        model: any ModelClient,
         names: any AgentNameStoring = UserDefaultsAgentNameStore(),
         look: AgentLook? = nil,
         firstMessage: String? = nil,
@@ -789,7 +789,7 @@ struct AvatarView: View {
 }
 
 #Preview {
-    ChatView(brand: Brand(name: "Preview"), names: InMemoryAgentNameStore())
+    ChatView(brand: Brand(name: "Preview"), model: LocalStubModel(), names: InMemoryAgentNameStore())
 }
 #else
 public enum PebbleUISupport {

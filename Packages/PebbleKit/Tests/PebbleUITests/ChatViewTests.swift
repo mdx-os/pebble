@@ -15,7 +15,7 @@ struct ChatViewTests {
         CGSize(width: 1280, height: 800),  // Mac window
     ])
     func smokeAtEachDeviceSize(size: CGSize) throws {
-        try smokeRender(ChatView(brand: brand, names: InMemoryAgentNameStore()).frame(width: size.width, height: size.height))
+        try smokeRender(ChatView(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore()).frame(width: size.width, height: size.height))
     }
 
     /// The chosen name is the one the chat shows, from the store.

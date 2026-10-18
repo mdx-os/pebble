@@ -59,9 +59,15 @@ struct HomeLayoutTests {
             #expect(chosen.isEmpty, "a collapsed list with nothing chosen draws no row chosen")
         }
         for place in HomeSection.allCases {
-            #expect(Split.traits(place, section: section, regular: regular).contains(.isSelected)
+            // Where this code draws the fill, the row it draws is heard chosen.
+            #expect(Split.traits(place, section: section, regular: regular, ownFill: true).contains(.isSelected)
                         == Split.isChosen(place, section: section, regular: regular),
                     "\(place) with \(String(describing: section)), regular \(regular)")
+            // Where the system draws the selection, as on the Mac, it gives
+            // the trait itself, so nothing is added: with no selection the
+            // Mac draws none, and Today must not be heard selected.
+            #expect(Split.traits(place, section: section, regular: regular, ownFill: false).isEmpty,
+                    "\(place) with \(String(describing: section)), regular \(regular), system selection")
         }
         // A count is heard as what it counts, never as a bare number: the
         // one the chosen row draws itself and the system badge on the rest.
@@ -74,6 +80,8 @@ struct HomeLayoutTests {
         let text = (try? String(contentsOf: root.appendingPathComponent("Packages/PebbleKit/Sources/PebbleUI/HomeView.swift"),
                                 encoding: .utf8)) ?? ""
         let code = String(SwiftSource(text).code)
+        #expect(code.contains("Self.traits(place, section: section, regular: isRegular, ownFill: Self.drawsOwnFill)"),
+                "the sidebar adds the trait only where it draws its own fill")
         #expect(code.range(of: #"Text\(count, format: \.number\)\s*\.monospacedDigit\(\)\s*\.accessibilityLabel\(Self\.spokenCount\(count\)\)"#,
                            options: .regularExpression) != nil, "the drawn count carries the spoken label")
         #expect(code.range(of: #"\.badge\([^\n]*\n?[^\n]*Text\(count, format: \.number\)\.accessibilityLabel\(Self\.spokenCount\(count\)\)\)"#,
@@ -87,7 +95,8 @@ struct HomeLayoutTests {
 
     /// Done draws its own style, so it brings back what the system's would
     /// give: a ring while the keyboard is on it, and the iPad pointer's
-    /// highlight.
+    /// highlight. The focus is read in `FocusRing`, a view inside the button,
+    /// not on the style, where it stays false.
     @Test func doneShowsKeyboardFocusAndPointerHover() throws {
         let root = SwiftSource.repositoryRoot(from: #filePath)
         let text = try String(contentsOf: root.appendingPathComponent("Packages/PebbleKit/Sources/PebbleUI/Theme.swift"),
@@ -95,11 +104,17 @@ struct HomeLayoutTests {
         let code = String(SwiftSource(text).code)
         let start = try #require(code.range(of: "struct FillButtonStyle"))
         let style = String(code[start.lowerBound...].prefix(1400))
-        #expect(style.contains(#"@Environment(\.isFocused)"#))
-        #expect(style.range(of: #"if\s+isFocused\s*\{\s*Capsule\(\)\.strokeBorder"#, options: .regularExpression) != nil)
         #expect(style.contains(".pointerHover(in: Capsule())"))
+        #expect(style.range(of: #"struct FillButtonStyle[^{]*\{[^}]*isFocused"#, options: .regularExpression) == nil,
+                "the style never reads the focus itself")
+        let ring = try #require(code.range(of: "struct FocusRing"))
+        let ringBody = String(code[ring.lowerBound...].prefix(600))
+        #expect(ringBody.contains(#"@Environment(\.isFocused)"#))
+        #expect(ringBody.range(of: #"if\s+isFocused\s*\{\s*Capsule\(\)\.strokeBorder"#, options: .regularExpression) != nil)
+        #expect(style.contains("FocusRing {"), "the style's capsule sits inside FocusRing")
         try smokeRender(DoneButton {}.padding().frame(width: 200, height: 100))
     }
+
 
     @Test("Smoke: the shortcuts screen draws", arguments: [ColorScheme.light, .dark])
     func smokeTheShortcutsScreen(scheme: ColorScheme) throws {

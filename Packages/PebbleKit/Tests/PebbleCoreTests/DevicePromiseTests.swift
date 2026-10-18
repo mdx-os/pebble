@@ -238,6 +238,14 @@ enum DevicePromise {
                 reason: "The preview's count of hidden private words, many. " + privateWordsName),
     ]
 
+    /// The only files that make a `LocalStubModel`: the app, which wires it
+    /// in as the model, the Debug showcase, and the stub itself.
+    static let stubMakers: Set<String> = [
+        "App/Sources/PebbleApp.swift",
+        "PebbleUI/ShowcaseScene.swift",
+        "PebbleModel/LocalStubModel.swift",
+    ]
+
     /// The words the competitor watch's fit score looks for.
     static let ideaFitKeywords = ["upload", "cloud data storage", "on our servers", "requires cloud", "cloud only"]
 
@@ -365,6 +373,8 @@ enum DevicePromise {
     ///   from `runsOnDevice`, so a place is never built from a turned Bool.
     /// - A Bool named `onDevice`, as a `let`/`var` or as an argument, must
     ///   come straight from `.staysOnDevice`, with no `!`.
+    /// - `LocalStubModel()` is made only in `stubMakers` and in a
+    ///   `#Preview`, so its `.onDevice` is never a screen's own promise.
     static func placeProblems(in source: SwiftSource, file: String) -> [String] {
         let code = String(source.code)
         var problems: [String] = []
@@ -419,6 +429,22 @@ enum DevicePromise {
         for call in source.calls(named: ["PrivacyPlace"]) where call.arguments.contains("staysOnDevice:") {
             if file != "PebbleModel/ModelClient.swift" || call.arguments != "staysOnDevice: runsOnDevice" {
                 problems.append("\(file):\(call.line): PrivacyPlace(\(call.arguments)) is made only by ModelClient, from runsOnDevice")
+            }
+        }
+        // A stand-in model, made anywhere, would be a model whose place is
+        // `.onDevice` with no real model behind it, so a screen could make
+        // the device promise from `LocalStubModel().privacyPlace`. It is made
+        // only by the app's wiring and the showcase, its own file, and in a
+        // `#Preview`, which no person sees.
+        if !DevicePromise.stubMakers.contains(file) {
+            each(#"\bLocalStubModel\s*(?:\(|\.\s*init\b)"#) { match, ns in
+                let lead = ns.substring(to: match.range.location)
+                if let preview = lead.range(of: "#Preview", options: .backwards) {
+                    let after = lead[preview.upperBound...]
+                    if after.filter({ $0 == "{" }).count > after.filter({ $0 == "}" }).count { return nil }
+                }
+                return "LocalStubModel() is made only by the app's wiring and the showcase, "
+                    + "so no screen takes its place without the real model"
             }
         }
         // A Bool called onDevice, kept or passed on.
@@ -657,6 +683,11 @@ struct DevicePromiseTests {
             "let place = PrivacyPlace.all()",
             "let place = PrivacyPlace\n    .all( )",
             "f(place: .all())",
+            // A stand-in model made by a screen, whose place reads as the device.
+            "MemoryView(store: store, place: LocalStubModel().privacyPlace)",
+            "init(model: any ModelClient = LocalStubModel()) {}",
+            "let model = LocalStubModel\n    .init()",
+            "#Preview { Text(\"a\") }\nlet model = LocalStubModel()",
         ]
         for text in wrong {
             #expect(!DevicePromise.placeProblems(in: SwiftSource(text), file: "PebbleUI/Wrong.swift").isEmpty, "missed: \(text)")
@@ -673,6 +704,8 @@ struct DevicePromiseTests {
             "let store = try? MemoryStore.onDevice()",
             "let place = PrivacyPlace.all(chat.privacyPlace, model.privacyPlace)",
             "let lines = CloudWords.all()",
+            "let reply = (try? LocalStubModel.answer(to: turns)) ?? LocalStubModel.fallback",
+            "#Preview {\n    ChatView(brand: brand, model: LocalStubModel())\n}",
         ]
         for text in right {
             #expect(DevicePromise.placeProblems(in: SwiftSource(text), file: "PebbleUI/Right.swift").isEmpty, "flagged: \(text)")
@@ -685,6 +718,11 @@ struct DevicePromiseTests {
         #expect(!DevicePromise.placeProblems(in: SwiftSource(cloudPlace), file: "PebbleUI/Other.swift").isEmpty)
         let cloudPromise = "public static let place = PrivacyPlace.onDevice"
         #expect(!DevicePromise.placeProblems(in: SwiftSource(cloudPromise), file: "PebbleModel/CloudModel.swift").isEmpty)
+        let stub = "HomeView(brand: brand, model: LocalStubModel())"
+        for maker in DevicePromise.stubMakers {
+            #expect(DevicePromise.placeProblems(in: SwiftSource(stub), file: maker).isEmpty, "\(maker)")
+        }
+        #expect(!DevicePromise.placeProblems(in: SwiftSource(stub), file: "PebbleUI/HomeView.swift").isEmpty)
         let flag = "public var staysOnDevice: Bool { self == .onDevice }"
         #expect(DevicePromise.placeProblems(in: SwiftSource(flag), file: "PebbleCore/PrivacyPlace.swift").isEmpty)
         #expect(!DevicePromise.placeProblems(in: SwiftSource(flag), file: "PebbleCore/Other.swift").isEmpty)

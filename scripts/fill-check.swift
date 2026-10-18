@@ -6,7 +6,8 @@
 // a smaller patch of fill and fewer white pixels will do.
 //
 // Passes when the region holds a patch of Theme.tintFill in dark mode
-// (0.74, 0.33, 0.08), and that patch has white words on it, not black or
+// (0.74, 0.33, 0.08), or in light mode (0.66, 0.29, 0.07), which is inside
+// the tolerance, and that patch has white words on it, not black or
 // gray ones. A gray sidebar selection, or a Done drawn as orange words on
 // glass, has no such patch and fails.
 import CoreGraphics

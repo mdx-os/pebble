@@ -87,10 +87,13 @@ for kind in iPhone iPad; do
   xcrun simctl bootstatus "$udid" -b >/dev/null
   xcrun simctl status_bar "$udid" override --time 9:41 --batteryState charged --batteryLevel 100 || true
   xcrun simctl install "$udid" "$ios_app"
-  xcrun simctl launch "$udid" "$bundle_id" >/dev/null
-  sleep 4
   file="$out/$(echo "$kind" | tr '[:upper:]' '[:lower:]').png"
-  xcrun simctl io "$udid" screenshot "$file" >/dev/null
+  for attempt in 1 2 3; do
+    xcrun simctl launch --terminate-running-process "$udid" "$bundle_id" >/dev/null
+    settled_shot "$udid" "$file"
+    if xcrun simctl spawn "$udid" launchctl list | grep -q "$bundle_id"; then break; fi
+    echo "screenshots: the app wasn't up for $file, launching again"
+  done
   echo "screenshots: $file"
   # In dark mode, where white words on the orange fill are hardest to
   # read: the iPad sidebar with Today selected, then with a question
