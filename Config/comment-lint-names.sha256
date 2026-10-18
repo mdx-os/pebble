@@ -1,0 +1,7 @@
+# The names the comment lint blocks, never in plain text: each line is
+# the SHA-256 of the salt and a name in lower case, two words joined by
+# one space. Rebuild with scripts/comment-lint.sh --hash-names.
+salt: 30a0669866e07c574e99ba7e5cab2e82
+344568636f18eadd6345a475b4962b9ee7a2b74812755ee8ab54b4fc9e458443
+b883ac6bc629c0188ccdbd3a58b71dafcdce956140fcb5ac94bd977832e19576
+e08a9580fa1806516abc2f89e6ce470b7c8a0a769377bddeb96beda9ce2371bb

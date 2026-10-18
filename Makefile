@@ -1,6 +1,6 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test release-test repeat-test build build-release screenshots ui-screenshots device-screenshots ui-test brand-check local-config-check comment-lint mutation-check secrets-check pulse clean
+.PHONY: verify generate test release-test repeat-test build build-release screenshots ui-screenshots device-screenshots ui-test brand-check local-config-check comment-lint hash-names mutation-check secrets-check pulse clean
 
 ## verify: everything CI runs. Run this before every PR.
 verify: brand-check local-config-check comment-lint test release-test mutation-check build build-release screenshots
@@ -78,10 +78,16 @@ brand-check:
 local-config-check:
 	sh scripts/local-config-check.sh
 
-## comment-lint: no review history or personal names in code comments
+## comment-lint: no review history or personal names in code comments. The
+## names are held as salted hashes in Config/comment-lint-names.sha256
 comment-lint:
 	sh scripts/comment-lint.sh --self-test
 	sh scripts/comment-lint.sh
+
+## hash-names: rebuild Config/comment-lint-names.sha256 from the git-ignored
+## Config/comment-lint-names.local.txt, keeping its salt
+hash-names:
+	sh scripts/comment-lint.sh --hash-names
 
 ## mutation-check: break the code each behavior test in
 ## scripts/mutation-manifest.txt covers, on a copy in build/mutation, and
