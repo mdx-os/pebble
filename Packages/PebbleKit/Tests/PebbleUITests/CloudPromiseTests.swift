@@ -514,13 +514,14 @@ struct CloudPromiseTests {
     @Test func theFallbackMemoryScreenErasesKeptPrivateWords() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("cloud-fallback-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
         let file = CloudHelpFileStore(fileURL: folder.appendingPathComponent("cloud-help.json"))
-        try file.save(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"]))
+        try file.save(CloudHelpSettings(isOn: false, privateWords: ["lemon cake"]))
         let cloud = CloudHelp.couldNotOpen(endpoint: endpoint, memory: nil, file: { file })
         var tasksGone = false
         let erased = HomeView.forgetWithoutNotes(cloud: cloud) { tasksGone = true }
         #expect(tasksGone)
-        #expect(erased == true)
+        #expect(erased == .erased)
         #expect(!FileManager.default.fileExists(atPath: file.fileURL.path))
         #expect(try file.load() == .off)
         let view = MemoryUnavailableView(hasTasks: false, forgotten: true, wordsErased: erased, erasesWords: true,
@@ -528,6 +529,31 @@ struct CloudPromiseTests {
         #expect(view.status == CloudWords.tasksAndWordsForgotten)
         #expect(view.detail == CloudWords.forgetTasksAndWordsDetail)
         #expect(view.detail.contains("words you asked me to hide"))
+    }
+
+    /// The same, when the file said on: it is cleared, so the cloud reads
+    /// as off next launch too, and the line says so rather than only that
+    /// the words went.
+    @Test func theFallbackMemoryScreenSaysWhenTheCloudWentOffWithTheWords() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("cloud-fallback-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = CloudHelpFileStore(fileURL: folder.appendingPathComponent("cloud-help.json"))
+        try file.save(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"]))
+        let cloud = CloudHelp.couldNotOpen(endpoint: endpoint, memory: nil, file: { file })
+        let erased = HomeView.forgetWithoutNotes(cloud: cloud) {}
+        #expect(erased == .erasedWithCloud)
+        #expect(!FileManager.default.fileExists(atPath: file.fileURL.path))
+        let view = MemoryUnavailableView(hasTasks: false, forgotten: true, wordsErased: erased, erasesWords: true,
+                                         onForgetTasks: {})
+        #expect(view.status == CloudWords.tasksAndWordsAndCloudForgotten)
+        #expect(CloudWords.tasksAndWordsAndCloudForgotten.contains("help from the cloud is off"))
+        // The setting opened at launch, and the words could only go with
+        // the whole file: the same line.
+        let store = FailingCloudStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"]))
+        store.savesToFail = .max
+        let opened = CloudHelp(store: store, endpoint: endpoint, memory: scratchMemory())
+        #expect(HomeView.forgetWithoutNotes(cloud: opened) {} == .erasedWithCloud)
     }
 
     /// The words file can't be reached either: the tasks still go, and the
@@ -538,7 +564,7 @@ struct CloudPromiseTests {
         var tasksGone = false
         let erased = HomeView.forgetWithoutNotes(cloud: cloud) { tasksGone = true }
         #expect(tasksGone)
-        #expect(erased == false)
+        #expect(erased == .stayed)
         let view = MemoryUnavailableView(hasTasks: false, forgotten: true, underway: TaskWords.forgotUnderway(1),
                                          wordsErased: erased, erasesWords: true, onForgetTasks: {})
         #expect(view.status == CloudWords.tasksForgottenNotWords + " " + TaskWords.forgotUnderway(1))
@@ -553,6 +579,120 @@ struct CloudPromiseTests {
     @Test func theAppLetsAnUnopenedSettingEraseItsFile() throws {
         let app = try String(contentsOf: Self.repo.appendingPathComponent("App/Sources/PebbleApp.swift"), encoding: .utf8)
         #expect(app.contains("file: { try CloudHelpFileStore.onDevice() }"))
+    }
+
+    // MARK: Fix round 6
+
+    /// The notes opened but the setting's file didn't, so the normal memory
+    /// screen shows. Forget everything still erases the words kept in that
+    /// file from an earlier launch, and only then says they went.
+    @Test func forgetEverythingErasesWordsKeptInASettingThatCouldntBeOpened() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("cloud-unopened-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = CloudHelpFileStore(fileURL: folder.appendingPathComponent("cloud-help.json"))
+        let memory = scratchMemory("Sam's birthday is May 14.")
+        for wasOn in [false, true] {
+            try file.save(CloudHelpSettings(isOn: wasOn, privateWords: ["lemon cake"]))
+            let cloud = CloudHelp.couldNotOpen(endpoint: endpoint, memory: memory, file: { file })
+            #expect(cloud.settings.privateWords.isEmpty)
+            let model = MemoryModel(store: memory, place: .onDevice, alsoForget: { try cloud.forgetPrivateWords() })
+            model.forgetEverything()
+            #expect(!FileManager.default.fileExists(atPath: file.fileURL.path))
+            #expect(model.status == (wasOn ? CloudWords.forgotAndCloudOff : MemoryWords.forgotten))
+        }
+    }
+
+    /// The same, but that file can't be reached or erased now: the line says
+    /// the words stayed, never "Gone."
+    @Test func forgetEverythingSaysWhenWordsInAnUnopenedSettingStayed() throws {
+        struct Unreachable: Error {}
+        let memory = scratchMemory("Sam's birthday is May 14.")
+        let unreachable = CloudHelp.couldNotOpen(endpoint: endpoint, memory: memory, file: { throw Unreachable() })
+        let model = MemoryModel(store: memory, place: .onDevice, alsoForget: { try unreachable.forgetPrivateWords() })
+        model.forgetEverything()
+        #expect(model.status == CloudWords.forgotNotesNotWords)
+        #expect(memory.notes().isEmpty)
+
+        // Reached, but the erase itself fails.
+        let stuck = FailingCloudStore(CloudHelpSettings(isOn: false, privateWords: ["lemon cake"]))
+        stuck.eraseFails = true
+        let cloud = CloudHelp.couldNotOpen(endpoint: endpoint, memory: memory, file: { stuck })
+        _ = try memory.remember("Prefers tea.", source: .toldMe)
+        let again = MemoryModel(store: memory, place: .onDevice, alsoForget: { try cloud.forgetPrivateWords() })
+        again.forgetEverything()
+        #expect(again.status == CloudWords.forgotNotesNotWords)
+        #expect(try stuck.load().privateWords == ["lemon cake"])
+        #expect(again.status != MemoryWords.forgotten)
+    }
+
+    /// Words that couldn't be read at launch, as on a locked device, are
+    /// still named by the Forget everything question, and the button shows
+    /// with no notes. Once they are read and there are none, the plain
+    /// question is the true one, and the button goes with nothing to erase.
+    @Test func theForgetEverythingQuestionNamesWordsThatCouldntBeRead() throws {
+        let store = InMemoryCloudHelpStore(CloudHelpSettings(privateWords: ["lemon cake"]))
+        store.makeUnreadable()
+        let cloud = help(store: store)
+        #expect(cloud.settings.privateWords.isEmpty)
+        #expect(cloud.mayHavePrivateWords)
+        #expect(MemoryView.forgetEverythingDetail(for: cloud) == CloudWords.forgetEverythingDetail)
+
+        // Unlocked: read again, and the words are there to name.
+        store.makeUnreadable(false)
+        cloud.refresh()
+        #expect(cloud.settings.privateWords == ["lemon cake"])
+        #expect(MemoryView.forgetEverythingDetail(for: cloud) == CloudWords.forgetEverythingDetail)
+
+        // None kept, read fine: the plain words.
+        let empty = help()
+        #expect(!empty.mayHavePrivateWords)
+        #expect(MemoryView.forgetEverythingDetail(for: empty) == MemoryWords.forgetEverythingDetail)
+
+        // Opened, read and erased: nothing left to name.
+        try cloud.forgetPrivateWords()
+        #expect(!cloud.mayHavePrivateWords)
+
+        // A setting that couldn't be opened at launch may keep words in its
+        // file, so the question names them until that file is erased.
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("cloud-unopened-\(UUID().uuidString)")
+        let file = CloudHelpFileStore(fileURL: folder.appendingPathComponent("cloud-help.json"))
+        let unopened = CloudHelp.couldNotOpen(endpoint: endpoint, memory: scratchMemory(), file: { file })
+        #expect(MemoryView.forgetEverythingDetail(for: unopened) == CloudWords.forgetEverythingDetail)
+        try unopened.forgetPrivateWords()
+        #expect(MemoryView.forgetEverythingDetail(for: unopened) == MemoryWords.forgetEverythingDetail)
+        // With nothing to reach, nothing was ever kept.
+        #expect(!CloudHelp.couldNotOpen(endpoint: endpoint, memory: nil).mayHavePrivateWords)
+
+        // The screen reads the words again when it appears, and its button
+        // shows whenever the question would name them.
+        let source = try String(contentsOf: Self.sources.appendingPathComponent("PebbleUI/MemoryView.swift"),
+                                encoding: .utf8)
+        #expect(source.contains(".onAppear { cloud?.refresh() }"))
+        #expect(source.contains("model.hasStoredFile || help.mayHavePrivateWords"))
+    }
+
+    /// The setting's changes reach the home screen through one publisher,
+    /// made once, not one built again on every redraw.
+    @Test func theHomeScreenHoldsTheSettingsPublisherOnce() throws {
+        let home = try String(contentsOf: Self.sources.appendingPathComponent("PebbleUI/HomeView.swift"),
+                              encoding: .utf8)
+        #expect(home.contains("@State private var cloudSettings: AnyPublisher<CloudHelpSettings, Never>"))
+        #expect(!home.contains("private var cloudSettings: AnyPublisher<CloudHelpSettings, Never> {"))
+    }
+
+    /// The cloud setting's only way in is a link on the memory screen, so
+    /// both places that show that screen hold it in a navigation stack.
+    /// `CloudUITests` taps it in the real app on iPhone and iPad.
+    @Test func theMemoryScreenSitsInANavigationStackInBothLayouts() throws {
+        let home = try String(contentsOf: Self.sources.appendingPathComponent("PebbleUI/HomeView.swift"),
+                              encoding: .utf8)
+        let sheet = try #require(home.range(of: "), onDismiss: sheetClosed) {"))
+        #expect(home[sheet.upperBound...].prefix(120).contains("NavigationStack {\n                memoryScreen"))
+        let split = try #require(home.range(of: "} detail: {"))
+        let detail = home[split.upperBound...].prefix(600)
+        #expect(detail.contains("NavigationStack {"))
+        #expect(detail.contains("memoryScreen"))
     }
 
     // MARK: Helpers

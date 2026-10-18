@@ -42,9 +42,12 @@ public struct HomeView: View {
     /// A cloud chat's preview is waiting for its answer, on screen or held
     /// back until another sheet closes. It covers the home screen.
     @State private var previewWaiting = false
-    /// Whether the fallback memory screen erased the private words with
-    /// the tasks. Nil until it has tried.
-    @State private var wordsErased: Bool?
+    /// What the fallback memory screen did with the private words when
+    /// the tasks went. Nil until it has tried.
+    @State private var wordsErased: CloudHelp.WordsErased?
+    /// Every change to the cloud setting, as it is about to be set. Made
+    /// once, so a redraw never subscribes again.
+    @State private var cloudSettings: AnyPublisher<CloudHelpSettings, Never>
     @StateObject private var feed: FeedModel
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -119,6 +122,7 @@ public struct HomeView: View {
         _feed = StateObject(wrappedValue: FeedModel(sources: feed, needsYou: needsYou, tasks: tasks,
                                                     drivesTasks: drivesTasks, place: place, now: now))
         _section = State(initialValue: section)
+        _cloudSettings = State(initialValue: cloud?.$settings.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher())
     }
 
     /// A new chat with the model the setting picks now. A chat keeps the
@@ -150,11 +154,6 @@ public struct HomeView: View {
 
     private var surfacePlace: PrivacyPlace {
         Self.surfacePlace(chat: chat?.privacyPlace, newChat: newChatPlace)
-    }
-
-    /// Every change to the cloud setting, as it is about to be set.
-    private var cloudSettings: AnyPublisher<CloudHelpSettings, Never> {
-        cloud?.$settings.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()
     }
 
     /// True when the window is wide enough for a sidebar.
@@ -441,7 +440,7 @@ public struct HomeView: View {
     }
 
     /// The same, apart from the screen, so tests can drive it.
-    static func forgetWithoutNotes(cloud: CloudHelp?, forgetTasks: () -> Void) -> Bool? {
+    static func forgetWithoutNotes(cloud: CloudHelp?, forgetTasks: () -> Void) -> CloudHelp.WordsErased? {
         forgetTasks()
         return cloud?.eraseWordsWithoutNotes()
     }

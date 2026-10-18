@@ -323,6 +323,9 @@ public enum CloudWords {
     public static let forgetTasksAndWordsDetail = "This stops any task still going, and removes every task, what you told me for it and any words you asked me to hide from this device. It can't be undone. Your notes aren't touched."
     /// The tasks and any private words went.
     public static let tasksAndWordsForgotten = "Your tasks are forgotten, and so are any words you asked me to hide."
+    /// The same, when the words could only go with the whole cloud setting,
+    /// which may have been on.
+    public static let tasksAndWordsAndCloudForgotten = "Your tasks are forgotten, and so are any words you asked me to hide. To be sure of that I cleared the cloud setting too, so help from the cloud is off."
     /// The tasks went, but the private words' file couldn't be reached.
     public static let tasksForgottenNotWords = "Your tasks are forgotten, but I couldn't erase the words you asked me to hide. Closing and reopening the app may help."
 
@@ -340,6 +343,6 @@ public enum CloudWords {
         forgotNotesNotWords, forgotWordsNotNotes, forgotAndCloudOff, forgotWordsAndCloudNotNotes,
         forgotNotesAndTasksNotWords, forgotTasksAndWordsNotNotes, forgotTasksNotNotesOrWords,
         forgotTasksAndWordsAndCloudNotNotes, forgetTasksAndWordsDetail, tasksAndWordsForgotten,
-        tasksForgottenNotWords,
+        tasksAndWordsAndCloudForgotten, tasksForgottenNotWords,
     ] + askPoints + Redaction.Kind.allCases.map(\.spoken)
 }

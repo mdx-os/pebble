@@ -1,7 +1,8 @@
 import XCTest
 
-/// Drives the cloud screens in the real app. They come from the showcase,
-/// whose transport refuses every request, so nothing is ever sent.
+/// Drives the cloud screens in the real app. Most come from the showcase,
+/// whose transport refuses every request, so nothing is ever sent. The way
+/// in from the memory screen is driven in the app as people get it.
 @MainActor
 final class CloudUITests: XCTestCase {
     override func setUp() async throws {
@@ -61,6 +62,36 @@ final class CloudUITests: XCTestCase {
         add.tap()
         // Typed in lowercase, kept in lowercase: nothing was capitalized or corrected.
         XCTAssertTrue(app.buttons["Stop hiding riverside clinic"].waitForExistence(timeout: 5))
+    }
+
+    /// The cloud setting's only way in is the row at the foot of the memory
+    /// screen. Here it is tapped in the app as people get it, not the
+    /// showcase: the memory as a sheet on iPhone and in the sidebar's detail
+    /// on iPad, so the link must work inside each. Launch arguments skip the
+    /// first run; they only fill the argument domain, so nothing is changed
+    /// but what the app itself saves in the Simulator. The toggle is never
+    /// touched.
+    func testTheCloudRowOpensTheSettingFromTheRealMemoryScreen() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-pebble.onboarding.finished", "YES", "-pebble.agent.displayName", "Pip"]
+        app.launch()
+        let isPad = UIDevice.current.userInterfaceIdiom == .pad
+        let memory = app.buttons["What I remember"].firstMatch
+        XCTAssertTrue(memory.waitForExistence(timeout: 10))
+        memory.tap()
+        let row = app.buttons["cloudRow"]
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        // Notes saved on this Simulator earlier can push it down.
+        for _ in 0..<6 where !row.isHittable { app.swipeUp() }
+        XCTAssertTrue(row.isHittable)
+        row.tap()
+        let toggle = app.switches["cloudToggle"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5), isPad ? "iPad sidebar detail" : "iPhone memory sheet")
+        XCTAssertTrue(app.staticTexts["Words I always hide"].exists)
+        // Back to the memory screen the same way.
+        app.navigationBars.buttons["BackButton"].firstMatch.tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertFalse(toggle.exists)
     }
 
     /// Turning it on asks first, and Not now leaves it off.

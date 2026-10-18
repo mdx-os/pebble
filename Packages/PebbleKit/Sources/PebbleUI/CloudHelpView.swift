@@ -22,6 +22,10 @@ public final class CloudHelp: ObservableObject {
         didSet { if status != nil { statusCount += 1 } }
     }
     @Published private(set) var statusCount = 0
+    /// True while private words may be kept that `settings` doesn't show:
+    /// the file couldn't be read, or couldn't be opened at launch but can
+    /// still be erased. Forget everything names them then too.
+    @Published private(set) var mayKeepUnseenWords: Bool
     /// The flag the setting's own words read, the same one every line
     /// outside a chat reads. `HomeView` works it out from the open chat's
     /// model and the next one's (see `PrivacyPlace`) and keeps this up to
@@ -82,7 +86,9 @@ public final class CloudHelp: ObservableObject {
         self.auth = auth
         self.makeTransport = transport
         self.unopenedFile = unopenedFile
-        settings = storeOpened ? store.loadOrOff() : .off
+        let read = storeOpened ? try? store.load() : nil
+        settings = read ?? .off
+        mayKeepUnseenWords = storeOpened ? read == nil : unopenedFile != nil
     }
 
     /// The setting when its file couldn't be opened at launch. It reads as
@@ -91,24 +97,38 @@ public final class CloudHelp: ObservableObject {
     ///
     /// `file` reaches the file it would have read, so private words kept
     /// there from an earlier launch can still be erased. See
-    /// `eraseWordsWithoutNotes`.
+    /// `forgetPrivateWords`.
     public static func couldNotOpen(endpoint: URL?, memory: MemoryStore?,
                                     file: (@Sendable () throws -> any CloudHelpStoring)? = nil) -> CloudHelp {
         CloudHelp(store: InMemoryCloudHelpStore(), endpoint: endpoint, memory: memory, auth: NoCloudAuth(),
                   transport: { URLSessionCloudTransport() }, storeOpened: false, unopenedFile: file)
     }
 
+    /// What erasing the private words did, for the memory screen shown
+    /// when the notes won't open.
+    enum WordsErased: Equatable {
+        case erased
+        /// Erased with the whole setting, so the cloud is off now.
+        case erasedWithCloud
+        /// They couldn't be erased, so they are still kept.
+        case stayed
+    }
+
     /// Erases the private words when the notes won't open, as the memory
-    /// screen in their place does along with the tasks. A setting opened
-    /// at launch erases them as Forget everything does. One that couldn't
-    /// be opened erases the whole file it would have read, if that can be
-    /// reached now; with no file it reads as off next time too. True when
-    /// no private words are kept any more.
-    func eraseWordsWithoutNotes() -> Bool {
-        if storeOpened { return (try? forgetPrivateWords()) != nil }
-        // Nothing to reach means nothing was ever kept, as in tests.
-        guard let unopenedFile else { return true }
-        return (try? unopenedFile().erase()) != nil
+    /// screen in their place does along with the tasks, the same way
+    /// Forget everything does.
+    func eraseWordsWithoutNotes() -> WordsErased {
+        switch try? forgetPrivateWords() {
+        case .privateWords?: .erased
+        case .privateWordsAndCloud?: .erasedWithCloud
+        case nil: .stayed
+        }
+    }
+
+    /// True when Forget everything may erase private words: some are
+    /// shown, or some may be kept that couldn't be read.
+    var mayHavePrivateWords: Bool {
+        !settings.privateWords.isEmpty || mayKeepUnseenWords
     }
 
     /// False when no address is set up, or the setting's file couldn't be
@@ -179,6 +199,7 @@ public final class CloudHelp: ObservableObject {
             try? store.save(fresh)
         }
         settings = fresh
+        mayKeepUnseenWords = false
     }
 
     /// The toggle. Turning on asks first; turning off never does.
@@ -281,9 +302,15 @@ public final class CloudHelp: ObservableObject {
     /// unless the words can't be read or saved without them: then the
     /// whole file is erased, which also turns the cloud off, and the answer
     /// says so. Throws only when even that fails.
+    ///
+    /// A setting that couldn't be opened at launch keeps nothing itself, so
+    /// it erases the whole file it would have read, the only place words
+    /// from an earlier launch can be. It throws if that can't be reached or
+    /// erased, so Forget everything never says they went when they didn't.
     @discardableResult
     func forgetPrivateWords() throws -> Forgot {
         newPrivateWord = ""
+        guard storeOpened else { return try eraseUnopenedFile() }
         let current = try? store.load()
         if var current {
             current.privateWords = []
@@ -291,6 +318,7 @@ public final class CloudHelp: ObservableObject {
             if (try? store.save(current)) != nil {
                 let hadWords = !settings.privateWords.isEmpty
                 settings = current
+                mayKeepUnseenWords = false
                 // What waits was hidden with words that are gone now.
                 if hadWords { withdrawPreviews() }
                 return .privateWords
@@ -300,6 +328,7 @@ public final class CloudHelp: ObservableObject {
         let mightHaveBeenOn = current?.isOn ?? true
         try store.erase()
         settings = .off
+        mayKeepUnseenWords = false
         guard mightHaveBeenOn, !switchedOff.value else {
             withdrawPreviews()
             return .privateWords
@@ -308,6 +337,19 @@ public final class CloudHelp: ObservableObject {
         switchedOff.value = true
         stopEverythingUnderWay()
         return .privateWordsAndCloud
+    }
+
+    /// `forgetPrivateWords` for a setting that couldn't be opened. The
+    /// setting already reads as off here; if the file said on, or can't be
+    /// read, it reads as off next launch too, and the answer says so.
+    private func eraseUnopenedFile() throws -> Forgot {
+        // Nothing to reach means nothing was ever kept, as in tests.
+        guard let unopenedFile else { return .privateWords }
+        let file = try unopenedFile()
+        let mightHaveBeenOn = (try? file.load())?.isOn ?? true
+        try file.erase()
+        mayKeepUnseenWords = false
+        return mightHaveBeenOn ? .privateWordsAndCloud : .privateWords
     }
 
     enum Outcome {
@@ -321,6 +363,7 @@ public final class CloudHelp: ObservableObject {
     /// this session is kept in whatever is saved.
     private func update(_ change: (inout CloudHelpSettings) -> Void) -> Outcome {
         guard let before = try? store.load() else { return .unreadable }
+        mayKeepUnseenWords = false
         var next = before
         if switchedOff.value { next.isOn = false }
         change(&next)

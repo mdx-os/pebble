@@ -41,9 +41,10 @@ public struct MemoryView: View {
     }
 
     /// The Forget everything question's words: they name the private words
-    /// whenever there are some it would erase.
+    /// whenever there may be some it would erase, those that couldn't be
+    /// read included.
     static func forgetEverythingDetail(for cloud: CloudHelp?) -> String {
-        cloud?.settings.privateWords.isEmpty == false ? CloudWords.forgetEverythingDetail
+        cloud?.mayHavePrivateWords == true ? CloudWords.forgetEverythingDetail
             : MemoryWords.forgetEverythingDetail
     }
 
@@ -121,9 +122,13 @@ public struct MemoryView: View {
         .onChange(of: model.statusCount) { _, _ in
             if let status = model.status { AccessibilityNotification.Announcement(status).post() }
         }
+        // Private words that couldn't be read at launch, as on a locked
+        // device, are read again here, so the question names what it erases.
+        .onAppear { cloud?.refresh() }
         .onChange(of: scenePhase) { _, phase in
             // Back from a locked screen, look again rather than leave the note up.
             if phase == .active, model.isUnavailable { model.refresh() }
+            if phase == .active { cloud?.refresh() }
         }
         .haptic(.saved, trigger: model.savedCount)
         .haptic(.forgotten, trigger: model.forgottenCount)
@@ -135,9 +140,9 @@ public struct MemoryView: View {
     private var forgetEverythingSection: some View {
         if let cloud {
             // Watches the cloud setting, so the button shows while there
-            // are private words to erase.
+            // may be private words to erase.
             CloudWatcher(help: cloud) { help in
-                forgetEverythingButton(shown: model.hasStoredFile || !help.settings.privateWords.isEmpty)
+                forgetEverythingButton(shown: model.hasStoredFile || help.mayHavePrivateWords)
             }
         } else {
             forgetEverythingButton(shown: model.hasStoredFile)
@@ -271,9 +276,9 @@ struct MemoryUnavailableView: View {
     var forgotten = false
     /// The line kept while a step said yes to may have happened.
     var underway: String?
-    /// True when the private words went with the tasks, false when they
-    /// couldn't be erased. Nil when this screen doesn't erase them.
-    var wordsErased: Bool?
+    /// What happened to the private words when the tasks went. Nil when
+    /// this screen doesn't erase them.
+    var wordsErased: CloudHelp.WordsErased?
     /// Whether forgetting here erases the private words too.
     var erasesWords = false
     let onForgetTasks: @MainActor () -> Void
@@ -287,8 +292,9 @@ struct MemoryUnavailableView: View {
         guard forgotten, !hasTasks else { return nil }
         let went = switch wordsErased {
         case nil: TaskWords.tasksForgotten
-        case true?: CloudWords.tasksAndWordsForgotten
-        case false?: CloudWords.tasksForgottenNotWords
+        case .erased?: CloudWords.tasksAndWordsForgotten
+        case .erasedWithCloud?: CloudWords.tasksAndWordsAndCloudForgotten
+        case .stayed?: CloudWords.tasksForgottenNotWords
         }
         return [went, underway].compactMap { $0 }.joined(separator: " ")
     }
