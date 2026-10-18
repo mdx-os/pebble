@@ -24,7 +24,9 @@ import PebbleCore
 /// takes that note's line out of the digest note itself, unless the person
 /// changed the digest by hand, which leaves it theirs. So a note forgotten
 /// anywhere, or one forgotten just before the app closed, leaves no words
-/// behind. A digest not yet kept whose notes change is stopped, and its
+/// behind. A digest's ids outlive its card, put away or let go, in the
+/// same file, until the digest note goes or Forget everything; the ids of
+/// notes that went leave the file once nothing is left to take out. A digest not yet kept whose notes change is stopped, and its
 /// question withdrawn, since a yes would be for other words.
 /// `forgetQuotes(of:)` says whether any of a note's words stayed.
 ///
@@ -71,10 +73,31 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         /// True once the person changed the kept digest by hand. It is
         /// theirs then: nothing is taken out of it here again.
         var byHand = false
+        /// True once a note the digest drew from went while the digest
+        /// may still hold its words, so the card never shows them.
+        var hidesQuote = false
+        /// How the kept digest note went, once it has. `kept` and every
+        /// note id go with it, so the file names no note that is gone.
+        var gone: DigestGone?
 
         /// Which notes it points at, so the file is written when only
         /// these change.
-        var links: Links { Links(kept: kept, drewFrom: drewFrom, quoted: quoted, more: more, byHand: byHand) }
+        var links: Links {
+            Links(kept: kept, drewFrom: drewFrom, quoted: quoted, more: more, byHand: byHand,
+                  hidesQuote: hidesQuote, gone: gone)
+        }
+
+        /// The kept digest note went: by the person's hand, or taken out
+        /// here once no line was left.
+        mutating func digestWent(tookOut: Bool) {
+            kept = nil
+            drewFrom = []
+            quoted = nil
+            more = nil
+            byHand = false
+            hidesQuote = false
+            gone = tookOut ? .tookOut : .removed
+        }
     }
 
     private struct Links: Equatable {
@@ -83,6 +106,8 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         let quoted: [UUID]?
         let more: [UUID]?
         let byHand: Bool
+        let hidesQuote: Bool
+        let gone: DigestGone?
     }
 
     /// A kept digest with notes to take out of it.
@@ -134,9 +159,10 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     private var unsaved = false
     private var seen = Seen.unread
     private var watchingNotes: TaskObservation?
-    /// True when the file was there but couldn't be decoded, so the tasks
-    /// it held, and which digests they kept, are not known. Until Forget
-    /// everything, a forgotten note may still be quoted somewhere.
+    /// True when the tasks that kept digests are not known: the file was
+    /// there but couldn't be decoded, or every task was forgotten while
+    /// the notes may still hold their digests. Until a look finds no note
+    /// the agent kept, a forgotten note may still be quoted somewhere.
     private var tasksLost = false
     /// In memory only: the line each quoted note had when the notes were
     /// last looked at, so a line is known to be its note's once the note
@@ -149,6 +175,13 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     /// Notes whose lines were taken out since `forgetQuotes(of:)` last
     /// asked about them. Ids only.
     private var cleanedOf: Set<UUID> = []
+    /// Kept digests whose cards were put away or let go, so a note
+    /// forgotten later still leaves them. Ids only, in the task file too.
+    private var letGo: [KeptDigest] = []
+    /// In memory only: for a note gone from a digest whose lines aren't
+    /// known, the digests that drew from it, so `forgetQuotes(of:)` looks
+    /// in them once its words are given. Ids only.
+    private var mayHold: [UUID: Set<UUID>] = [:]
     /// Questions asked by an engine before this one that its file's tasks
     /// still had open, to withdraw.
     private var orphans: [(AskFirst, ConfirmationRequest)] = []
@@ -318,9 +351,25 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     public func dismiss(_ id: String) -> Bool {
         mutate {
             guard let index = runs.firstIndex(where: { $0.task.id == id }), !runs[index].task.isActive else { return false }
-            runs.remove(at: index)
+            keepLinks(of: runs.remove(at: index))
             return true
         }
+    }
+
+    /// A kept digest's ids outlive its card, so its lines still go when
+    /// their notes do. Only once no other card points at the same note,
+    /// and only for a digest whose lines were written down.
+    private func keepLinks(of run: Run) {
+        guard let kept = run.kept, run.quoted != nil,
+              !runs.contains(where: { $0.kept == kept }), !letGo.contains(where: { $0.note == kept }) else { return }
+        letGo.append(KeptDigest(note: kept, quoted: run.quoted, more: run.more, byHand: run.byHand))
+    }
+
+    /// Every kept digest this engine knows of: on a card or let go.
+    private func holders() -> [KeptDigest] {
+        runs.compactMap { run in
+            run.kept.map { KeptDigest(note: $0, quoted: run.quoted, more: run.more, byHand: run.byHand) }
+        } + letGo
     }
 
     /// Stops and forgets every task, and erases the task file. If the file
@@ -333,14 +382,18 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
             let underway = runs.filter { $0.stage == .saving }.count
             let forgotten = runs.count
             runs.removeAll()
+            letGo = []
             seen = .unread
             lastLines = [:]
             pendingForgotten = []
             cleanedOf = []
+            mayHold = [:]
             // A file left unread, as on a locked device, or one that
             // couldn't be decoded, goes too.
             loaded = true
-            tasksLost = false
+            // The notes go after the tasks, and may not: until a look finds
+            // no note the agent kept, a digest may still quote a note.
+            tasksLost = true
             unsaved = false
             let erased = (try? removeFile()) != nil
             return ClearedTasks(forgotten: forgotten, underway: underway, erased: erased)
@@ -426,59 +479,53 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     /// Says whether a forgotten note's words, or a changed note's earlier
     /// words in `note`, are gone from everything a task kept. The line is
     /// taken out by the look at the notes that every change brings; this
-    /// looks once more, with `note`'s words to check the line by, and then
-    /// at what no task here points to any longer: a digest whose card was
-    /// put away or let go, and one from a task file that couldn't be read.
-    /// It never calls words gone that may still be there.
+    /// looks once more, with `note`'s words to check the line by. Digests
+    /// whose lines aren't known are looked in: one the person changed, one
+    /// kept before lines were written down, and every note the agent kept
+    /// that no task here knows of. Words found there stayed; a digest that
+    /// drew from the note without them found in it may have kept them
+    /// reworded. It never calls words gone that may still be there.
     public func forgetQuotes(of note: MemoryNote) -> QuotesForgotten {
         guard let all = sweep([note.id: DigestTask.line(for: note)]) else { return .stayed }
-        let current = all.first { $0.id == note.id }
+        let byID = Dictionary(all.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let line = DigestTask.line(for: note)
         lock.lock()
-        let kept = Set(runs.compactMap(\.kept))
-        var stayed = false
-        // Older digests, kept before which line is whose was written down,
-        // and found not to hold the words.
-        var notThere: Set<UUID> = []
-        for run in runs where run.drewFrom.contains(note.id) {
-            guard let digest = run.kept.flatMap({ id in all.first { $0.id == id } }) else { continue }
-            if run.byHand {
-                // The person changed it: said plainly, never guessed.
-                stayed = true
-            } else if let quoted = run.quoted {
-                // Still quoted after the look, as when the digest couldn't
-                // be written just now, unless its line is the note's own
-                // words as they are now.
-                if quoted.contains(note.id), current.map({ DigestTask.line(for: $0) }) != DigestTask.line(for: note) {
-                    stayed = true
-                }
-            } else if DigestTask.mayQuote(note, in: digest.text) {
-                stayed = true
-            } else {
-                notThere.insert(digest.id)
-            }
+        let holders = holders()
+        var stayed = false, mayHave = false
+        // Still quoted after the look, as when the digest couldn't be
+        // written just now, unless its line is the note's own words as
+        // they are now.
+        for holder in holders where !holder.byHand && holder.quoted?.contains(note.id) == true {
+            if byID[note.id].map(DigestTask.line(for:)) != line { stayed = true }
         }
-        // Digests no task points to: looked for, leaning to say they stay.
-        let others = all.filter { $0.id != note.id && !kept.contains($0.id) }
-        if others.contains(where: { DigestTask.isDigest($0) && DigestTask.mayQuote(note, in: $0.text) }) {
-            stayed = true
+        // Digests whose lines aren't known that drew from it: those it
+        // went from at the look, and those it is still in, as when it
+        // was changed rather than forgotten.
+        var lookIn = mayHold.removeValue(forKey: note.id) ?? []
+        for run in runs where run.byHand || run.quoted == nil {
+            if let kept = run.kept, run.drewFrom.contains(note.id) { lookIn.insert(kept) }
         }
-        // With the task file unread or unreadable, a digest it knew of may
-        // have been changed past finding. Only the agent keeps a note as
-        // its own guess, so with none of those there is nothing to fear.
-        if !loaded || tasksLost, others.contains(where: { $0.source == .inferred }) {
-            stayed = true
+        for record in letGo where record.byHand && ((record.quoted ?? []) + (record.more ?? [])).contains(note.id) {
+            lookIn.insert(record.note)
         }
+        for id in lookIn {
+            guard let digest = byID[id] else { continue }
+            if DigestTask.mayQuote(note, in: digest.text) { stayed = true } else { mayHave = true }
+        }
+        // Notes the agent kept that no task here knows of, whatever their
+        // first line now says: looked in, leaning to say the words stay.
+        let known = Set(holders.map(\.note))
+        let others = all.filter { $0.id != note.id && $0.source == .inferred && !known.contains($0.id) }
+        if others.contains(where: { DigestTask.mayQuote(note, in: $0.text) }) { stayed = true }
+        // With the tasks that kept digests unknown, one may have been
+        // changed past finding. Only the agent keeps a note as its own
+        // guess, so with none of those there is nothing to fear.
+        if !loaded || tasksLost, !others.isEmpty { mayHave = true }
         let cleaned = cleanedOf.remove(note.id) != nil
         lock.unlock()
-        if !notThere.isEmpty {
-            mutate {
-                for index in runs.indices where runs[index].kept.map(notThere.contains) == true {
-                    runs[index].drewFrom.removeAll { $0 == note.id }
-                }
-            }
-        }
         if stayed { return .stayed }
-        return cleaned || !notThere.isEmpty ? .forgotten : .notQuoted
+        if mayHave { return .mayHaveStayed }
+        return cleaned ? .forgotten : .notQuoted
     }
 
     public func questionClosed(_ request: ConfirmationRequest) {
@@ -520,6 +567,12 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     /// the caller names with the line its words had, as when it was just
     /// changed. Returns the notes as the last look read them, or nil when
     /// they couldn't be read.
+    ///
+    /// It reads and writes the notes file on the thread that changed the
+    /// notes, which is the main one from the memory screen. A note is at
+    /// most `MemoryStore.maxLength` characters and a digest one note, so
+    /// that is quick today; a bigger digest, or many more notes, would want
+    /// this moved off the main thread.
     @discardableResult
     private func sweep(_ asked: [UUID: String] = [:]) -> [MemoryNote]? {
         sweepLock.lock()
@@ -539,12 +592,13 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     }
 
     /// One look. Takes each gone or changed note's line out of the kept
-    /// digest that quoted it, stops a digest not yet kept whose notes
-    /// changed, and keeps what the cards show. With `read` false, the
-    /// notes are read only when some task points at them.
+    /// digest that quoted it, on a card or let go, stops a digest not yet
+    /// kept whose notes changed, lets go of the ids of notes that went,
+    /// and keeps what the cards show. With `read` false, the notes are
+    /// read only when some task or kept digest points at them.
     private func sweepOnce(_ asked: [UUID: String], read: Bool) -> [MemoryNote]? {
         lock.lock()
-        let anything = read || !pendingForgotten.isEmpty
+        let anything = read || !pendingForgotten.isEmpty || !letGo.isEmpty || tasksLost
             || runs.contains { $0.kept != nil || $0.task.isActive }
         lock.unlock()
         // Nothing to look for: no read, and the cards as they are.
@@ -563,13 +617,13 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
 
         lock.lock()
         let before = lastLines
-        lastLines = Self.lines(of: runs, in: byID)
+        lastLines = Self.lines(of: runs, letGo, in: byID)
         let pending = pendingForgotten
         var plans: [UUID: Plan] = [:]
         // Each digest note once, though two tasks may point at it.
-        for run in runs {
-            guard let kept = run.kept, byID[kept] != nil, let quoted = run.quoted, !run.byHand,
-                  plans[kept] == nil else { continue }
+        for holder in holders() {
+            let kept = holder.note
+            guard byID[kept] != nil, let quoted = holder.quoted, !holder.byHand, plans[kept] == nil else { continue }
             var gone = Set<UUID>(), lines: [UUID: String] = [:]
             for id in quoted {
                 guard let note = byID[id] else {
@@ -594,7 +648,7 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
                     lines[id] = now
                 }
             }
-            let more = run.more ?? []
+            let more = holder.more ?? []
             for id in more where byID[id] == nil { gone.insert(id) }
             if !gone.isEmpty {
                 plans[kept] = Plan(kept: kept, written: DigestTask.Written(text: "", quoted: quoted, more: more),
@@ -629,20 +683,44 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         mutate {
             for index in runs.indices {
                 guard let kept = runs[index].kept else { continue }
+                // The digest note went: the person's doing, or this look's
+                // when no line was left.
+                let tookOut = cleaned[kept] == .some(nil)
+                if tookOut || byID[kept] == nil {
+                    runs[index].digestWent(tookOut: tookOut)
+                    continue
+                }
                 if theirs.contains(kept) { runs[index].byHand = true }
-                guard let next = cleaned[kept], let plan = plans[kept] else { continue }
-                runs[index].drewFrom.removeAll(where: plan.gone.contains)
-                if let next {
+                if let plan = plans[kept], case .some(.some(let next)) = cleaned[kept] {
+                    runs[index].drewFrom.removeAll(where: plan.gone.contains)
                     runs[index].quoted = next.quoted
                     runs[index].more = next.more
                 }
+                letGoOfGoneNotes(&runs[index], kept: kept, in: byID)
+            }
+            letGo.removeAll { byID[$0.note] == nil || cleaned[$0.note] == .some(nil) }
+            for index in letGo.indices {
+                let kept = letGo[index].note
+                if theirs.contains(kept) { letGo[index].byHand = true }
+                if case .some(.some(let next)) = cleaned[kept] {
+                    letGo[index].quoted = next.quoted
+                    letGo[index].more = next.more
+                }
+                guard letGo[index].byHand else { continue }
+                let had = (letGo[index].quoted ?? []) + (letGo[index].more ?? [])
+                for id in had where byID[id] == nil { mayHold[id, default: []].insert(kept) }
+                letGo[index].quoted?.removeAll { byID[$0] == nil }
+                letGo[index].more?.removeAll { byID[$0] == nil }
             }
             for (kept, _) in cleaned { cleanedOf.formUnion(plans[kept]?.gone ?? []) }
             // Kept only while a digest here still quotes them unchecked.
             pendingForgotten.formUnion(failed)
+            let holders = holders()
             pendingForgotten = pendingForgotten.filter { id in
-                runs.contains { !$0.byHand && $0.kept != nil && (($0.quoted ?? []) + ($0.more ?? [])).contains(id) }
+                holders.contains { !$0.byHand && (($0.quoted ?? []) + ($0.more ?? [])).contains(id) }
             }
+            // With no note the agent kept left, no digest can quote a note.
+            if tasksLost, !all.contains(where: { $0.source == .inferred }) { tasksLost = false }
             // A digest not yet kept whose notes changed: the yes would be
             // for other words, so it stops and nothing is kept.
             for index in runs.indices where Self.drewOnChanged(runs[index], in: byID) {
@@ -666,12 +744,36 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         return all
     }
 
+    /// Lets go of the ids of notes that went from a kept digest, once
+    /// nothing is left to take out for them. A digest whose lines are
+    /// known keeps a gone note's id only while its line is still to go.
+    /// One whose lines aren't known, changed by the person or kept before
+    /// lines were written down, may still hold the words: its card stops
+    /// showing them, and `forgetQuotes(of:)` is told to look in it.
+    private func letGoOfGoneNotes(_ run: inout Run, kept: UUID, in byID: [UUID: MemoryNote]) {
+        let unknown = run.byHand || run.quoted == nil
+        let listed = Set((run.quoted ?? []) + (run.more ?? []))
+        for id in run.drewFrom where byID[id] == nil {
+            if unknown, run.quoted == nil || listed.contains(id) {
+                run.hidesQuote = true
+                mayHold[id, default: []].insert(kept)
+            } else if listed.contains(id) {
+                continue
+            }
+            run.drewFrom.removeAll { $0 == id }
+            run.quoted?.removeAll { $0 == id }
+            run.more?.removeAll { $0 == id }
+        }
+    }
+
     /// The line each quoted note has now, for every digest still kept or
     /// still being written. None for a digest the person removed.
-    private static func lines(of runs: [Run], in byID: [UUID: MemoryNote]) -> [UUID: String] {
+    private static func lines(of runs: [Run], _ letGo: [KeptDigest], in byID: [UUID: MemoryNote]) -> [UUID: String] {
         var out: [UUID: String] = [:]
-        for run in runs where run.kept.map({ byID[$0] != nil }) ?? run.task.isActive {
-            for id in run.quoted ?? [] {
+        let quoting = runs.filter { run in run.kept.map { byID[$0] != nil } ?? run.task.isActive }.map(\.quoted)
+            + letGo.filter { byID[$0.note] != nil }.map(\.quoted)
+        for quoted in quoting {
+            for id in quoted ?? [] {
                 if let note = byID[id] { out[id] = DigestTask.line(for: note) }
             }
         }
@@ -710,13 +812,22 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         if case .unread = seen, runs.contains(where: { $0.kept != nil }) { seen = readNotes() }
         return runs.reversed().map { run in
             var task = run.task
-            guard let kept = run.kept else { return task }
+            guard let kept = run.kept else {
+                // Said truly: the person removed it, or it was taken out
+                // here because every note it quoted went.
+                if let gone = run.gone { task.step = gone == .tookOut ? DigestWords.tookOut : DigestWords.removed }
+                return task
+            }
             switch seen {
             case .unread, .unavailable:
                 task.step = DigestWords.notesLocked
             case .read(let ids, let digests):
                 if let text = digests[kept] {
-                    if run.drewFrom.allSatisfy(ids.contains) { task.result = text } else { task.step = DigestWords.hiddenQuote }
+                    if run.drewFrom.allSatisfy(ids.contains) && !run.hidesQuote {
+                        task.result = text
+                    } else {
+                        task.step = DigestWords.hiddenQuote
+                    }
                 } else {
                     task.step = DigestWords.removed
                 }
@@ -843,6 +954,7 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         let stagesBefore = runs.map(\.stage)
         let linksBefore = runs.map(\.links)
         let questionsBefore = runs.compactMap { run in run.question.map { (run.task.id, $0) } }
+        let letGoBefore = letGo
         let value = change()
         let ids = Set(runs.map(\.task.id))
         for (id, question) in questionsBefore where !ids.contains(id) && !withdrawals.contains(question) {
@@ -863,7 +975,8 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         }
         lock.lock()
         dropOldEnded()
-        if unsaved || before != runs.map(\.task) || stagesBefore != runs.map(\.stage) || linksBefore != runs.map(\.links) {
+        if unsaved || before != runs.map(\.task) || stagesBefore != runs.map(\.stage) || linksBefore != runs.map(\.links)
+            || letGoBefore != letGo {
             saveFile()
         }
         Self.open.update(ObjectIdentifier(self), rule: rule, open: Dictionary(
@@ -884,7 +997,7 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     private func dropOldEnded() {
         let ended = runs.indices.filter { !runs[$0].task.isActive }
         guard ended.count > Self.endedLimit else { return }
-        for index in ended.prefix(ended.count - Self.endedLimit).reversed() { runs.remove(at: index) }
+        for index in ended.prefix(ended.count - Self.endedLimit).reversed() { keepLinks(of: runs.remove(at: index)) }
     }
 
     /// Moves steps along on its own while any are waiting, one at a time
@@ -938,38 +1051,46 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         loaded = true
         // Unreadable: start with none. The file is replaced on the next
         // change, or erased by Forget everything.
-        guard let stored = try? Self.decoder.decode([StoredTask].self, from: data) else {
+        // A file from before kept digests were written down beside the
+        // tasks holds only the tasks.
+        guard let stored = (try? Self.decoder.decode(StoredFile.self, from: data))
+                ?? (try? Self.decoder.decode([StoredTask].self, from: data)).map({ StoredFile(tasks: $0, kept: nil) }) else {
             tasksLost = true
             return
         }
         let going = Set(runs.map(\.task.id))
-        let back = stored.filter { !going.contains($0.id) }.map { stored in
+        let back = stored.tasks.filter { !going.contains($0.id) }.map { stored in
             Run(task: stored.restored(at: clock()), stage: .ended, kept: stored.kept, drewFrom: stored.drewFrom ?? [],
-                quoted: stored.quoted, more: stored.more, byHand: stored.byHand == true)
+                quoted: stored.quoted, more: stored.more, byHand: stored.byHand == true,
+                hidesQuote: stored.hidesQuote == true, gone: stored.gone)
         }
         runs = back + runs
+        for record in stored.kept ?? [] where !letGo.contains(where: { $0.note == record.note }) {
+            letGo.append(record)
+        }
         // A question an engine before this one asked for these tasks, in
         // this app, can't be answered here: they came back stopped.
         orphans += Self.open.take(Set(back.map(\.task.id)), notOwnedBy: ObjectIdentifier(self))
     }
 
-    /// Writes every task, or removes the file once there are none. Only
-    /// what the card shows is kept, and never a note's words: not the
-    /// notes read, not a draft, and not a digest once kept.
+    /// Writes every task and the ids of every digest let go, or removes
+    /// the file once there are none. Only what the card shows is kept,
+    /// and never a note's words: not the notes read, not a draft, and not
+    /// a digest once kept.
     private func saveFile() {
         guard loaded else {
             unsaved = true
             return
         }
         unsaved = false
-        if runs.isEmpty {
+        if runs.isEmpty && letGo.isEmpty {
             try? removeFile()
             return
         }
-        let stored = runs.map {
+        let stored = StoredFile(tasks: runs.map {
             StoredTask($0.task, saving: $0.stage == .saving, kept: $0.kept, drewFrom: $0.drewFrom,
-                       quoted: $0.quoted, more: $0.more, byHand: $0.byHand)
-        }
+                       quoted: $0.quoted, more: $0.more, byHand: $0.byHand, hidesQuote: $0.hidesQuote, gone: $0.gone)
+        }, kept: letGo.isEmpty ? nil : letGo)
         guard let data = try? Self.encoder.encode(stored) else { return }
         let manager = FileManager.default
         try? manager.removeItem(at: stagingURL)
@@ -1040,6 +1161,34 @@ private final class OpenQuestions: @unchecked Sendable {
     }
 }
 
+/// How a kept digest note went.
+enum DigestGone: String, Codable, Equatable {
+    /// The person, or another writer, removed it.
+    case removed
+    /// The engine took it out, since no line was left once the notes it
+    /// quoted went or changed.
+    case tookOut
+}
+
+/// A kept digest whose card was put away or let go, as the file keeps it.
+/// Ids only: the digest note, the notes with a line in it, in order, and
+/// those its last line counts, so a note forgotten later still leaves it,
+/// and whether the person changed it. No words, and nothing worked out
+/// from them. It goes once the digest note does, so nothing here says
+/// how a digest went.
+struct KeptDigest: Codable, Equatable {
+    let note: UUID
+    var quoted: [UUID]?
+    var more: [UUID]?
+    var byHand: Bool
+}
+
+/// The task file: every task, and the kept digests let go.
+struct StoredFile: Codable, Equatable {
+    let tasks: [StoredTask]
+    let kept: [KeptDigest]?
+}
+
 /// A task as the file keeps it: what its card shows, whether a save the
 /// person said yes to was under way, and for a kept digest, which notes
 /// to read its words from. Never a note's words. Its history does keep
@@ -1079,9 +1228,14 @@ struct StoredTask: Codable, Equatable {
     /// True once the person changed the kept digest, so it is left as
     /// theirs. Absent otherwise.
     let byHand: Bool?
+    /// True once a note the kept digest drew from went while the digest
+    /// may still hold its words. Absent otherwise.
+    let hidesQuote: Bool?
+    /// How the kept digest note went, once it has, with no id left.
+    let gone: DigestGone?
 
     init(_ task: AgentTask, saving: Bool, kept: UUID? = nil, drewFrom: [UUID] = [], quoted: [UUID]? = nil,
-         more: [UUID]? = nil, byHand: Bool = false) {
+         more: [UUID]? = nil, byHand: Bool = false, hidesQuote: Bool = false, gone: DigestGone? = nil) {
         id = task.id
         title = task.title
         step = task.step
@@ -1096,6 +1250,8 @@ struct StoredTask: Codable, Equatable {
         self.quoted = kept == nil ? nil : quoted
         self.more = kept == nil ? nil : more
         self.byHand = kept != nil && byHand ? true : nil
+        self.hidesQuote = kept != nil && hidesQuote ? true : nil
+        self.gone = gone
     }
 
     /// The task as it comes back after the app closed. One that ended

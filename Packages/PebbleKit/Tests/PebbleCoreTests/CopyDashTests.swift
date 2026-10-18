@@ -1,5 +1,6 @@
 import Foundation
 import PebbleCore
+import SourceScan
 import Testing
 
 /// docs/VOICE.md: no em dashes and no en dashes anywhere a person reads.
@@ -139,12 +140,31 @@ extension TaskWords {
     }
 }
 
+/// The list above can't miss a new digest line: every plain line written
+/// in `DigestWords` is in it.
+struct DigestWordsListTests {
+    @Test func everyDigestLineIsChecked() throws {
+        let file = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/PebbleCore/DigestTask.swift")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        let start = try #require(text.range(of: "public enum DigestWords"))
+        let source = SwiftSource(String(text[start.lowerBound...]))
+        let all = try DigestWords.all()
+        let lines = source.literals.map(\.text).filter { !$0.contains("\\(") }
+        #expect(lines.count >= 30, "the scan found too few lines")
+        for line in lines { #expect(all.contains(line), "unchecked: \(line)") }
+    }
+}
+
 extension DigestWords {
     /// Every line the digest task and its offer can show or say.
+    /// `DigestWordsListTests` fails if a plain line is missing here.
     static func all() throws -> [String] {
-        [offerHeading, offerDetail, startTitle, startHint, reading, picking, writing, askLine, saving, done,
-         removed, nothingThisWeek, couldNotRead, couldNotSave, alreadyKept, tooLongToKeep, emptyDigest, hiddenQuote,
-         notesLocked, stillInDigest, earlierWordsInDigest, noteChanged, cantSteer, cantDoThatYet, stoppedWhenClosed,
+        [offerHeading, offerDetail, startTitle, startHint, startInputLabel(DigestTask.title), reading, picking,
+         writing, askLine, saving, done, removed, tookOut, nothingThisWeek, couldNotRead, couldNotSave, alreadyKept,
+         tooLongToKeep, emptyDigest, hiddenQuote, notesLocked, stillInDigest, mayStillBeInDigest, earlierWordsInDigest,
+         earlierWordsMayBeInDigest, noteChanged, cantSteer, cantDoThatYet, stoppedWhenClosed,
          yourNotes, heading, andMore(1), andMore(3), DigestTask.keep("x").question,
          TaskWords.declined(DigestTask.saveTodo),
          try #require(TaskWrapUp(kept: [], notDone: [DigestTask.saveTodo]).notDoneLine)]

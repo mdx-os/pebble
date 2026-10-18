@@ -587,8 +587,12 @@ final class MemoryModel: ObservableObject {
             self.cancelEdit()
             // The earlier words go from anything that quoted them, such as
             // a kept digest, or the line says plainly where they stayed.
-            if let earlier, earlier.text != note.text, self.forgetQuotes(earlier) == .stayed {
-                self.status = DigestWords.earlierWordsInDigest
+            if let earlier, earlier.text != note.text {
+                switch self.forgetQuotes(earlier) {
+                case .stayed: self.status = DigestWords.earlierWordsInDigest
+                case .mayHaveStayed: self.status = DigestWords.earlierWordsMayBeInDigest
+                case .notQuoted, .forgotten: break
+                }
             }
             self.onNotesChanged()
         }
@@ -599,8 +603,12 @@ final class MemoryModel: ObservableObject {
         cancelEdit()
         do {
             if try store.forget(note.id) {
-                // "Gone" only once no kept digest still holds its words.
-                status = forgetQuotes(note) == .stayed ? DigestWords.stillInDigest : MemoryWords.forgotten
+                // "Gone" only once no kept digest may still hold its words.
+                switch forgetQuotes(note) {
+                case .stayed: status = DigestWords.stillInDigest
+                case .mayHaveStayed: status = DigestWords.mayStillBeInDigest
+                case .notQuoted, .forgotten: status = MemoryWords.forgotten
+                }
                 forgottenCount += 1
             } else {
                 status = nil

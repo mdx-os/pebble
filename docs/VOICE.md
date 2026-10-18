@@ -187,7 +187,11 @@ A digest whose notes change before it is kept stops and says so ("One of
 the notes I was tidying changed, so I stopped. Nothing was kept."), since a
 yes would be for other words. Forgetting a note never says "Gone" while a
 digest the person changed may still hold its words: the line says they are
-still there.
+still there when they are found, and that they may be when they aren't but
+could have been reworded. A digest the agent takes out of the notes itself,
+because every note it quoted went, says so ("I took the weekly digest out
+of your notes, because the notes it quoted are gone or changed."), never
+that the person removed it.
 
 ### Confirmations
 

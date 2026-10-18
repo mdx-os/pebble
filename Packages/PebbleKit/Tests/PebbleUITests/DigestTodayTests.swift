@@ -142,6 +142,23 @@ struct DigestTodayTests {
         #expect(memory.hasStoredFile)
     }
 
+    /// The memory screen is told only when the task file comes or goes,
+    /// not at every step, so a running task doesn't make it read the notes
+    /// again each time.
+    @Test func theMemoryScreenLooksAgainOnlyWhenTheTaskFileComesOrGoes() throws {
+        var looks = 0
+        let watch = feed.$tasksSeen.dropFirst().sink { _ in looks += 1 }
+        defer { watch.cancel() }
+        feed.start(DigestTask.request)
+        #expect(looks == 1)
+        for _ in 0..<3 { engine.runPending() }
+        feed.refresh()
+        #expect(feed.feed.needsYou.compactMap(\.task).count == 1)
+        #expect(looks == 1)
+        _ = feed.forgetTasks()
+        #expect(looks == 2)
+    }
+
     /// Forgetting the kept digest on the memory screen takes its words
     /// off Today's card, and closes them if they are open.
     @Test func forgettingTheDigestNoteTakesItsWordsOffToday() throws {
@@ -241,10 +258,14 @@ struct DigestTodayTests {
         let sheet = ConfirmationState(request: request, rule: rule, onApprove: { feed.approved($0) },
                                       onDecline: { feed.closedQuestion(request) })
         let memory = memoryScreen()
+        var heard: [TaskAnnouncer.Line] = []
+        feed.announce = { heard.append($0) }
         let dentist = try #require(memory.notes.first { $0.text.hasPrefix("Dentist") })
         memory.forget(dentist)
         #expect(memory.status == MemoryWords.forgotten)
         #expect(feed.reviewing == nil)
+        // The sheet VoiceOver was in is gone, so the stop is said at once.
+        #expect(heard == [TaskAnnouncer.Line(text: DigestTask.title + ". " + DigestWords.noteChanged, urgent: true)])
         let card = try #require(todayCards.first { $0.id == task.id })
         #expect(card.step == DigestWords.noteChanged)
         #expect(card.question == nil)
@@ -276,7 +297,72 @@ struct DigestTodayTests {
         memory.forget(dentist)
         #expect(memory.status == MemoryWords.forgotten)
         #expect(notes.notes().isEmpty)
-        #expect(todayCards.first { $0.id == done.id }?.step == DigestWords.removed)
+        // Taken out here, so the card never says the person removed it.
+        #expect(todayCards.first { $0.id == done.id }?.step == DigestWords.tookOut)
+    }
+
+    /// A kept digest whose card was put away on Today still loses a note
+    /// forgotten on the memory screen, which then says it is gone.
+    @Test func forgettingANoteAfterTheCardWasPutAwayForgetsItEverywhere() throws {
+        try notes.remember("Sam's birthday is May 14", at: Date() - 7_200, source: .toldMe)
+        let done = try keepDigest()
+        feed.dismiss(done)
+        #expect(!todayCards.contains { $0.id == done.id })
+        let memory = memoryScreen()
+        let sam = try #require(memory.notes.first { $0.text.hasPrefix("Sam's") })
+        memory.forget(sam)
+        #expect(memory.status == MemoryWords.forgotten)
+        #expect(!notes.notes().contains { $0.text.contains("Sam's birthday") })
+        #expect(digestNote(memory)?.text == DigestWords.heading + ".\n• Dentist on Thursday at 3 (You told me)")
+    }
+
+    /// With a task file that can't be read, the memory screen never says
+    /// a note is gone while a digest may hold it: found, it says the words
+    /// are still there; not found in a digest changed past finding, that
+    /// they may be.
+    @Test func aDigestFromATaskFileThatCantBeReadIsSaidToHoldTheWords() throws {
+        try notes.remember("Sam's birthday is May 14", at: Date() - 7_200, source: .toldMe)
+        // Kept by an engine before this one, whose file can't be read now.
+        let week = DigestTask.thisWeek(notes.notes(), now: Date())
+        try notes.remember(DigestTask.write(week, now: Date()).text, source: .inferred)
+        try Data("not tasks".utf8).write(to: tasksFile)
+        let engine = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, rule: rule, pace: nil))
+        let feed = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: rule), tasks: engine, place: .onDevice)
+        let memory = HomeView.memoryModel(store: notes, place: .onDevice, onNotesChanged: { feed.notesChanged() },
+                                          forgetQuotes: { feed.forgetQuotes(of: $0) })
+        let sam = try #require(memory.notes.first { $0.text.hasPrefix("Sam's") })
+        memory.forget(sam)
+        #expect(memory.status == DigestWords.stillInDigest)
+        let digest = try #require(digestNote(memory))
+        memory.beginEdit(digest)
+        memory.editDraft = "My week was busy."
+        memory.saveEdit()
+        let dentist = try #require(memory.notes.first { $0.text.hasPrefix("Dentist") })
+        memory.forget(dentist)
+        #expect(memory.status == DigestWords.mayStillBeInDigest)
+    }
+
+    /// A digest the person changed that no longer has a note's line: the
+    /// screen says its words may be there, never that they are.
+    @Test func aLineThePersonTookOutIsSaidToMaybeStay() throws {
+        try notes.remember("Sam's birthday is May 14", at: Date() - 7_200, source: .toldMe)
+        _ = try keepDigest()
+        let memory = memoryScreen()
+        let digest = try #require(digestNote(memory))
+        memory.beginEdit(digest)
+        memory.editDraft = DigestWords.heading + ".\n• Dentist on Thursday at 3 (You told me)"
+        memory.saveEdit()
+        let sam = try #require(memory.notes.first { $0.text.hasPrefix("Sam's") })
+        memory.beginEdit(sam)
+        memory.editDraft = "Sam's birthday is May 15"
+        memory.saveEdit()
+        #expect(memory.status == DigestWords.earlierWordsMayBeInDigest)
+        let dentist = try #require(memory.notes.first { $0.text.hasPrefix("Dentist") })
+        memory.beginEdit(try #require(digestNote(memory)))
+        memory.editDraft = "Quiet week."
+        memory.saveEdit()
+        memory.forget(dentist)
+        #expect(memory.status == DigestWords.mayStillBeInDigest)
     }
 
     /// While a digest the person changed still holds the note's words, the

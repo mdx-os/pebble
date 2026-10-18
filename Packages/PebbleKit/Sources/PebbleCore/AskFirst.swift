@@ -173,6 +173,12 @@ public struct ConfirmationRequest: Sendable, Equatable, Identifiable {
 
     /// Called by the confirmation sheet when the person taps yes. A test in
     /// `AskFirstGateTests` fails if anything else in the sources calls it.
+    ///
+    /// It asks the rule nothing, and the rule honors an approval for a
+    /// question still open, so this alone would let code say yes without
+    /// the sheet. That gate test is what stops it: only the sheet, and
+    /// `sayYes` here, may call it. Tests call it to prove a yes is refused
+    /// once a question has closed or its task has moved on.
     package func approve() -> Approval {
         Approval(request: self)
     }
@@ -375,16 +381,6 @@ public final class AskFirst: @unchecked Sendable {
         let since = now() - yesAt
         return yesAt - open.askedAt <= window && since >= .zero && since <= Self.yesGrace
     }
-
-    #if DEBUG
-    /// Everything the rule stores, for tests to look inside: proof that it
-    /// keeps only ids and times. Never used outside tests.
-    package var storedForTests: [Any] {
-        lock.lock()
-        defer { lock.unlock() }
-        return [pending, withdrawn, window]
-    }
-    #endif
 
     /// The one test for whether a question is still open.
     private func isOpen(_ open: Open) -> Bool {

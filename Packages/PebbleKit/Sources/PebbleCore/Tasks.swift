@@ -351,6 +351,10 @@ public enum QuotesForgotten: Sendable, Equatable {
     /// Some of its words are still in a kept note, as when the person
     /// changed the digest or it couldn't be written just now.
     case stayed
+    /// Some of its words may still be in a kept note: one the person
+    /// changed, or one whose lines aren't known, drew from it, and its
+    /// words weren't found there but may have been reworded.
+    case mayHaveStayed
 }
 
 /// What forgetting every task left behind: counts only, so nothing a task
@@ -459,9 +463,12 @@ public struct TaskAnnouncer: Sendable {
             guard primed else { continue }
             guard before != current else { continue }
             // A task that already ended says nothing more when only its
-            // line changes, as when the person removes what it kept: they
-            // did it, so they know.
-            if let before, before.state == task.state, task.state.isFinished { continue }
+            // line changes because of the person's own change to their
+            // notes, as when they remove what it kept: they did it, so they
+            // know. Any other change to its line, such as the notes
+            // locking, is said.
+            if let before, before.state == task.state, task.state.isFinished,
+               Self.followsThePerson.contains(task.step) { continue }
             let line = Self.line(for: task)
             if Self.isUrgent(task.state) && before?.state != task.state {
                 waiting[task.id] = nil
@@ -501,6 +508,13 @@ public struct TaskAnnouncer: Sendable {
         lastSpoken = now
         return Line(text: Self.line(for: task), urgent: true)
     }
+
+    /// Lines an ended task moves to only after the person changed their
+    /// notes: removing the digest, forgetting a note it quoted, or a line
+    /// coming back once that note's line is gone.
+    static let followsThePerson: Set<String> = [
+        DigestWords.removed, DigestWords.tookOut, DigestWords.hiddenQuote, DigestWords.done, DigestWords.alreadyKept,
+    ]
 
     static func isUrgent(_ state: TaskState) -> Bool {
         state == .waitingOnYou || state.isFinished

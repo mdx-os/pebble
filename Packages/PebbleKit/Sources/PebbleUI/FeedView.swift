@@ -70,9 +70,13 @@ final class FeedModel: ObservableObject {
     /// True from forgetting every task until a new one starts, so the
     /// memory screen can say the tasks are gone.
     @Published private(set) var tasksForgotten = false
-    /// Goes up by one with each change the engine tells of, so the memory
-    /// screen can look again at what Forget everything would erase.
+    /// Goes up by one each time the engine's file of tasks appears or
+    /// goes, so the memory screen can look again at what Forget everything
+    /// would erase. Not on every step, so a running task doesn't make it
+    /// read the notes again each time.
     @Published private(set) var tasksSeen = 0
+    /// `tasksStored` when `tasksSeen` last went up.
+    private var storedWhenSeen = false
     private let clock: () -> ContinuousClock.Instant
     /// Says a line to VoiceOver. Tests replace it to hear what would be said.
     var announce: @MainActor (TaskAnnouncer.Line) -> Void = FeedModel.post
@@ -95,6 +99,7 @@ final class FeedModel: ObservableObject {
         track(list)
         sections = Self.sections(of: feed)
         _ = announcer.lines(for: list, at: clock())
+        storedWhenSeen = tasks?.hasStoredFile == true
         watching = tasks?.observe { [weak self] snapshot in
             // Engines tell us on whatever thread they run. Hop to the main
             // one, without a wait when already there. A hop doesn't promise
@@ -276,7 +281,11 @@ final class FeedModel: ObservableObject {
     func tasksChanged(_ snapshot: TaskSnapshot) {
         guard snapshot.sequence > seen else { return }
         seen = snapshot.sequence
-        tasksSeen += 1
+        let stored = tasksStored
+        if stored != storedWhenSeen {
+            storedWhenSeen = stored
+            tasksSeen += 1
+        }
         if track(snapshot.tasks) { rebuild() }
         for line in announcer.lines(for: snapshot.tasks, at: clock()) { announce(line) }
     }
@@ -899,7 +908,12 @@ struct TaskOfferCard: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(request.title)
         .accessibilityHint(DigestWords.startHint)
-        .accessibilityInputLabels([Text(DigestWords.startTitle), Text(request.title)])
+        // Voice Control users can say the title they see. "Start" alone
+        // would name every offer once there is more than one.
+        .accessibilityInputLabels([Text(request.title), Text(DigestWords.startInputLabel(request.title))])
+        // Not redundant: `children: .ignore` makes a new element without
+        // the button's trait. Without it the UI tests can't find the offer
+        // as a button.
         .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("offer")
     }

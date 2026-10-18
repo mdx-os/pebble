@@ -11,7 +11,7 @@ public enum DigestTask {
     package static let todos = ["read your notes", "write the digest", saveTodo]
 
     /// The longest line a note gets in the digest.
-    static let lineLimit = 90
+    package static let lineLimit = 90
 
     /// Where the digest goes, as the question names it.
     public static let notes = Recipient(id: "notes:what-i-remember", displayName: DigestWords.yourNotes,
@@ -103,9 +103,10 @@ public enum DigestTask {
     /// `lines` holds the line each quoted note must have, where it is
     /// known. A line is taken out only once every line is checked: each
     /// known one word for word, and one not known, as for a note gone
-    /// before its words were read, only by where it sits and only for a
-    /// note in `gone`. Anything else means the person changed the digest,
-    /// so it is left as they made it.
+    /// before its words were read, only for a note in `gone`, by where it
+    /// sits and by its shape: no longer than a line is written, and ending
+    /// with where a note came from. Anything else means the person changed
+    /// the digest, so it is left as they made it.
     package static func dropping(_ gone: Set<UUID>, from text: String, as written: Written,
                                  lines expected: [UUID: String]) -> Dropped {
         let quoted = written.quoted, more = written.more
@@ -119,7 +120,7 @@ public enum DigestTask {
             if let want = expected[id] {
                 guard line == want else { return .cantTell }
             } else {
-                guard gone.contains(id), line.hasPrefix("• ") else { return .cantTell }
+                guard gone.contains(id), couldBeLine(line) else { return .cantTell }
             }
         }
         let keptQuoted = quoted.filter { !gone.contains($0) }
@@ -129,6 +130,32 @@ public enum DigestTask {
         if !more.isEmpty { lines.removeLast() }
         if !keptMore.isEmpty { lines.append(DigestWords.andMore(keptMore.count)) }
         return .edited(Written(text: lines.joined(separator: "\n"), quoted: keptQuoted, more: keptMore))
+    }
+
+    /// True when `line` has the shape `line(for:)` gives every note: the
+    /// mark, the note's tidied words, cut at `lineLimit` with "...", and
+    /// a known label in brackets. A line the person added words to is
+    /// most often longer, or no longer ends with a label.
+    package static func couldBeLine(_ line: String) -> Bool {
+        guard line.hasPrefix("• "), line.hasSuffix(")"), let open = line.range(of: " (", options: .backwards) else {
+            return false
+        }
+        let label = String(line[open.upperBound..<line.index(before: line.endIndex)])
+        let body = String(line[line.index(line.startIndex, offsetBy: 2)..<open.lowerBound])
+        let fits = body.count <= lineLimit || (body.count == lineLimit + 3 && body.hasSuffix("..."))
+        return isLabel(label) && fits && !body.isEmpty && body == tidy(body)
+    }
+
+    /// True for any label `MemorySource.label` can give.
+    static func isLabel(_ label: String) -> Bool {
+        if [MemorySource.toldMe.label, MemorySource.inferred.label, MemorySource.fromApp("").label].contains(label) {
+            return true
+        }
+        guard label.hasPrefix("From ") else { return false }
+        let app = String(label.dropFirst("From ".count))
+        let fits = app.count <= MemorySource.maxAppNameLength
+            || (app.count == MemorySource.maxAppNameLength + 3 && app.hasSuffix("..."))
+        return fits && app == tidy(app)
     }
 
     /// For a digest whose lines aren't known, as one whose task was let
@@ -173,6 +200,9 @@ public enum DigestWords {
     public static let offerDetail = "I read only your notes, and I ask you first before I keep anything."
     public static let startTitle = "Start"
     public static let startHint = "Starts it. I'll ask you before I keep anything."
+    /// What Voice Control users can say to start one offer, naming it, so
+    /// two offers never answer to the same words.
+    public static func startInputLabel(_ title: String) -> String { "\(startTitle) \(title)" }
     public static let reading = "Reading your notes"
     public static let picking = "Picking out this week's notes"
     public static let writing = "Writing a short digest"
@@ -182,6 +212,9 @@ public enum DigestWords {
     /// A kept digest the person has since removed from their notes. The
     /// card no longer shows its words.
     public static let removed = "I kept a weekly digest, and you've since removed it from your notes."
+    /// A kept digest the agent took out of the notes itself, because no
+    /// line was left once the notes it quoted went or changed.
+    public static let tookOut = "I took the weekly digest out of your notes, because the notes it quoted are gone or changed."
     public static let nothingThisWeek = "There were no notes from this week to tidy, so I didn't write a digest."
     public static let couldNotRead = "Sorry, I couldn't read your notes just now, so I stopped. Nothing was changed."
     public static let couldNotSave = "Sorry, I couldn't keep the digest in your notes just now. Nothing was saved."
@@ -197,8 +230,14 @@ public enum DigestWords {
     public static let notesLocked = "Your weekly digest is in your notes. I can't open them just now to show it here."
     /// Forgetting a note whose words are still in a kept digest.
     public static let stillInDigest = "I forgot that note, but its words are still in your weekly digest. You can change or remove the digest here too."
+    /// Forgetting a note when a digest the person changed, or one whose
+    /// lines aren't known, drew from it, but its words weren't found
+    /// there. They may have been reworded, so it is never called gone.
+    public static let mayStillBeInDigest = "I forgot that note, but some of its words may still be in your weekly digest. You can change or remove the digest here too."
     /// Changing a note whose earlier words are still in a kept digest.
     public static let earlierWordsInDigest = "I changed that note, but your weekly digest still has its earlier words. You can change or remove the digest here too."
+    /// The same as `mayStillBeInDigest`, for a changed note.
+    public static let earlierWordsMayBeInDigest = "I changed that note, but your weekly digest may still have some of its earlier words. You can change or remove the digest here too."
     /// A digest not yet kept whose notes changed or went while it was
     /// being written or waiting for a yes. The yes was for other words.
     public static let noteChanged = "One of the notes I was tidying changed, so I stopped. Nothing was kept."

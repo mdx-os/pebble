@@ -1,6 +1,48 @@
 import Foundation
 @testable import PebbleCore
+import SourceScan
 import Testing
+
+/// The app has one notes store, so every writer, the memory screen, the
+/// cloud redactor and the task engine alike, is heard by everything that
+/// watches it. `MemoryStore.onDevice()` gives the same store every time,
+/// its plain init is package-only so the app can't make another, and the
+/// only other makers in the package are the store's own and the
+/// showcase's, which is Debug only and never touches real notes.
+struct OneNotesStoreTests {
+    static let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+
+    /// Code only: comments and words in strings are blanked.
+    func code(_ file: URL) throws -> String {
+        String(SwiftSource(try String(contentsOf: file, encoding: .utf8)).code)
+    }
+
+    func swiftFiles(in folder: URL) throws -> [URL] {
+        try #require(FileManager.default.enumerator(at: folder, includingPropertiesForKeys: nil))
+            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
+    }
+
+    @Test func theAppMakesOneNotesStore() throws {
+        let app = Self.root.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("App")
+        let appFiles = try swiftFiles(in: app)
+        #expect(!appFiles.isEmpty)
+        var opened = 0
+        for file in appFiles {
+            let text = try code(file)
+            opened += text.components(separatedBy: "MemoryStore.onDevice(").count - 1
+            #expect(!text.contains("MemoryStore(fileURL"), "\(file.lastPathComponent) makes a store")
+        }
+        #expect(opened == 1)
+        let makers = try swiftFiles(in: Self.root.appendingPathComponent("Sources")).filter {
+            try code($0).contains("MemoryStore(fileURL")
+        }.map(\.lastPathComponent).sorted()
+        #expect(makers == ["Memory.swift", "ShowcaseScene.swift"])
+        let showcase = try String(contentsOf: Self.root.appendingPathComponent("Sources/PebbleUI/ShowcaseScene.swift"),
+                                  encoding: .utf8)
+        #expect(showcase.contains("#if canImport(SwiftUI) && DEBUG"))
+    }
+}
 
 struct MemoryStoreTests {
     let folder: URL
