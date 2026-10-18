@@ -188,6 +188,58 @@ struct ModelFetchTests {
         #expect(await record.stoppedSoon())
     }
 
+    /// A result that arrives before `start` is resumed then, not dropped.
+    /// That is the race when a fetch is cancelled before its continuation
+    /// is registered. Many times, because the old handshake hung for good.
+    @Test func aCompletionBeforeStartStillFinishes() async {
+        for _ in 0..<10_000 {
+            let finish = FetchFinish()
+            finish.finish(.failure(URLError(.cancelled)))
+            await #expect(throws: URLError(.cancelled)) {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    finish.start(continuation)
+                }
+            }
+        }
+    }
+
+    /// Start and completion on two threads, the same race a cancelled task hits.
+    @Test func aCompletionRacingStartStillFinishes() async {
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<1_000 {
+                group.addTask {
+                    let finish = FetchFinish()
+                    await withTaskGroup(of: Void.self) { race in
+                        race.addTask { finish.finish(.failure(URLError(.cancelled))) }
+                        race.addTask {
+                            try? await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                                finish.start(continuation)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The real fetcher, cancelled before it can register. Each one has to
+    /// finish. Nothing here leaves the machine: `PlannedServer` answers.
+    @Test func aPreCancelledFetchAlwaysFinishes() async throws {
+        let folder = try scratch()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let body = Data(repeating: 4, count: 64)
+        for index in 0..<200 {
+            let url = address()
+            _ = PlannedServer.serve(.init(stated: body.count, body: body, piece: body.count), at: url)
+            let destination = folder.appendingPathComponent("part-\(index)")
+            let task = Task {
+                try await fetcher.fetch(ModelDownloadRequest.make(url), to: destination, bytes: Int64(body.count)) { _ in }
+            }
+            task.cancel()
+            _ = await task.result
+        }
+    }
+
     /// Through the installer: an oversized file ends failed with Try again,
     /// and nothing of the download is kept.
     @Test func anOversizedFileFailsTheInstallAndKeepsNothing() async throws {

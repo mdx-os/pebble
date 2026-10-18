@@ -97,13 +97,16 @@ public enum MLXChatModelError: Error, Equatable, Sendable {
     /// The latest message alone is more than the model can read at once.
     /// Nothing was generated, and a shorter message can still be answered.
     case tooLong
+    /// The app left the foreground, or a reply was refused because it had.
+    /// Nothing was kept as an answer, and the same message can be asked again.
+    case stopped
 
     /// True when the folder itself could not be loaded, so no reply from it
     /// will work until it is replaced.
     public var isLoadFailure: Bool {
         switch self {
         case .unavailable, .invalidConfiguration: true
-        case .tooLong: false
+        case .tooLong, .stopped: false
         }
     }
 }
@@ -119,12 +122,21 @@ public actor MLXChatModel: ModelClient {
     static let cacheLimitBytes = 64 * 1024 * 1024
 
     private let directory: URL
+    private let generation: OnDeviceGeneration
     private var loaded: ModelContainer?
     private var loadFailure: MLXChatModelError?
     private var loading: Task<ModelContainer, Error>?
+    /// False from the moment the app leaves the foreground until it is back.
+    private var loadsAllowed = true
 
     public init(directory: URL) {
         self.directory = directory
+        self.generation = .shared
+    }
+
+    init(directory: URL, generation: OnDeviceGeneration) {
+        self.directory = directory
+        self.generation = generation
     }
 
     /// The weights and every word stay on this device.
@@ -133,15 +145,69 @@ public actor MLXChatModel: ModelClient {
     /// The folder this model loads.
     public nonisolated var folder: URL { directory }
 
+    public func stopForBackground() async {
+        loadsAllowed = false
+        loading?.cancel()
+        await generation.stop()
+        await Self.drainGPU()
+    }
+
+    public func resumeAfterBackground() async {
+        loadsAllowed = true
+        await generation.resume()
+    }
+
+    /// Stops every model that shares the process-wide generation, then drains.
+    /// Used when the chat is no longer holding the model that was generating.
+    static func drainShared() async {
+        await OnDeviceGeneration.shared.stop()
+        await drainGPU()
+    }
+
     public func reply(to transcript: [ChatTurn]) async throws -> String {
         guard transcript.contains(where: { $0.speaker == .person }) else {
             throw ModelClientError.noPersonTurn
         }
+        // One generation in the whole process. The next waits until this one
+        // has left, including the drain after a cancel.
+        return try await generation.run { slot in
+            try await self.answer(transcript, slot: slot)
+        }
+    }
+
+    private func answer(_ transcript: [ChatTurn], slot: GenerationSlot) async throws -> String {
+        do {
+            return try await generate(transcript, slot: slot)
+        } catch {
+            let backgrounded = !loadsAllowed || await generation.isClosed
+            if backgrounded || Task.isCancelled {
+                await Self.drainGPU()
+            }
+            if backgrounded && error is CancellationError {
+                throw MLXChatModelError.stopped
+            }
+            throw error
+        }
+    }
+
+    private func generate(_ transcript: [ChatTurn], slot: GenerationSlot) async throws -> String {
+        if !loadsAllowed { throw MLXChatModelError.stopped }
         let container = try await container()
         let lines = try await Self.fitted(OnDeviceTranscript.lines(for: transcript), in: container)
-        let prepared = try await container.prepare(input: UserInput(chat: Self.messages(for: lines)))
-        let stream = try await container.generate(input: prepared, parameters: Self.parameters)
-        return await Self.text(from: stream)
+        if !loadsAllowed || await generation.isClosed { throw MLXChatModelError.stopped }
+        let (stream, task) = try await Self.stream(for: lines, in: container)
+        slot.track(task)
+        let text = await withTaskCancellationHandler {
+            await Self.text(from: stream)
+        } onCancel: {
+            task.cancel()
+        }
+        // `task` synchronizes the GPU stream before it returns, so a cancel
+        // does not leave an evaluation running into the next generation.
+        await task.value
+        if !loadsAllowed || await generation.isClosed { throw MLXChatModelError.stopped }
+        try Task.checkCancellation()
+        return text
     }
 
     /// The reply's length and the cache's size, both inside `OnDeviceModel.contextTokens`.
@@ -178,6 +244,12 @@ public actor MLXChatModel: ModelClient {
             loaded = container
             loading = nil
             return container
+        } catch is CancellationError {
+            // A stop while loading is not a broken folder. The next reply,
+            // once the app is in front, loads again.
+            loading = nil
+            if !loadsAllowed { throw MLXChatModelError.stopped }
+            throw CancellationError()
         } catch let error as MLXChatModelError {
             loadFailure = error
             loading = nil
@@ -252,9 +324,34 @@ public actor MLXChatModel: ModelClient {
         }
     }
 
+    /// The generation and the task that runs it. The task is what a cancel
+    /// stops, and awaiting it waits until that generation's GPU work is done.
+    private static func stream(for lines: [OnDeviceTranscriptLine],
+                               in container: ModelContainer) async throws -> (AsyncStream<Generation>, Task<Void, Never>) {
+        let generationParameters = Self.parameters
+        return try await container.perform { context in
+            let prepared = try await context.processor.prepare(
+                input: UserInput(chat: messages(for: lines)))
+            let iterator = try TokenIterator(
+                input: prepared, model: context.model, parameters: generationParameters)
+            return generateTask(
+                promptTokenCount: prepared.text.tokens.size,
+                modelConfiguration: context.configuration,
+                tokenizer: context.tokenizer,
+                iterator: iterator)
+        }
+    }
+
+    /// Waits until GPU work already submitted has finished, then frees cached buffers.
+    private static func drainGPU() async {
+        Stream.defaultStream.synchronize()
+        Memory.clearCache()
+    }
+
     private static func text(from stream: AsyncStream<Generation>) async -> String {
         var reply = ""
         for await event in stream {
+            if Task.isCancelled { break }
             switch event {
             case .chunk(let text):
                 reply += text

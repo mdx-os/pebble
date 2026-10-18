@@ -37,6 +37,14 @@ private struct TooLongModel: ModelClient {
     }
 }
 
+/// The reply the model throws when the app has left the foreground.
+private struct StoppedModel: ModelClient {
+    var runsOnDevice: Bool { true }
+    func reply(to transcript: [ChatTurn]) async throws -> String {
+        throw MLXChatModelError.stopped
+    }
+}
+
 /// Answers only after a long pause, so a test can act while a reply is coming.
 private struct SlowModel: ModelClient {
     var runsOnDevice: Bool { true }
@@ -156,6 +164,27 @@ struct ChatRenameTests {
         #expect(controller.draft == "A very long pasted document")
         #expect(controller.conversation.turns == before)
         #expect(ChatController.pointsAtTheDraft(OnDeviceModelWords.tooLong))
+    }
+
+    /// Leaving the foreground stops the reply and keeps the message, in the
+    /// chat and back in the composer, so it can be sent again.
+    @Test func aReplyStoppedWhenTheAppLeavesKeepsTheMessage() async throws {
+        let controller = ChatController(brand: brand, model: StoppedModel(), names: InMemoryAgentNameStore(),
+                                        replyBeat: .zero)
+        #expect(ChatController.failureLine(for: MLXChatModelError.stopped) == FirstConversation.couldNotAnswer)
+        #expect(!ChatController.nothingWasSent(MLXChatModelError.stopped))
+        controller.submit("Pack lunches")
+        await controller.settled()
+        #expect(controller.failure == FirstConversation.couldNotAnswer)
+        #expect(controller.draft == "Pack lunches")
+        let kept = try #require(controller.conversation.turns.last)
+        #expect(kept.speaker == .person && kept.text == "Pack lunches")
+        let turns = controller.conversation.turns.count
+        #expect(controller.send("Pack lunches"))
+        #expect(controller.conversation.turns.count == turns)
+        #expect(controller.conversation.turns.filter { $0.text == "Pack lunches" }.count == 1)
+        await controller.settled()
+        #expect(controller.conversation.turns.filter { $0.speaker == .person }.map(\.text) == ["Pack lunches"])
     }
 
     @Test func theAppModelOpensWithAnHonestPrivacyLine() {
