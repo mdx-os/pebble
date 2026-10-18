@@ -8,6 +8,10 @@ out="${1:-build/screenshots}"
 derived="build/DerivedData"
 bundle_id="com.mdxos.pebble"
 mkdir -p "$out"
+# The tree these screenshots show, taken before the build. Written to
+# $out/STAMP once they are all made, and checked by `make verify`.
+rm -f "$out/STAMP"
+tree="$(sh scripts/screenshot-stamp.sh tree)"
 
 # First available simulator whose name starts with $1, unless $2 names one.
 pick_sim() {
@@ -66,3 +70,4 @@ mac_app="$(built_app Debug)"
 exe="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$mac_app/Contents/Info.plist")"
 "$mac_app/Contents/MacOS/$exe" -snapshotPath "$PWD/$out/mac.png"
 echo "screenshots: $out/mac.png"
+sh scripts/screenshot-stamp.sh write "$out" "$tree"

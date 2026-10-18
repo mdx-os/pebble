@@ -30,10 +30,12 @@ struct CopyDashTests {
         MemoryWords.forgetTitle, MemoryWords.forgetEverythingTitle, MemoryWords.forgotten,
         MemoryWords.needsWords, MemoryWords.tooLong, MemoryWords.editTitle, MemoryWords.saveTitle,
         MemoryWords.cancelTitle, MemoryWords.doneTitle, MemoryWords.addPlaceholder, MemoryWords.addTitle,
-        MemoryWords.forgetEverythingQuestion, MemoryWords.forgetEverythingDetail,
+        MemoryWords.forgetEverythingQuestion, MemoryWords.forgetEverythingDetail(background: true),
+        MemoryWords.forgetEverythingDetail(background: false),
         MemoryWords.unreadable, MemoryWords.unavailable, MemoryWords.couldNotOpen, MemoryWords.tryAgainTitle,
         MemoryWords.forgetOneQuestion, MemoryWords.editPlaceholder, MemoryWords.couldNotForget,
-        MemoryWords.couldNotForgetNotes,
+        MemoryWords.couldNotForgetNotes, MemoryWords.summariesGone,
+        MemoryWords.summariesStayed,
         MemorySource.toldMe.label, MemorySource.fromApp("Calendar").label, MemorySource.inferred.label,
         ConfirmationWords.heading, ConfirmationWords.toLabel, ConfirmationWords.fromLabel,
         ConfirmationWords.whatLabel, ConfirmationWords.whereLabel, ConfirmationWords.priceLabel,
@@ -50,6 +52,8 @@ struct CopyDashTests {
       + CloudWords.all
       + Redaction.Kind.allCases.flatMap { [$0.mask, $0.counted(1), $0.counted(2)] }
       + TaskWords.all
+      + BackgroundWordsTests.all
+      + MemoryWords.couldNotForgetSummariesLines
       + ReceiptWords.all
       + NudgeWords.all
 
@@ -71,6 +75,16 @@ struct CopyDashTests {
             #expect(all.contains(line), "unchecked: \(line)")
         }
         #expect(Set(TaskState.allCases.map(\.label)).isSubset(of: Set(all)))
+    }
+
+    /// The Forget everything lines about the morning summaries come in
+    /// through `CloudWords.all` and `MemoryWords`, so they are swept too.
+    @Test func theSummaryLinesAreChecked() {
+        for line in [CloudWords.forgetEverythingWithSummariesDetail, MemoryWords.summariesGone,
+                     MemoryWords.summariesStayed, MemoryWords.forgetEverythingDetail(background: true)]
+            + MemoryWords.couldNotForgetSummariesLines + CloudWords.forgotAndCloudOffNotSummariesLines {
+            #expect(Self.copy.contains(line), "unchecked: \(line)")
+        }
     }
 
     /// Catches new words too: no source file and not the voice guide.
@@ -102,13 +116,22 @@ struct CopyDashTests {
         #expect(MemoryWords.forgotten == "Gone. I no longer have it.")
         // Forget everything says it stops tasks, and the tasks-only fallback
         // says the notes are left alone.
-        #expect(MemoryWords.forgetEverythingDetail.contains("every task"))
-        #expect(MemoryWords.forgetEverythingDetail.contains("stops any task still going"))
+        for background in [true, false] {
+            #expect(MemoryWords.forgetEverythingDetail(background: background).contains("every task"))
+            #expect(MemoryWords.forgetEverythingDetail(background: background).contains("stops any task still going"))
+        }
+        // And it says background work stops too, as `BackgroundRunner.forget`
+        // does, only where there is background work to stop.
+        #expect(MemoryWords.forgetEverythingDetail(background: true).contains("turns off work while you're away"))
+        #expect(!MemoryWords.forgetEverythingDetail(background: false).contains("away"))
+        #expect(!MemoryWords.forgetEverythingDetail(background: false).contains("summary"))
         #expect(TaskWords.forgetTasksDetail.contains("stops any task still going"))
         #expect(TaskWords.forgetTasksDetail.contains("Your notes aren't touched"))
         // Forget everything keeps the nudge choice, so every way it is
         // offered says so, and "everything" never misleads.
-        for detail in [MemoryWords.forgetEverythingDetail, CloudWords.forgetEverythingDetail,
+        for detail in [MemoryWords.forgetEverythingDetail(background: false),
+                       MemoryWords.forgetEverythingDetail(background: true), CloudWords.forgetEverythingDetail,
+                       CloudWords.forgetEverythingWithSummariesDetail,
                        TaskWords.forgetTasksDetail, CloudWords.forgetTasksAndWordsDetail] {
             #expect(detail.localizedCaseInsensitiveContains("your choice about nudges stays as it is."), "\(detail)")
         }

@@ -1,6 +1,7 @@
 import Foundation
 @testable import PebbleCore
 import SourceScan
+import TestScratch
 import Testing
 
 /// A question at a consequential step, end to end in the engine and the
@@ -587,7 +588,7 @@ struct NeedsYouFlowTests {
 
     /// A file that can't be understood and won't go is owed a forget, so
     /// it is never read and goes as soon as it can.
-    @Test(.enabled(if: canLockFiles, "file permissions don't stop root"))
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
     func aFileThatCannotBeDecodedAndWontGoIsOwedAForget() throws {
         let folder = try Self.folder()
         let marker = try Self.marker()
@@ -647,14 +648,11 @@ struct NeedsYouFlowTests {
         }
     }
 
-    /// Permissions don't stop root, so these can't make a file unreadable there.
-    static let canLockFiles = geteuid() != 0
-
     /// PERMANENT GUARD. Forget everything removes the file even when it
     /// couldn't be read, as before the device is first unlocked, and
     /// nothing it held comes back once it could have been. The nudge
     /// choice, kept apart from it, stays.
-    @Test(.enabled(if: canLockFiles, "file permissions don't stop root"))
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
     func forgetRemovesAFileThatCouldNotBeRead() throws {
         let (folder, url, marker, _) = try Self.earlierFile()
         defer { Self.cleanUp(folder, marker.deletingLastPathComponent()) }
@@ -676,7 +674,7 @@ struct NeedsYouFlowTests {
     /// PERMANENT GUARD. The same button gives the same result: Forget
     /// everything keeps the nudge choice whether the file could be read or
     /// not, as when the device hasn't been unlocked since it started.
-    @Test(.enabled(if: canLockFiles, "file permissions don't stop root"))
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
     func forgetKeepsTheNudgeChoiceWhetherOrNotTheFileWasRead() throws {
         var kept: [NudgeChoice] = []
         for readable in [true, false] {
@@ -725,7 +723,7 @@ struct NeedsYouFlowTests {
     /// forgotten, even by a store opened after the app was killed: none
     /// reads it, and the first that can deletes it. The nudge choice stays,
     /// the same as when it could be removed.
-    @Test(.enabled(if: canLockFiles, "file permissions don't stop root"))
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
     func aFileForgottenWhileItCouldNotBeRemovedNeverComesBack() throws {
         let (folder, url, marker, _) = try Self.earlierFile()
         defer { Self.cleanUp(folder, marker.deletingLastPathComponent()) }
@@ -757,7 +755,7 @@ struct NeedsYouFlowTests {
     /// PERMANENT GUARD. Forget everything deletes the file first, even when
     /// it was read and the store is in use. A file that won't go is owed a
     /// forget, written down, and tried again at every later change.
-    @Test(.enabled(if: canLockFiles, "file permissions don't stop root"))
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
     func forgetDeletesTheFileFirstEvenWhenItWasRead() throws {
         let (folder, url, marker, receipt) = try Self.earlierFile()
         defer { Self.cleanUp(folder, marker.deletingLastPathComponent()) }
@@ -826,7 +824,7 @@ struct NeedsYouFlowTests {
     }
 
     /// A file read late never takes back what changed since launch.
-    @Test(.enabled(if: canLockFiles, "file permissions don't stop root"))
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
     func aLateReadKeepsWhatChangedSinceLaunch() throws {
         let (folder, url, marker, earlier) = try Self.earlierFile()
         defer { Self.cleanUp(folder, marker.deletingLastPathComponent()) }
@@ -849,7 +847,7 @@ struct NeedsYouFlowTests {
     /// even after a `keep` from before the read that knew none of them. An
     /// approved step under way still ends saying it may be done, with its
     /// receipt, and is never run again.
-    @Test(.enabled(if: canLockFiles, "file permissions don't stop root"))
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
     func aLateReadNeverDropsSavedTasks() throws {
         let folder = try Self.folder()
         let marker = try Self.marker()
@@ -890,7 +888,7 @@ struct NeedsYouFlowTests {
     /// PERMANENT GUARD. Clearing the last receipt when its file won't go
     /// is owed a forget, written down, so the receipt never comes back,
     /// even after the app is killed.
-    @Test(.enabled(if: canLockFiles, "file permissions don't stop root"))
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
     func aReceiptClearedWhenItsFileWontGoNeverComesBack() throws {
         let folder = try Self.folder()
         let marker = try Self.marker()
@@ -920,7 +918,7 @@ struct NeedsYouFlowTests {
     /// PERMANENT GUARD. A rewrite that fails after a clear stays owed and
     /// is tried again at the next look, so the cleared receipt is gone from
     /// the file as soon as the file can be written.
-    @Test(.enabled(if: canLockFiles, "file permissions don't stop root"))
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
     func aClearThatCouldNotBeWrittenIsWrittenAtTheNextLook() throws {
         let folder = try Self.folder()
         let marker = try Self.marker()

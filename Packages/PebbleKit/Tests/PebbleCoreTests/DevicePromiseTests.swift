@@ -40,10 +40,15 @@ enum DevicePromise {
 
     static let allowed: [Allowed] = [
         Allowed(file: "PebbleCore/Memory.swift",
+                literal: "This removes every note, every task and every morning summary from this device, stops any task still going, and turns off work while you're away. It can't be undone. Your choice about nudges stays as it is.",
+                reason: "MemoryWords.forgetEverythingDetail is about where the notes, tasks and summaries are, not where "
+                    + "the chat goes. Notes live only in MemoryStore's local file, tasks only in the engine in this "
+                    + "process, and summaries only in BackgroundStore's file beside the notes, whatever the model is, "
+                    + "so it is true with a cloud model too."),
+        Allowed(file: "PebbleCore/Memory.swift",
                 literal: "This removes every note and every task from this device, and stops any task still going. It can't be undone. Your choice about nudges stays as it is.",
-                reason: "MemoryWords.forgetEverythingDetail is about where the notes and tasks are, not where the chat goes. "
-                    + "Notes live only in MemoryStore's local file and tasks only in the engine in this process, "
-                    + "whatever the model is, so it is true with a cloud model too."),
+                reason: "MemoryWords.forgetEverythingDetail with no background work: where the notes and tasks are, "
+                    + "not where the chat goes, so it is true with a cloud model too."),
         Allowed(file: "PebbleCore/Tasks.swift",
                 literal: "This stops any task still going, and removes every task and what you told me for it from this device. It can't be undone. Your notes aren't touched, and your choice about nudges stays as it is.",
                 reason: "TaskWords.forgetTasksDetail names where the tasks are erased from, not that nothing left. "
@@ -77,6 +82,12 @@ enum DevicePromise {
     static let privateWordsName = "\"Private words\" names the list of words the person asked to hide (CloudHelp's private "
         + "words, `Redaction.Kind.privateWord`). It names that list and promises nothing about where a chat goes, so it "
         + "is true with the cloud on or off."
+
+    /// Each form of `CloudWords.forgotAndCloudOffNotSummaries`.
+    static let cloudSummariesStayed = "CloudWords.forgotAndCloudOffNotSummaries, a Forget everything status line, in "
+        + "the form for what went. Its only phrase is \"private words\", the name of the person's list in the cloud "
+        + "setting, which it says went. The summaries clause says what stayed, BackgroundStore's local file, and "
+        + "promises nothing about where a chat goes, so it is true with the cloud on or off."
 
     /// The cloud setting's lines. Each is shown whatever the open chat's
     /// place, and each is true with the cloud on and off.
@@ -145,6 +156,23 @@ enum DevicePromise {
                 reason: "CloudWords.forgetEverythingDetail, like MemoryWords.forgetEverythingDetail: it names where the "
                     + "notes, tasks and private words are erased from, all local files, whatever the model is."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "This removes every note, every task, every morning summary and every word you asked me to hide from this device, stops any task still going, and turns off work while you're away. It can't be undone. Your choice about nudges stays as it is.",
+                reason: "CloudWords.forgetEverythingWithSummariesDetail, like MemoryWords.forgetEverythingDetail with "
+                    + "background work: it names where the notes, tasks, summaries and private words are erased from, "
+                    + "all local files, whatever the model is."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "I forgot your notes and tasks, and turned off work while you're away, but I couldn't erase your morning summaries just now. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. Please try Forget everything again in a moment.",
+                reason: cloudSummariesStayed),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "I forgot your notes and turned off work while you're away, but I couldn't erase your morning summaries just now. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. Please try Forget everything again in a moment.",
+                reason: cloudSummariesStayed),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "I forgot your tasks and turned off work while you're away, but I couldn't erase your morning summaries just now. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. Please try Forget everything again in a moment.",
+                reason: cloudSummariesStayed),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "I turned off work while you're away, but I couldn't erase your morning summaries just now. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. Please try Forget everything again in a moment.",
+                reason: cloudSummariesStayed),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
                 literal: "Your notes are gone, but I couldn't erase your private words just now. Please try Forget everything again in a moment.",
                 reason: privateWordsName),
         Allowed(file: "PebbleCore/CloudHelp.swift",
@@ -190,7 +218,8 @@ enum DevicePromise {
     /// Lines the copy lists hold that the guard lets by, each with its
     /// entry in `allowed` for the reason.
     static let allowedLines: [String] = [
-        MemoryWords.forgetEverythingDetail,
+        MemoryWords.forgetEverythingDetail(background: true),
+        MemoryWords.forgetEverythingDetail(background: false),
         TaskWords.forgetTasksDetail,
         FeedWords.sampleNote(.mayLeaveDevice),
         CloudWords.onDetail,
@@ -206,6 +235,7 @@ enum DevicePromise {
         CloudWords.staysHere,
         CloudWords.notesUnreadable,
         CloudWords.forgetEverythingDetail,
+        CloudWords.forgetEverythingWithSummariesDetail,
         CloudWords.forgotNotesNotWords,
         CloudWords.forgotNotesAndTasksNotWords,
         CloudWords.forgotWordsNotNotes,
@@ -217,7 +247,7 @@ enum DevicePromise {
         CloudWords.forgetTasksAndWordsDetail,
         Redaction.Kind.privateWord.mask,
         Redaction.Kind.privateWord.spoken,
-    ] + CloudWords.askPoints.filter { !found(in: $0).isEmpty }
+    ] + CloudWords.forgotAndCloudOffNotSummariesLines + CloudWords.askPoints.filter { !found(in: $0).isEmpty }
 
     /// Lines built at run time around an allowed literal, each with the
     /// literal it is built from. What is built around it adds no phrase.
@@ -385,6 +415,45 @@ struct DevicePromiseTests {
         }
         #expect(DevicePromise.found(in: "only one").isEmpty)
         #expect(!DevicePromise.found(in: "Kept ONLY on this device").isEmpty)
+    }
+
+    /// The Forget everything question is built by a function with one
+    /// branch for background work and one without. Each branch goes
+    /// through the guard on its own: the sweep sees its literal, it has its
+    /// own entry by exact words, and a word added to either one is caught.
+    /// The same for the cloud's two questions and the summaries status lines.
+    @Test func bothForgetEverythingBranchesGoThroughTheGuard() throws {
+        let files = try Self.sources()
+        let lines: [(file: String, line: String)] = [
+            ("PebbleCore/Memory.swift", MemoryWords.forgetEverythingDetail(background: true)),
+            ("PebbleCore/Memory.swift", MemoryWords.forgetEverythingDetail(background: false)),
+            ("PebbleCore/CloudHelp.swift", CloudWords.forgetEverythingDetail),
+            ("PebbleCore/CloudHelp.swift", CloudWords.forgetEverythingWithSummariesDetail),
+        ] + CloudWords.forgotAndCloudOffNotSummariesLines.map { (file: "PebbleCore/CloudHelp.swift", line: $0) }
+        #expect(Set(CloudWords.forgotAndCloudOffNotSummariesLines).count == 4, "a form for each of what went")
+        #expect(MemoryWords.forgetEverythingDetail(background: true)
+                != MemoryWords.forgetEverythingDetail(background: false))
+        for (name, line) in lines {
+            let file = try #require(files.first { $0.name == name })
+            let source = SwiftSource(file.text)
+            #expect(!DevicePromise.found(in: line).isEmpty, "something for the guard to check: \(line)")
+            let literal = try #require(source.literals.first { $0.text == line }, "the sweep sees: \(line)")
+            #expect(!DevicePromise.isGated(literal, in: source), "passes by its entry, not the flag: \(line)")
+            let entries = DevicePromise.allowed.filter { $0.literal == line }
+            #expect(entries.count == 1 && entries.first?.file == name, "its own entry: \(line)")
+            #expect(entries.first?.reason != DevicePromise.privateWordsName, "its own reason: \(line)")
+            #expect(Self.ungated(in: [file]).isEmpty)
+
+            let quoted = "\"" + line + "\""
+            #expect(file.text.components(separatedBy: quoted).count == 2, "written once: \(line)")
+            let longer = file.text.replacingOccurrences(of: quoted, with: "\"" + line + " It stays private.\"")
+            #expect(Self.ungated(in: [(name, longer)]).count == 1, "a word added is caught: \(line)")
+        }
+        // The summaries status lines that promise nothing need no entry.
+        for line in MemoryWords.couldNotForgetSummariesLines + [MemoryWords.summariesGone, MemoryWords.summariesStayed] {
+            #expect(DevicePromise.found(in: line).isEmpty, "\(line)")
+            #expect(!DevicePromise.allowed.contains { $0.literal == line })
+        }
     }
 
     /// An allowed line passes only word for word. Anything added to it,

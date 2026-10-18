@@ -4,6 +4,7 @@ import PebbleCore
 import PebbleModel
 import SourceScan
 import SwiftUI
+import TestScratch
 import Testing
 #if canImport(UserNotifications)
 import UserNotifications
@@ -906,7 +907,7 @@ struct NeedsYouFlowModelTests {
     /// Tasks a late read of the store found reach Today's engine on their
     /// own, with no change from Today: a step said yes to that was under
     /// way gets its card and its receipt.
-    @Test(.enabled(if: geteuid() != 0, "file permissions don't stop root"))
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
     func tasksALateReadFoundArePickedUpByToday() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("flow-\(UUID().uuidString)")
         defer {

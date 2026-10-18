@@ -1,5 +1,7 @@
 AppUITests/CloudUITests.swift: XCTAssertTrue(labels.label.contains("User-Agent, pebble"))
 AppUITests/CloudUITests.swift: app.launchArguments = ["-pebble.onboarding.finished", "YES", "-pebble.agent.displayName", "Pip"]
+AppUITests/HomeLayoutUITests.swift: "-pebble.onboarding.finished", "YES", "-pebble.agent.displayName", "Pip"]
+AppUITests/HomeLayoutUITests.swift: clean.launchArguments = ["-pebble.onboarding.finished", "YES"]
 Packages/PebbleKit/Sources/PebbleCore/AgentLook.swift: public static let storageKey = "pebble.agent.look"
 Packages/PebbleKit/Sources/PebbleCore/AgentName.swift: public static let storageKey = "pebble.agent.displayName"
 Packages/PebbleKit/Sources/PebbleCore/Memory.swift: var folder = base.appendingPathComponent("pebble", isDirectory: true)
