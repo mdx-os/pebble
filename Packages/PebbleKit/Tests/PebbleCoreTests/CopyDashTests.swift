@@ -62,7 +62,8 @@ struct CopyDashTests {
     /// dash slipping into a format string or a date style is caught too.
     @Test func reconLinesBuiltAtRunTimeUseNoDash() throws {
         let topic = "the Riverside pool reopening"
-        let pool = try ReconTests.summary(SampleSources.poolTopic)
+        // Read as real pages, so every point has a note to check.
+        let pool = try ReconTests.realSummary(SampleSources.poolTopic)
         let library = try ReconTests.summary(SampleSources.libraryTopic)
         let now = ReconTests.readOn
         let cloud = ReconSummary(id: pool.id, topic: pool.topic, overview: pool.overview, points: pool.points,
@@ -74,14 +75,19 @@ struct CopyDashTests {
             ReconWords.overview(topic: topic, sources: 3, backedTwice: 0, disagreements: 2, old: 3),
             ReconWords.disputedBy(pool.sources.map(\.publisher)),
             ReconWords.gathered(now, now: now), ReconWords.gathered(now - 86_400, now: now),
-            ReconWords.gathered(now - 9 * 86_400, now: now),
+            ReconWords.gathered(now - 9 * 86_400, now: now), ReconWords.gathered(now - 400 * 86_400, now: now),
             ReconWords.reading(2), ReconWords.reading(12), ReconWords.keptSources(2), ReconWords.keptSources(12),
             ReconWords.followUpDraft(topic), ReconWords.askLine(topic), ReconWords.nothingFound(topic),
             ReconWords.morePoints(3), ReconWords.from(pool.sources.map(\.publisher)),
+            // The chat's line when a preview was taken away unanswered.
+            CloudWords.withdrawn,
         ]
-        lines += pool.points.flatMap { [pool.note(for: $0), cloud.note(for: $0), $0.text] }
+        // What VoiceOver says each source's link does, from its own host.
+        lines += pool.sources.compactMap(\.link).map { ReconWords.pageLinkHint($0.host) }
+        #expect(lines.contains("Opens gazette.example.org in your browser."))
+        lines += pool.points.flatMap { [pool.note(for: $0), cloud.note(for: $0), $0.text].compactMap { $0 } }
         lines += pool.disagreements.map(\.text)
-        lines += (pool.points + cloud.points).map { pool.memorySource(for: $0).label }
+        lines += (pool.points + cloud.points).compactMap { pool.memorySource(for: $0)?.label }
         for line in lines {
             #expect(!line.contains(where: Self.dashes.contains), "dash in: \(line)")
         }

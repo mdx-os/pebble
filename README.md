@@ -108,6 +108,12 @@ are labelled as examples. With the cloud off, the summary is put together on
 the device. With it on, the request goes through the same redaction and
 preview as a chat, and choosing not to send keeps it on the device.
 
+A point you keep is saved with the source `lookedUp` and labelled with
+where it came from. Builds from before looking into things can't read that
+kind, so if you go back to one, those notes show as "My guess" (`inferred`),
+the least trusted label. Their words are kept, but once that older build
+saves the notes again, where they came from is lost and they stay "My guess".
+
 ## The agent's name
 
 The product name is set in `Config/Brand.xcconfig`. The name you call your

@@ -51,10 +51,16 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
     private var underway: [UUID: Task<Void, Never>] = [:]
     /// Work that returned before `summarize` could note it.
     private var endedEarly: Set<UUID> = []
+    /// Goes up with each `clear`, so a recon whose `lookInto` was under way
+    /// when everything was forgotten is never kept after it.
+    private var generation = 0
 
     private struct Run {
         let task: ReconTask
         let summarizer: any ReconSummarizer
+        /// The provider said its pages are examples when this was started,
+        /// so the summary is stamped as one whoever puts it together.
+        let isSample: Bool
         /// What was read. Let go once the summary holds it, or the card stops.
         var sources: [ReconSource]
         /// How many sources this round read, and how many the engine's
@@ -82,11 +88,12 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         var round = 0
     }
 
-    /// `now` is when sources count as read. By default, the engine's own
-    /// clock for a `LocalFakeEngine`, and the wall clock otherwise. The
-    /// engine's clock fits only one played to a set moment, as the
-    /// showcase's is: one moved only while a card is live falls behind, so
-    /// give it the wall clock, as `HomeView.reconFeedModel` does.
+    /// `now` is when sources count as read. By default it is the wall
+    /// clock, `Date()`, for every engine but a `LocalFakeEngine`, whose
+    /// scripted clock is read instead, since that engine stands in for a
+    /// set moment, as the showcase's does. A `LocalFakeEngine` moved only
+    /// while a card is live falls behind the wall clock, so one that plays
+    /// in real time is given the wall clock, as `HomeView.reconFeedModel` does.
     public init(engine: any TaskEngine, provider: any SourceProvider, now: (@Sendable () -> Date)? = nil) {
         self.engine = engine
         self.provider = provider
@@ -114,23 +121,41 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
     public func lookInto(_ topic: String, with summarizer: any ReconSummarizer = LocalReconSummarizer()) -> String? {
         guard let task = ReconTask(topic: topic), provider.runsOnDevice,
               let scripted = engine as? ScriptedTaskEngine else { return nil }
-        let (sources, failed) = read(task)
+        lock.lock()
+        let begun = generation
+        lock.unlock()
+        let isSample = provider.isSample
+        let (sources, failed) = read(task, isSample: isSample)
         let gatheredAt = now()
         // Not under the lock: the engine tells its observers, this one
         // included, before `start` returns.
         let id = scripted.start(task.script(sources: sources.count))
         lock.lock()
-        runs[id] = Run(task: task, summarizer: summarizer, sources: sources, read: sources.count,
-                       scripted: sources.count, gatheredAt: gatheredAt, readFailed: failed)
+        // Forget everything came while this was being started, before or
+        // after the engine took the task. Nothing it read is kept, and
+        // the task goes too, so no card is left that no one asked for.
+        let forgotten = generation != begun
+        if !forgotten {
+            runs[id] = Run(task: task, summarizer: summarizer, isSample: isSample, sources: sources,
+                           read: sources.count, scripted: sources.count, gatheredAt: gatheredAt, readFailed: failed)
+        }
         lock.unlock()
+        if forgotten {
+            _ = engine.stop(id)
+            _ = engine.dismiss(id)
+            return nil
+        }
         changed()
         return id
     }
 
-    /// Never under the lock: a provider is someone else's code.
-    private func read(_ task: ReconTask) -> ([ReconSource], failed: Bool) {
+    /// Never under the lock: a provider is someone else's code. Pages from
+    /// a provider of examples are marked as examples, so a summary made
+    /// from them is one too.
+    private func read(_ task: ReconTask, isSample: Bool) -> ([ReconSource], failed: Bool) {
         do {
-            return (try provider.sources(for: task), false)
+            let pages = try provider.sources(for: task)
+            return (isSample ? pages.map { $0.asSample() } : pages, false)
         } catch {
             return ([], true)
         }
@@ -240,7 +265,8 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         guard let task, task.state != .stopped, task.state != .failed else { return }
         lock.lock()
         guard let run = runs[id], run.round == round, !run.stopped, !run.stopping else { lock.unlock(); return }
-        runs[id]?.summary = summary
+        // Whoever put it together, a summary read from examples is one.
+        runs[id]?.summary = summary.stamped(sample: run.isSample)
         runs[id]?.work = nil
         // The summary holds what was read now.
         runs[id]?.sources = []
@@ -257,7 +283,31 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
     public var isSample: Bool { engine.isSample }
 
     public func isSample(_ id: String) -> Bool {
-        engine.isSample(id) || (provider.isSample && isRecon(id))
+        if engine.isSample(id) { return true }
+        lock.lock(); defer { lock.unlock() }
+        return runs[id].map { $0.isSample || $0.summary?.isSample == true } ?? false
+    }
+
+    /// The recon already going or ready for `topic`, if there is one, so a
+    /// second ask from the feed or a chat starts nothing more. The topic is
+    /// compared as `ReconTask` tidies it, whatever its case. One that
+    /// stopped or failed doesn't count, so it can be asked again.
+    public func activeRecon(for topic: String) -> String? {
+        guard let wanted = ReconTask(topic: topic)?.topic else { return nil }
+        lock.lock()
+        let topics = runs.mapValues(\.task.topic)
+        lock.unlock()
+        return tasks.first { task in
+            guard let known = topics[task.id], task.isActive || task.state == .done else { return false }
+            return known.caseInsensitiveCompare(wanted) == .orderedSame
+        }?.id
+    }
+
+    /// True when the recon's summary is put together by a summarizer that
+    /// may send what was read off this device, after a yes.
+    public func mayLeaveDevice(_ id: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return runs[id]?.summarizer.mayLeaveDevice == true
     }
 
     /// True when a point from this recon may be kept in the person's notes.
@@ -292,7 +342,9 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
                 shown.wrapUp = TaskWrapUp(kept: [], notDone: [ReconWords.readTodo])
             } else if let summary = run.summary {
                 shown.result = summary.plainText
-                if summary.points.isEmpty { shown.step = ReconWords.nothingFoundLine }
+                // From the summary, not the script: a retry may find what
+                // the script it plays again had nothing of, or the other way.
+                shown.step = summary.points.isEmpty ? ReconWords.nothingFoundLine : ReconWords.doneLine
             } else {
                 shown.state = .running
                 shown.step = ReconWords.puttingTogether
@@ -406,6 +458,8 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         lock.lock()
         let works = runs.values.compactMap(\.work)
         runs.removeAll()
+        // A `lookInto` still on its way keeps nothing it read.
+        generation += 1
         lock.unlock()
         // Cancelling also withdraws a cloud preview still waiting for an answer.
         for work in works { work.cancel() }
@@ -421,10 +475,11 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
     public func retry(_ id: String) -> Bool {
         lock.lock()
         let task = runs[id]?.task
+        let isSample = runs[id]?.isSample ?? false
         lock.unlock()
         guard engine.retry(id) else { return false }
         guard let task else { return true }
-        let (sources, failed) = read(task)
+        let (sources, failed) = read(task, isSample: isSample)
         let gatheredAt = now()
         lock.lock()
         let old = runs[id]?.work

@@ -557,6 +557,33 @@ struct CloudHelpTests {
         #expect(maker.wire.sent.isEmpty)
     }
 
+    /// Two lines taken back one after the other, the first still in the
+    /// composer when the second goes, as when a starter is tapped. The line
+    /// says what you wrote is still here, so both are.
+    @Test func twoWithdrawnLinesAreBothStillHere() async throws {
+        let maker = TransportMaker()
+        let cloud = help(CloudHelpSettings(isOn: true), endpoint: endpoint, maker: maker)
+        let controller = chat(cloud)
+        let review = try #require(controller.review)
+        controller.draft = "Plan my week"
+        controller.submit("Plan my week")
+        _ = await review.shown()
+        controller.screenWentAway()
+        await controller.settled()
+        #expect(controller.failure == CloudWords.withdrawn)
+        #expect(controller.draft == "Plan my week")
+        // A second line that isn't the draft, so the draft stays as it is.
+        controller.submit("Write a note to the school")
+        _ = await review.shown()
+        review.cancelPending()
+        await controller.settled()
+        #expect(controller.failure == CloudWords.withdrawn)
+        #expect(controller.draft.contains("Plan my week"))
+        #expect(controller.draft.contains("Write a note to the school"))
+        #expect(personTurns(controller).isEmpty)
+        #expect(maker.wire.sent.isEmpty)
+    }
+
     @Test func stoppingAReplyClosesThePreviewAndSendsNothing() async throws {
         let maker = TransportMaker()
         let cloud = help(CloudHelpSettings(isOn: true), endpoint: endpoint, maker: maker)

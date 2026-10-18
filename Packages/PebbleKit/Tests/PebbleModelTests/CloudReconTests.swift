@@ -78,7 +78,7 @@ struct CloudReconTests {
         #expect(disputed.disagreement?.sourceIDs == ["a", "b"])
         #expect(disputed.sourceIDs.count == 1)
         // Remembering it keeps the disagreement with it.
-        let note = summary.note(for: disputed)
+        let note = try #require(summary.note(for: disputed))
         #expect(note.contains("They give different reopening dates"))
     }
 
@@ -135,19 +135,41 @@ struct CloudReconTests {
     }
 
     /// A point the cloud put into words is a retelling. Kept as a note, it
-    /// says so, and its label names no publisher, so the Gazette is never
-    /// credited with words it didn't write.
+    /// says so, and neither it nor its label names a publisher: which page
+    /// each line came from is the cloud's word, never checked here, so the
+    /// Gazette is never credited with words it didn't write.
     @Test func aCloudWordedPointIsNeverKeptAsThePublishersOwnWords() throws {
         let summary = try #require(parsed(Self.goodReply))
         let gazette = try #require(summary.points.first { $0.sourceIDs == ["a"] })
-        let note = summary.note(for: gazette)
+        let note = try #require(summary.note(for: gazette))
         #expect(note.hasPrefix(gazette.text))
-        #expect(note.contains("(put into words in the cloud from Riverside Gazette, "))
-        #expect(!note.contains("(Riverside Gazette, "))
-        let source = summary.memorySource(for: gazette)
+        #expect(note.contains("(put into words in the cloud, from the sources it was given)"))
+        #expect(!note.contains("Riverside Gazette"))
+        #expect(!note.contains("City of Riverside Parks"))
+        let source = try #require(summary.memorySource(for: gazette))
         #expect(source == .lookedUp(""))
         #expect(source.label == "From something I looked into")
         #expect(!source.label.contains("Riverside Gazette"))
+    }
+
+    /// Only the label and its colon count. A reply that writes "POINTS:"
+    /// or "DISAGREEMENT:" never leaves "S:" or "MENT:" on the card.
+    @Test func aLabelMustBeTheWholeWordAndAColon() throws {
+        let summary = try #require(parsed("""
+            POINTS: The pool reopens on November 10. [2]
+            POINT: Family swim is on Saturdays. [2]
+            DISAGREEMENT: The Gazette says November 3 and the city says November 10. [1][2]
+            POINTER The snack bar is open. [1]
+            POINT The pool has a sauna. [1]
+            point: Lessons start the same week. [1]
+            """))
+        #expect(summary.points.map(\.text) == ["Family swim is on Saturdays.", "Lessons start the same week."])
+        #expect(summary.disagreements.isEmpty)
+        #expect(!summary.points.contains { $0.text.hasPrefix("S:") || $0.text.hasPrefix("MENT:") || $0.text.hasPrefix("ER") })
+        #expect(parsed("POINTS: The pool reopens on November 10. [2]") == nil)
+        // The prompt asks for exactly that.
+        let prompt = CloudReconSummarizer.prompt(for: task, sources: sources)
+        #expect(prompt.contains("SUMMARY:") && prompt.contains("POINT:") && prompt.contains("DISAGREE:"))
     }
 
     @Test func noSourcesMeansNothingToRead() {
@@ -214,6 +236,97 @@ struct CloudReconTests {
         #expect(reviewer.seen.isEmpty)
         #expect(transport.sent.isEmpty)
         #expect(summary.madeOnDevice)
+        // No one chose this, and nothing was put into words in the cloud, so
+        // the card says neither. It says why, plainly.
+        #expect(summary.note != ReconWords.declinedCloud)
+        #expect(summary.note != ReconWords.wordedInCloud)
+        #expect(summary.note == ReconWords.keptForCare)
+    }
+
+    // MARK: A yes, then something else
+
+    /// The person said send, and the cloud was off by the time it would
+    /// go. A yes was given, so the card never says nothing went because
+    /// the preview was taken away.
+    @Test func aYesThenTheCloudOffNeverSaysWithdrawn() async {
+        let transport = RecordingTransport(reply: Self.goodReply)
+        let power = Power()
+        let reviewer = SwitchingReviewer(turningOff: power)
+        let notes = notes
+        let model = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer,
+                               redactor: { Redactor(memory: notes, privateWords: []) }, isOn: { power.on })
+        let summary = await CloudReconSummarizer(model: model).summarize(task, id: "task:1", sources: sources, gatheredAt: readOn)
+        #expect(reviewer.asked == 1)
+        #expect(transport.sent.isEmpty)
+        #expect(summary.note == ReconWords.cloudOff)
+        #expect(summary.note != ReconWords.cloudWithdrawn)
+        #expect(summary.note?.contains("Nothing went to the cloud") != true)
+    }
+
+    /// Off before any preview: nothing was asked, so nothing was taken
+    /// away either. A plain line, not the withdrawn one.
+    @Test func offBeforeAnyPreviewGetsAPlainOffLine() async {
+        let transport = RecordingTransport(reply: Self.goodReply)
+        let reviewer = RecordingReviewer(answer: .send)
+        let notes = notes
+        let model = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer,
+                               redactor: { Redactor(memory: notes, privateWords: []) }, isOn: { false })
+        let summary = await CloudReconSummarizer(model: model).summarize(task, id: "task:1", sources: sources, gatheredAt: readOn)
+        #expect(reviewer.seen.isEmpty)
+        #expect(transport.sent.isEmpty)
+        #expect(summary.note == ReconWords.cloudOff)
+        #expect(summary.note != ReconWords.cloudWithdrawn)
+    }
+
+    /// The person said send, and the work was stopped before an answer
+    /// came. Never "nothing went to the cloud": after a yes, that isn't known.
+    @Test func aYesThenAStopNeverSaysNothingWent() async {
+        let transport = RecordingTransport(reply: Self.goodReply)
+        let reviewer = HeldYes()
+        let notes = notes
+        let model = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer,
+                               redactor: { Redactor(memory: notes, privateWords: []) })
+        let task = task, sources = sources, readOn = readOn
+        let work = Task { await CloudReconSummarizer(model: model).summarize(task, id: "task:1", sources: sources, gatheredAt: readOn) }
+        await reviewer.asked()
+        work.cancel()
+        reviewer.sayYes()
+        let summary = await work.value
+        #expect(summary.note == ReconWords.cloudStopped)
+        #expect(summary.note != ReconWords.cloudWithdrawn)
+        #expect(summary.note?.contains("Nothing went") != true)
+        #expect(summary.note != ReconWords.declinedCloud)
+    }
+
+    // MARK: The topic is the person's own words
+
+    /// The topic goes in the request, so it is redacted like everything
+    /// else: a name from the notes and a private word are masked in the
+    /// preview and in the bytes that went.
+    @Test func theTopicIsMaskedInThePreviewAndTheBytesSent() async throws {
+        let transport = RecordingTransport(reply: Self.goodReply)
+        let reviewer = RecordingReviewer(answer: .send)
+        let asked = try #require(ReconTask(topic: "Priya's lemon cake order"))
+        _ = await CloudReconSummarizer(model: cloud(transport, reviewer))
+            .summarize(asked, id: "task:1", sources: sources, gatheredAt: readOn)
+        let preview = try #require(reviewer.seen.first)
+        #expect(transport.sent == [preview.request])
+        let payload = try JSONDecoder().decode(CloudPayload.self, from: preview.request.body)
+        let first = try #require(payload.messages.first { $0.role == "person" })
+        #expect(first.text.hasPrefix("Please look into [name]"))
+        for text in [preview.request.text] + transport.sent.map(\.text) {
+            #expect(!text.contains("Priya"))
+            #expect(!text.localizedCaseInsensitiveContains("lemon cake"))
+        }
+        // A private word alone in the topic is masked too.
+        let reviewer2 = RecordingReviewer(answer: .send)
+        let transport2 = RecordingTransport(reply: Self.goodReply)
+        let cake = try #require(ReconTask(topic: "the lemon cake contest"))
+        _ = await CloudReconSummarizer(model: cloud(transport2, reviewer2))
+            .summarize(cake, id: "task:2", sources: sources, gatheredAt: readOn)
+        let body = try #require(reviewer2.seen.first).request.text
+        #expect(body.contains("Please look into the [private] contest"))
+        #expect(transport2.sent.allSatisfy { !$0.text.localizedCaseInsensitiveContains("lemon cake") })
     }
 
     @Test func anUnreadableAnswerIsPutTogetherHereInstead() async {
@@ -253,5 +366,77 @@ struct CloudReconTests {
         #expect(prompt.contains("[1] Pool reopens. Riverside Gazette,"))
         #expect(prompt.contains("[2] Fall schedule. City of Riverside Parks,"))
         #expect(!prompt.contains("\u{2014}") && !prompt.contains("\u{2013}"))
+    }
+}
+
+/// Whether the cloud setting is on, turned off by a test.
+final class Power: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isOn = true
+    var on: Bool { lock.withLock { isOn } }
+    func turnOff() { lock.withLock { isOn = false } }
+}
+
+/// Says send, and turns the cloud off as it does, as when another window
+/// turned it off right after the yes.
+final class SwitchingReviewer: CloudReviewing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    let power: Power
+    init(turningOff power: Power) { self.power = power }
+    var asked: Int { lock.withLock { count } }
+    func review(_ preview: CloudPreview) async -> CloudConsent {
+        lock.withLock { count += 1 }
+        power.turnOff()
+        return .send
+    }
+}
+
+/// Holds its yes until the test gives it, whatever happens meanwhile, so
+/// a test can stop the work between the preview and the yes landing.
+final class HeldYes: CloudReviewing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var yes: CheckedContinuation<Void, Never>?
+    private var given = false
+    private var seen: CheckedContinuation<Void, Never>?
+    private var wasAsked = false
+
+    func review(_ preview: CloudPreview) async -> CloudConsent {
+        let watcher: CheckedContinuation<Void, Never>? = lock.withLock {
+            wasAsked = true
+            defer { seen = nil }
+            return seen
+        }
+        watcher?.resume()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let now = lock.withLock { () -> Bool in
+                if given { return true }
+                yes = continuation
+                return false
+            }
+            if now { continuation.resume() }
+        }
+        return .send
+    }
+
+    /// Waits until a preview has been asked about.
+    func asked() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let now = lock.withLock { () -> Bool in
+                if wasAsked { return true }
+                seen = continuation
+                return false
+            }
+            if now { continuation.resume() }
+        }
+    }
+
+    func sayYes() {
+        let waiting: CheckedContinuation<Void, Never>? = lock.withLock {
+            given = true
+            defer { yes = nil }
+            return yes
+        }
+        waiting?.resume()
     }
 }

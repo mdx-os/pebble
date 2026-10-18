@@ -35,8 +35,9 @@ public struct CloudReconSummarizer: ReconSummarizer {
         }
         guard !sources.isEmpty else { return onDevice(nil) }
         let prompt = Self.prompt(for: task, sources: sources)
-        // Words of crisis in what would be sent: nothing is sent.
-        guard !CareCheck.needsCare(prompt) else { return onDevice(nil) }
+        // Words of crisis in what would be sent: nothing is sent, and the
+        // card says why, never that the person chose it.
+        guard !CareCheck.needsCare(prompt) else { return onDevice(ReconWords.keptForCare) }
         let asked = Conversation(turns: [ChatTurn(id: UUID(), speaker: .person, text: prompt)], onDevice: false)
         let reply: String
         do {
@@ -46,12 +47,20 @@ public struct CloudReconSummarizer: ReconSummarizer {
             reply = last.text
         } catch CloudModelError.notSent {
             return onDevice(ReconWords.declinedCloud)
-        } catch CloudModelError.withdrawn, CloudModelError.off {
-            // Taken away, or turned off, before the person answered. They
-            // didn't choose this, so the note doesn't say they did.
+        } catch CloudModelError.withdrawn {
+            // Taken away before the person answered. They didn't choose
+            // this, so the note doesn't say they did. Only a preview with
+            // no answer is withdrawn, so no yes was ever given.
             return onDevice(ReconWords.cloudWithdrawn)
+        } catch CloudModelError.off {
+            // Off before a preview was shown, or by the time a yes came:
+            // nothing was asked, or the yes couldn't be used.
+            return onDevice(ReconWords.cloudOff)
         } catch CloudModelError.staysHere {
-            return onDevice(nil)
+            return onDevice(ReconWords.keptForCare)
+        } catch is CancellationError {
+            // Stopped after the yes. Never "nothing went": that isn't known.
+            return onDevice(ReconWords.cloudStopped)
         } catch {
             return onDevice(ReconWords.cloudUnavailable)
         }
@@ -63,7 +72,7 @@ public struct CloudReconSummarizer: ReconSummarizer {
     public static func prompt(for task: ReconTask, sources: [ReconSource]) -> String {
         var parts = [
             "Please look into \(task.topic) using only the sources below, and answer in plain words.",
-            "Write one line that starts with SUMMARY, then three to five lines that start with POINT. If the sources don't agree, add a line that starts with DISAGREE that says how. End every line with the numbers of the sources it comes from, like [1][3]. Leave out anything the sources don't say.",
+            "Write one line that starts with SUMMARY:, then three to five lines that start with POINT:. If the sources don't agree, add a line that starts with DISAGREE: that says how. End every line with the numbers of the sources it comes from, like [1][3]. Leave out anything the sources don't say.",
         ]
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -136,10 +145,13 @@ public struct CloudReconSummarizer: ReconSummarizer {
         return summary.points.isEmpty ? nil : summary
     }
 
+    /// The label and the words after it. Only the label itself followed by
+    /// a colon counts, so "POINTS:" or "DISAGREEMENT:" never leave "S:" or
+    /// "MENT:" on the card.
     private static func label(_ line: String) -> (String, String)? {
         let upper = line.uppercased()
-        for kind in ["SUMMARY", "POINT", "DISAGREE"] where upper.hasPrefix(kind) {
-            let rest = line.dropFirst(kind.count).drop { $0 == ":" || $0 == " " }
+        for kind in ["SUMMARY", "POINT", "DISAGREE"] where upper.hasPrefix(kind + ":") {
+            let rest = line.dropFirst(kind.count + 1).drop { $0 == " " }
             return (kind, String(rest))
         }
         return nil

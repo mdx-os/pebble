@@ -167,7 +167,7 @@ struct ReconCard: View {
     /// Dismiss is always last, as on every ended task card.
     var actions: [Action] {
         guard !summary.sources.isEmpty else { return [.followUp, .dismiss] }
-        let keeps = !summary.points.isEmpty && canRemember && !isSample
+        let keeps = !summary.points.isEmpty && canRemember && !isSample && !summary.isSample
         return keeps ? [.sources, .followUp, .remember, .dismiss] : [.sources, .followUp, .dismiss]
     }
 
@@ -185,24 +185,35 @@ struct ReconCard: View {
         .padding(.top, 2)
     }
 
+    /// The words on each action's button. Lines that send the person to
+    /// one, such as `ReconWords.pointTooLong`, name it by these.
+    static func title(_ action: Action) -> String {
+        switch action {
+        case .sources: ReconWords.openSourcesTitle
+        case .followUp: ReconWords.followUpTitle
+        case .remember: ReconWords.rememberTitle
+        case .dismiss: TaskWords.dismissTitle
+        }
+    }
+
     @ViewBuilder
     private func buttonViews(_ row: [Action]) -> some View {
         ForEach(row, id: \.self) { action in
             switch action {
             case .sources:
-                Button(ReconWords.openSourcesTitle, action: onOpenSources)
+                Button(Self.title(action), action: onOpenSources)
                     .buttonStyle(CardButtonStyle(kind: .secondary))
                     .accessibilityHint(ReconWords.openSourcesHint)
             case .followUp:
-                Button(ReconWords.followUpTitle, action: onFollowUp)
+                Button(Self.title(action), action: onFollowUp)
                     .buttonStyle(CardButtonStyle(kind: .secondary))
                     .accessibilityHint(ReconWords.followUpHint)
             case .remember:
-                Button(ReconWords.rememberTitle, action: onRemember)
+                Button(Self.title(action), action: onRemember)
                     .buttonStyle(CardButtonStyle(kind: .quiet))
                     .accessibilityHint(ReconWords.rememberHint)
             case .dismiss:
-                Button(TaskWords.dismissTitle, action: onDismiss)
+                Button(Self.title(action), action: onDismiss)
                     .buttonStyle(CardButtonStyle(kind: .quiet))
             }
         }
@@ -318,6 +329,12 @@ struct ReconSourcesSheet: View {
     /// source's own text, a retelling from the cloud must never read as a quote.
     var pointsNote: String? { summary.points.isEmpty ? nil : summary.note }
 
+    /// Every point, each in its own whole words, with none held back as
+    /// the card holds some. "Open sources has it in full" rests on this.
+    var points: [ReconPointRow] {
+        summary.points.map { ReconPointRow(point: $0, summary: summary) }
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -333,8 +350,8 @@ struct ReconSourcesSheet: View {
                             Text(ReconWords.pointsHeading)
                                 .font(.headline)
                                 .accessibilityAddTraits(.isHeader)
-                            ForEach(summary.points) { point in
-                                ReconPointRow(point: point, summary: summary)
+                            ForEach(points, id: \.point.id) { row in
+                                row
                             }
                             if let pointsNote {
                                 Text(pointsNote)

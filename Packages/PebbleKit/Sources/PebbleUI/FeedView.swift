@@ -358,8 +358,8 @@ final class FeedModel: ObservableObject {
             // A second tap while the first is under way, or once it is
             // ready, starts nothing more: the card for it is already here,
             // and VoiceOver hears so, rather than nothing at all.
-            if isLookingInto(topic) {
-                announce(TaskAnnouncer.Line(text: ReconWords.alreadyOn, urgent: false))
+            if let line = alreadyLine(for: topic) {
+                announce(TaskAnnouncer.Line(text: line, urgent: false))
                 return
             }
             // Without a runner, the chat offers it instead, still one tap away.
@@ -409,14 +409,20 @@ final class FeedModel: ObservableObject {
     }
 
     /// True when a recon for `topic` is going or done on Today. One that
-    /// stopped or failed can be started again. Case doesn't count, so "the
-    /// pool" from a card and "The pool" from the chat are one topic.
+    /// stopped or failed can be started again. Asked of the runner, so the
+    /// feed and every chat agree on what counts as the same topic.
     func isLookingInto(_ topic: String) -> Bool {
-        guard let recon, let title = ReconTask(topic: topic)?.title else { return false }
-        return recon.tasks.contains {
-            $0.title.caseInsensitiveCompare(title) == .orderedSame && ($0.isActive || $0.state == .done)
-                && recon.isRecon($0.id)
-        }
+        recon?.activeRecon(for: topic) != nil
+    }
+
+    /// What to say when `topic` is already going or ready, or nil when a
+    /// tap may start it. `onDevice` is true for a chat that promised to stay
+    /// on this device: if the one already going may be put into words in
+    /// the cloud, the line says so, so that promise stays true.
+    func alreadyLine(for topic: String, onDevice: Bool = false) -> String? {
+        guard let recon, let id = recon.activeRecon(for: topic) else { return nil }
+        if recon.tasks.first(where: { $0.id == id })?.state == .done { return ReconWords.alreadyReady }
+        return onDevice && recon.mayLeaveDevice(id) ? ReconWords.alreadyOnWithCloud : ReconWords.alreadyOn
     }
 
     /// The summary a finished recon card shows. Asked of the runner once
@@ -464,8 +470,9 @@ final class FeedModel: ObservableObject {
         }
         do {
             // A point worded in the cloud says so in the note, and its
-            // label names no publisher (see `ReconSummary.note(for:)`).
-            switch try memory.remember(summary.note(for: point), source: summary.memorySource(for: point)) {
+            // label names no publisher (see `ReconSummary.note(for:)`). The
+            // store itself refuses an example's point.
+            switch try memory.remember(point, from: summary) {
             case .saved(let note):
                 remembered.insert(Self.rememberKey(summary, point))
                 rememberedFrom[Self.rememberKey(summary, point)] = summary.id
@@ -477,6 +484,9 @@ final class FeedModel: ObservableObject {
                 rememberStatus = ReconWords.pointTooLong
             case .needsWords, .notFound:
                 rememberStatus = MemoryWords.needsWords
+            case .notKept:
+                // Only an example's point, which never gets this far.
+                rememberStatus = nil
             }
         } catch is MemoryStore.Unavailable {
             rememberStatus = MemoryWords.unavailable

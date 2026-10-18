@@ -193,11 +193,16 @@ fresh it is. Saving a point to memory happens only on a tap. While the
 only pages to read are examples, the offer says so. Points the cloud put
 into words say so under the card and under the points in Open sources,
 since they are a retelling, not quotes. Remembered, such a point says
-"put into words in the cloud from" its source, and its label names no
-publisher. The overview above a card worded in the cloud is the plain one
-that only says what was read. A kept point is the person's own note: it
-stays when the card goes, and the remember sheet says so. Sources that
-couldn't be read are a failure, said plainly, never "nothing found".
+"put into words in the cloud, from the sources it was given" and names no
+publisher, in the note or its label: which page the cloud said a line came
+from was never checked on the device. The overview above a card worded in
+the cloud is the plain one that only says what was read. A kept point is
+the person's own note: it stays when the card goes, and the remember sheet
+says so. A point from example pages is never kept. Sources that couldn't
+be read are a failure, said plainly, never "nothing found". Asked again for
+a topic already going, the agent says it is on it; once that one is ready,
+"That one's ready." A note under a card never says nothing went to the
+cloud after the person said send.
 
 ### Confirmations
 

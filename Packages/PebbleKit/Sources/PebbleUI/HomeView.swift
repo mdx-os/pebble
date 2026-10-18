@@ -61,14 +61,27 @@ public struct HomeView: View {
         needsYou: NeedsYou,
         tasks: (any TaskEngine)? = nil,
         drivesTasks: Bool = false,
-        sources: any SourceProvider = SampleSources(),
+        sources: (any SourceProvider)? = nil,
         now: @escaping @Sendable () -> Date = { Date() },
         cloud: CloudHelp? = nil
     ) {
         screen = HomeScreen(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                             looks: looks, conversation: conversation, section: section, feed: feed,
-                            needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, sources: sources,
-                            now: now, cloud: cloud, chatLine: nil)
+                            needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
+                            sources: Self.reconSources(sources, now: now), now: now, cloud: cloud, chatLine: nil)
+    }
+
+    /// Where looking into something reads, as the home screen gets it.
+    /// Without one given, the sample pages, dated by the screen's own
+    /// clock, so they and the time they were gathered agree.
+    ///
+    /// Only a provider that reads on this device is ever used. The chat's
+    /// promise that its words stay here covers the topic it asks for, so a
+    /// provider that would take it elsewhere gives way to one that reads
+    /// nothing, and Today never offers to look into anything with it.
+    static func reconSources(_ given: (any SourceProvider)?, now: @escaping @Sendable () -> Date) -> any SourceProvider {
+        guard let given else { return SampleSources(now: now) }
+        return given.runsOnDevice ? given : NoSources()
     }
 
     #if DEBUG
@@ -80,8 +93,8 @@ public struct HomeView: View {
          feed: [any FeedSource], needsYou: NeedsYou, now: @escaping @Sendable () -> Date, chatLine: String) {
         screen = HomeScreen(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                             looks: looks, conversation: conversation, section: section, feed: feed,
-                            needsYou: needsYou, tasks: nil, drivesTasks: false, sources: SampleSources(),
-                            now: now, cloud: nil, chatLine: chatLine)
+                            needsYou: needsYou, tasks: nil, drivesTasks: false,
+                            sources: Self.reconSources(nil, now: now), now: now, cloud: nil, chatLine: chatLine)
     }
     #endif
 
@@ -183,7 +196,7 @@ public struct HomeView: View {
         chat.lookInto = feed.canLookInto
             ? { [weak feed] topic, onDevice in feed?.lookInto(topic, onDevice: onDevice) ?? false }
             : nil
-        chat.isLookingInto = { [weak feed] topic in feed?.isLookingInto(topic) ?? false }
+        chat.alreadyOn = { [weak feed] topic, onDevice in feed?.alreadyLine(for: topic, onDevice: onDevice) }
         chat.reconReadsExamples = feed.readsExamples
         return chat
     }
@@ -706,6 +719,14 @@ struct HomeScreen: View {
                                   erasesWords: cloud != nil, onForgetTasks: forgetTasksWithoutNotes)
         }
     }
+}
+
+/// Reads nothing, and says it doesn't read on this device, so no recon
+/// starts with it. Stands in for a provider the home screen won't use.
+struct NoSources: SourceProvider {
+    var runsOnDevice: Bool { false }
+    var isSample: Bool { false }
+    func sources(for task: ReconTask) throws -> [ReconSource] { [] }
 }
 
 /// The home screen's open chat. Starting a new one replaces it, which

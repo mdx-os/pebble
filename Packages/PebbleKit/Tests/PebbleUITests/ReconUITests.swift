@@ -675,7 +675,7 @@ struct ReconUITests {
     }
 
     @Test func theReadyCardOffersRememberOnlyWithPoints() throws {
-        let summary = try ReconTestData.pool()
+        let summary = try ReconTestData.realPool()
         #expect(ReconCard(summary: summary, time: "", gathered: "").actions == [.sources, .followUp, .remember, .dismiss])
         let empty = ReconSummary(id: "t", topic: "volcanoes", overview: ReconWords.nothingFound("volcanoes"),
                                  points: [], sources: [], gatheredAt: summary.gatheredAt, madeOnDevice: true)
@@ -750,6 +750,14 @@ enum ReconTestData {
     static func pool() throws -> ReconSummary {
         let task = try #require(ReconTask(topic: SampleSources.poolTopic))
         return LocalReconSummarizer().summary(task, id: "task:1", sources: try sources.sources(for: task),
+                                              gatheredAt: ShowcaseScene.morning)
+    }
+
+    /// The same, from the sample pages' words read as real ones, so its
+    /// points may be kept.
+    static func realPool() throws -> ReconSummary {
+        let task = try #require(ReconTask(topic: SampleSources.poolTopic))
+        return LocalReconSummarizer().summary(task, id: "task:1", sources: try sources.sources(for: task).map(notExample),
                                               gatheredAt: ShowcaseScene.morning)
     }
 }

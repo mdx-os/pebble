@@ -10,14 +10,25 @@ public struct ReconSource: Identifiable, Sendable, Equatable {
     /// When it was published.
     public let published: Date
     public let text: String
+    /// A made up page, such as `SampleSources` gives. A summary that read
+    /// one is an example, whoever put it together (see `ReconSummary.isSample`).
+    public let isSample: Bool
 
-    public init(id: String, title: String, publisher: String, url: URL, published: Date, text: String) {
+    public init(id: String, title: String, publisher: String, url: URL, published: Date, text: String,
+                isSample: Bool = false) {
         self.id = id
         self.title = title
         self.publisher = publisher
         self.url = url
         self.published = published
         self.text = text
+        self.isSample = isSample
+    }
+
+    /// The same page, marked as an example.
+    public func asSample() -> ReconSource {
+        isSample ? self : ReconSource(id: id, title: title, publisher: publisher, url: url, published: published,
+                                      text: text, isSample: true)
     }
 
     /// More than a year old when it was read, so the card says so.
@@ -91,16 +102,22 @@ public struct ReconSummary: Identifiable, Sendable, Equatable {
     /// send it to the cloud. Never nil when it was put into words in the
     /// cloud, so its points are never taken for the sources' own words.
     public let note: String?
+    /// Read from example pages, so its points are made up. Set when it is
+    /// made, from `isSample` or any of its sources, and by the runner from
+    /// the provider it read (`stamped(sample:)`). It never goes back to
+    /// false, and an example's points never become notes (see `note(for:)`).
+    public private(set) var isSample: Bool
 
     public init(id: String, topic: String, overview: String, overviewSourceIDs: [String] = [],
                 points: [ReconPoint], sources: [ReconSource], gatheredAt: Date,
-                madeOnDevice: Bool, note: String? = nil) {
+                madeOnDevice: Bool, note: String? = nil, isSample: Bool = false) {
         let known = Set(sources.map(\.id))
         self.id = id
         self.topic = topic
         self.sources = sources
         self.gatheredAt = gatheredAt
         self.madeOnDevice = madeOnDevice
+        self.isSample = isSample || sources.contains(where: \.isSample)
         self.note = note ?? (madeOnDevice ? nil : ReconWords.wordedInCloud)
         self.points = Array(points.compactMap { point -> ReconPoint? in
             let ids = Self.unique(point.sourceIDs.filter(known.contains))
@@ -132,6 +149,13 @@ public struct ReconSummary: Identifiable, Sendable, Equatable {
         }
     }
 
+    /// The same summary, marked as an example when `sample` is true.
+    public func stamped(sample: Bool) -> ReconSummary {
+        var copy = self
+        copy.isSample = isSample || sample
+        return copy
+    }
+
     public var disagreements: [ReconDisagreement] { points.compactMap(\.disagreement) }
 
     public func source(_ id: String) -> ReconSource? { sources.first { $0.id == id } }
@@ -149,17 +173,23 @@ public struct ReconSummary: Identifiable, Sendable, Equatable {
     /// each says. A disputed point is never kept as if it were settled.
     ///
     /// Words put into words in the cloud say so in the note, so a retelling
-    /// is never kept as the publisher's own words. When the whole
-    /// disagreement would make the note too long to keep, it names only the
-    /// sides, since the person can't shorten a note they didn't write.
-    public func note(for point: ReconPoint) -> String {
-        let from = point.sourceIDs.compactMap(source).map {
+    /// is never kept as the publisher's own words. Which pages the cloud
+    /// said each line came from was never checked here, so such a note
+    /// names no publisher at all. When the whole disagreement would make
+    /// the note too long to keep, it names only the sides, since the person
+    /// can't shorten a note they didn't write.
+    ///
+    /// Nil for an example: its points are made up, and a note outlives the
+    /// card that says it was one.
+    public func note(for point: ReconPoint) -> String? {
+        guard !isSample else { return nil }
+        let from = madeOnDevice ? point.sourceIDs.compactMap(source).map {
             "\($0.publisher), \($0.published.formatted(.dateTime.month(.abbreviated).day().year()))"
-        }
+        } : []
         let full = ReconWords.memoryNote(point.text, from: from, disagreement: point.disagreement?.text,
                                          wordedInCloud: !madeOnDevice)
         guard let disagreement = point.disagreement, !Self.fits(full) else { return full }
-        let sides = disagreement.sourceIDs.compactMap(source).map(\.publisher)
+        let sides = madeOnDevice ? disagreement.sourceIDs.compactMap(source).map(\.publisher) : []
         return ReconWords.memoryNote(point.text, from: from, disagreement: ReconWords.disputedBy(sides),
                                      wordedInCloud: !madeOnDevice)
     }
@@ -167,7 +197,9 @@ public struct ReconSummary: Identifiable, Sendable, Equatable {
     /// Where a remembered point says it came from. A point worded on this
     /// device is a sentence its first source says, so it names that source.
     /// One worded in the cloud is a retelling, so it names no publisher.
-    public func memorySource(for point: ReconPoint) -> MemorySource {
+    /// Nil for an example, like `note(for:)`.
+    public func memorySource(for point: ReconPoint) -> MemorySource? {
+        guard !isSample else { return nil }
         guard madeOnDevice else { return .lookedUp("") }
         return .lookedUp(point.sourceIDs.first.flatMap(source)?.publisher ?? "")
     }
@@ -261,11 +293,15 @@ public enum ReconIntent {
         // "Would you mind" takes the verb as "looking into", so only after
         // it do those forms count. On their own they start a statement.
         var minding = false
+        // Asked outright, as in "Can you research papers on sleep", so
+        // "papers" there is what to read, not the start of a statement.
+        var asking = false
         while trimmed {
             trimmed = false
             for opener in openers where lower().hasPrefix(opener + " ") || lower().hasPrefix(opener + ",") {
                 said = String(said.dropFirst(opener.count)).trimmingCharacters(in: CharacterSet(charactersIn: " ,"))
                 if opener == "would you mind" { minding = true }
+                if askingOpeners.contains(opener) { asking = true }
                 trimmed = true
                 break
             }
@@ -284,7 +320,8 @@ public enum ReconIntent {
         }
         let first = topic.split(separator: " ").first.map { $0.lowercased() } ?? ""
         // "Research shows ..." is a statement, and "look into it" has no topic.
-        guard !notTopics.contains(topic.lowercased()), !statementWords.contains(first) else { return nil }
+        guard !notTopics.contains(topic.lowercased()), !statementWords.contains(first),
+              asking || !paperWords.contains(first) else { return nil }
         return ReconTask(topic: topic)?.topic
     }
 
@@ -306,7 +343,17 @@ public enum ReconIntent {
     /// A word right after "research" that makes the sentence a statement.
     private static let statementWords: Set<String> = [
         "shows", "says", "suggests", "is", "are", "was", "were", "has", "have", "found", "finds",
-        "indicates", "proves", "papers", "paper",
+        "indicates", "proves",
+    ]
+    /// "Research papers show ..." is a statement, but "Can you research
+    /// papers on sleep" asks for them, so these count as a statement only
+    /// when nothing before them asked.
+    private static let paperWords: Set<String> = ["papers", "paper"]
+    /// Openers that ask for something. "So" or "hey" before "research
+    /// papers" still starts a statement.
+    private static let askingOpeners: Set<String> = [
+        "please", "pls", "can you", "could you", "would you", "will you", "i'd like you to", "i want you to",
+        "i need you to", "would you mind", "help me", "go and", "go",
     ]
 }
 
@@ -379,11 +426,12 @@ public struct SampleSources: SourceProvider {
     }
 
     /// Made up documents on domains kept for examples, each dated `daysOld`
-    /// days before `readOn`. One is more than a year old.
+    /// days before `readOn`. One is more than a year old. Every page is
+    /// marked as an example, so what is made from it is one too.
     public static func documents(readOn: Date) -> [ReconSource] {
         func page(_ id: String, _ title: String, _ publisher: String, _ url: String, daysOld: Int, _ text: String) -> ReconSource {
             ReconSource(id: id, title: title, publisher: publisher, url: URL(string: url)!,
-                        published: readOn - TimeInterval(daysOld) * 86_400, text: text)
+                        published: readOn - TimeInterval(daysOld) * 86_400, text: text, isSample: true)
         }
         return [
             page("sample:gazette-pool", "Riverside Pool reopens after repairs", "Riverside Gazette",
@@ -506,6 +554,11 @@ public enum ReconWords {
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: yesterday) {
             return "Gathered yesterday at \(time)"
         }
+        // The year too once it isn't this one, so a summary kept past New
+        // Year never reads as this year's.
+        guard calendar.component(.year, from: date) == calendar.component(.year, from: now) else {
+            return "Gathered on \(date.formatted(.dateTime.month(.wide).day().year()))"
+        }
         return "Gathered on \(date.formatted(.dateTime.month(.wide).day()))"
     }
     /// What VoiceOver says after a point, such as "From Riverside Gazette and City of Riverside Parks."
@@ -524,6 +577,14 @@ public enum ReconWords {
     /// The preview was taken away before anyone answered it, as when the
     /// cloud was turned off or the screen went away. No one chose anything.
     public static let cloudWithdrawn = "Nothing went to the cloud, so I put this together without it."
+    /// Help from the cloud was off by the time the summary was ready to go,
+    /// before a preview or after a yes. Nothing went, and no one chose that.
+    public static let cloudOff = "Help from the cloud was off by then, so I put this together without it."
+    /// Stopped after the person said send. Some of it may have gone, so it
+    /// never says nothing did.
+    public static let cloudStopped = "It was stopped before an answer came back, so I put this together without the cloud."
+    /// Something in what was read needs care, so none of it was sent.
+    public static let keptForCare = "Some of what I read touches on hard things, so I didn't send any of it and put this together without the cloud."
     /// Under a summary put into words in the cloud: its points are a
     /// retelling, not the sources' own words.
     public static let wordedInCloud = "Put into words in the cloud, from these sources. Open sources to read what each one says."
@@ -558,6 +619,11 @@ public enum ReconWords {
     /// A second tap on Look into it, while that one is going or ready, on
     /// Today or in the chat, so it never says "here".
     public static let alreadyOn = "I'm already on that one. Its card is in Today."
+    /// The same, once that one is ready.
+    public static let alreadyReady = "That one's ready. Its card is in Today."
+    /// To a chat that stays on this device, when the one already going was
+    /// started with the cloud on. True before the yes and after it.
+    public static let alreadyOnWithCloud = "I'm already on that one. Today started it with the cloud on, so its summary may be put into words there, only with your yes. Its card is in Today."
     /// A kept point too long for the notes. The person didn't write it, so
     /// it never asks them to shorten it.
     public static let pointTooLong = "That point is too long for your notes. Open sources has it in full."
@@ -568,14 +634,14 @@ public enum ReconWords {
         return "Opens \(host) in your browser."
     }
     /// The point, who says it, and any disagreement after it. When it was
-    /// `wordedInCloud`, the brackets say so, so the words are never kept as
-    /// the publisher's own.
+    /// `wordedInCloud`, the brackets say so and name no one, so the words
+    /// are never kept as the publisher's own, and no publisher is named
+    /// for a line no one here checked they said.
     public static func memoryNote(_ point: String, from sources: [String], disagreement: String? = nil,
                                   wordedInCloud: Bool = false) -> String {
         let said: String
         if wordedInCloud {
-            said = sources.isEmpty ? "\(point) (put into words in the cloud)"
-                : "\(point) (put into words in the cloud from \(sources.joined(separator: "; ")))"
+            said = "\(point) (put into words in the cloud, from the sources it was given)"
         } else {
             said = sources.isEmpty ? point : "\(point) (\(sources.joined(separator: "; ")))"
         }
@@ -606,21 +672,31 @@ public enum ReconWords {
          planning, looking, reading(1), reading(4), checkingDates, puttingTogether, doneLine, nothingFoundLine,
          couldNotRead, wordedInCloud, forgotWhileInCloud,
          memoryNote("The pool opens.", from: ["A", "B"], disagreement: "Sources don't agree on this."),
-         memoryNote("The pool opens.", from: ["A", "B"], wordedInCloud: true),
          memoryNote("The pool opens.", from: [], wordedInCloud: true),
+         memoryNote("The pool opens.", from: [], disagreement: disputedBy([]), wordedInCloud: true),
          disputedBy(["A", "B"]), disputedBy(["A"]), rememberThisLabel("The pool opens."), rememberedLabel("The pool opens."),
-         alreadyOn, pointTooLong, pageLinkHint("gazette.example.org"), pageLinkHint(nil),
+         alreadyOn, alreadyReady, alreadyOnWithCloud, pointTooLong, pageLinkHint("gazette.example.org"), pageLinkHint(nil),
          planTodo, readTodo, datesTodo, summaryTodo, keptQuestions, keptSources(1), keptSources(4), keptSummary,
          overview(topic: "the pool", sources: 4, backedTwice: 2, disagreements: 1, old: 1),
          overview(topic: "the pool", sources: 1, backedTwice: 1, disagreements: 2, old: 2),
          nothingFound("the pool"),
          disagreement([("Riverside Gazette", "November 3"), ("City of Riverside Parks", "November 10")],
                       newest: "City of Riverside Parks"),
-         sourcesHeading, pointsHeading, morePoints(1), morePoints(2), olderLabel, gathered(Date(), now: Date()), from(["A", "B"]), sourceNumber(1),
-         declinedCloud, cloudUnreadable, cloudUnavailable, cloudWithdrawn, openSourcesTitle, followUpTitle, rememberTitle,
+         sourcesHeading, pointsHeading, morePoints(1), morePoints(2), olderLabel, from(["A", "B"]), sourceNumber(1),
+         declinedCloud, cloudUnreadable, cloudUnavailable, cloudWithdrawn, cloudOff, cloudStopped, keptForCare,
+         openSourcesTitle, followUpTitle, rememberTitle,
          openSourcesHint, followUpHint, rememberHint, followUpDraft("the pool"), rememberQuestion,
          rememberDetail(.onDevice), rememberDetail(.mayLeaveDevice),
          rememberThis, remembered, pageLinkTitle, lookIntoTitle, lookIntoHint, askLine("the pool")]
-            + questions(about: "the pool")
+            + questions(about: "the pool") + gatheredSamples
+    }
+
+    /// The gathered line on fixed dates, for each way it can read: today,
+    /// yesterday, earlier this year, and another year.
+    static var gatheredSamples: [String] {
+        let calendar = Calendar(identifier: .gregorian)
+        let now = SampleSources.day(2026, 3, 10)
+        return [now, now - 86_400, SampleSources.day(2026, 1, 20), SampleSources.day(2025, 11, 3)]
+            .map { gathered($0, now: now, calendar: calendar) }
     }
 }

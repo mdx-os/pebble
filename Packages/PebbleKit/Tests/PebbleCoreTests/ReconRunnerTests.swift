@@ -152,14 +152,59 @@ struct ReconRunnerTests {
         #expect(runner.summary(for: id) == nil)
     }
 
+    /// The pages are read once, as the recon starts, and never again: what
+    /// was read goes at Stop, and nothing reads more after it.
     @Test func stoppingBeforeAnyStepKeepsNoSourceText() throws {
         let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
-        let runner = ReconRunner(engine: engine, provider: Self.sources)
+        let provider = CountingProvider(now: { Self.readOn })
+        let runner = ReconRunner(engine: engine, provider: provider)
         let id = try #require(runner.lookInto(SampleSources.poolTopic))
+        #expect(provider.asked == 1)
+        #expect(runner.held(id)?.sources == 4)
         #expect(runner.stop(id))
         #expect(runner.held(id)?.sources == 0)
         engine.advance(by: 60)
         #expect(runner.held(id)?.begun == false)
+        #expect(runner.held(id)?.sources == 0)
+        #expect(provider.asked == 1)
+    }
+
+    // MARK: Forget everything while a recon starts
+
+    /// Forget everything lands while the pages are being read, before the
+    /// engine has the task. Nothing read is kept, and no card is left.
+    @Test func forgettingEverythingWhileTheSourcesAreReadKeepsNothing() throws {
+        let engine = ReplayEngine()
+        let provider = CountingProvider(now: { Self.readOn })
+        let runner = ReconRunner(engine: engine, provider: provider, now: { Self.readOn })
+        provider.whileReading = { [runner] in _ = runner.clear() }
+        #expect(runner.lookInto(SampleSources.poolTopic) == nil)
+        #expect(provider.asked == 1)
+        #expect(runner.tasks.isEmpty)
+        #expect(engine.tasks.isEmpty)
+        #expect(runner.summariesMayLeaveDevice == 0)
+        // The control: the same start with nothing forgotten keeps its run.
+        provider.whileReading = nil
+        let id = try #require(runner.lookInto(SampleSources.poolTopic))
+        #expect(runner.held(id)?.sources == 4)
+    }
+
+    /// Forget everything lands as the engine tells its watchers about the
+    /// new task, before the runner has noted it. The run is never kept.
+    @Test func forgettingEverythingAsTheTaskStartsKeepsNothing() throws {
+        let engine = ReplayEngine()
+        let runner = ReconRunner(engine: engine, provider: CountingProvider(now: { Self.readOn }), now: { Self.readOn })
+        let forgot = ForgetOnce()
+        let watch = runner.observe { [runner] snapshot in
+            if !snapshot.tasks.isEmpty, forgot.first() { _ = runner.clear() }
+        }
+        defer { watch.cancel() }
+        let id = runner.lookInto(SampleSources.poolTopic)
+        #expect(forgot.done)
+        #expect(id == nil)
+        #expect(runner.tasks.isEmpty)
+        #expect(engine.tasks.isEmpty)
+        if let id { #expect(runner.held(id) == nil) }
     }
 
     // MARK: Retry
@@ -253,6 +298,26 @@ struct ReconRunnerTests {
         #expect(runner.summary(for: id)?.points.isEmpty == true)
     }
 
+    /// The other way round: the first try found nothing, and the engine
+    /// plays that script again, which ends on "I couldn't find anything".
+    /// This try read pages and found points, so the card says it did.
+    @Test func aRetryThatFindsPointsSaysHeresWhatIFound() throws {
+        let engine = ReplayEngine()
+        let provider = ShrinkingProvider()
+        provider.limit = 0
+        let runner = ReconRunner(engine: engine, provider: provider, now: { Self.readOn })
+        let id = try #require(runner.lookInto(SampleSources.poolTopic))
+        engine.finish(id)
+        #expect(runner.tasks.first { $0.id == id }?.step == ReconWords.nothingFoundLine)
+        provider.limit = nil
+        #expect(runner.retry(id))
+        engine.show(id, step: ReconWords.nothingFoundLine)
+        engine.finish(id)
+        let done = try #require(runner.tasks.first { $0.id == id })
+        #expect(try #require(runner.summary(for: id)).points.isEmpty == false)
+        #expect(done.step == ReconWords.doneLine)
+    }
+
     @Test func aTaskTheEngineWontRetryStaysAsItWas() throws {
         let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
         let runner = ReconRunner(engine: engine, provider: Self.sources)
@@ -322,6 +387,62 @@ struct ReconRunnerTests {
         // A task that isn't a recon has no points to keep.
         let real = realRecon(at: Self.readOn).runner
         #expect(!real.keepsPoints(real.start(TaskRequest(title: "Book the car service"))))
+    }
+
+    /// The summary itself carries that it is an example, so no caller can
+    /// make a note of its points, whether or not it asks `keepsPoints`.
+    /// It is stamped from the provider at the start, even when the
+    /// summarizer hands back pages that don't say so.
+    @Test func anExampleSummaryIsStampedWhoeverPutItTogether() async throws {
+        let engine = ReplayEngine()
+        let runner = ReconRunner(engine: engine, provider: UnmarkedExamples(), now: { Self.readOn })
+        let id = try #require(runner.lookInto(SampleSources.poolTopic, with: UnmarkingSummarizer()))
+        engine.finish(id)
+        await runner.settle(id)
+        let summary = try #require(runner.summary(for: id))
+        #expect(summary.sources.allSatisfy { !$0.isSample })
+        #expect(summary.isSample)
+        let point = try #require(summary.points.first)
+        #expect(summary.note(for: point) == nil)
+        #expect(summary.memorySource(for: point) == nil)
+        #expect(runner.isSample(id))
+        #expect(!runner.keepsPoints(id))
+    }
+
+    /// One lookup for "already on it", on the topic as a task tidies it,
+    /// for the feed and every chat alike. Stopped ones don't count.
+    @Test func theRunnerKnowsATopicItIsAlreadyOn() throws {
+        let engine = ReplayEngine()
+        let runner = ReconRunner(engine: engine, provider: Self.sources, now: { Self.readOn })
+        let id = try #require(runner.lookInto("the Riverside pool reopening"))
+        #expect(runner.activeRecon(for: "The Riverside  pool reopening?") == id)
+        #expect(runner.activeRecon(for: "the library's new Sunday hours") == nil)
+        #expect(runner.activeRecon(for: "") == nil)
+        engine.finish(id)
+        #expect(runner.activeRecon(for: SampleSources.poolTopic) == id)
+        #expect(runner.dismiss(id))
+        #expect(runner.activeRecon(for: SampleSources.poolTopic) == nil)
+        let stopped = try #require(runner.lookInto(SampleSources.poolTopic))
+        #expect(runner.stop(stopped))
+        #expect(runner.activeRecon(for: SampleSources.poolTopic) == nil)
+        // A task of the engine's own with the same title is not a recon.
+        runner.start(TaskRequest(title: ReconWords.title(SampleSources.poolTopic)))
+        #expect(runner.activeRecon(for: SampleSources.poolTopic) == nil)
+    }
+
+    /// With no clock given, a runner on any engine but the scripted one
+    /// reads the wall clock for when the pages were read.
+    @Test func theDefaultClockIsTheWallClock() throws {
+        // Long ago, so its scripted clock could never pass for now.
+        let inner = LocalFakeEngine(rule: .isolated(), origin: Date(timeIntervalSinceReferenceDate: 0))
+        let runner = ReconRunner(engine: PlainEngine(inner), provider: PagesNotExamples(now: { Self.readOn }))
+        let before = Date()
+        let id = try #require(runner.lookInto(SampleSources.poolTopic))
+        inner.advance(by: 60)
+        let summary = try #require(runner.summary(for: id))
+        let after = Date()
+        #expect(summary.gatheredAt >= before)
+        #expect(summary.gatheredAt <= after)
     }
 
     // MARK: A provider that fails
@@ -395,20 +516,41 @@ struct ReconRunnerTests {
 
     /// Kept as a note, a point worded on this device names its source, as
     /// those are the page's own words. One worded in the cloud says it was,
-    /// and its label names no publisher.
+    /// and names no publisher anywhere: which page the cloud said each line
+    /// came from was never checked here.
     @Test func aRememberedPointSaysWhoWordedIt() throws {
-        let page = Self.sources.documents[0]
+        let page = notExample(Self.sources.documents[0])
         let point = ReconPoint(id: "a", text: "The pool reopens soon.", sourceIDs: [page.id])
         let local = ReconSummary(id: "t", topic: "the pool", overview: "", points: [point],
                                  sources: [page], gatheredAt: Self.readOn, madeOnDevice: true)
         #expect(local.memorySource(for: point) == .lookedUp("Riverside Gazette"))
-        #expect(local.note(for: point).contains("(Riverside Gazette, "))
-        #expect(!local.note(for: point).contains("cloud"))
+        let localNote = try #require(local.note(for: point))
+        #expect(localNote.contains("(Riverside Gazette, "))
+        #expect(!localNote.contains("cloud"))
         let cloud = ReconSummary(id: "t", topic: "the pool", overview: "", points: [point],
                                  sources: [page], gatheredAt: Self.readOn, madeOnDevice: false)
         #expect(cloud.memorySource(for: point) == .lookedUp(""))
-        #expect(cloud.memorySource(for: point).label == "From something I looked into")
-        #expect(cloud.note(for: point).contains("(put into words in the cloud from Riverside Gazette, "))
+        #expect(cloud.memorySource(for: point)?.label == "From something I looked into")
+        let cloudNote = try #require(cloud.note(for: point))
+        #expect(cloudNote == "The pool reopens soon. (put into words in the cloud, from the sources it was given)")
+        #expect(!cloudNote.contains("Riverside Gazette"))
+    }
+
+    /// A cloud-worded point whose disagreement is too long to keep whole
+    /// is cut to a plain line that names no side either.
+    @Test func aLongCloudDisputeNamesNoSide() throws {
+        let pages = Self.sources.documents.prefix(2).map(notExample)
+        let long = String(repeating: "Each page tells it a little differently. ", count: 14)
+        let point = ReconPoint(id: "a", text: "The pool reopens in November.", sourceIDs: [pages[0].id],
+                               disagreement: ReconDisagreement(text: long, sourceIDs: pages.map(\.id)))
+        let cloud = ReconSummary(id: "t", topic: "the pool", overview: "", points: [point], sources: Array(pages),
+                                 gatheredAt: Self.readOn, madeOnDevice: false)
+        let kept = try #require(cloud.points.first)
+        let note = try #require(cloud.note(for: kept))
+        #expect(note.hasSuffix(ReconWords.disputedBy([])))
+        #expect(!note.contains("Riverside Gazette"))
+        #expect(!note.contains("City of Riverside Parks"))
+        #expect(note.count <= MemoryStore.maxLength)
     }
 
     @Test func aPointOnlyOnOldPagesIsKnownAsOld() throws {
@@ -424,7 +566,37 @@ struct DeviceProvider: SourceProvider {
     var runsOnDevice: Bool { true }
     var isSample: Bool { false }
     func sources(for task: ReconTask) throws -> [ReconSource] {
-        try ReconTests.sources.sources(for: task)
+        try ReconTests.sources.sources(for: task).map(notExample)
+    }
+}
+
+/// Says it gives examples, but its pages don't say so themselves.
+struct UnmarkedExamples: SourceProvider {
+    var runsOnDevice: Bool { true }
+    var isSample: Bool { true }
+    func sources(for task: ReconTask) throws -> [ReconSource] {
+        try ReconTests.sources.sources(for: task).map(notExample)
+    }
+}
+
+/// Puts a summary together from pages it marks as real, as a careless
+/// summarizer might.
+struct UnmarkingSummarizer: ReconSummarizer {
+    func summarize(_ task: ReconTask, id: String, sources: [ReconSource], gatheredAt: Date) async -> ReconSummary {
+        LocalReconSummarizer().summary(task, id: id, sources: sources.map(notExample), gatheredAt: gatheredAt)
+    }
+}
+
+/// True the first time it is asked, then false.
+final class ForgetOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var asked = false
+    var done: Bool { lock.lock(); defer { lock.unlock() }; return asked }
+    func first() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if asked { return false }
+        asked = true
+        return true
     }
 }
 
@@ -440,7 +612,7 @@ final class ShrinkingProvider: SourceProvider, @unchecked Sendable {
     var runsOnDevice: Bool { true }
     var isSample: Bool { false }
     func sources(for task: ReconTask) throws -> [ReconSource] {
-        let all = try ReconTests.sources.sources(for: task)
+        let all = try ReconTests.sources.sources(for: task).map(notExample)
         return limit.map { Array(all.prefix($0)) } ?? all
     }
 }

@@ -178,6 +178,9 @@ public final class MemoryStore: @unchecked Sendable {
         case needsWords
         case tooLong
         case notFound
+        /// A point from something looked into that may not be kept: one
+        /// from an example, or one that didn't come with its summary.
+        case notKept
     }
 
     public static let maxLength = 500
@@ -282,11 +285,30 @@ public final class MemoryStore: @unchecked Sendable {
             || FileManager.default.fileExists(atPath: stagingURL.path)
     }
 
-    /// Adds a note. Every writer comes through here, so notes that can't be
-    /// read or opened are refused first, before the words are even looked
-    /// at, and the file is never touched.
+    /// Adds a note. Every writer comes through here or through
+    /// `remember(_:from:at:)`, so notes that can't be read or opened are
+    /// refused first, before the words are even looked at, and the file is
+    /// never touched.
+    ///
+    /// A `.lookedUp` note is refused here, in every build: it may only come
+    /// with the summary it is from, so an example's made up point can't be
+    /// saved as a sourced note by a caller that forgot to ask.
     @discardableResult
     public func remember(_ proposed: String, at date: Date = Date(), source: MemorySource) throws -> Decision {
+        if case .lookedUp = source { return .notKept }
+        return try keep(proposed, at: date, source: source)
+    }
+
+    /// Keeps one point of a summary, in the words and with the source the
+    /// summary gives it. Never one from an example, which has neither.
+    @discardableResult
+    public func remember(_ point: ReconPoint, from summary: ReconSummary, at date: Date = Date()) throws -> Decision {
+        guard !summary.isSample, summary.points.contains(point),
+              let note = summary.note(for: point), let source = summary.memorySource(for: point) else { return .notKept }
+        return try keep(note, at: date, source: source)
+    }
+
+    private func keep(_ proposed: String, at date: Date, source: MemorySource) throws -> Decision {
         lock.lock()
         defer { lock.unlock() }
         var all = try load()

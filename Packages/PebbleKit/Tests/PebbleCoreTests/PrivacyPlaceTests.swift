@@ -58,7 +58,9 @@ struct PrivacyPlaceTests {
     @Test func reconsCloudLinesNeverPromiseTheDevice() {
         for line in [ReconWords.declinedCloud, ReconWords.cloudUnreadable, ReconWords.cloudUnavailable,
                      ReconWords.cloudWithdrawn, ReconWords.offer("the pool"), ReconWords.wordedInCloud,
-                     ReconWords.forgotWhileInCloud, ReconWords.alreadyOn,
+                     ReconWords.forgotWhileInCloud, ReconWords.alreadyOn, ReconWords.alreadyReady,
+                     ReconWords.alreadyOnWithCloud, ReconWords.cloudOff, ReconWords.cloudStopped,
+                     ReconWords.keptForCare,
                      ReconWords.memoryNote("The pool opens.", from: ["A"], wordedInCloud: true)] {
             #expect(!Self.promisesTheDevice(line), "device promise in: \(line)")
         }

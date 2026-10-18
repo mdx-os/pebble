@@ -16,6 +16,14 @@ struct ReconTests {
         return LocalReconSummarizer().summary(task, id: "task:1", sources: sources, gatheredAt: readOn)
     }
 
+    /// The same, from the sample pages' words read as if they were real, so
+    /// its points may become notes.
+    static func realSummary(_ topic: String) throws -> ReconSummary {
+        let task = try #require(ReconTask(topic: topic))
+        let sources = try Self.sources.sources(for: task).map(notExample)
+        return LocalReconSummarizer().summary(task, id: "task:1", sources: sources, gatheredAt: readOn)
+    }
+
     // MARK: Phrasing
 
     @Test(arguments: [
@@ -33,6 +41,9 @@ struct ReconTests {
         ("Would you mind looking into the bus strike?", "the bus strike"),
         ("would you mind researching quiet dishwashers for me", "quiet dishwashers"),
         ("Would you mind, please look into flu shots near us", "flu shots near us"),
+        // Asked for outright, papers are what to read.
+        ("Can you research papers on sleep for me", "papers on sleep"),
+        ("please research papers on sleep", "papers on sleep"),
     ])
     func asksToLookIntoSomething(said: String, topic: String) {
         #expect(ReconIntent.topic(in: said) == topic)
@@ -55,6 +66,9 @@ struct ReconTests {
         // Without "would you mind" before it, "looking into" is a statement.
         "Looking into the pool was fun",
         "Researching quiet dishwashers took all day",
+        // With nothing asking before it, "research papers" starts a statement.
+        "Research papers show coffee is fine",
+        "So research papers say sleep matters",
         "",
     ])
     func ordinarySentencesAreNotRequests(said: String) {
@@ -186,9 +200,11 @@ struct ReconTests {
     /// A disputed point cites only sources that say its very words. Points
     /// with no dispute are held to their own rule, a second source repeating
     /// the dates, prices and numbers, in `aSourceIsListedOnlyBesideWhatItSays`.
-    @Test(arguments: [SampleSources.poolTopic, SampleSources.libraryTopic])
-    func everySourceBesideAPointSaysIt(topic: String) throws {
-        let summary = try Self.summary(topic)
+    /// Only the pool's pages disagree, so only they have a disputed point
+    /// to check, and the test makes sure of one before it looks.
+    @Test func everySourceBesideAPointSaysIt() throws {
+        let summary = try Self.summary(SampleSources.poolTopic)
+        try #require(summary.points.contains { $0.disagreement != nil }, "no disputed point to check")
         for point in summary.points where point.disagreement != nil {
             for id in point.sourceIDs {
                 #expect(try #require(summary.source(id)).text.contains(point.text), "\(id) doesn't say: \(point.text)")
@@ -197,9 +213,9 @@ struct ReconTests {
     }
 
     @Test func aRememberedDisputedPointCarriesTheDisagreement() throws {
-        let summary = try Self.summary(SampleSources.poolTopic)
+        let summary = try Self.realSummary(SampleSources.poolTopic)
         let point = try #require(summary.points.first { $0.disagreement != nil })
-        let note = summary.note(for: point)
+        let note = try #require(summary.note(for: point))
         let disagreement = try #require(point.disagreement)
         #expect(note.hasPrefix(point.text))
         #expect(note.contains(disagreement.text))
@@ -210,7 +226,7 @@ struct ReconTests {
         #expect(note.count <= MemoryStore.maxLength)
         // An undisputed point is kept as it was.
         let plain = try #require(summary.points.first { $0.disagreement == nil })
-        #expect(!summary.note(for: plain).contains("don't agree"))
+        #expect(try #require(summary.note(for: plain)).contains("don't agree") == false)
     }
 
     @Test func sourcesThatAgreeShowNoDisagreement() throws {
@@ -233,6 +249,23 @@ struct ReconTests {
         #expect(ReconWords.gathered(now - 60, now: now, calendar: calendar).hasPrefix("Gathered today at "))
         #expect(ReconWords.gathered(now - 86_400, now: now, calendar: calendar).hasPrefix("Gathered yesterday at "))
         #expect(ReconWords.gathered(now - 5 * 86_400, now: now, calendar: calendar).hasPrefix("Gathered on "))
+        // Earlier this year: no year. Another year: the year too, so a
+        // summary kept past New Year never reads as this year's.
+        let thisYear = ReconWords.gathered(SampleSources.day(2026, 3, 2), now: now, calendar: calendar)
+        #expect(!thisYear.contains("2026"))
+        let lastYear = ReconWords.gathered(SampleSources.day(2025, 11, 3), now: now, calendar: calendar)
+        #expect(lastYear.hasPrefix("Gathered on "))
+        #expect(lastYear.contains("2025"))
+    }
+
+    /// The gathered line in every form it takes is in the checked list.
+    @Test func everyGatheredLineIsChecked() {
+        let lines = ReconWords.gatheredSamples
+        #expect(lines.contains { $0.hasPrefix("Gathered today at ") })
+        #expect(lines.contains { $0.hasPrefix("Gathered yesterday at ") })
+        #expect(lines.contains { $0.hasPrefix("Gathered on ") && !$0.contains("2025") })
+        #expect(lines.contains { $0.hasPrefix("Gathered on ") && $0.contains("2025") })
+        #expect(lines.allSatisfy(ReconWords.all.contains))
     }
 
     @Test func dateAndPriceValuesAreRead() {
@@ -249,6 +282,9 @@ struct ReconTests {
         let start = Self.readOn
         let engine = LocalFakeEngine(rule: .isolated(), origin: start)
         let runner = ReconRunner(engine: engine, provider: Self.sources)
+        // The scripted clock moves on before the ask, so the time the pages
+        // were read is that clock's now, not the moment the engine was made.
+        engine.advance(by: 90)
         let id = try #require(runner.lookInto(SampleSources.poolTopic))
         #expect(runner.isRecon(id))
         func shown() throws -> AgentTask { try #require(runner.tasks.first { $0.id == id }) }
@@ -267,8 +303,11 @@ struct ReconTests {
         #expect(try shown().step == ReconWords.doneLine)
         let summary = try #require(runner.summary(for: id))
         #expect(summary.id == id)
-        // Read when the person asked, by the engine's own clock.
-        #expect(summary.gatheredAt == start)
+        // Read when the person asked. With no clock given, a runner on a
+        // `LocalFakeEngine` reads that engine's scripted clock; any other
+        // engine gets the wall clock (see `theDefaultClockIsTheWallClock`).
+        #expect(summary.gatheredAt == start + 90)
+        #expect(summary.gatheredAt == engine.currentDate - 15)
         #expect(try shown().result == summary.plainText)
         // Sample sources make the card an example.
         #expect(runner.isSample(id))
@@ -463,9 +502,9 @@ struct ReconTests {
     // MARK: Memory
 
     @Test func aPointBecomesANoteWithWhereItCameFrom() throws {
-        let summary = try Self.summary(SampleSources.libraryTopic)
+        let summary = try Self.realSummary(SampleSources.libraryTopic)
         let point = try #require(summary.points.first)
-        let note = summary.note(for: point)
+        let note = try #require(summary.note(for: point))
         #expect(note.hasPrefix(point.text))
         #expect(note.contains("Riverside Public Library"))
         #expect(note.count <= MemoryStore.maxLength)
@@ -479,6 +518,100 @@ struct ReconTests {
         #expect(MemorySource.lookedUp(" ").label == "From something I looked into")
     }
 
+    static func scratchStore() -> MemoryStore {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("recon-memory-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
+    }
+
+    /// Lets go of a `scratchStore`, its folder included.
+    static func throwAway(_ memory: MemoryStore) {
+        discard(memory)
+        try? FileManager.default.removeItem(at: memory.fileURL.deletingLastPathComponent())
+    }
+
+    /// A summary of the sample pages is an example in itself, whoever put
+    /// it together and whoever asks, so none of its points becomes a note:
+    /// there is no note to save and no source to save it with.
+    @Test func anExamplesPointsNeverBecomeANote() throws {
+        let summary = try Self.summary(SampleSources.poolTopic)
+        #expect(summary.isSample)
+        #expect(!summary.points.isEmpty)
+        for point in summary.points {
+            #expect(summary.note(for: point) == nil, "a note from: \(point.text)")
+            #expect(summary.memorySource(for: point) == nil)
+        }
+        let memory = Self.scratchStore()
+        defer { Self.throwAway(memory) }
+        for point in summary.points {
+            #expect(try memory.remember(point, from: summary) == .notKept)
+        }
+        #expect(!memory.hasStoredFile)
+        // A summary marked as one by whoever read it is the same.
+        let real = try Self.realSummary(SampleSources.poolTopic)
+        #expect(!real.isSample)
+        let point = try #require(real.points.first)
+        #expect(real.note(for: point) != nil)
+        #expect(real.stamped(sample: true).note(for: point) == nil)
+        #expect(real.stamped(sample: true).stamped(sample: false).isSample)
+        // The control: the same point from real pages is kept.
+        guard case .saved = try memory.remember(point, from: real) else {
+            Issue.record("a real point was not kept")
+            return
+        }
+    }
+
+    /// The store keeps a looked up note only with the summary behind it,
+    /// so a caller that skips the checks can't save an example as sourced.
+    @Test func theStoreRefusesALookedUpNoteWithoutItsSummary() throws {
+        let memory = Self.scratchStore()
+        defer { Self.throwAway(memory) }
+        #expect(try memory.remember("The pool reopens on November 10.", source: .lookedUp("Riverside Gazette")) == .notKept)
+        #expect(try memory.remember("The pool reopens on November 10.", source: .lookedUp("")) == .notKept)
+        #expect(!memory.hasStoredFile)
+        // A point that isn't in the summary it comes with is refused too.
+        let real = try Self.realSummary(SampleSources.poolTopic)
+        let stranger = ReconPoint(id: "x", text: "The pool has a slide.", sourceIDs: [try #require(real.sources.first).id])
+        #expect(try memory.remember(stranger, from: real) == .notKept)
+        #expect(!memory.hasStoredFile)
+        // Other notes are kept as ever.
+        guard case .saved = try memory.remember("Swim on Saturdays", source: .toldMe) else {
+            Issue.record("a told note was not kept")
+            return
+        }
+    }
+
+    /// Forget everything erases a kept point with where it came from: the
+    /// file goes, and nothing with its words or its source is left beside it.
+    @Test func forgettingEverythingErasesAKeptPointAndItsSource() throws {
+        let memory = Self.scratchStore()
+        defer { Self.throwAway(memory) }
+        let real = try Self.realSummary(SampleSources.libraryTopic)
+        let point = try #require(real.points.first)
+        guard case .saved(let note) = try memory.remember(point, from: real) else {
+            Issue.record("not kept")
+            return
+        }
+        let publisher = try #require(real.memorySource(for: point).flatMap { source -> String? in
+            if case .lookedUp(let name) = source { return name }
+            return nil
+        })
+        #expect(!publisher.isEmpty)
+        let onDisk = String(decoding: try Data(contentsOf: memory.fileURL), as: UTF8.self)
+        #expect(onDisk.contains("\"lookedUp\""))
+        #expect(onDisk.contains(publisher))
+        try memory.forgetEverything()
+        #expect(!memory.hasStoredFile)
+        #expect(memory.notes().isEmpty)
+        let folder = memory.fileURL.deletingLastPathComponent()
+        let left = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+        for file in left {
+            let words = String(decoding: (try? Data(contentsOf: file)) ?? Data(), as: UTF8.self)
+            #expect(!words.contains(publisher), "still on disk in \(file.lastPathComponent)")
+            #expect(!words.contains(note.text), "still on disk in \(file.lastPathComponent)")
+        }
+    }
+
     /// Dashes are checked over `ReconWords.all` by `CopyDashTests`.
     @Test func reconWordsAreCalm() {
         for line in ReconWords.all {
@@ -490,7 +623,8 @@ struct ReconTests {
     @Test func everyCloudNoteIsInTheCheckedList() {
         for line in [ReconWords.cloudWithdrawn, ReconWords.declinedCloud, ReconWords.cloudUnreadable,
                      ReconWords.cloudUnavailable, ReconWords.wordedInCloud, ReconWords.forgotWhileInCloud,
-                     ReconWords.alreadyOn] {
+                     ReconWords.alreadyOn, ReconWords.alreadyReady, ReconWords.alreadyOnWithCloud,
+                     ReconWords.cloudOff, ReconWords.cloudStopped, ReconWords.keptForCare, ReconWords.pointTooLong] {
             #expect(ReconWords.all.contains(line), "not checked: \(line)")
         }
     }
@@ -502,13 +636,14 @@ struct ReconTests {
     /// still never kept as if it were settled.
     @Test func aLongDisputeIsCutToItsSidesSoThePointCanBeKept() throws {
         let pages = Self.sources.documents.filter { ["sample:gazette-pool", "sample:parks-pool"].contains($0.id) }
+            .map(notExample)
         let long = "Sources don't agree on this. " + String(repeating: "Each page tells it a little differently. ", count: 14)
         let point = ReconPoint(id: "a", text: "Riverside Pool reopens on November 10.", sourceIDs: ["sample:parks-pool"],
                                disagreement: ReconDisagreement(text: long, sourceIDs: pages.map(\.id)))
         let summary = ReconSummary(id: "t", topic: SampleSources.poolTopic, overview: "", points: [point],
                                    sources: pages, gatheredAt: Self.readOn, madeOnDevice: true)
         let kept = try #require(summary.points.first)
-        let note = summary.note(for: kept)
+        let note = try #require(summary.note(for: kept))
         #expect(note.count <= MemoryStore.maxLength)
         #expect(!note.contains("a little differently"))
         #expect(note.hasPrefix(kept.text))
@@ -518,14 +653,15 @@ struct ReconTests {
         let memory = MemoryStore(fileURL: FileManager.default.temporaryDirectory
             .appendingPathComponent("recon-memory-\(UUID().uuidString).json"))
         defer { discard(memory) }
-        guard case .saved = try memory.remember(note, source: summary.memorySource(for: kept)) else {
+        guard case .saved(let saved) = try memory.remember(kept, from: summary) else {
             Issue.record("not saved: \(note)")
             return
         }
+        #expect(saved.text == note)
         // A short dispute is kept whole.
-        let pool = try Self.summary(SampleSources.poolTopic)
+        let pool = try Self.realSummary(SampleSources.poolTopic)
         let disputed = try #require(pool.points.first { $0.disagreement != nil })
-        #expect(pool.note(for: disputed).hasSuffix(try #require(disputed.disagreement?.text)))
+        #expect(try #require(pool.note(for: disputed)).hasSuffix(try #require(disputed.disagreement?.text)))
     }
 }
 

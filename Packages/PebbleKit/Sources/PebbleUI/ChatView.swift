@@ -464,9 +464,11 @@ final class ChatController: ObservableObject {
     /// one, so it never offers. The second value is true when this chat
     /// promised to stay on this device, so the recon keeps that promise.
     var lookInto: ((_ topic: String, _ onDevice: Bool) -> Bool)?
-    /// True when a recon on this topic is already going or ready on Today,
-    /// so a tap on Look into it starts nothing more and says so.
-    var isLookingInto: ((_ topic: String) -> Bool)?
+    /// What to say when a recon on this topic is already going or ready on
+    /// Today, so a tap on Look into it starts nothing more and says so. Nil
+    /// when nothing is. The second value is true for a chat that stays on
+    /// this device, as for `lookInto`.
+    var alreadyOn: ((_ topic: String, _ onDevice: Bool) -> String?)?
     /// True while the only pages there are to read are examples, so the
     /// offer says so rather than promise real sources.
     var reconReadsExamples = false
@@ -657,8 +659,8 @@ final class ChatController: ObservableObject {
     func acceptReconOffer() {
         guard let offer = reconOffer else { return }
         reconOffer = nil
-        if isLookingInto?(offer.topic) == true {
-            say(ReconWords.alreadyOn)
+        if let line = alreadyOn?(offer.topic, model.runsOnDevice) {
+            say(line)
             return
         }
         let started = lookInto?(offer.topic, model.runsOnDevice) ?? false
@@ -785,9 +787,19 @@ struct ReconOfferButtons: View {
     /// once the question itself is done: moving focus sooner would cut it
     /// off, and the person would hear "Look into it" without the offer.
     /// Nil for any other line, so focus stays where the person left it.
+    ///
+    /// The announcement only has to hold the whole question, not equal it,
+    /// so a line read with something before or after it, or with other
+    /// spacing, still lands focus once the question is done.
     static func focusOnceRead(afterFinishing finished: String?, question: String?) -> Choice? {
-        guard let finished, let question, finished == question else { return nil }
+        guard let finished = finished.map(tidy), let question = question.map(tidy), !question.isEmpty,
+              finished.contains(question) else { return nil }
         return arrivalFocus
+    }
+
+    /// Spacing and case set aside, so only the words count.
+    private static func tidy(_ line: String) -> String {
+        line.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ").lowercased()
     }
 
     /// What VoiceOver says each choice does.

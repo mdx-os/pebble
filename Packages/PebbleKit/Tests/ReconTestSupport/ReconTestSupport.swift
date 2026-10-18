@@ -182,13 +182,51 @@ public final class PlainEngine: ScriptedTaskEngine, @unchecked Sendable {
 }
 
 /// The sample pages' words, on this device, standing in for a real
-/// provider, so a test can keep a point from them. Not an example.
+/// provider, so a test can keep a point from them. Not an example, and
+/// neither are its pages.
 public struct PagesNotExamples: SourceProvider {
     public let pages: SampleSources
     public init(now: @escaping @Sendable () -> Date) { pages = SampleSources(now: now) }
     public var runsOnDevice: Bool { true }
     public var isSample: Bool { false }
-    public func sources(for task: ReconTask) throws -> [ReconSource] { try pages.sources(for: task) }
+    public func sources(for task: ReconTask) throws -> [ReconSource] { try pages.sources(for: task).map(notExample) }
+}
+
+/// The same page, not marked as an example, standing in for a real one.
+public func notExample(_ page: ReconSource) -> ReconSource {
+    ReconSource(id: page.id, title: page.title, publisher: page.publisher, url: page.url,
+                published: page.published, text: page.text)
+}
+
+/// Counts every time it is asked, and reads the sample pages' words as if
+/// they were real. Not an example.
+public final class CountingProvider: SourceProvider, @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    private let pages: PagesNotExamples
+    /// Pages to give from the next ask on, instead of the sample ones.
+    private var given: [ReconSource]?
+    public init(now: @escaping @Sendable () -> Date) { pages = PagesNotExamples(now: now) }
+    public var asked: Int { lock.lock(); defer { lock.unlock() }; return count }
+    public var runsOnDevice: Bool { true }
+    public var isSample: Bool { false }
+    /// Runs inside `sources(for:)`, after the count, so a test can land
+    /// something while a recon is being started.
+    public var whileReading: (@Sendable () -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return hook }
+        set { lock.lock(); hook = newValue; lock.unlock() }
+    }
+    private var hook: (@Sendable () -> Void)?
+    public func give(_ pages: [ReconSource]?) { lock.lock(); given = pages; lock.unlock() }
+    public func sources(for task: ReconTask) throws -> [ReconSource] {
+        lock.lock()
+        count += 1
+        let pages = given
+        let hook = self.hook
+        lock.unlock()
+        hook?()
+        return try pages ?? self.pages.sources(for: task)
+    }
 }
 
 /// A recon a test can play to its end.

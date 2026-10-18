@@ -170,6 +170,50 @@ struct ReconFeedTests {
         #expect(card.updatedAt <= wall.now)
     }
 
+    /// The home screen reads only from a provider on this device, the
+    /// promise an on-device chat makes for the topic it asks for. One that
+    /// would read elsewhere is never used, so Today and the chat never offer.
+    @Test func theHomeScreenReadsOnlyOnThisDevice() throws {
+        let clock: @Sendable () -> Date = { [morning] in morning }
+        let refused = HomeView.reconSources(FarPages(), now: clock)
+        #expect(!(refused is FarPages))
+        #expect(!refused.runsOnDevice)
+        #expect(try refused.sources(for: try #require(ReconTask(topic: SampleSources.poolTopic))).isEmpty)
+        let model = HomeView.reconFeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()),
+                                            tasks: nil, drivesTasks: false, reading: refused, place: .onDevice,
+                                            memory: nil, model: LocalStubModel(), cloud: nil, now: clock)
+        #expect(!model.canLookInto)
+        let chat = HomeView.wired(ChatController.make(brand: brand, model: LocalStubModel(),
+                                                      names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil),
+                                  to: model)
+        #expect(chat.lookInto == nil)
+        // A provider on this device, examples or not, is used as given.
+        #expect(HomeView.reconSources(RealPages(), now: clock) is RealPages)
+        #expect(HomeView.reconSources(ReconTestData.sources, now: clock) is SampleSources)
+    }
+
+    /// With none given, the sample pages are dated by the screen's own
+    /// clock, the one the time they were gathered is read from, so a page
+    /// never reads as newer, or older, than it is when the showcase holds
+    /// its clock still.
+    @Test func theSamplePagesShareTheScreensClock() throws {
+        let still = morning - 3 * 86_400
+        let pages = try #require(HomeView.reconSources(nil, now: { still }) as? SampleSources)
+        #expect(pages.now() == still)
+        let gazette = try #require(pages.documents.first { $0.id == "sample:gazette-pool" })
+        #expect(gazette.published == still - 7 * 86_400)
+        let model = HomeView.reconFeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: nil,
+                                            drivesTasks: false, reading: pages, place: .onDevice, memory: nil,
+                                            model: LocalStubModel(), cloud: nil, now: { still })
+        let runner = try #require(model.recon)
+        #expect(model.lookInto(SampleSources.poolTopic))
+        model.tick(30)
+        let summary = try #require(runner.tasks.first.flatMap { runner.summary(for: $0.id) })
+        #expect(summary.gatheredAt == still)
+        #expect(summary.sources.allSatisfy { $0.published < still })
+        #expect(summary.oldSources.map(\.id) == ["sample:council-pool"])
+    }
+
     /// The chat's Look into it checks Today first. A topic already going
     /// there, in any case of letters, starts nothing more and says so.
     @Test func theChatNeverStartsATopicTodayIsAlreadyOn() throws {
@@ -196,6 +240,52 @@ struct ReconFeedTests {
         chat.acceptReconOffer()
         #expect(runner.tasks.count == 2)
         #expect(chat.conversation.turns.last?.text == ReconWords.started)
+        // Once it is ready, it isn't something I'm "on": the line says it's ready.
+        model.tick(60)
+        #expect(runner.tasks.allSatisfy { $0.state == .done })
+        chat.submit("look into the Riverside pool reopening")
+        chat.acceptReconOffer()
+        #expect(runner.tasks.count == 2)
+        #expect(chat.conversation.turns.last?.text == ReconWords.alreadyReady)
+    }
+
+    /// With the cloud on, Today's recon may be put into words there. An
+    /// on-device chat asking for the same topic is told so, so its promise
+    /// to stay on this device stays true. Nothing is sent by the ask.
+    @Test func anOnDeviceChatIsToldWhenTodaysOneMayUseTheCloud() async throws {
+        let maker = TransportMaker()
+        let notes = ShowcaseScene.emptyMemory()
+        defer { discard(notes) }
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+                              memory: notes, transport: { maker.make() })
+        let model = HomeView.reconFeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()),
+                                            tasks: nil, drivesTasks: false, reading: ReconTestData.sources,
+                                            place: .mayLeaveDevice, memory: notes, model: LocalStubModel(),
+                                            cloud: cloud, now: { [morning] in morning })
+        let runner = try #require(model.recon)
+        let card = try #require(model.feed.groups.flatMap(\.items).first { $0.id == "sample:pool" })
+        model.perform(card) { _ in }
+        let id = try #require(runner.tasks.first?.id)
+        #expect(runner.mayLeaveDevice(id))
+        let chat = HomeView.wired(ChatController.make(brand: brand, model: LocalStubModel(),
+                                                      names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil,
+                                                      replyBeat: .zero), to: model)
+        #expect(chat.privacyPlace.staysOnDevice)
+        chat.submit("look into the Riverside pool reopening")
+        chat.acceptReconOffer()
+        #expect(runner.tasks.count == 1)
+        #expect(chat.conversation.turns.last?.text == ReconWords.alreadyOnWithCloud)
+        #expect(ReconWords.alreadyOnWithCloud.contains("cloud"))
+        // A chat that may leave the device anyway gets the plain line.
+        #expect(model.alreadyLine(for: SampleSources.poolTopic, onDevice: false) == ReconWords.alreadyOn)
+        // With the cloud off when Today started it, the plain line is true too.
+        let local = HomeView.reconFeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()),
+                                            tasks: nil, drivesTasks: false, reading: ReconTestData.sources,
+                                            place: .onDevice, memory: nil, model: LocalStubModel(), cloud: nil,
+                                            now: { [morning] in morning })
+        #expect(local.lookInto(SampleSources.poolTopic))
+        #expect(local.alreadyLine(for: SampleSources.poolTopic, onDevice: true) == ReconWords.alreadyOn)
+        #expect(maker.wire.sent.isEmpty)
     }
 
     /// A kept point too long for the notes gets a line of its own, never
@@ -215,12 +305,53 @@ struct ReconFeedTests {
         await runner.settle(id)
         let summary = try #require(runner.summary(for: id))
         let point = try #require(summary.points.first)
-        #expect(summary.note(for: point).count > MemoryStore.maxLength)
+        #expect(try #require(summary.note(for: point)).count > MemoryStore.maxLength)
         #expect(!model.remember(point, in: summary))
         #expect(model.rememberStatus == ReconWords.pointTooLong)
         #expect(model.rememberStatus != MemoryWords.tooLong)
         #expect(memory.notes().isEmpty)
         #expect(ReconWords.all.contains(ReconWords.pointTooLong))
+    }
+
+    /// A point worded on this device whose own words, with no dispute,
+    /// are longer than a note may be: the too-long line, nothing saved, and
+    /// Open sources, which the line sends the person to, has every word.
+    @Test func aPointLongerThanANoteSaysSoAndOpenSourcesHasItAll() async throws {
+        let memory = ShowcaseScene.emptyMemory()
+        defer { discard(memory) }
+        let inner = LocalFakeEngine(rule: .isolated(), origin: morning)
+        let provider = CountingProvider(now: { [morning] in morning })
+        let words = Array(repeating: "the Riverside pool reopening brings swim lessons and family swim", count: 10)
+            .joined(separator: " and ") + "."
+        provider.give([ReconSource(id: "long", title: "Riverside pool reopening", publisher: "Riverside Gazette",
+                                   url: URL(string: "https://gazette.example.org/long")!, published: morning - 86_400,
+                                   text: words)])
+        let runner = ReconRunner(engine: PlainEngine(inner), provider: provider, now: { [morning] in morning })
+        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: runner, place: .onDevice,
+                              memory: memory, now: { [morning] in morning })
+        #expect(model.lookInto(SampleSources.poolTopic))
+        inner.advance(by: 30)
+        let id = try #require(runner.tasks.first?.id)
+        let summary = try #require(runner.summary(for: id))
+        #expect(summary.madeOnDevice)
+        let point = try #require(summary.points.first)
+        #expect(point.disagreement == nil)
+        #expect(point.text.count > MemoryStore.maxLength)
+        #expect(model.canRemember(summary))
+        #expect(!model.remember(point, in: summary))
+        #expect(model.rememberStatus == ReconWords.pointTooLong)
+        #expect(memory.notes().isEmpty)
+        #expect(!memory.hasStoredFile)
+        // The line names the card's own button, which the card shows.
+        let card = ReconCard(summary: summary, time: "", gathered: "", canRemember: true)
+        #expect(card.actions.contains(.sources))
+        #expect(ReconWords.pointTooLong.contains(ReconCard.title(.sources)))
+        // And that sheet shows the point whole, as the card can't.
+        let sheet = ReconSourcesSheet(summary: summary)
+        let row = try #require(sheet.points.first { $0.point.id == point.id })
+        #expect(row.pointLine == point.text)
+        #expect(row.spoken.contains(point.text))
+        #expect(sheet.points.map(\.point) == summary.points)
     }
 
     /// Two previews waiting at once: the first to come shows, the other
@@ -722,7 +853,7 @@ struct ReconFeedTests {
 
     /// A second tap on Look into it starts nothing, and VoiceOver hears why.
     @Test func aSecondTapOnLookIntoItIsHeard() throws {
-        let (model, _, runner) = feed()
+        let (model, engine, runner) = feed()
         var heard: [String] = []
         model.announce = { heard.append($0.text) }
         let card = try #require(model.feed.groups.flatMap(\.items).first { $0.id == "sample:pool" })
@@ -731,6 +862,11 @@ struct ReconFeedTests {
         model.perform(card) { _ in }
         #expect(runner.tasks.count == 1)
         #expect(heard.filter { $0 == ReconWords.alreadyOn }.count == 1)
+        // Once it's ready, the line says so.
+        engine.advance(by: 60)
+        model.perform(card) { _ in }
+        #expect(runner.tasks.count == 1)
+        #expect(heard.last == ReconWords.alreadyReady)
     }
 
     /// The answers to Look into it and Not now are read aloud like any
@@ -758,13 +894,33 @@ struct ReconFeedTests {
     /// VoiceOver lands on the offer's answers only once it has finished
     /// reading the offer, so the question is never cut off. Another line
     /// finishing moves nothing. Each answer says what it does.
-    @Test func theOffersButtonsAreFoundAndSayWhatTheyDo() {
+    @Test func theOffersButtonsAreFoundAndSayWhatTheyDo() throws {
         #expect(ReconOfferButtons.arrivalFocus == .yes)
         let offer = ReconWords.offer("the pool")
         #expect(ReconOfferButtons.focusOnceRead(afterFinishing: offer, question: offer) == .yes)
         #expect(ReconOfferButtons.focusOnceRead(afterFinishing: FirstConversation.thinking, question: offer) == nil)
         #expect(ReconOfferButtons.focusOnceRead(afterFinishing: nil, question: offer) == nil)
         #expect(ReconOfferButtons.focusOnceRead(afterFinishing: offer, question: nil) == nil)
+        // Read with something before it, or with other spacing, it still
+        // counts once the whole question is done. Part of it never does.
+        #expect(ReconOfferButtons.focusOnceRead(afterFinishing: "Pip. " + offer, question: offer) == .yes)
+        #expect(ReconOfferButtons.focusOnceRead(afterFinishing: offer.replacingOccurrences(of: " ", with: "  ") + "\n",
+                                                question: offer) == .yes)
+        #expect(ReconOfferButtons.focusOnceRead(afterFinishing: String(offer.prefix(20)), question: offer) == nil)
+        #expect(ReconOfferButtons.focusOnceRead(afterFinishing: offer, question: "  ") == nil)
+        // What the chat announces for an offer is the offer's own line, the
+        // one the buttons wait for.
+        let controller = ChatController.make(brand: brand, model: LocalStubModel(),
+                                             names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil)
+        controller.lookInto = { _, _ in true }
+        controller.submit("look into the pool")
+        let question = try #require(controller.reconOffer.flatMap { offer in
+            controller.conversation.turns.first { $0.id == offer.turnID }?.text
+        })
+        #expect(question == controller.conversation.turns.last?.text)
+        let announced = ChatView.replyLanded(in: controller, covered: false)
+        #expect(announced == question)
+        #expect(ReconOfferButtons.focusOnceRead(afterFinishing: announced, question: question) == .yes)
         #expect(ImageRenderer(content: ReconOfferButtons(question: offer, onYes: {}, onNo: {}).frame(width: 393)).cgImage != nil)
         #expect(ReconOfferButtons.hint(.no) == "Nothing starts.")
         #expect(ReconOfferButtons.hint(.yes) == ReconWords.offerYesHint)
@@ -829,7 +985,8 @@ struct ReconFeedTests {
         #expect(model.remember(point, in: summary))
         let note = try #require(memory.notes().first)
         #expect(note.text.hasPrefix(point.text))
-        #expect(note.text.contains("(put into words in the cloud from \(publisher), "))
+        #expect(note.text.contains("(put into words in the cloud, from the sources it was given)"))
+        #expect(!note.text.contains(publisher))
         #expect(note.source == .lookedUp(""))
         #expect(note.source.label == "From something I looked into")
         #expect(!note.source.label.contains(publisher))
@@ -871,10 +1028,14 @@ struct ReconFeedTests {
     /// The card alone: an example never offers Remember, even when told
     /// its points could be kept.
     @Test func anExampleCardNeverOffersRemember() throws {
-        let pool = try ReconTestData.pool()
+        let pool = try ReconTestData.realPool()
         #expect(!ReconCard(summary: pool, time: "", gathered: "", isSample: true).actions.contains(.remember))
         #expect(!ReconCard(summary: pool, time: "", gathered: "", canRemember: false).actions.contains(.remember))
         #expect(ReconCard(summary: pool, time: "", gathered: "").actions.contains(.remember))
+        // A summary of example pages says so itself, whatever the card is told.
+        let example = try ReconTestData.pool()
+        #expect(example.isSample)
+        #expect(!ReconCard(summary: example, time: "", gathered: "").actions.contains(.remember))
     }
 
     /// A kept note deleted on the memory screen: opening the choice again
