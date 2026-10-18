@@ -204,6 +204,10 @@ public final class AskFirst: @unchecked Sendable {
 
     private let lock = NSLock()
     private var pending: [UUID: Open] = [:]
+    /// Questions withdrawn while still open, by when they were asked, so
+    /// `wasWithdrawn` can tell a no from a timeout. Each is kept only as
+    /// long as the question could have stayed open. Ids only.
+    private var withdrawn: [UUID: ContinuousClock.Instant] = [:]
     private let window: Duration
     /// A monotonic clock that keeps counting while the device sleeps.
     /// Changing the date and time in Settings can't move it, so it can't
@@ -240,6 +244,7 @@ public final class AskFirst: @unchecked Sendable {
         lock.lock()
         let time = now()
         pending = pending.filter { isOpen($0.value) || isFreshYes($0.value) }
+        withdrawn = withdrawn.filter { isOpen(Open(askedAt: $0.value)) }
         pending[request.id] = Open(askedAt: time)
         lock.unlock()
         return request
@@ -269,8 +274,20 @@ public final class AskFirst: @unchecked Sendable {
     /// The person said no or closed the question. It can't be approved later.
     public func withdraw(_ request: ConfirmationRequest) {
         lock.lock()
-        pending[request.id] = nil
+        // One that had already timed out stays a timeout.
+        if let open = pending.removeValue(forKey: request.id), isOpen(open) || isFreshYes(open) {
+            withdrawn[request.id] = open.askedAt
+        }
         lock.unlock()
+    }
+
+    /// True when the question closed because it was withdrawn while still
+    /// open, not because its time ran out. Only says why; it never opens
+    /// or closes anything.
+    public func wasWithdrawn(_ request: ConfirmationRequest) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return withdrawn[request.id] != nil
     }
 
     /// True once a yes can no longer be given: the question expired, was
