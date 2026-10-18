@@ -86,6 +86,10 @@ extension CloudHelpStoring {
 /// iPad. The private words are the most sensitive words in the app, so they
 /// get the same care as the notes. A restored or new device reads as off.
 public final class CloudHelpFileStore: CloudHelpStoring, @unchecked Sendable {
+    /// The private words can be opened only while the device is unlocked,
+    /// as the notes can. Nothing that runs while locked reads them.
+    public static let fileProtection: FileProtectionType = .complete
+
     public let fileURL: URL
     private let lock = NSLock()
 
@@ -123,11 +127,7 @@ public final class CloudHelpFileStore: CloudHelpStoring, @unchecked Sendable {
         // Staged under one known name, then renamed over the real file, as
         // the notes are, so no copy is left anywhere else.
         try removeStaged()
-        #if os(macOS)
-        try data.write(to: stagingURL, options: [.withoutOverwriting])
-        #else
-        try data.write(to: stagingURL, options: [.withoutOverwriting, .completeFileProtection])
-        #endif
+        try data.write(to: stagingURL, options: .staged(Self.fileProtection))
         guard rename(stagingURL.path, fileURL.path) == 0 else {
             try? removeStaged()
             throw CocoaError(.fileWriteUnknown)

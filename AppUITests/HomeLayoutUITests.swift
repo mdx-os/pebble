@@ -145,8 +145,9 @@ final class HomeLayoutUITests: XCTestCase {
     }
 
     /// Work done while the app was closed shows in Today: this morning's
-    /// summary opens to read, and a morning that never ran says why. Both
-    /// are examples here, and say so first.
+    /// summary opens to read, and is an example here, saying so first. With
+    /// no tasks to count, as in the app, the morning that never ran leaves
+    /// no card claiming a summary was missed.
     func testTheMorningSummaryShowsInToday() throws {
         let app = launch("todaySummary")
         let summary = app.buttons.matching(
@@ -154,9 +155,8 @@ final class HomeLayoutUITests: XCTestCase {
         XCTAssertTrue(summary.waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["Needs you"].exists, "the question it counted still waits")
         let missed = app.descendants(matching: .any).matching(
-            NSPredicate(format: "label BEGINSWITH %@", "Example. Noticed. I couldn't make")).firstMatch
-        XCTAssertTrue(missed.exists)
-        XCTAssertTrue(missed.label.contains("Low Power Mode"))
+            NSPredicate(format: "label CONTAINS %@", "I couldn't make")).firstMatch
+        XCTAssertFalse(missed.exists)
         summary.tap()
         let detail = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Anything still waiting")).firstMatch
         XCTAssertTrue(detail.waitForExistence(timeout: 5))

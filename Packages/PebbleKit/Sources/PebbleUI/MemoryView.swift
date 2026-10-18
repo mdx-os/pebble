@@ -654,8 +654,14 @@ final class MemoryModel: ObservableObject {
         let now = now()
         let next = on ? background.queue.map(\.due).min().map { BackgroundWords.nextDue($0, now: now) } : nil
         if backgroundNext != next { backgroundNext = next }
-        let stored = background.store.hasStoredFile || !background.results.isEmpty
+        let stored = backgroundStored
         if hasBackgroundToForget != stored { hasBackgroundToForget = stored }
+    }
+
+    /// True while background work has a file or cards.
+    private var backgroundStored: Bool {
+        guard let background else { return false }
+        return background.store.hasStoredFile || !background.results.isEmpty
     }
 
     func refresh() {
@@ -738,42 +744,66 @@ final class MemoryModel: ObservableObject {
         // again while the rest goes, and its summaries go. It turns off and
         // its cards go from memory even if its file can't be erased. Before
         // Today's part, so Today redraws with the cards already gone.
+        // Summaries erased are named, and tapped for, only when there were
+        // some: with no file and no cards, nothing of them went.
+        let hadSummaries = backgroundStored
         let summaries = background.map { background -> Summaries in
             (try? background.forget()) != nil ? .erased : .stayed
-        }
+        }.flatMap { $0 == .erased && !hadSummaries ? nil : $0 }
         let tasks = onForgetEverything()
         let notesGone = (try? store.forgetEverything()) != nil
         // nil when there is nothing else; .some(nil) when it couldn't go.
         let rest = alsoForget.map { forget in try? forget() }
         // A step said yes to may have happened, so the line says so here too.
-        let underway = tasks.underwayLine.map { " " + $0 } ?? ""
         status = Self.forgotLine(notesGone: notesGone, rest: rest, tasksGone: tasks.forgotten > 0,
-                                 summaries: summaries) + underway
+                                 summaries: summaries, underway: tasks.underwayLine)
         let restGone = rest.map { $0 != nil } == true
         if notesGone || restGone || tasks.forgotten > 0 || summaries == .erased { forgottenCount += 1 }
         refresh()
     }
 
+    #if DEBUG
+    /// For the showcase: the screen as it is once Forget everything has said `line`.
+    func showAfterForgetting(_ line: String) {
+        status = line
+    }
+    #endif
+
     /// What Forget everything says went, from what each part did. Tasks
     /// can't fail to go, so they are named only when something else stayed.
     /// The summaries are named the same way, and only with background work:
     /// when all the rest went, the line says just what stayed, and when
-    /// something else stayed too, a sentence about them follows.
+    /// something else stayed too, a sentence about them follows. Then
+    /// `underway`, if a step said yes to may have happened. Any advice to
+    /// try again always comes last.
     static func forgotLine(notesGone: Bool, rest: CloudHelp.Forgot??, tasksGone: Bool,
-                           summaries: Summaries? = nil) -> String {
+                           summaries: Summaries? = nil, underway: String? = nil) -> String {
         let line = notesWordsAndTasksLine(notesGone: notesGone, rest: rest, tasksGone: tasksGone)
         let restWent = notesGone && (rest.map { $0 != nil } ?? true)
+        let said: String
+        let aboutSummaries: String?
         switch (summaries, restWent) {
         case (nil, _), (.erased?, true):
-            return line
+            said = line; aboutSummaries = nil
         case (.erased?, false):
-            return line + " " + MemoryWords.summariesGone
+            said = line; aboutSummaries = MemoryWords.summariesGone
         case (.stayed?, true):
-            return rest == .some(.some(.privateWordsAndCloud)) ? CloudWords.forgotAndCloudOffNotSummaries
+            said = rest == .some(.some(.privateWordsAndCloud)) ? CloudWords.forgotAndCloudOffNotSummaries
                 : MemoryWords.couldNotForgetSummaries
+            aboutSummaries = nil
         case (.stayed?, false):
-            return line + " " + MemoryWords.summariesStayed
+            said = line; aboutSummaries = MemoryWords.summariesStayed
         }
+        return beforeRetry(said, [aboutSummaries, underway].compactMap { $0 })
+    }
+
+    /// `line` with `sentences` after it, but before its advice to try
+    /// again, so that advice is the last thing said.
+    private static func beforeRetry(_ line: String, _ sentences: [String]) -> String {
+        guard !sentences.isEmpty else { return line }
+        let retry = MemoryWords.retryAdvice.first { line.hasSuffix(" " + $0) }
+        let body = retry.map { String(line.dropLast($0.count + 1)) } ?? line
+        return ([body] + sentences + [retry].compactMap { $0 }).joined(separator: " ")
     }
 
     /// The line for the notes, the private words and the tasks alone.

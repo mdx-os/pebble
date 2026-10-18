@@ -26,8 +26,13 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     case taskRunning, taskRetrying, taskWaiting, taskDone, tasksLive
     /// Today after background work: this morning's summary, made late
     /// because the device was locked, and yesterday's, which never ran.
-    /// `memoryBackground` is the memory screen with background work on.
-    case todaySummary, memoryBackground
+    /// `memoryBackground` is the memory screen with background work on and
+    /// the cloud setting's row, and `memoryBackgroundEnd` the same screen
+    /// scrolled to its end, so a phone shows the switch and the cloud row
+    /// together. `memoryForgetAsk` asks Forget everything with the summaries
+    /// and the private words named, and `memorySummariesStayed` is the
+    /// screen after Forget everything couldn't erase the summaries' file.
+    case todaySummary, memoryBackground, memoryBackgroundEnd, memoryForgetAsk, memorySummariesStayed
 
     public static let launchKey = "pebbleScreen"
 
@@ -90,9 +95,23 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                                                        names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil),
                              look: AgentLook.load(from: looks), firstMessage: nil)
                 }
-            case .memory, .memoryBackground:
+            case .memory:
                 MemoryView(store: Self.sampleMemory(), place: LocalStubModel().privacyPlace,
-                           background: Self.sampleBackground(on: self == .memoryBackground, at: morning))
+                           background: Self.sampleBackground(on: false, at: morning))
+            case .memoryBackground:
+                // With the cloud setting too, as the app shows it once a
+                // cloud model is set up, so the whole screen is seen.
+                MemoryView(store: Self.sampleMemory(), place: LocalStubModel().privacyPlace, cloud: Self.sampleCloud(),
+                           background: Self.sampleBackground(on: true, at: morning))
+            case .memoryBackgroundEnd:
+                MemoryView(store: Self.sampleMemory(), place: LocalStubModel().privacyPlace, cloud: Self.sampleCloud(),
+                           background: Self.sampleBackground(on: true, at: morning))
+                    .defaultScrollAnchor(.bottom)
+            case .memoryForgetAsk:
+                Self.forgetAskMemory(at: morning)
+            case .memorySummariesStayed:
+                Self.summariesStayedMemory(at: morning)
+                    .defaultScrollAnchor(.bottom)
             case .memoryEmpty:
                 MemoryView(store: Self.emptyMemory(), place: LocalStubModel().privacyPlace)
             case .memorySaved:
@@ -283,8 +302,9 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// nothing here touches the person's own and no launch leaves a file
     /// behind. It plays as if the app had been running all along.
     /// `played` runs it through two mornings: yesterday's held back by Low
-    /// Power Mode until its day ended, and today's held back while locked,
-    /// then made at `morning`.
+    /// Power Mode until its day ended, and today's held back before the
+    /// first unlock, then made at `morning`. It has no tasks, as the app
+    /// has none yet, so the missed day leaves no card, just as in the app.
     static func sampleBackground(on: Bool, needsYou: NeedsYou? = nil, played: Bool = false,
                                  at morning: Date) -> BackgroundRunner {
         let runner = BackgroundRunner(store: .memoryOnly(), toggle: InMemoryBackgroundSwitch(),
@@ -342,11 +362,39 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
 
     /// The cloud setting, off, with one private word.
     @MainActor
-    static func sampleCloud() -> CloudHelp {
+    static func sampleCloud(privateWords: [String] = ["lemon cake"]) -> CloudHelp {
         CloudHelp(
-            store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: false, privateWords: ["lemon cake"])),
+            store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: false, privateWords: privateWords)),
             endpoint: sampleEndpoint, memory: sampleMemory(), transport: { NoSendTransport() }
         )
+    }
+
+    /// The memory screen with background work on and the cloud setting,
+    /// asking Forget everything, so its words name the summaries and the
+    /// private words.
+    @MainActor
+    static func forgetAskMemory(at morning: Date) -> some View {
+        let cloud = sampleCloud()
+        let model = MemoryModel(store: sampleMemory(), place: LocalStubModel().privacyPlace,
+                                alsoForget: MemoryView.alsoForget(cloud),
+                                background: sampleBackground(on: true, at: morning), now: { morning })
+        return MemoryView(model: model, place: LocalStubModel().privacyPlace, cloud: cloud)
+            .onAppear { model.askForgetEverything = true }
+    }
+
+    /// The memory screen just after Forget everything, when every note and
+    /// private word went but the summaries' file couldn't be erased: work
+    /// while away is off, its cards stay so it can be tried again, and the
+    /// line is the one `forgotLine` gives for that outcome.
+    @MainActor
+    static func summariesStayedMemory(at morning: Date) -> some View {
+        let runner = sampleBackground(on: true, needsYou: sampleQuestion(at: morning), played: true, at: morning)
+        runner.turnOff()
+        let model = MemoryModel(store: emptyMemory(), place: LocalStubModel().privacyPlace,
+                                background: runner, now: { morning })
+        model.showAfterForgetting(MemoryModel.forgotLine(notesGone: true, rest: .some(.privateWords),
+                                                         tasksGone: false, summaries: .stayed))
+        return MemoryView(model: model, place: LocalStubModel().privacyPlace, cloud: sampleCloud(privateWords: []))
     }
 
     /// A chat on the cloud model with its preview showing, presented the

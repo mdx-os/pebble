@@ -10,6 +10,9 @@ out="${1:-build/screenshots/ui}"
 derived="build/DerivedData"
 bundle_id="com.mdxos.pebble"
 mkdir -p "$out"
+# The tree these screenshots show, written to $out/STAMP once they are made.
+rm -f "$out/STAMP"
+tree="$(sh scripts/screenshot-stamp.sh tree)"
 
 # The app itself, picked by bundle id: Products also holds the UI test
 # runner once `make ui-test` has run.
@@ -46,3 +49,4 @@ for mode in light dark; do
 done
 xcrun simctl terminate "$udid" "$bundle_id" || true
 xcrun simctl ui "$udid" appearance light
+sh scripts/screenshot-stamp.sh write "$out" "$tree"

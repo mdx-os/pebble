@@ -19,7 +19,8 @@ in lint, a skill, or CI.
 - `make test`: package unit tests (Swift Testing)
 - `make build-release`: Release builds for macOS and the iOS Simulator (part of verify). Anything behind `#if DEBUG`, like the showcase, must only be used behind it too
 - `make pulse`: fetch the competitor watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
-- `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`
+- `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`, plus a `STAMP` with the commit and the working tree's hash. `make verify` makes them and then fails with "screenshots are stale, rerun make screenshots" if the stamp is missing or the tree has changed since. Screenshots always show the code as it is now
+- `make screenshots-check`: that check alone, and `make screenshots-check-test` its self-test
 - `make generate`: regenerate `Pebble.xcodeproj` after editing `project.yml`
 - `make secrets-check`: gitleaks over git history
 
@@ -31,10 +32,25 @@ in lint, a skill, or CI.
   - `PebbleCore`: plain types. No SwiftUI, no networking.
   - `PebblePulse`: competitor watch fetching and snapshots. Imports PebbleCore.
   - `PebbleModel`: model adapter. `ModelClient`, the on-device placeholder and `CloudModel` (off by default, every request previewed and redacted by `Redactor` in PebbleCore). Imports PebbleCore. MLX and Ollama adapters plug in here.
-  - `PebbleBackground`: gives the background runner time (`BGTaskScheduler` on iOS, `NSBackgroundActivityScheduler` on the Mac). Imports PebbleCore. The runner and every scheduling decision live in PebbleCore (`Background.swift`) as pure functions.
+  - `PebbleBackground`: gives the background runner time (`BGTaskScheduler` on iOS, `NSBackgroundActivityScheduler` on the Mac). Imports PebbleCore. Scheduling decisions are pure functions in `BackgroundPlan`; the runner and its store live in `Background.swift`.
   - `PebbleUI`: SwiftUI views shared by every platform. Imports PebbleCore and PebbleModel.
 - New code goes in a package, not in `App/`. New layers get added to
   `Package.swift` with their place in the order written down.
+
+## Background work
+
+- On iPhone and iPad the app has the background fetch capability:
+  `UIBackgroundModes: fetch` and one identifier in
+  `BGTaskSchedulerPermittedIdentifiers`, both from `project.yml`. It lets
+  the system wake the app for a short `BGAppRefreshTask`, so the morning
+  summary can be made while the app is closed. It is off until the person
+  turns on "Work while you're away".
+- That run never touches the network. It counts what is already on the
+  device and writes counts and times to its own file. Nothing in
+  `PebbleBackground` or the runner opens a connection.
+- The summary's file uses `completeUntilFirstUserAuthentication`, so it
+  opens once the device has been unlocked since it started. Notes and
+  private words keep `.complete`, and the summary never copies their words.
 
 ## The name
 

@@ -89,7 +89,7 @@ public final class BackgroundService {
                         return done(.finished)
                     }
                     if activity.shouldDefer { return done(.deferred) }
-                    runner.runDue(now: Date(), conditions: Self.conditions(budget: nil))
+                    runner.runDue(now: Date(), conditions: self.conditions(budget: nil))
                     done(.finished)
                 }
             }
@@ -109,21 +109,26 @@ public final class BackgroundService {
             // Called on a queue of the system's; the token takes its own lock.
             time.timeIsUp()
         }
-        runner.runDue(now: Date(), conditions: Self.conditions(budget: 20), time: time)
+        runner.runDue(now: Date(), conditions: conditions(budget: 20), time: time)
         // And again now the run moved the job on, before the app can be
         // suspended: the watch's own ask waits for a later turn of the main
         // actor, which may not come until the next launch.
         plan()
-        task.setTaskCompleted(success: true)
+        // Held back or out of time, the run didn't do its work, and the
+        // system hears so.
+        task.setTaskCompleted(success: !(time.isUp || runner.isHeldBack(now: Date())))
     }
     #endif
 
     /// The moment as the system reports it. `budget` is how long a
     /// background run may take, well inside what the system gives.
-    static func conditions(budget: TimeInterval?) -> BackgroundConditions {
+    func conditions(budget: TimeInterval?) -> BackgroundConditions {
         let now = Date()
         #if os(iOS)
-        let locked = !UIApplication.shared.isProtectedDataAvailable
+        // The runner's file opens once the device has been unlocked since
+        // it started. Locked after that, it still opens, so only a file
+        // that won't open while protected data is away counts as locked.
+        let locked = !UIApplication.shared.isProtectedDataAvailable && runner?.store.canOpen == false
         #else
         // The Mac has no file protection to wait for while locked.
         let locked = false

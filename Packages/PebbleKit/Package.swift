@@ -10,8 +10,9 @@ import PackageDescription
 //                MLX or Ollama adapter lives here.
 //   PebbleBackground  gives the background runner time: BGTaskScheduler on
 //                iPhone and iPad, NSBackgroundActivityScheduler on the Mac.
-//                Imports PebbleCore. The runner and every decision it
-//                makes live in PebbleCore; this is only the platform's door.
+//                Imports PebbleCore. Scheduling decisions are pure
+//                functions in `BackgroundPlan`; the runner and its store
+//                live in `Background.swift`.
 //   PebbleUI     SwiftUI views shared by Mac, iPhone and iPad.
 //                Imports PebbleCore and PebbleModel.
 // SourceScan is not a layer. It lives under Tests, is in no product, and

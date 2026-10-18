@@ -126,6 +126,19 @@ struct BackgroundFeedTests {
         #expect(model.feed.needsYou.count == 1, "the question still waits for its answer")
     }
 
+    /// A save cut short leaves a staged copy beside the file. Forget
+    /// everything has to erase it too.
+    private func leaveAStagedCopy(_ store: BackgroundStore) throws {
+        try Data(contentsOf: store.fileURL).write(to: store.stagingURL)
+        #expect(FileManager.default.fileExists(atPath: store.stagingURL.path))
+    }
+
+    private func expectNoSummaryFiles(_ store: BackgroundStore, sourceLocation: SourceLocation = #_sourceLocation) {
+        #expect(!store.hasStoredFile, sourceLocation: sourceLocation)
+        #expect(!FileManager.default.fileExists(atPath: store.fileURL.path), sourceLocation: sourceLocation)
+        #expect(!FileManager.default.fileExists(atPath: store.stagingURL.path), sourceLocation: sourceLocation)
+    }
+
     /// Forget everything turns background work off and its cards go.
     @Test func forgetEverythingClearsTheCardsAndTurnsItOff() throws {
         let runner = runner(on: true)
@@ -133,6 +146,7 @@ struct BackgroundFeedTests {
         model.refresh()
         let card = try #require(model.feed.groups.first?.items.first)
         model.perform(card) { _ in }
+        try leaveAStagedCopy(runner.store)
 
         let memory = MemoryModel(store: scratchMemory(), place: .onDevice, background: runner,
                                  now: { Self.at(9) }, onForgetEverything: { model.forgetEverything() })
@@ -141,6 +155,7 @@ struct BackgroundFeedTests {
         #expect(!runner.isOn)
         #expect(runner.queue.isEmpty)
         #expect(runner.results.isEmpty)
+        expectNoSummaryFiles(runner.store)
         #expect(model.feed.isEmpty)
         #expect(model.reading == nil)
         #expect(!memory.backgroundOn)
@@ -166,12 +181,71 @@ struct BackgroundFeedTests {
         #expect(!runner.results.isEmpty, "turning off keeps the cards")
         #expect(!memory.hasStoredFile)
         #expect(memory.hasSomethingToForget)
+        try leaveAStagedCopy(runner.store)
 
         memory.forgetEverything()
         #expect(runner.results.isEmpty)
-        #expect(!runner.store.hasStoredFile)
+        expectNoSummaryFiles(runner.store)
         #expect(!memory.hasSomethingToForget)
         #expect(memory.status == MemoryWords.forgotten)
+    }
+
+    /// Forget everything goes in one order, each step whatever the one
+    /// before did: background work first, so its questions are withdrawn
+    /// and nothing runs while the rest goes, then the tasks, the notes and
+    /// the private words.
+    @Test func forgetEverythingGoesInOrder() throws {
+        let notes = scratchMemory()
+        _ = try notes.remember("Sam's birthday is May 14.", source: .toldMe)
+        let log = StepLog(notes: notes)
+        let asks = Self.oneWaiting()
+        let runner = runner(on: true, needsYou: asks)
+        let proposed = runner.propose(Self.note, conditions: .foreground, at: Self.at(9), act: {})
+        let asked = try #require(proposed)
+        let watch = runner.observe {
+            log.step(asks.rule.wasWithdrawn(asked) ? "background" : "background, question still open")
+        }
+        defer { runner.stopObserving(watch) }
+        let memory = MemoryModel(store: notes, place: .onDevice,
+                                 alsoForget: { log.step("private words"); return .privateWords },
+                                 background: runner, now: { Self.at(9) },
+                                 onForgetEverything: { log.step("tasks"); return .none })
+        memory.forgetEverything()
+        log.step("done")
+        #expect(log.steps == ["background", "tasks", "notes", "private words", "done"])
+    }
+
+    /// With nothing of background work to forget, its summaries are not
+    /// said to go, and nothing erased means no "forgotten" tap: the line
+    /// and the tap agree.
+    @Test(.enabled(if: geteuid() != 0, "file permissions don't hold for root"))
+    func theForgottenTapNeedsSomethingErased() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("memory-ro-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let notes = MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
+        _ = try notes.remember("Sam's birthday is May 14.", source: .toldMe)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        let runner = runner(on: false)
+        let memory = MemoryModel(store: notes, place: .onDevice, alsoForget: { throw CocoaError(.fileWriteNoPermission) },
+                                 background: runner, now: { Self.at(9) })
+        #expect(!memory.hasBackgroundToForget)
+        memory.forgetEverything()
+        #expect(memory.status == MemoryWords.couldNotForget)
+        #expect(memory.forgottenCount == 0)
+
+        // With cards to forget, they go, the line says so, and it taps.
+        runner.turnOn(now: Self.at(6))
+        runner.runDue(now: Self.at(7, days: 1), conditions: .foreground)
+        memory.refresh()
+        memory.forgetEverything()
+        #expect(memory.status == MemoryModel.forgotLine(notesGone: false, rest: .some(nil), tasksGone: false,
+                                                        summaries: .erased))
+        #expect(memory.status?.contains(MemoryWords.summariesGone) == true)
+        #expect(memory.forgottenCount == 1)
     }
 
     /// If the summaries' file can't be erased, the line says so rather
@@ -186,14 +260,30 @@ struct BackgroundFeedTests {
             try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
             try? FileManager.default.removeItem(at: folder)
         }
-        let runner = runner(on: true, store: BackgroundStore(fileURL: folder.appendingPathComponent("background.json")))
+        let toggle = InMemoryBackgroundSwitch()
+        let asks = Self.oneWaiting()
+        let runner = BackgroundRunner(store: BackgroundStore(fileURL: folder.appendingPathComponent("background.json")),
+                                      toggle: toggle, needsYou: asks, watchingSince: .distantPast,
+                                      calendar: Self.calendar)
+        runner.turnOn(now: Self.at(6))
+        runner.runDue(now: Self.at(7), conditions: .foreground)
+        #expect(!runner.results.isEmpty)
+        #expect(toggle.nextDue != nil)
+        let proposed = runner.propose(Self.note, conditions: .foreground, at: Self.at(9), act: {})
+        let asked = try #require(proposed)
         #expect(runner.store.hasStoredFile)
         try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
 
         let memory = MemoryModel(store: scratchMemory(), place: .onDevice, background: runner, now: { Self.at(9) })
         #expect(memory.hasSomethingToForget)
         memory.forgetEverything()
+        // Work while you're away is off and its cards are gone either way.
         #expect(!runner.isOn, "off even so")
+        #expect(runner.results.isEmpty)
+        #expect(runner.queue.isEmpty)
+        #expect(toggle.nextDue == nil)
+        #expect(asks.rule.wasWithdrawn(asked), "a yes on a sheet still open does nothing")
+        #expect(!asks.items(now: Self.at(9)).contains { $0.request == asked })
         #expect(memory.status == MemoryWords.couldNotForgetSummaries)
         #expect(memory.hasSomethingToForget, "still there, so it can be tried again")
 
@@ -201,6 +291,46 @@ struct BackgroundFeedTests {
         memory.forgetEverything()
         #expect(memory.status == MemoryWords.forgotten)
         #expect(!memory.hasSomethingToForget)
+        expectNoSummaryFiles(runner.store)
+    }
+
+    /// The summaries go first, and when their file can't be erased every
+    /// later step still runs: the note, the tasks and the private words all
+    /// go, and the line says only the summaries stayed.
+    @Test(.enabled(if: geteuid() != 0, "file permissions don't hold for root"))
+    func aSummaryFileThatCantBeErasedStopsNothingElse() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("background-ro-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let runner = runner(on: true, store: BackgroundStore(fileURL: folder.appendingPathComponent("background.json")))
+        runner.runDue(now: Self.at(7), conditions: .foreground)
+        #expect(runner.store.hasStoredFile)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+
+        let notes = scratchMemory()
+        _ = try notes.remember("Sam's birthday is May 14.", source: .toldMe)
+        let engine = LocalFakeEngine(rule: .isolated())
+        engine.start(SampleTasks.plan)
+        #expect(!engine.tasks.isEmpty)
+        let feed = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: engine.rule), tasks: engine,
+                             place: .onDevice, background: runner, calendar: Self.calendar, now: { Self.at(9) })
+        var wordsForgotten = 0
+        let memory = MemoryModel(store: notes, place: .onDevice,
+                                 alsoForget: { wordsForgotten += 1; return .privateWords },
+                                 background: runner, now: { Self.at(9) },
+                                 onForgetEverything: { feed.forgetEverything() })
+        memory.forgetEverything()
+
+        #expect(runner.store.hasStoredFile, "the summaries' file stayed")
+        #expect(notes.notes().isEmpty, "the note went")
+        #expect(!notes.hasStoredFile)
+        #expect(engine.tasks.isEmpty, "the tasks went")
+        #expect(wordsForgotten == 1, "the private words step ran")
+        #expect(memory.status == MemoryWords.couldNotForgetSummaries)
+        #expect(!runner.isOn)
     }
 
     /// With the private words too, each step runs whatever the others did:
@@ -220,16 +350,18 @@ struct BackgroundFeedTests {
         let runner = runner(on: true)
         runner.runDue(now: Self.at(7, days: 1), conditions: .foreground)
         #expect(!runner.results.isEmpty)
+        try leaveAStagedCopy(runner.store)
         var wordsForgotten = false
         let memory = MemoryModel(store: notes, place: .onDevice,
                                  alsoForget: { wordsForgotten = true; return .privateWords },
                                  background: runner, now: { Self.at(9) })
         memory.forgetEverything()
-        #expect(memory.status == CloudWords.forgotWordsNotNotes + " " + MemoryWords.summariesGone)
+        #expect(memory.status == "Your private words are gone, but I couldn't erase your notes just now. "
+                + MemoryWords.summariesGone + " Please try Forget everything again in a moment.")
         #expect(wordsForgotten)
         #expect(!runner.isOn)
         #expect(runner.results.isEmpty)
-        #expect(!runner.store.hasStoredFile)
+        expectNoSummaryFiles(runner.store)
         #expect(notes.notes().count == 1)
     }
 
@@ -320,7 +452,8 @@ struct BackgroundFeedTests {
         let asks = ShowcaseScene.sampleQuestion(at: morning)
         let runner = ShowcaseScene.sampleBackground(on: true, needsYou: asks, played: true, at: morning)
         #expect(runner.isSample)
-        #expect(runner.results.count == 2)
+        // Only the summary: with no tasks, as in the app, a missed day leaves no card.
+        #expect(runner.results.count == 1)
         let model = FeedModel(sources: [EmptyFeedSource()], needsYou: asks, place: .onDevice, background: runner,
                               now: { morning })
         #expect(model.isSample)
@@ -328,5 +461,31 @@ struct BackgroundFeedTests {
             for item in group.items { #expect(model.isSample(item)) }
         }
     }
+}
+
+/// The steps of Forget everything as they happen, from any thread. The
+/// notes have no hook of their own, so their erase is logged when the next
+/// step finds their file gone.
+final class StepLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private let notes: MemoryStore
+    private var notesThere: Bool
+    private var list: [String] = []
+
+    init(notes: MemoryStore) {
+        self.notes = notes
+        notesThere = notes.hasStoredFile
+    }
+
+    func step(_ name: String) {
+        lock.lock(); defer { lock.unlock() }
+        if notesThere, !notes.hasStoredFile {
+            notesThere = false
+            list.append("notes")
+        }
+        list.append(name)
+    }
+
+    var steps: [String] { lock.lock(); defer { lock.unlock() }; return list }
 }
 #endif

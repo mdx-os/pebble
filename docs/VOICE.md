@@ -183,8 +183,9 @@ scripted task's card says "Example", like every other example.
 
 Background work is off until the person turns it on, from the switch on the
 memory screen, and the line under the switch says what it does and when:
-"in the background when I can, or as soon as you open the app" on iPhone and
-iPad, where the system decides, and "while the app is open" on the Mac. It
+"overnight if you've unlocked since your last restart, and otherwise when you
+open the app" on iPhone and iPad, since the summary's file opens only after
+that first unlock, and "while the app is open" on the Mac. It
 names "what finished overnight" only when there are tasks to count, and says
 "when there's something to tell you", since a quiet morning leaves no card.
 Under it, "I'll look next at 7:00 AM tomorrow." says when it looks, not that
@@ -199,10 +200,12 @@ says why, once: "I waited until you unlocked, so this came later than
 planned." What is waiting is open now, so it is always said when Needs you
 can be seen. A count it couldn't know, because nothing could be counted or the
 app wasn't running for the whole time, is left out, never said as zero. It
-says "overnight" only for one night, and "since Tuesday" for longer. A
-morning that never ran gets its own card that names the day and the reason,
-and promises nothing about the next one; several missed in a row share one
-card that names them all and says only what is true of each. None of these lines
+says "overnight" only for one night, and "since Tuesday" for longer. With
+tasks to count, a morning that never ran gets its own card that names the
+day and the reason, and promises nothing about the next one; several missed
+in a row share one card that names them all and says only what is true of
+each. With no tasks to count, that morning would almost always have been
+quiet, so no card claims a summary was missed. None of these lines
 mention the device: they are about time and power, not where words go.
 The words live in `BackgroundWords`.
 

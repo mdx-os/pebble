@@ -59,21 +59,35 @@ private func scratchStore() -> BackgroundStore {
         .appendingPathComponent("background-\(UUID().uuidString).json"))
 }
 
-/// A file that is there but can't be opened, as while the device is locked:
-/// a folder where the file should be. `saved` is what the file held.
+extension Trait where Self == ConditionTrait {
+    /// Root reads a file at mode 0o000 anyway, so the lock can't be faked.
+    static var fakesALock: Self { .enabled(if: geteuid() != 0, "file permissions don't hold for root") }
+}
+
+/// A file that is there but can't be opened, as before the first unlock: a
+/// regular file at mode 0o000. `saved` is what the file holds, or a few
+/// bytes of its own. A rename can still replace a file like this, so a
+/// runner that wrote while it shouldn't would change its bytes.
 private func lockedStore(saved: BackgroundState? = nil) throws -> (BackgroundStore, unlock: () throws -> Void) {
     let store = scratchStore()
-    var data: Data?
     if let saved {
         try store.save(saved)
-        data = try Data(contentsOf: store.fileURL)
-        try FileManager.default.removeItem(at: store.fileURL)
+    } else {
+        try Data("locked".utf8).write(to: store.fileURL)
     }
-    try FileManager.default.createDirectory(at: store.fileURL, withIntermediateDirectories: true)
+    try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: store.fileURL.path)
+    #expect(!store.canOpen)
     return (store, {
-        try FileManager.default.removeItem(at: store.fileURL)
-        if let data { try data.write(to: store.fileURL) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: store.fileURL.path)
     })
+}
+
+/// The bytes of a locked store's file, read without leaving it unlocked.
+private func lockedBytes(_ store: BackgroundStore) throws -> Data {
+    let path = store.fileURL.path
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+    defer { try? FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: path) }
+    return try Data(contentsOf: store.fileURL)
 }
 
 /// Needs you with one question open, so a summary has something to say:
@@ -390,6 +404,8 @@ struct BackgroundRunnerTests {
         runner.turnOn(now: at(6))
         runner.runDue(now: at(7), conditions: background)
         #expect(!runner.results.isEmpty)
+        // A save cut short leaves its staged copy, which holds the cards too.
+        try Data(contentsOf: store.fileURL).write(to: store.stagingURL)
         let heard = Counter()
         let watch = runner.observe { heard.add() }
         defer { runner.stopObserving(watch) }
@@ -402,6 +418,8 @@ struct BackgroundRunnerTests {
         #expect(runner.results.isEmpty)
         #expect(runner.nextWake(now: at(8)) == nil)
         #expect(!store.hasStoredFile)
+        #expect(!FileManager.default.fileExists(atPath: store.fileURL.path))
+        #expect(!FileManager.default.fileExists(atPath: store.stagingURL.path))
         #expect(heard.value == 1)
         // Nothing left to run, the next morning or ever, until turned on again.
         #expect(runner.runDue(now: at(7, days: 1), conditions: background).isEmpty)
@@ -450,43 +468,100 @@ struct BackgroundRunnerTests {
         #expect(runner.queue.first?.held == nil)
     }
 
-    @Test func aFileThatCantBeOpenedIsNeverWrittenOver() throws {
-        let store = scratchStore()
+    @Test(.fakesALock) func aFileThatCantBeOpenedIsNeverWrittenOver() throws {
+        let (store, unlock) = try lockedStore()
         defer { try? FileManager.default.removeItem(at: store.fileURL) }
-        // A folder where the file should be reads like a file that is locked.
-        try FileManager.default.createDirectory(at: store.fileURL, withIntermediateDirectories: true)
+        let before = try lockedBytes(store)
         #expect(throws: BackgroundStore.Unavailable.self) { try store.load() }
 
         let runner = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(on: true), calendar: calendar)
         #expect(runner.runDue(now: at(7, 1), conditions: background).isEmpty)
         runner.turnOn(now: at(7, 2))
-        var isFolder: ObjCBool = false
-        #expect(FileManager.default.fileExists(atPath: store.fileURL.path, isDirectory: &isFolder) && isFolder.boolValue)
-        #expect(try FileManager.default.contentsOfDirectory(atPath: store.fileURL.path).isEmpty)
-        #expect(runner.hasUnsavedChanges, "kept for later, not written over the file")
+        #expect(try lockedBytes(store) == before, "kept for later, not written over the file")
+        #expect(!FileManager.default.fileExists(atPath: store.stagingURL.path))
+        #expect(runner.hasUnsavedChanges)
+        try unlock()
+        #expect(try Data(contentsOf: store.fileURL) == before)
     }
 
-    @Test func aRunWhileTheFileIsLockedIsRememberedForTheCard() throws {
-        let store = scratchStore()
-        defer { try? FileManager.default.removeItem(at: store.fileURL) }
-        let setUp = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(), calendar: calendar)
+    /// A launch in the night before the first unlock: the hold is kept
+    /// beside the switch, so a new process launched later, as iOS does
+    /// after ending the one that ran the task, still says the run waited.
+    @Test(.fakesALock) func theWaitForTheFirstUnlockOutlivesTheProcess() throws {
+        let suite = "background-switch-test.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let setUp = BackgroundRunner(store: scratchStore(), toggle: UserDefaultsBackgroundSwitch(defaults: defaults),
+                                     calendar: calendar)
         setUp.turnOn(now: at(6))
-        let saved = try Data(contentsOf: store.fileURL)
+        let (store, unlock) = try lockedStore(saved: BackgroundState(queue: setUp.queue))
+        defer { try? FileManager.default.removeItem(at: store.fileURL) }
 
-        // A new launch in the night, with the file locked.
-        try FileManager.default.removeItem(at: store.fileURL)
-        try FileManager.default.createDirectory(at: store.fileURL, withIntermediateDirectories: true)
-        let runner = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(on: true),
-                                      needsYou: oneWaiting(), calendar: calendar)
-        #expect(runner.runDue(now: at(7, 1), conditions: background).isEmpty)
+        let night = BackgroundRunner(store: store, toggle: UserDefaultsBackgroundSwitch(defaults: defaults),
+                                     needsYou: oneWaiting(), watchingSince: .distantPast, calendar: calendar)
+        #expect(night.runDue(now: at(7, 1), conditions: BackgroundConditions(moment: .background, locked: true))
+            .isEmpty)
+        #expect(UserDefaultsBackgroundSwitch(defaults: defaults).heldBeforeLoad
+            == BackgroundHeldRun(hold: .locked, at: at(7, 1)))
+        #expect(night.isHeldBack(now: at(7, 1)), "the system hears the run didn't do its work")
 
-        // Unlocked again.
-        try FileManager.default.removeItem(at: store.fileURL)
-        try saved.write(to: store.fileURL)
-        let made = try #require(runner.runDue(now: at(8), conditions: .foreground).first)
+        // That process ends. A new one starts, and the device is unlocked.
+        let morning = BackgroundRunner(store: store, toggle: UserDefaultsBackgroundSwitch(defaults: defaults),
+                                       needsYou: oneWaiting(), watchingSince: .distantPast, calendar: calendar)
+        try unlock()
+        let made = try #require(morning.runDue(now: at(8), conditions: .foreground).first)
         guard case .morningSummary(let summary) = made.content else { Issue.record("not a summary"); return }
         #expect(summary.late == .locked)
-        #expect(!runner.hasUnsavedChanges)
+        #expect(UserDefaultsBackgroundSwitch(defaults: defaults).heldBeforeLoad == nil, "said once")
+        #expect(!morning.hasUnsavedChanges)
+    }
+
+    /// The hold goes on the job as soon as the file is read, and is written
+    /// there, so a launch that only reads the queue keeps it too.
+    @Test(.fakesALock) func theWaitGoesOnTheJobWhenTheFileIsRead() throws {
+        let toggle = InMemoryBackgroundSwitch(on: true, nextDue: at(7))
+        let (store, unlock) = try lockedStore(saved: BackgroundState(queue: [BackgroundJob(kind: .morningSummary,
+                                                                                            due: at(7))]))
+        defer { try? FileManager.default.removeItem(at: store.fileURL) }
+        let night = BackgroundRunner(store: store, toggle: toggle, calendar: calendar)
+        night.runDue(now: at(7, 1), conditions: BackgroundConditions(moment: .background, locked: true))
+        try unlock()
+        let next = BackgroundRunner(store: store, toggle: toggle, calendar: calendar)
+        #expect(next.queue.first?.held == .locked)
+        #expect(toggle.heldBeforeLoad == nil)
+        #expect(BackgroundRunner(store: store, toggle: toggle, calendar: calendar).queue.first?.held == .locked)
+    }
+
+    /// A file that won't open while the device isn't locked is some other
+    /// trouble, such as a disk error. No lock is claimed for it, then or later.
+    @Test(.fakesALock) func aDiskErrorIsNotALock() throws {
+        let toggle = InMemoryBackgroundSwitch(on: true, nextDue: at(7))
+        let (store, unlock) = try lockedStore(saved: BackgroundState(queue: [BackgroundJob(kind: .morningSummary,
+                                                                                            due: at(7))]))
+        defer { try? FileManager.default.removeItem(at: store.fileURL) }
+        let runner = BackgroundRunner(store: store, toggle: toggle, needsYou: oneWaiting(),
+                                      watchingSince: .distantPast, calendar: calendar)
+        #expect(runner.runDue(now: at(7, 1), conditions: background).isEmpty)
+        #expect(toggle.heldBeforeLoad == nil)
+        #expect(!runner.isHeldBack(now: at(7, 1)))
+
+        try unlock()
+        let made = try #require(runner.runDue(now: at(8), conditions: .foreground).first)
+        guard case .morningSummary(let summary) = made.content else { Issue.record("not a summary"); return }
+        #expect(summary.late == nil, "no reason claimed")
+    }
+
+    /// Held back or out of time, the run didn't do its work; once it ran,
+    /// it did.
+    @Test func aHeldRunIsHeldBackUntilItRuns() {
+        let runner = runner()
+        #expect(!runner.isHeldBack(now: at(6, 30)), "nothing due yet")
+        runner.runDue(now: at(7, 1), conditions: BackgroundConditions(moment: .background, lowPower: true))
+        #expect(runner.isHeldBack(now: at(7, 1)))
+        runner.runDue(now: at(7, 20), conditions: background)
+        #expect(!runner.isHeldBack(now: at(7, 20)))
+        runner.turnOff()
+        #expect(!runner.isHeldBack(now: at(7, 20)))
     }
 
     @Test func lowPowerModeHoldsItBackInTheBackground() throws {
@@ -530,7 +605,7 @@ struct BackgroundRunnerTests {
     /// iOS launches the app for its morning task while the phone is still
     /// locked. The file can't be read, but its queue is still there, so the
     /// runner asks to be woken again soon rather than cancel every ask.
-    @Test func aColdLaunchWhileLockedKeepsAskingForTime() throws {
+    @Test(.fakesALock) func aColdLaunchWhileLockedKeepsAskingForTime() throws {
         let saved = BackgroundState(queue: [BackgroundJob(kind: .morningSummary, due: at(7))])
         let (store, unlock) = try lockedStore(saved: saved)
         defer { try? FileManager.default.removeItem(at: store.fileURL) }
@@ -555,7 +630,7 @@ struct BackgroundRunnerTests {
     /// asks for the due time the switch keeps, not every quarter hour until
     /// unlock. A hold before the job was due held nothing back, so the card
     /// never says it waited; one at or after due does.
-    @Test func aLockedLaunchAsksForTheDueTimeAndOnlyLateHoldsAreSaid() throws {
+    @Test(.fakesALock) func aLockedLaunchAsksForTheDueTimeAndOnlyLateHoldsAreSaid() throws {
         for (holdAt, said) in [(at(2), nil), (at(7), BackgroundHold.locked), (at(7, 5), BackgroundHold.locked)] {
             let saved = BackgroundState(queue: [BackgroundJob(kind: .morningSummary, due: at(7))])
             let (store, unlock) = try lockedStore(saved: saved)
@@ -581,7 +656,7 @@ struct BackgroundRunnerTests {
 
     /// With nothing kept beside the switch, as after an update from a
     /// version that didn't keep it, a locked launch still asks again soon.
-    @Test func aLockedLaunchWithNoKeptTimeStillAsks() throws {
+    @Test(.fakesALock) func aLockedLaunchWithNoKeptTimeStillAsks() throws {
         let (store, _) = try lockedStore(saved: BackgroundState(queue: [BackgroundJob(kind: .morningSummary, due: at(7))]))
         defer { try? FileManager.default.removeItem(at: store.fileURL) }
         let runner = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(on: true), calendar: calendar)
@@ -590,12 +665,14 @@ struct BackgroundRunnerTests {
 
     /// Turned on while locked, the time kept is the sooner of the one
     /// already kept and the new morning, since the file's job keeps its time.
-    @Test func turningOnWhileLockedKeepsTheSoonerTime() throws {
+    @Test(.fakesALock) func turningOnWhileLockedKeepsTheSoonerTime() throws {
         let (store, _) = try lockedStore(saved: BackgroundState(queue: [BackgroundJob(kind: .morningSummary, due: at(7))]))
         defer { try? FileManager.default.removeItem(at: store.fileURL) }
+        let before = try lockedBytes(store)
         let toggle = InMemoryBackgroundSwitch(nextDue: at(7))
         let runner = BackgroundRunner(store: store, toggle: toggle, calendar: calendar)
         runner.turnOn(now: at(9))
+        #expect(try lockedBytes(store) == before, "never written over while it can't be read")
         #expect(toggle.nextDue == at(7))
         runner.turnOff()
         #expect(toggle.nextDue == nil)
@@ -606,7 +683,7 @@ struct BackgroundRunnerTests {
     /// Turned off while the file can't be read, it stays off once it can:
     /// the queue saved in the file doesn't come back, and turning on later
     /// starts fresh, with no stale "couldn't make" card.
-    @Test func turningOffWhileLockedSticks() throws {
+    @Test(.fakesALock) func turningOffWhileLockedSticks() throws {
         let saved = BackgroundState(queue: [BackgroundJob(kind: .morningSummary, due: at(7, days: -2))])
         let (store, unlock) = try lockedStore(saved: saved)
         defer { try? store.forget() }
@@ -627,19 +704,59 @@ struct BackgroundRunnerTests {
         #expect(runner.results.isEmpty)
     }
 
+    /// Forget everything while the file can't be read, with changes held
+    /// in memory to write once it can: none of them is written back after
+    /// it unlocks, however often the runner is asked to run.
+    @Test(.fakesALock) func forgetEverythingWhileLockedWritesNothingBack() throws {
+        let saved = BackgroundState(queue: [BackgroundJob(kind: .morningSummary, due: at(7))])
+        let (store, _) = try lockedStore(saved: saved)
+        defer { try? FileManager.default.removeItem(at: store.fileURL) }
+        let toggle = InMemoryBackgroundSwitch()
+        let runner = BackgroundRunner(store: store, toggle: toggle, needsYou: oneWaiting(),
+                                      watchingSince: .distantPast, calendar: calendar)
+        runner.turnOn(now: at(6))
+        #expect(runner.runDue(now: at(7, 1), conditions: BackgroundConditions(moment: .background, locked: true))
+            .isEmpty)
+        #expect(runner.hasUnsavedChanges, "held in memory for when the file opens")
+
+        try runner.forget()
+        #expect(!runner.hasUnsavedChanges)
+        #expect(!store.hasStoredFile, "erased even while it couldn't be read")
+
+        // Unlocked: the file is gone, so there is nothing to put back, and
+        // the runner has nothing of its own to write.
+        for hour in [8, 9] { runner.runDue(now: at(hour), conditions: .foreground) }
+        #expect(!store.hasStoredFile)
+        #expect(!FileManager.default.fileExists(atPath: store.stagingURL.path))
+        #expect(!runner.hasUnsavedChanges)
+        #expect(runner.queue.isEmpty)
+        #expect(runner.results.isEmpty)
+        #expect(toggle.nextDue == nil)
+        // Turned on from elsewhere, as by another window, it still has
+        // nothing old to write: only the fresh queue goes in the file.
+        toggle.set(true)
+        runner.runDue(now: at(10), conditions: .foreground)
+        #expect(!store.hasStoredFile, "nothing changed, so nothing written")
+        let again = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(on: true), calendar: calendar)
+        #expect(again.queue.isEmpty)
+        #expect(again.results.isEmpty)
+    }
+
     /// Turned on while locked, a job already in the file keeps its time.
-    @Test func turningOnWhileLockedKeepsTheSavedJob() throws {
+    @Test(.fakesALock) func turningOnWhileLockedKeepsTheSavedJob() throws {
         let saved = BackgroundState(queue: [BackgroundJob(kind: .morningSummary, due: at(7), held: .lowPower)])
         let (store, unlock) = try lockedStore(saved: saved)
         defer { try? store.forget() }
+        let before = try lockedBytes(store)
         let runner = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(), calendar: calendar)
         runner.turnOn(now: at(7, 30))
+        #expect(try lockedBytes(store) == before, "never written over while it can't be read")
         try unlock()
         #expect(runner.queue == saved.queue)
     }
 
     @Test func aDayThatEndedSaysItCouldntAndTodayStillRuns() throws {
-        let runner = runner()
+        let runner = runner(tasks: FixedTasks([]))
         let locked = BackgroundConditions(moment: .background, locked: true)
         runner.runDue(now: at(7, 1), conditions: locked)
         runner.runDue(now: at(13), conditions: locked)
@@ -655,7 +772,7 @@ struct BackgroundRunnerTests {
     }
 
     @Test func aMissedDayBeforeTheMorningWaitsForTheMorning() {
-        let runner = runner()
+        let runner = runner(tasks: FixedTasks([]))
         let made = runner.runDue(now: at(5, days: 1), conditions: background)
         #expect(made.count == 1)
         #expect(made.first?.item(calendar: calendar).body == BackgroundWords.missed(nil))
@@ -666,7 +783,7 @@ struct BackgroundRunnerTests {
     /// is true of every one of them.
     @Test func severalMissedDaysAreNamedHonestly() throws {
         let en = Locale(identifier: "en_US")
-        let runner = runner()
+        let runner = runner(tasks: FixedTasks([]))
         let made = runner.runDue(now: at(5, days: 3), conditions: background)
         #expect(made.count == 1)
         let card = try #require(made.first?.item(calendar: calendar, locale: en))
@@ -676,6 +793,27 @@ struct BackgroundRunnerTests {
 
         let long = BackgroundWords.missedTitle(from: at(7), through: at(7, days: 8), calendar: calendar, locale: en)
         #expect(long == "I couldn't make the last 9 summaries")
+    }
+
+    /// With no task engine, as in the app today, a day the app never ran
+    /// would almost always have been quiet, and a quiet morning leaves no
+    /// card. So no card claims a summary was missed. The job still moves
+    /// on to this morning and runs.
+    @Test func withNoTasksAMissedDayLeavesNoCard() throws {
+        let runner = runner(tasks: nil)
+        let locked = BackgroundConditions(moment: .background, locked: true)
+        runner.runDue(now: at(7, 1), conditions: locked)
+
+        #expect(runner.runDue(now: at(5, days: 1), conditions: background).isEmpty)
+        #expect(runner.results.isEmpty)
+        #expect(runner.queue.first?.due == at(7, days: 1))
+        #expect(runner.queue.first?.held == nil)
+
+        let made = runner.runDue(now: at(9, days: 3), conditions: .foreground)
+        #expect(made.count == 1)
+        guard case .morningSummary = made.first?.content else { Issue.record("today's summary didn't run"); return }
+        #expect(!runner.results.contains { if case .missed = $0.content { true } else { false } })
+        #expect(runner.queue.first?.due == at(7, days: 4))
     }
 
     @Test func oldCardsGo() {
@@ -858,7 +996,15 @@ struct BackgroundWordsTests {
                 let line = BackgroundWords.settingDetail(whileClosed: whileClosed, countsTasks: countsTasks)
                 #expect(line.contains("summary"))
                 #expect(line.contains("without asking you first"))
-                #expect(line.contains("as soon as you"), "says when it catches up")
+                if whileClosed {
+                    // Overnight only after the first unlock since a restart,
+                    // when the summary's file opens; otherwise on opening.
+                    #expect(line.contains("overnight if you've unlocked since your last restart"))
+                    #expect(line.contains("otherwise when you open the app"), "says when it catches up")
+                    #expect(!line.contains("when I can"))
+                } else {
+                    #expect(line.contains("as soon as you come back"), "says when it catches up")
+                }
                 // A quiet morning leaves no card, so it never promises one each day.
                 #expect(!line.contains("Each morning"))
                 #expect(line.contains("finished") == countsTasks, "names what finished only with tasks to count")
@@ -885,6 +1031,65 @@ struct BackgroundWordsTests {
         #expect(!project.contains("- processing"), "one refresh task is enough for a short count")
         #expect(BackgroundIdentifiers.refresh(bundleIdentifier: "org.example.app") == "org.example.app.background.refresh")
         #expect(BackgroundIdentifiers.mac(bundleIdentifier: "org.example.app") == "org.example.app.background.mac")
+    }
+
+    /// The summary's file opens once the device has been unlocked since it
+    /// started, so a run in the night can write it. The notes and the
+    /// private words keep the strictest class. On iPhone and iPad each store
+    /// writes its staged copy with these options, and the rename that makes
+    /// it the file keeps the class. Chat isn't kept on disk at all.
+    @Test func eachFileKeepsItsProtectionClass() {
+        #expect(BackgroundStore.fileProtection == .completeUntilFirstUserAuthentication)
+        #expect(MemoryStore.fileProtection == .complete)
+        #expect(CloudHelpFileStore.fileProtection == .complete)
+
+        func protection(_ type: FileProtectionType) -> Data.WritingOptions {
+            Data.WritingOptions.staged(type, protecting: true).intersection(.fileProtectionMask)
+        }
+        #expect(protection(BackgroundStore.fileProtection) == .completeFileProtectionUntilFirstUserAuthentication)
+        #expect(protection(MemoryStore.fileProtection) == .completeFileProtection)
+        #expect(protection(CloudHelpFileStore.fileProtection) == .completeFileProtection)
+        for type in [BackgroundStore.fileProtection, MemoryStore.fileProtection] {
+            #expect(Data.WritingOptions.staged(type, protecting: true).contains(.withoutOverwriting))
+            #expect(Data.WritingOptions.staged(type, protecting: false) == .withoutOverwriting, "the Mac has no classes")
+        }
+    }
+
+    /// A summary made beside notes and private words carries none of their
+    /// text, in its file or on its card, even when the same words sit in a
+    /// question and a task it counts: only counts and times go in.
+    @Test func aSummaryCopiesNothingFromTheNotesOrThePrivateWords() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("summary-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let secrets = ["Marigold clinic", "Zephyrine", "Juniper Lane"]
+        let notes = MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
+        _ = try notes.remember("Appointment at \(secrets[0]) on Friday.", source: .toldMe)
+        let words = CloudHelpFileStore(fileURL: folder.appendingPathComponent("cloud-help.json"))
+        try words.save(CloudHelpSettings(isOn: false, privateWords: [secrets[1], secrets[2]]))
+
+        let rule = AskFirst.isolated()
+        let asks = NeedsYou(rule: rule)
+        _ = asks.ask(ProposedAction(kind: .send,
+                                    recipient: Recipient(id: "c:z", displayName: secrets[1], handle: "z@example.com"),
+                                    details: "Call \(secrets[0]) about \(secrets[2])"), at: at(6, 50))
+        let tasks = FixedTasks([
+            AgentTask(id: "a", title: "Book \(secrets[0])", step: "Asked \(secrets[1])", state: .done,
+                      startedAt: at(1), updatedAt: at(2)),
+        ], rule: rule)
+        let store = BackgroundStore(fileURL: folder.appendingPathComponent("background.json"))
+        let runner = runner(store: store, needsYou: asks, tasks: tasks)
+        let made = try #require(runner.runDue(now: at(7), conditions: background).first)
+
+        let file = try String(contentsOf: store.fileURL, encoding: .utf8)
+        let card = made.item(calendar: calendar, locale: Locale(identifier: "en_US"))
+        let shown = [card.title, card.body, card.action.map { "\($0)" } ?? ""].joined(separator: " ")
+        let pieces = secrets.flatMap { $0.split(separator: " ").map(String.init) }
+        for secret in secrets + pieces {
+            #expect(!file.contains(secret), "\(secret) in the summary's file")
+            #expect(!shown.contains(secret), "\(secret) on the card")
+        }
+        #expect(card.body.contains("One thing was waiting for you."), "it did count them")
     }
 
     /// The showcase's store keeps nothing anywhere, so no launch leaves a file.

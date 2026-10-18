@@ -156,7 +156,10 @@ enum DevicePromise {
                     + "all local files, whatever the model is."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
                 literal: "I forgot the rest and turned off work while you're away, but I couldn't erase your morning summaries just now. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. Please try again in a moment.",
-                reason: privateWordsName),
+                reason: "CloudWords.forgotAndCloudOffNotSummaries, a Forget everything status line. Its only phrase is "
+                    + "\"private words\", the name of the person's list in the cloud setting, which it says went. "
+                    + "The summaries clause says what stayed, BackgroundStore's local file, and promises nothing "
+                    + "about where a chat goes, so it is true with the cloud on or off."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
                 literal: "Your notes are gone, but I couldn't erase your private words just now. Please try Forget everything again in a moment.",
                 reason: privateWordsName),
@@ -401,6 +404,45 @@ struct DevicePromiseTests {
         }
         #expect(DevicePromise.found(in: "only one").isEmpty)
         #expect(!DevicePromise.found(in: "Kept ONLY on this device").isEmpty)
+    }
+
+    /// The Forget everything question is built by a function with one
+    /// branch for background work and one without. Each branch goes
+    /// through the guard on its own: the sweep sees its literal, it has its
+    /// own entry by exact words, and a word added to either one is caught.
+    /// The same for the cloud's two questions and the summaries status lines.
+    @Test func bothForgetEverythingBranchesGoThroughTheGuard() throws {
+        let files = try Self.sources()
+        let lines: [(file: String, line: String)] = [
+            ("PebbleCore/Memory.swift", MemoryWords.forgetEverythingDetail(background: true)),
+            ("PebbleCore/Memory.swift", MemoryWords.forgetEverythingDetail(background: false)),
+            ("PebbleCore/CloudHelp.swift", CloudWords.forgetEverythingDetail),
+            ("PebbleCore/CloudHelp.swift", CloudWords.forgetEverythingWithSummariesDetail),
+            ("PebbleCore/CloudHelp.swift", CloudWords.forgotAndCloudOffNotSummaries),
+        ]
+        #expect(MemoryWords.forgetEverythingDetail(background: true)
+                != MemoryWords.forgetEverythingDetail(background: false))
+        for (name, line) in lines {
+            let file = try #require(files.first { $0.name == name })
+            let source = SwiftSource(file.text)
+            #expect(!DevicePromise.found(in: line).isEmpty, "something for the guard to check: \(line)")
+            let literal = try #require(source.literals.first { $0.text == line }, "the sweep sees: \(line)")
+            #expect(!DevicePromise.isGated(literal, in: source), "passes by its entry, not the flag: \(line)")
+            let entries = DevicePromise.allowed.filter { $0.literal == line }
+            #expect(entries.count == 1 && entries.first?.file == name, "its own entry: \(line)")
+            #expect(entries.first?.reason != DevicePromise.privateWordsName, "its own reason: \(line)")
+            #expect(Self.ungated(in: [file]).isEmpty)
+
+            let quoted = "\"" + line + "\""
+            #expect(file.text.components(separatedBy: quoted).count == 2, "written once: \(line)")
+            let longer = file.text.replacingOccurrences(of: quoted, with: "\"" + line + " It stays private.\"")
+            #expect(Self.ungated(in: [(name, longer)]).count == 1, "a word added is caught: \(line)")
+        }
+        // The summaries status lines that promise nothing need no entry.
+        for line in [MemoryWords.couldNotForgetSummaries, MemoryWords.summariesGone, MemoryWords.summariesStayed] {
+            #expect(DevicePromise.found(in: line).isEmpty, "\(line)")
+            #expect(!DevicePromise.allowed.contains { $0.literal == line })
+        }
     }
 
     /// An allowed line passes only word for word. Anything added to it,

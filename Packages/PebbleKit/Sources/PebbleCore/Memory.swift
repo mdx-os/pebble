@@ -164,6 +164,37 @@ public enum MemoryWords {
     public static let summariesGone = "Your morning summaries are gone, and work while you're away is off."
     /// The same, when the summaries' file couldn't be erased either.
     public static let summariesStayed = "Work while you're away is off, but I couldn't erase your morning summaries either."
+    /// The advice that ends a Forget everything line when something stayed.
+    /// Whatever is said after such a line goes before it, so it comes last.
+    public static let retryAdvice = ["Please try Forget everything again in a moment.", "Please try again in a moment."]
+}
+
+extension Data.WritingOptions {
+    /// How a store writes its staged copy: never over a file already there,
+    /// and on iPhone and iPad with `protection`. The rename that follows
+    /// keeps the class, so the file has it too.
+    package static func staged(_ protection: FileProtectionType) -> Data.WritingOptions {
+        #if os(macOS)
+        staged(protection, protecting: false)
+        #else
+        staged(protection, protecting: true)
+        #endif
+    }
+
+    /// `protecting` is false on the Mac, which keeps no protection classes.
+    package static func staged(_ protection: FileProtectionType, protecting: Bool) -> Data.WritingOptions {
+        guard protecting else { return .withoutOverwriting }
+        switch protection {
+        case .completeUntilFirstUserAuthentication:
+            return [.withoutOverwriting, .completeFileProtectionUntilFirstUserAuthentication]
+        case .completeUnlessOpen:
+            return [.withoutOverwriting, .completeFileProtectionUnlessOpen]
+        case .none:
+            return [.withoutOverwriting, .noFileProtection]
+        default:
+            return [.withoutOverwriting, .completeFileProtection]
+        }
+    }
 }
 
 /// Notes the agent keeps, stored only on this device.
@@ -197,6 +228,10 @@ public final class MemoryStore: @unchecked Sendable {
         case unreadable
         case unavailable
     }
+
+    /// The notes can be opened only while the device is unlocked, on iPhone
+    /// and iPad. The strictest class: nothing that runs while locked reads them.
+    public static let fileProtection: FileProtectionType = .complete
 
     public let fileURL: URL
     private let lock = NSLock()
@@ -362,11 +397,7 @@ public final class MemoryStore: @unchecked Sendable {
         // Stage under one known name, then rename over the real file. The
         // system never makes a copy somewhere this store can't clean up.
         try removeStaged()
-        #if os(macOS)
-        try data.write(to: stagingURL, options: [.withoutOverwriting])
-        #else
-        try data.write(to: stagingURL, options: [.withoutOverwriting, .completeFileProtection])
-        #endif
+        try data.write(to: stagingURL, options: .staged(Self.fileProtection))
         guard rename(stagingURL.path, fileURL.path) == 0 else {
             try? removeStaged()
             throw CocoaError(.fileWriteUnknown)

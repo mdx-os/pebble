@@ -541,7 +541,12 @@ struct CloudPromiseTests {
         let source = try String(contentsOf: Self.sources.appendingPathComponent("PebbleUI/MemoryView.swift"),
                                 encoding: .utf8)
         let dialog = try #require(source.range(of: "private struct ForgetEverythingDialog"))
-        let watching = source[dialog.upperBound...].prefix(1_400)
+        // The struct's own body, up to its closing brace at the start of a
+        // line: the types inside it close indented.
+        let after = source[dialog.upperBound...]
+        let end = try #require(after.range(of: "\n}\n"), "ForgetEverythingDialog's closing brace")
+        let watching = after[..<end.lowerBound]
+        #expect(!watching.contains("\nstruct ") && !watching.contains("\nprivate struct "), "only the one struct")
         #expect(watching.contains("@ObservedObject var help: CloudHelp"))
         #expect(watching.contains("forgetEverythingDetail(for: help, background: background)"))
     }
