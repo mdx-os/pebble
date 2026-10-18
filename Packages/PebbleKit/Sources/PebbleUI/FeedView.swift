@@ -112,13 +112,22 @@ final class FeedModel: ObservableObject {
         }
     }
 
-    var isSample: Bool { sources.contains { $0.isSample } || tasks?.isSample == true }
+    /// True when anything on Today is an example, so the note at the top says so.
+    var isSample: Bool {
+        sources.contains { $0.isSample } || taskIDs.contains { tasks?.isSample($0) == true }
+    }
 
-    /// True when this card came from an example source or a scripted engine.
+    /// True when this card came from an example source, a scripted engine,
+    /// or a recon that read sample sources. Asked per task, so one example
+    /// never makes real work look like one.
     func isSample(_ item: FeedItem) -> Bool {
-        if let tasks, tasks.isSample, taskIDs.contains(item.id) { return true }
+        if let tasks, taskIDs.contains(item.id) { return tasks.isSample(item.id) }
         return sources.contains { $0.isSample && $0.items(now: now()).contains { $0.id == item.id } }
     }
+
+    /// True while a card in Working on it is live, so the scripted clock
+    /// needs to move. Nothing ticks while nothing is going.
+    var ticks: Bool { drivesTasks && !feed.working.isEmpty }
 
     /// The live progress a task's card reads. Ticks change it, never `feed`.
     func liveProgress(_ id: String) -> LiveProgress {
@@ -262,12 +271,20 @@ final class FeedModel: ObservableObject {
 
     /// Starts looking into `topic`, after the person's tap. False when
     /// nothing started, as for words of crisis.
+    ///
+    /// `onDevice` is true when it was asked from a chat that promised to stay
+    /// on this device. That promise holds: the summary is put together here,
+    /// whatever the cloud setting is now.
     @discardableResult
-    func lookInto(_ topic: String) -> Bool {
-        guard let recon, recon.lookInto(topic, with: summarizer()) != nil else { return false }
+    func lookInto(_ topic: String, onDevice: Bool = false) -> Bool {
+        let summarizer: any ReconSummarizer = onDevice ? LocalReconSummarizer() : summarizer()
+        guard let recon, recon.lookInto(topic, with: summarizer) != nil else { return false }
         refresh()
         return true
     }
+
+    /// True while the only pages to read are examples, so the chat's offer says so.
+    var readsExamples: Bool { recon?.provider.isSample == true }
 
     /// The summary a finished recon card shows.
     func summary(for task: AgentTask) -> ReconSummary? {
@@ -411,10 +428,15 @@ final class FeedModel: ObservableObject {
         closeSummaries { _ in true }
         rememberStatus = nil
         askedBy.removeAll()
+        // Asked before clearing: a summary going through the cloud may have
+        // sent what it read already, and that can't be called back.
+        let inCloud = (recon?.summariesMayLeaveDevice ?? 0) > 0
         let cleared = tasks.clear()
         refresh()
         if cleared.forgotten > 0 { tasksForgotten = true }
-        if let line = cleared.underwayLine {
+        let lines = [cleared.underwayLine, inCloud ? ReconWords.forgotWhileInCloud : nil].compactMap { $0 }
+        if !lines.isEmpty {
+            let line = lines.joined(separator: " ")
             forgotUnderway = line
             announce(TaskAnnouncer.Line(text: line, urgent: true))
         }

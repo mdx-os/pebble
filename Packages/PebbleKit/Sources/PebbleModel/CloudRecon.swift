@@ -26,6 +26,8 @@ public struct CloudReconSummarizer: ReconSummarizer {
         self.model = model
     }
 
+    public var mayLeaveDevice: Bool { !model.runsOnDevice }
+
     public func summarize(_ task: ReconTask, id: String, sources: [ReconSource], gatheredAt: Date) async -> ReconSummary {
         let local = LocalReconSummarizer()
         func onDevice(_ note: String?) -> ReconSummary {
@@ -87,23 +89,25 @@ public struct CloudReconSummarizer: ReconSummarizer {
             }
         }
         // Each disagreement goes with the point it shares most sources with,
-        // or stands as its own point, so it is never lost.
+        // or stands as its own point, so it is never lost. The point keeps
+        // only the sources it named; the other side stays in the disagreement.
         for (text, ids) in disagreements {
             let best = points.indices
                 .filter { points[$0].disagreement == nil }
                 .max { Set(points[$0].sourceIDs).intersection(ids).count < Set(points[$1].sourceIDs).intersection(ids).count }
             if let best, !Set(points[best].sourceIDs).isDisjoint(with: ids) {
                 let point = points[best]
-                points[best] = ReconPoint(id: point.id, text: point.text, sourceIDs: point.sourceIDs + ids,
+                points[best] = ReconPoint(id: point.id, text: point.text, sourceIDs: point.sourceIDs,
                                           disagreement: ReconDisagreement(text: text, sourceIDs: ids))
             } else {
                 points.append(ReconPoint(id: "point:\(points.count)", text: text, sourceIDs: ids,
                                          disagreement: ReconDisagreement(text: text, sourceIDs: ids)))
             }
         }
+        // The model's own retelling, so the card says where the words came from.
         let summary = ReconSummary(id: id, topic: task.topic, overview: overview?.0 ?? fallbackOverview,
                                    overviewSourceIDs: overview?.1 ?? [], points: points, sources: sources,
-                                   gatheredAt: gatheredAt, madeOnDevice: false)
+                                   gatheredAt: gatheredAt, madeOnDevice: false, note: ReconWords.wordedInCloud)
         return summary.points.isEmpty ? nil : summary
     }
 

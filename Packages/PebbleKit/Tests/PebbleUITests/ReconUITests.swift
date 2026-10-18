@@ -10,9 +10,12 @@ import Testing
 @MainActor
 final class Starts {
     var topics: [String] = []
+    /// Whether each start was asked from a chat that stays on this device.
+    var onDevice: [Bool] = []
     var answer = true
-    func start(_ topic: String) -> Bool {
+    func start(_ topic: String, onDevice: Bool = true) -> Bool {
         topics.append(topic)
+        self.onDevice.append(onDevice)
         return answer
     }
 }
@@ -25,7 +28,7 @@ struct ReconUITests {
     func chat(starts: Starts?) -> ChatController {
         let controller = ChatController.make(brand: brand, model: LocalStubModel(),
                                              names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil)
-        if let starts { controller.lookInto = { starts.start($0) } }
+        if let starts { controller.lookInto = { starts.start($0, onDevice: $1) } }
         return controller
     }
 
@@ -134,7 +137,7 @@ struct ReconUITests {
 
     func feed(memory: MemoryStore?) -> (FeedModel, LocalFakeEngine, ReconRunner) {
         let engine = LocalFakeEngine(rule: .isolated(), origin: ShowcaseScene.morning)
-        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let runner = ReconRunner(engine: engine, provider: ReconTestData.sources)
         let model = FeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()), tasks: runner,
                               memory: memory, now: { ShowcaseScene.morning })
         return (model, engine, runner)
@@ -328,6 +331,10 @@ struct ReconUITests {
         model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel())) }
         #expect(model.lookInto(SampleSources.poolTopic))
         let id = try #require(runner.tasks.first?.id)
+        // The preview comes only once the card says it is putting it together.
+        #expect(cloud.review.pending == nil)
+        runner.advance(by: 12)
+        #expect(runner.tasks.first?.step == ReconWords.puttingTogether)
         for _ in 0..<500 where cloud.review.pending == nil { try await Task.sleep(for: .milliseconds(10)) }
         #expect(cloud.review.pending != nil)
         let task = try #require(runner.tasks.first)
@@ -365,7 +372,10 @@ struct ReconUITests {
         let spoken = ReconPointRow(point: point, summary: summary).spoken
         #expect(spoken.hasPrefix(point.text))
         #expect(spoken.contains("Sources don't agree on this."))
-        #expect(spoken.hasSuffix("From City of Riverside Parks and Riverside Gazette."))
+        // Only the page that says the point is named as its source. The
+        // Gazette, which says otherwise, is heard in the disagreement.
+        #expect(spoken.hasSuffix("From City of Riverside Parks."))
+        #expect(point.disagreement?.text.contains("Riverside Gazette says November 3.") == true)
     }
 
     @Test func aReconCardHidesChangeCourse() throws {
@@ -378,9 +388,12 @@ struct ReconUITests {
 }
 
 enum ReconTestData {
+    /// The sample pages, read at the showcase's morning.
+    static let sources = SampleSources(now: { ShowcaseScene.morning })
+
     static func pool() throws -> ReconSummary {
         let task = try #require(ReconTask(topic: SampleSources.poolTopic))
-        return LocalReconSummarizer().summary(task, id: "task:1", sources: try SampleSources().sources(for: task),
+        return LocalReconSummarizer().summary(task, id: "task:1", sources: try sources.sources(for: task),
                                               gatheredAt: ShowcaseScene.morning)
     }
 }

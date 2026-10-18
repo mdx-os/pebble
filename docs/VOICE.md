@@ -151,8 +151,14 @@ When the person asks the agent to look into something, the chat offers
 first and starts nothing on its own: "Want me to look into this?" A
 summary says only what its sources say. Every point names where it came
 from, and when sources don't agree, the card says so plainly instead of
-picking a side. It says when it was gathered, so the person knows how
-fresh it is. Saving a point to memory happens only on a tap.
+picking a side. A point names only the sources that say it; the other
+side is named in the disagreement, and a remembered point keeps that
+disagreement with it. It says when it was gathered, so the person knows how
+fresh it is. Saving a point to memory happens only on a tap. While the
+only pages to read are examples, the offer says so. Points the cloud put
+into words say so under the card, since they are a retelling, not quotes.
+Sources that couldn't be read are a failure, said plainly, never "nothing
+found".
 
 ### Confirmations
 

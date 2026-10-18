@@ -24,6 +24,12 @@ public struct ReconSource: Identifiable, Sendable, Equatable {
     public func isOld(at date: Date) -> Bool {
         date.timeIntervalSince(published) > 365 * 86_400
     }
+
+    /// The page to open, only when it is an https address. Any other kind,
+    /// such as a phone number or another app, is never opened from a card.
+    public var link: URL? {
+        url.scheme?.lowercased() == "https" && url.host?.isEmpty == false ? url : nil
+    }
 }
 
 /// One thing the sources say, and which of them say it.
@@ -31,8 +37,11 @@ public struct ReconPoint: Identifiable, Sendable, Equatable {
     public let id: String
     public let text: String
     /// Never empty in a `ReconSummary`: a point without a source is dropped.
+    /// Only the sources that say these words. A source that says otherwise
+    /// is named in `disagreement`, never here.
     public let sourceIDs: [String]
-    /// Set when the sources don't agree on this point.
+    /// Set when the sources don't agree on this point. Its sources are
+    /// every side, this point's included.
     public let disagreement: ReconDisagreement?
 
     public init(id: String, text: String, sourceIDs: [String], disagreement: ReconDisagreement? = nil) {
@@ -78,7 +87,8 @@ public struct ReconSummary: Identifiable, Sendable, Equatable {
     /// True when every word was put together on this device.
     public let madeOnDevice: Bool
     /// A line about how it was made, such as when the person chose not to
-    /// send it to the cloud.
+    /// send it to the cloud. Never nil when it was put into words in the
+    /// cloud, so its points are never taken for the sources' own words.
     public let note: String?
 
     public init(id: String, topic: String, overview: String, overviewSourceIDs: [String] = [],
@@ -90,7 +100,7 @@ public struct ReconSummary: Identifiable, Sendable, Equatable {
         self.sources = sources
         self.gatheredAt = gatheredAt
         self.madeOnDevice = madeOnDevice
-        self.note = note
+        self.note = note ?? (madeOnDevice ? nil : ReconWords.wordedInCloud)
         self.points = Array(points.compactMap { point -> ReconPoint? in
             let ids = Self.unique(point.sourceIDs.filter(known.contains))
             let text = point.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -105,7 +115,7 @@ public struct ReconSummary: Identifiable, Sendable, Equatable {
         // An overview that names sources must name real ones.
         if !overviewSourceIDs.isEmpty && overviewIDs.isEmpty {
             self.overview = ReconWords.overview(topic: topic, sources: sources.count,
-                                                backedTwice: self.points.filter { $0.sourceIDs.count > 1 }.count,
+                                                backedTwice: self.points.filter { $0.sourceIDs.count > 1 && $0.disagreement == nil }.count,
                                                 disagreements: self.points.filter { $0.disagreement != nil }.count,
                                                 old: sources.filter { $0.isOld(at: gatheredAt) }.count)
             self.overviewSourceIDs = []
@@ -127,12 +137,21 @@ public struct ReconSummary: Identifiable, Sendable, Equatable {
     /// Sources more than a year old when they were read.
     public var oldSources: [ReconSource] { sources.filter { $0.isOld(at: gatheredAt) } }
 
-    /// What a point becomes as a memory note: its words and where they came from.
+    /// What a point becomes as a memory note: its words, the sources that
+    /// say them, and, when the sources don't agree, that they don't and what
+    /// each says. A disputed point is never kept as if it were settled.
     public func note(for point: ReconPoint) -> String {
         let from = point.sourceIDs.compactMap(source).map {
             "\($0.publisher), \($0.published.formatted(.dateTime.month(.abbreviated).day().year()))"
         }
-        return ReconWords.memoryNote(point.text, from: from)
+        return ReconWords.memoryNote(point.text, from: from, disagreement: point.disagreement?.text)
+    }
+
+    /// True when every source behind the point was more than a year old
+    /// when it was read.
+    public func restsOnOldPages(_ point: ReconPoint) -> Bool {
+        let behind = point.sourceIDs.compactMap(source)
+        return !behind.isEmpty && behind.allSatisfy { $0.isOld(at: gatheredAt) }
     }
 
     /// The whole summary as plain text, for a reader that shows only text.
@@ -274,16 +293,24 @@ extension SourceProvider {
 
 /// Sample documents kept on this device, for the showcase, tests, and the
 /// app until a real provider is plugged in. Nothing here goes to the network.
+///
+/// Each page is dated a set number of days before it is read, so a page
+/// never looks as if it came from the future, whenever the app runs.
 public struct SampleSources: SourceProvider {
     public static let limit = 4
-    public let documents: [ReconSource]
+    /// When the pages are read. The wall clock, unless a test or the
+    /// showcase holds it still.
+    public let now: @Sendable () -> Date
 
-    public init(documents: [ReconSource] = SampleSources.all) {
-        self.documents = documents
+    public init(now: @escaping @Sendable () -> Date = { Date() }) {
+        self.now = now
     }
 
     public var runsOnDevice: Bool { true }
     public var isSample: Bool { true }
+
+    /// Every page, dated as of now.
+    public var documents: [ReconSource] { Self.documents(readOn: now()) }
 
     public func sources(for task: ReconTask) throws -> [ReconSource] {
         let wanted = ReconText.keywords(task.topic)
@@ -312,52 +339,49 @@ public struct SampleSources: SourceProvider {
         return Calendar(identifier: .gregorian).date(from: parts) ?? Date(timeIntervalSince1970: 0)
     }
 
-    /// Made up documents on domains kept for examples.
-    public static let all: [ReconSource] = [
-        ReconSource(
-            id: "sample:gazette-pool", title: "Riverside Pool reopens after repairs", publisher: "Riverside Gazette",
-            url: URL(string: "https://gazette.example.org/riverside-pool-reopens")!, published: day(2026, 10, 10),
-            text: "The Riverside community pool will reopen on November 3 after six months of roof repairs. The city says the new roof lets in more daylight and keeps the hall warmer in winter. Swim lessons for children restart the same week, and sign up opens online on October 20."
-        ),
-        ReconSource(
-            id: "sample:parks-pool", title: "Pool schedule for the fall season", publisher: "City of Riverside Parks",
-            url: URL(string: "https://parks.example.org/riverside-pool/fall")!, published: day(2026, 10, 14),
-            text: "Riverside Pool reopens on November 10, a week later than first planned, because the final safety check moved. Family swim runs on Saturdays from 9 to noon. Swim lessons for children start in the week of November 10, and sign up opens on October 20."
-        ),
-        ReconSource(
-            id: "sample:parents-pool", title: "What families should know about the Riverside pool", publisher: "Northside Parents",
-            url: URL(string: "https://parents.example.org/riverside-pool-guide")!, published: day(2026, 10, 12),
-            text: "The new changing rooms at the Riverside pool have family stalls and a step free entrance. Parents say the Saturday family swim fills up fast, so arrive early. A day pass costs 6 dollars for adults and 3 dollars for children."
-        ),
-        ReconSource(
-            id: "sample:council-pool", title: "Council approves pool repair budget", publisher: "Riverside Gazette",
-            url: URL(string: "https://gazette.example.org/council-pool-budget")!, published: day(2025, 3, 2),
-            text: "City council approved 2.4 million dollars to repair the Riverside pool roof. Work was expected to take six months."
-        ),
-        ReconSource(
-            id: "sample:gazette-library", title: "Library adds Sunday hours", publisher: "Riverside Gazette",
-            url: URL(string: "https://gazette.example.org/library-sundays")!, published: day(2026, 10, 1),
-            text: "The Riverside Library will open on Sundays from noon to 5, starting in November. Weekday hours stay the same, from 9 to 8. Reading programs for children will run on Sunday afternoons."
-        ),
-        ReconSource(
-            id: "sample:library-hours", title: "Hours and holidays", publisher: "Riverside Public Library",
-            url: URL(string: "https://library.example.org/hours")!, published: day(2026, 10, 3),
-            text: "From November, the library is open on Sundays from noon to 5. The library is closed on November 11 for Remembrance Day. Weekend reading programs for children run on Sunday afternoons."
-        ),
-        ReconSource(
-            id: "sample:school-lunch", title: "November lunch menu", publisher: "Elm Street School",
-            url: URL(string: "https://school.example.org/lunch/november")!, published: day(2026, 10, 15),
-            text: "Pizza day moves to Thursdays in November. Every lunch now comes with fruit."
-        ),
-    ]
+    /// Made up documents on domains kept for examples, each dated `daysOld`
+    /// days before `readOn`. One is more than a year old.
+    public static func documents(readOn: Date) -> [ReconSource] {
+        func page(_ id: String, _ title: String, _ publisher: String, _ url: String, daysOld: Int, _ text: String) -> ReconSource {
+            ReconSource(id: id, title: title, publisher: publisher, url: URL(string: url)!,
+                        published: readOn - TimeInterval(daysOld) * 86_400, text: text)
+        }
+        return [
+            page("sample:gazette-pool", "Riverside Pool reopens after repairs", "Riverside Gazette",
+                 "https://gazette.example.org/riverside-pool-reopens", daysOld: 7,
+                 "The Riverside community pool will reopen on November 3 after six months of roof repairs. The city says the new roof lets in more daylight and keeps the hall warmer in winter. Swim lessons for children restart the same week, and sign up opens online on October 20."),
+            page("sample:parks-pool", "Pool schedule for the fall season", "City of Riverside Parks",
+                 "https://parks.example.org/riverside-pool/fall", daysOld: 3,
+                 "Riverside Pool reopens on November 10, a week later than first planned, because the final safety check moved. Family swim runs on Saturdays from 9 to noon. Swim lessons for children start in the week of November 10, and sign up opens on October 20."),
+            page("sample:parents-pool", "What families should know about the Riverside pool", "Northside Parents",
+                 "https://parents.example.org/riverside-pool-guide", daysOld: 5,
+                 "The new changing rooms at the Riverside pool have family stalls and a step free entrance. Parents say the Saturday family swim fills up fast, so arrive early. A day pass costs 6 dollars for adults and 3 dollars for children."),
+            page("sample:council-pool", "Council approves pool repair budget", "Riverside Gazette",
+                 "https://gazette.example.org/council-pool-budget", daysOld: 594,
+                 "City council approved 2.4 million dollars to repair the Riverside pool roof. Work was expected to take six months."),
+            page("sample:gazette-library", "Library adds Sunday hours", "Riverside Gazette",
+                 "https://gazette.example.org/library-sundays", daysOld: 16,
+                 "The Riverside Library will open on Sundays from noon to 5, starting in November. Weekday hours stay the same, from 9 to 8. Reading programs for children will run on Sunday afternoons."),
+            page("sample:library-hours", "Hours and holidays", "Riverside Public Library",
+                 "https://library.example.org/hours", daysOld: 14,
+                 "From November, the library is open on Sundays from noon to 5. The library is closed on November 11 for Remembrance Day. Weekend reading programs for children run on Sunday afternoons."),
+            page("sample:school-lunch", "November lunch menu", "Elm Street School",
+                 "https://school.example.org/lunch/november", daysOld: 2,
+                 "Pizza day moves to Thursdays in November. Every lunch now comes with fruit."),
+        ]
+    }
 }
 
 /// Words for looking into something: the offer in the chat, the steps on the
 /// card, and the summary.
 public enum ReconWords {
     // The offer in the chat.
-    public static func offer(_ topic: String) -> String {
-        "Want me to look into \(topic)? I'll read a few sources and bring a short summary to Today, with where each point came from."
+    /// `examples` while the only pages there are to read are the sample
+    /// ones, so the offer never promises real sources it doesn't have.
+    public static func offer(_ topic: String, examples: Bool = false) -> String {
+        examples
+            ? "Want me to look into \(topic)? For now I can only read a few example pages kept on this device, so it will be an example, not real news. I'll bring a short summary to Today, with where each point came from."
+            : "Want me to look into \(topic)? I'll read a few sources and bring a short summary to Today, with where each point came from."
     }
     public static let offerYes = "Look into it"
     public static let offerNo = "Not now"
@@ -377,6 +401,8 @@ public enum ReconWords {
     public static let puttingTogether = "Putting it together"
     public static let doneLine = "Here's what I found."
     public static let nothingFoundLine = "I couldn't find anything on this."
+    /// The sources couldn't be read at all. A failure, not an empty result.
+    public static let couldNotRead = "I couldn't read my sources just now, so I have nothing to tell you yet. You can ask me again in a moment."
     public static let planTodo = "plan the questions"
     public static let readTodo = "read the sources"
     public static let datesTodo = "check the dates"
@@ -447,6 +473,12 @@ public enum ReconWords {
     public static let declinedCloud = "You chose not to send it, so I put this together on this device."
     public static let cloudUnreadable = "I couldn't use the answer from the cloud, so I put this together on this device."
     public static let cloudUnavailable = "I couldn't reach the cloud just now, so I put this together on this device."
+    /// Under a summary put into words in the cloud: its points are a
+    /// retelling, not the sources' own words.
+    public static let wordedInCloud = "Put into words in the cloud, from these sources. Open sources to read what each one says."
+    /// Kept on Today after Forget everything, when a summary was being put
+    /// together in the cloud. What may already have gone can't be called back.
+    public static let forgotWhileInCloud = "If I'd already sent sources to the cloud for a summary, that can't be called back. Nothing else was sent."
 
     // The actions.
     public static let openSourcesTitle = "Open sources"
@@ -461,8 +493,11 @@ public enum ReconWords {
     public static let rememberThis = "Remember this"
     public static let remembered = "Remembered"
     public static let pageLinkTitle = "Open the page"
-    public static func memoryNote(_ point: String, from sources: [String]) -> String {
-        sources.isEmpty ? point : "\(point) (\(sources.joined(separator: "; ")))"
+    /// The point, who says it, and any disagreement after it.
+    public static func memoryNote(_ point: String, from sources: [String], disagreement: String? = nil) -> String {
+        let said = sources.isEmpty ? point : "\(point) (\(sources.joined(separator: "; ")))"
+        guard let disagreement else { return said }
+        return "\(said) \(disagreement)"
     }
 
     // A feed card that offers to look into something.
@@ -473,8 +508,11 @@ public enum ReconWords {
 
     /// Every fixed line, for the dash and tone checks.
     public static var all: [String] {
-        [offer("the pool"), offerYes, offerNo, started, offerDeclined, couldNotStart, title("the pool"),
+        [offer("the pool"), offer("the pool", examples: true), offerYes, offerNo, started, offerDeclined,
+         couldNotStart, title("the pool"),
          planning, looking, reading(1), reading(4), checkingDates, puttingTogether, doneLine, nothingFoundLine,
+         couldNotRead, wordedInCloud, forgotWhileInCloud,
+         memoryNote("The pool opens.", from: ["A", "B"], disagreement: "Sources don't agree on this."),
          planTodo, readTodo, datesTodo, summaryTodo, keptQuestions, keptSources(1), keptSources(4), keptSummary,
          overview(topic: "the pool", sources: 4, backedTwice: 2, disagreements: 1, old: 1),
          overview(topic: "the pool", sources: 1, backedTwice: 1, disagreements: 2, old: 2),

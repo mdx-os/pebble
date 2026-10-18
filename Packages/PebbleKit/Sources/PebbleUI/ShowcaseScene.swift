@@ -222,7 +222,8 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     static func sampleRecon(ready: Bool) -> ReconRunner {
         let at: TimeInterval = ready ? 16 : 4
         let engine = LocalFakeEngine(rule: .isolated(), origin: morning - at)
-        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        // Pages dated by the engine's clock, so they read as days old at 9:40.
+        let runner = ReconRunner(engine: engine, provider: SampleSources(now: { [engine] in engine.currentDate }))
         runner.lookInto(SampleSources.poolTopic)
         engine.advance(by: at)
         return runner

@@ -53,6 +53,29 @@ struct CloudReconTests {
         #expect(summary.points.allSatisfy { !$0.sourceIDs.isEmpty })
         #expect(summary.disagreements.count == 1)
         #expect(summary.gatheredAt == readOn)
+        // The cloud's own words, so the card says so.
+        #expect(summary.note == ReconWords.wordedInCloud)
+    }
+
+    /// A point keeps only the sources it named. The disagreement's other
+    /// side is never merged in as backing what it contradicts.
+    @Test func aPointCitesOnlyTheSourcesThatSayIt() async throws {
+        let transport = RecordingTransport(reply: Self.goodReply)
+        let summary = await CloudReconSummarizer(model: cloud(transport, RecordingReviewer(answer: .send)))
+            .summarize(task, id: "task:1", sources: sources, gatheredAt: readOn)
+        #expect(summary.points.map(\.sourceIDs) == [["a"], ["b"], ["b"]])
+        let disputed = try #require(summary.points.first { $0.disagreement != nil })
+        #expect(disputed.disagreement?.sourceIDs == ["a", "b"])
+        #expect(disputed.sourceIDs.count == 1)
+        // Remembering it keeps the disagreement with it.
+        let note = summary.note(for: disputed)
+        #expect(note.contains("They give different reopening dates"))
+    }
+
+    @Test func aChatModelOnTheDeviceNeverMayLeaveIt() {
+        #expect(!CloudReconSummarizer(model: LocalStubModel()).mayLeaveDevice)
+        #expect(CloudReconSummarizer(model: cloud(RecordingTransport(), RecordingReviewer(answer: .send))).mayLeaveDevice)
+        #expect(!LocalReconSummarizer().mayLeaveDevice)
     }
 
     @Test func linesWithoutARealSourceAreDropped() async {
@@ -82,6 +105,7 @@ struct CloudReconTests {
         #expect(transport.sent.isEmpty)
         #expect(summary.madeOnDevice)
         #expect(summary.note == ReconWords.declinedCloud)
+        #expect(summary.note != ReconWords.wordedInCloud)
         #expect(!summary.points.isEmpty)
     }
 

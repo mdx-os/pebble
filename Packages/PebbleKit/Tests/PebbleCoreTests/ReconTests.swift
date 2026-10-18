@@ -4,10 +4,12 @@ import Testing
 
 struct ReconTests {
     static let readOn = SampleSources.day(2026, 10, 17)
+    /// The sample pages, read on `readOn`.
+    static let sources = SampleSources(now: { readOn })
 
     static func summary(_ topic: String) throws -> ReconSummary {
         let task = try #require(ReconTask(topic: topic))
-        let sources = try SampleSources().sources(for: task)
+        let sources = try Self.sources.sources(for: task)
         return LocalReconSummarizer().summary(task, id: "task:1", sources: sources, gatheredAt: readOn)
     }
 
@@ -61,7 +63,7 @@ struct ReconTests {
         #expect(CareCheck.needsCare(said))
         #expect(ReconIntent.topic(in: said) == nil)
         #expect(ReconTask(topic: said) == nil)
-        let runner = ReconRunner(engine: LocalFakeEngine(rule: .isolated()), provider: SampleSources())
+        let runner = ReconRunner(engine: LocalFakeEngine(rule: .isolated()), provider: Self.sources)
         #expect(runner.lookInto(said) == nil)
         #expect(runner.tasks.isEmpty)
     }
@@ -96,7 +98,7 @@ struct ReconTests {
     }
 
     @Test func aPointWithoutARealSourceIsDropped() {
-        let source = SampleSources.all[0]
+        let source = Self.sources.documents[0]
         let summary = ReconSummary(
             id: "t", topic: "the pool", overview: "Some words.",
             points: [
@@ -115,7 +117,7 @@ struct ReconTests {
     }
 
     @Test func anOverviewNamingNoRealSourceIsReplaced() {
-        let source = SampleSources.all[0]
+        let source = Self.sources.documents[0]
         let summary = ReconSummary(id: "t", topic: "the pool", overview: "The pool is shut forever.",
                                    overviewSourceIDs: ["nowhere"],
                                    points: [ReconPoint(id: "a", text: "Real.", sourceIDs: [source.id])],
@@ -126,7 +128,7 @@ struct ReconTests {
 
     @Test func noPointsAtAllWhenNothingWasFound() throws {
         let task = try #require(ReconTask(topic: "volcanoes on Mars"))
-        let sources = try SampleSources().sources(for: task)
+        let sources = try Self.sources.sources(for: task)
         #expect(sources.isEmpty)
         let summary = LocalReconSummarizer().summary(task, id: "t", sources: sources, gatheredAt: Self.readOn)
         #expect(summary.points.isEmpty)
@@ -144,10 +146,44 @@ struct ReconTests {
         #expect(disagreement.text.hasPrefix("Sources don't agree on this."))
         #expect(disagreement.text.contains("City of Riverside Parks says November 10, and theirs is the newer page."))
         #expect(disagreement.text.contains("Riverside Gazette says November 3."))
-        // The point leads with the newer page, and lists both sides.
+        // The point leads with the newer page, and cites only the page that
+        // says it. The other side lives in the disagreement, never as backing.
         #expect(point.text.contains("November 10"))
-        #expect(Set(point.sourceIDs) == Set(disagreement.sourceIDs))
+        #expect(point.sourceIDs == ["sample:parks-pool"])
+        #expect(Set(point.sourceIDs) != Set(disagreement.sourceIDs))
+        #expect(!point.sourceIDs.contains("sample:gazette-pool"))
+        for id in point.sourceIDs {
+            #expect(try #require(summary.source(id)).text.contains(point.text))
+        }
         #expect(summary.overview.contains("They don't agree on one thing, so I marked it."))
+    }
+
+    /// No point, anywhere, cites a source that doesn't say its words.
+    @Test(arguments: [SampleSources.poolTopic, SampleSources.libraryTopic])
+    func everySourceBesideAPointSaysIt(topic: String) throws {
+        let summary = try Self.summary(topic)
+        for point in summary.points where point.disagreement != nil {
+            for id in point.sourceIDs {
+                #expect(try #require(summary.source(id)).text.contains(point.text), "\(id) doesn't say: \(point.text)")
+            }
+        }
+    }
+
+    @Test func aRememberedDisputedPointCarriesTheDisagreement() throws {
+        let summary = try Self.summary(SampleSources.poolTopic)
+        let point = try #require(summary.points.first { $0.disagreement != nil })
+        let note = summary.note(for: point)
+        let disagreement = try #require(point.disagreement)
+        #expect(note.hasPrefix(point.text))
+        #expect(note.contains(disagreement.text))
+        // Who says the point's words, in brackets, names only the page that does.
+        let cited = try #require(note.split(separator: "(").dropFirst().first?.split(separator: ")").first)
+        #expect(cited.contains("City of Riverside Parks"))
+        #expect(!cited.contains("Riverside Gazette"))
+        #expect(note.count <= MemoryStore.maxLength)
+        // An undisputed point is kept as it was.
+        let plain = try #require(summary.points.first { $0.disagreement == nil })
+        #expect(!summary.note(for: plain).contains("don't agree"))
     }
 
     @Test func sourcesThatAgreeShowNoDisagreement() throws {
@@ -185,7 +221,7 @@ struct ReconTests {
     @Test func aReconPlaysItsStepsOnTheEngine() throws {
         let start = Self.readOn
         let engine = LocalFakeEngine(rule: .isolated(), origin: start)
-        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let runner = ReconRunner(engine: engine, provider: Self.sources)
         let id = try #require(runner.lookInto(SampleSources.poolTopic))
         #expect(runner.isRecon(id))
         func shown() throws -> AgentTask { try #require(runner.tasks.first { $0.id == id }) }
@@ -208,12 +244,12 @@ struct ReconTests {
         #expect(summary.gatheredAt == start)
         #expect(try shown().result == summary.plainText)
         // Sample sources make the card an example.
-        #expect(runner.isSample)
+        #expect(runner.isSample(id))
     }
 
     @Test func theCardStaysLiveUntilTheSummaryIsIn() async throws {
         let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
-        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let runner = ReconRunner(engine: engine, provider: Self.sources)
         let gate = Gate()
         let id = try #require(runner.lookInto(SampleSources.poolTopic, with: GatedSummarizer(gate: gate)))
         engine.advance(by: 60)
@@ -231,7 +267,7 @@ struct ReconTests {
 
     @Test func stoppingAReconKeepsNoSummary() async throws {
         let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
-        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let runner = ReconRunner(engine: engine, provider: Self.sources)
         let gate = Gate()
         let id = try #require(runner.lookInto(SampleSources.poolTopic, with: GatedSummarizer(gate: gate)))
         engine.advance(by: 4)
@@ -245,7 +281,7 @@ struct ReconTests {
 
     @Test func aReconCantChangeCourseButOtherTasksCan() throws {
         let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
-        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let runner = ReconRunner(engine: engine, provider: Self.sources)
         let recon = try #require(runner.lookInto(SampleSources.libraryTopic))
         let plan = runner.start(TaskRequest(title: SampleTasks.planTitle))
         #expect(!runner.redirect(recon, with: "Look at the museum instead"))
@@ -255,7 +291,7 @@ struct ReconTests {
 
     @Test func nothingFoundStillEndsWithASourcedCard() throws {
         let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
-        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let runner = ReconRunner(engine: engine, provider: Self.sources)
         let id = try #require(runner.lookInto("volcanoes on Mars"))
         #expect(runner.tasks.first?.step == ReconWords.planning)
         engine.advance(by: 3)
@@ -270,7 +306,7 @@ struct ReconTests {
 
     @Test func stoppingWhileTheSummaryWaitsSaysStoppedNeverDone() async throws {
         let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
-        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let runner = ReconRunner(engine: engine, provider: Self.sources)
         let gate = Gate()
         let id = try #require(runner.lookInto(SampleSources.poolTopic, with: GatedSummarizer(gate: gate)))
         engine.advance(by: 60)
@@ -293,7 +329,7 @@ struct ReconTests {
 
     @Test func dismissingAReconTakesItsSummaryToo() throws {
         let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
-        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let runner = ReconRunner(engine: engine, provider: Self.sources)
         let id = try #require(runner.lookInto(SampleSources.poolTopic))
         #expect(!runner.dismiss(id))
         engine.advance(by: 60)
@@ -307,7 +343,7 @@ struct ReconTests {
     @Test func forgettingEverythingForgetsEveryReconAndCountsWhatWasUnderway() async throws {
         let rule = AskFirst.isolated()
         let engine = LocalFakeEngine(rule: rule, origin: Self.readOn)
-        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let runner = ReconRunner(engine: engine, provider: Self.sources)
         let gate = Gate()
         let done = try #require(runner.lookInto(SampleSources.libraryTopic))
         let waiting = try #require(runner.lookInto(SampleSources.poolTopic, with: GatedSummarizer(gate: gate)))
@@ -339,7 +375,7 @@ struct ReconTests {
     @Test func aStopThroughTheRunnerNeverCallsAYesUndone() throws {
         let rule = AskFirst.isolated()
         let engine = LocalFakeEngine(rule: rule, origin: Self.readOn)
-        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let runner = ReconRunner(engine: engine, provider: Self.sources)
         let id = runner.start(TaskRequest(title: SampleTasks.dentistTitle))
         engine.advance(by: 45)
         let question = try #require(runner.tasks.first?.question)
@@ -353,7 +389,7 @@ struct ReconTests {
 
     @Test func snapshotsAreNumberedInOrder() throws {
         let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
-        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let runner = ReconRunner(engine: engine, provider: Self.sources)
         let numbers = SnapshotNumbers()
         let watch = runner.observe { numbers.add($0.sequence, count: $0.tasks.count) }
         let id = try #require(runner.lookInto(SampleSources.poolTopic))
@@ -368,7 +404,7 @@ struct ReconTests {
 
     @Test func endedReconsAreLetGoWithTheEnginesCap() throws {
         let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
-        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let runner = ReconRunner(engine: engine, provider: Self.sources)
         let first = try #require(runner.lookInto(SampleSources.poolTopic))
         engine.advance(by: 60)
         for _ in 0..<LocalFakeEngine.endedLimit {
@@ -390,8 +426,8 @@ struct ReconTests {
     }
 
     @Test func theSampleSourcesStayOnTheDevice() {
-        #expect(SampleSources().runsOnDevice)
-        for source in SampleSources.all {
+        #expect(Self.sources.runsOnDevice)
+        for source in Self.sources.documents {
             // Domains kept for examples, so nothing real is ever named.
             #expect(source.url.host?.hasSuffix("example.org") == true)
         }
@@ -443,9 +479,16 @@ actor Gate {
 
 struct GatedSummarizer: ReconSummarizer {
     let gate: Gate
+    /// Raised when the work is cancelled while it waits.
+    var onCancel: Flag?
 
     func summarize(_ task: ReconTask, id: String, sources: [ReconSource], gatheredAt: Date) async -> ReconSummary {
-        await gate.wait()
+        let flag = onCancel
+        await withTaskCancellationHandler {
+            await gate.wait()
+        } onCancel: {
+            if let flag { Task { await flag.raise() } }
+        }
         return LocalReconSummarizer().summary(task, id: id, sources: sources, gatheredAt: gatheredAt)
     }
 }
@@ -468,6 +511,6 @@ final class RecordingProvider: SourceProvider, @unchecked Sendable {
 
     func sources(for task: ReconTask) throws -> [ReconSource] {
         lock.lock(); count += 1; lock.unlock()
-        return SampleSources.all
+        return ReconTests.sources.documents
     }
 }

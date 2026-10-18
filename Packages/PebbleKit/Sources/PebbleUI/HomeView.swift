@@ -112,8 +112,11 @@ public struct HomeView: View {
     }
 
     /// Lets a chat offer to look into something. It starts only on the person's tap.
+    /// An on-device chat's recon stays on this device, whatever the cloud
+    /// setting is when the person taps.
     private static func wired(_ chat: ChatController, to feed: FeedModel) -> ChatController {
-        chat.lookInto = { [weak feed] topic in feed?.lookInto(topic) ?? false }
+        chat.lookInto = { [weak feed] topic, onDevice in feed?.lookInto(topic, onDevice: onDevice) ?? false }
+        chat.reconReadsExamples = feed.readsExamples
         return chat
     }
 
@@ -188,7 +191,7 @@ public struct HomeView: View {
             FeedReader(item: item, time: feed.timeLabel(for: item.time), isSample: feed.isSample(item))
         }
         .sheet(item: $feed.readingSources) { summary in
-            ReconSourcesSheet(summary: summary, isSample: feed.recon?.provider.isSample == true)
+            ReconSourcesSheet(summary: summary, isSample: feed.recon?.isSample(summary.id) == true)
         }
         .sheet(item: $feed.choosingPoint) { summary in
             ReconRememberSheet(model: feed, summary: summary)
@@ -196,9 +199,10 @@ public struct HomeView: View {
         // What would leave the device, shown over whichever screen asked:
         // the chat, or Today when a summary is put together in the cloud.
         .cloudPreview(cloud?.review)
-        .task(id: feed.drivesTasks) {
-            // Scripted tasks play in real time, wherever the person is.
-            guard feed.drivesTasks else { return }
+        .task(id: feed.ticks) {
+            // Scripted tasks play in real time, wherever the person is, and
+            // only while one is live. With nothing going, nothing ticks.
+            guard feed.ticks else { return }
             var last = ContinuousClock.now
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .milliseconds(250)) } catch { return }

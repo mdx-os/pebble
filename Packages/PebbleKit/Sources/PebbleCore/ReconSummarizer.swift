@@ -4,6 +4,13 @@ import Foundation
 /// it returns keeps the rule: every point names at least one of `sources`.
 public protocol ReconSummarizer: Sendable {
     func summarize(_ task: ReconTask, id: String, sources: [ReconSource], gatheredAt: Date) async -> ReconSummary
+    /// True when it may send what was read off this device, after the
+    /// person's yes in the preview.
+    var mayLeaveDevice: Bool { get }
+}
+
+extension ReconSummarizer {
+    public var mayLeaveDevice: Bool { false }
 }
 
 /// Puts a summary together on this device, from the sources' own sentences.
@@ -107,8 +114,13 @@ public struct LocalReconSummarizer: ReconSummarizer {
         let disagreement = ReconDisagreement(
             text: ReconWords.disagreement(said, newest: publishers.count > 1 ? newest.source.publisher : nil),
             sourceIDs: sides.map(\.source.id))
+        // The point's words are the newest page's, so only it, and sources
+        // that say the same, stand behind them. The other side is named in
+        // the disagreement, never as backing what it contradicts.
+        let backing = newest.source.id == draft.lead.source.id ? draft.backing : []
+        let agreeing = sides.dropFirst().filter { Self.backs(newest, $0) }
         return ReconPoint(id: "point:\(index)", text: newest.text,
-                          sourceIDs: sides.map(\.source.id) + draft.backing.map(\.source.id),
+                          sourceIDs: [newest.source.id] + (backing + agreeing).map(\.source.id),
                           disagreement: disagreement)
     }
 

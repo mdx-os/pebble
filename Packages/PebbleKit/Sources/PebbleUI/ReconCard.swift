@@ -61,11 +61,14 @@ struct ReconCard: View {
         .accessibilityIdentifier("recon:\(summary.id)")
     }
 
+    /// What VoiceOver reads for the line above the title: example or not,
+    /// that it's ready, and when.
     var spoken: String {
-        [isSample ? FeedWords.exampleTag : "", FeedWords.readyLabel, ReconWords.title(summary.topic), summary.overview, time]
+        [isSample ? FeedWords.exampleTag : "", FeedWords.readyLabel, time]
             .filter { !$0.isEmpty }.joined(separator: ". ")
     }
 
+    /// Only the title is a heading. The overview under it is read as body text.
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -92,18 +95,18 @@ struct ReconCard: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(spoken)
             Text(ReconWords.title(summary.topic))
                 .font(.system(.headline, design: .rounded))
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
             Text(summary.overview)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(spoken)
-        .accessibilityAddTraits(.isHeader)
     }
 
     private var sourcesList: some View {
@@ -205,9 +208,15 @@ struct ReconPointRow: View {
         point.sourceIDs.compactMap(summary.number).map { "[\($0)]" }.joined()
     }
 
+    /// "More than a year old" when every page behind the point is.
+    var oldLabel: String? {
+        summary.restsOnOldPages(point) ? ReconWords.olderLabel : nil
+    }
+
     var spoken: String {
         let from = ReconWords.from(point.sourceIDs.compactMap(summary.source).map(\.publisher))
-        return [point.text, point.disagreement?.text, from].compactMap { $0 }.joined(separator: " ")
+        return [point.text, point.disagreement?.text, from, oldLabel.map { "\($0)." }]
+            .compactMap { $0 }.joined(separator: " ")
     }
 
     var body: some View {
@@ -222,6 +231,12 @@ struct ReconPointRow: View {
                     .font(.subheadline)
                     .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if let oldLabel {
+                Label(oldLabel, systemImage: "clock.arrow.circlepath")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 14)
             }
             if let disagreement = point.disagreement {
                 Label {
@@ -309,13 +324,17 @@ struct ReconSourcesSheet: View {
                                 .font(.body)
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
-                            Link(destination: source.url) {
-                                Label(ReconWords.pageLinkTitle, systemImage: "safari")
-                                    .font(.subheadline.weight(.semibold))
+                            // Only an https page opens. Any other kind of
+                            // address a provider gives is never followed.
+                            if let link = source.link {
+                                Link(destination: link) {
+                                    Label(ReconWords.pageLinkTitle, systemImage: "safari")
+                                        .font(.subheadline.weight(.semibold))
+                                }
+                                .tint(Theme.accent)
+                                .frame(minHeight: 44)
+                                .accessibilityHint(link.host ?? "")
                             }
-                            .tint(Theme.accent)
-                            .frame(minHeight: 44)
-                            .accessibilityHint(source.url.host ?? "")
                         }
                         .padding(16)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -349,6 +368,8 @@ struct ReconRememberSheet: View {
     let summary: ReconSummary
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
+
+    static let title = ReconWords.rememberTitle
 
     var body: some View {
         NavigationStack {
@@ -390,6 +411,11 @@ struct ReconRememberSheet: View {
                 .readableColumn(Theme.readableWidth)
             }
             .background(Backdrop())
+            // So VoiceOver lands on a sheet with a name.
+            .navigationTitle(Self.title)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(FeedWords.doneTitle) { dismiss() }

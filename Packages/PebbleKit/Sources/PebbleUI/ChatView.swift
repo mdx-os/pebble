@@ -433,8 +433,12 @@ final class ChatController: ObservableObject {
     @Published private(set) var reconOffer: ReconOffer?
     /// Starts looking into a topic, after the person taps Look into it.
     /// Returns false when nothing started. Nil means this chat can't start
-    /// one, so it never offers.
-    var lookInto: ((String) -> Bool)?
+    /// one, so it never offers. The second value is true when this chat
+    /// promised to stay on this device, so the recon keeps that promise.
+    var lookInto: ((_ topic: String, _ onDevice: Bool) -> Bool)?
+    /// True while the only pages there are to read are examples, so the
+    /// offer says so rather than promise real sources.
+    var reconReadsExamples = false
     /// The shortest time the thinking dots show, so a quick reply settles
     /// in after a calm beat instead of snapping onto the screen.
     let replyBeat: Duration
@@ -521,7 +525,7 @@ final class ChatController: ObservableObject {
         // an offer, and the offer starts nothing until the person taps it.
         if lookInto != nil, !CareCheck.answersWithCare(conversation.turns),
            let topic = ReconIntent.topic(in: trimmed),
-           let offered = try? conversation.appendingAgent(ReconWords.offer(topic)) {
+           let offered = try? conversation.appendingAgent(ReconWords.offer(topic, examples: reconReadsExamples)) {
             conversation = offered
             reconOffer = ReconOffer(topic: topic, turnID: offered.turns.last?.id)
             return
@@ -575,11 +579,12 @@ final class ChatController: ObservableObject {
         }
     }
 
-    /// The person tapped Look into it. Starts it once, and says so.
+    /// The person tapped Look into it. Starts it once, and says so. A chat
+    /// that said it stays on this device keeps the recon here too.
     func acceptReconOffer() {
         guard let offer = reconOffer else { return }
         reconOffer = nil
-        let started = lookInto?(offer.topic) ?? false
+        let started = lookInto?(offer.topic, model.runsOnDevice) ?? false
         if let next = try? conversation.appendingAgent(started ? ReconWords.started : ReconWords.couldNotStart) {
             conversation = next
         }
