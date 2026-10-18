@@ -15,8 +15,10 @@ in lint, a skill, or CI.
 
 ## Commands
 
-- `make verify`: everything CI runs (brand check, tests, builds, screenshots)
+- `make verify`: everything CI runs (brand and privacy checks, tests, builds, unsigned archives, screenshots)
 - `make test`: package unit tests (Swift Testing)
+- `make archive`: unsigned Release archives for iOS and macOS, checked for App Store Connect. `docs/RELEASE.md` covers signing and upload
+- `make privacy-check`: fails when code uses a required-reason API that `App/Resources/PrivacyInfo.xcprivacy` does not list
 - `make pulse`: fetch the competitor watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
 - `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`
 - `make generate`: regenerate `Pebble.xcodeproj` after editing `project.yml`
@@ -39,6 +41,7 @@ in lint, a skill, or CI.
 - The product name lives only in `Config/Brand.xcconfig`. Code reads it from
   `Brand` and never spells it. `make brand-check` enforces this.
 - Code, modules, bundle IDs and the repo use the codename `pebble`.
+- The version and build number live only in `Config/Version.xcconfig`.
 - Each user may name their own agent. Never confuse the agent's name with a
   person in the user's contacts.
 
@@ -63,7 +66,8 @@ in lint, a skill, or CI.
 ## Never
 
 - Commit secrets, API keys or signing material. The xAI key and signing keys
-  live in CI secrets or the Keychain.
+  live in CI secrets or the Keychain. Team IDs and profiles go only in the
+  ignored `Config/Signing.local.xcconfig`.
 - Run untrusted PR code on a self-hosted runner. PR checks use GitHub's runners.
 - Copy code from MDx without reading it first; MDx carries enterprise
   assumptions and internal names that do not belong here.

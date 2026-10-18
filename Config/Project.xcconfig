@@ -1,0 +1,9 @@
+// Settings every target reads, in Debug and Release. project.yml points
+// both configurations here.
+#include "Brand.xcconfig"
+#include "Version.xcconfig"
+
+// Signing is not in the repo. Whoever signs a build may put their own
+// settings in Config/Signing.local.xcconfig, which git ignores.
+// docs/RELEASE.md says what goes there.
+#include? "Signing.local.xcconfig"

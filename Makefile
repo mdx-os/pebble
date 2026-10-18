@@ -1,9 +1,9 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test repeat-test build screenshots ui-screenshots device-screenshots ui-test brand-check secrets-check pulse clean
+.PHONY: verify generate test repeat-test build archive screenshots ui-screenshots device-screenshots ui-test brand-check privacy-check secrets-check pulse clean
 
 ## verify: everything CI runs. Run this before every PR.
-verify: brand-check test build screenshots
+verify: brand-check privacy-check test build archive screenshots
 
 ## generate: create Pebble.xcodeproj from project.yml (the project file is not committed)
 generate:
@@ -27,6 +27,19 @@ pulse:
 build: generate
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -destination 'platform=macOS,arch=arm64' -derivedDataPath $(DERIVED)
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -destination 'generic/platform=iOS Simulator' -derivedDataPath $(DERIVED) CODE_SIGNING_ALLOWED=NO
+
+## archive: unsigned Release archives for iOS and macOS in build/archives,
+## then a check of what App Store Connect reads. Signing comes later, by
+## whoever uploads; see docs/RELEASE.md.
+archive: generate privacy-check
+	rm -rf build/archives
+	xcodebuild archive -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release \
+		-destination 'generic/platform=iOS' -archivePath build/archives/Pebble-iOS.xcarchive \
+		-derivedDataPath $(DERIVED) CODE_SIGNING_ALLOWED=NO
+	xcodebuild archive -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release \
+		-destination 'generic/platform=macOS' -archivePath build/archives/Pebble-macOS.xcarchive \
+		-derivedDataPath $(DERIVED) CODE_SIGNING_ALLOWED=NO
+	sh scripts/release-check.sh build/archives
 
 ## screenshots: first screen on iPhone, iPad and Mac, written to build/screenshots
 screenshots: generate
@@ -56,6 +69,10 @@ ui-test: generate
 ## brand-check: the product name must live only in Config/Brand.xcconfig
 brand-check:
 	sh scripts/brand-check.sh
+
+## privacy-check: PrivacyInfo.xcprivacy must name every required-reason API the app uses
+privacy-check:
+	sh scripts/privacy-check.sh
 
 ## secrets-check: scan git history for leaked secrets
 secrets-check:

@@ -6,3 +6,11 @@ xcuserdata/
 Packages/*/.build/
 Packages/*/.swiftpm/
 pulse/digest.json
+# Signing stays out of the repo. See docs/RELEASE.md.
+Config/Signing.local.xcconfig
+*.mobileprovision
+*.provisionprofile
+*.p12
+*.p8
+*.cer
+*.certSigningRequest
