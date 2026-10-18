@@ -62,7 +62,7 @@ public struct HomeView: View {
         tasks: (any TaskEngine)? = nil,
         drivesTasks: Bool = false,
         sources: (any SourceProvider)? = nil,
-        now: @escaping @Sendable () -> Date = { Date() },
+        now: @escaping @Sendable () -> Date = HomeView.wallClock,
         cloud: CloudHelp? = nil
     ) {
         screen = HomeScreen(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
@@ -70,6 +70,10 @@ public struct HomeView: View {
                             needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
                             sources: Self.reconSources(sources, now: now), now: now, cloud: cloud, chatLine: nil)
     }
+
+    /// The screen's clock when none is given, as in the app: the wall clock,
+    /// so a recon says when it was really gathered.
+    static let wallClock: @Sendable () -> Date = { Date() }
 
     /// Where looking into something reads, as the home screen gets it.
     /// Without one given, the sample pages, dated by the screen's own
@@ -182,7 +186,9 @@ public struct HomeView: View {
         // the next one, as it does for chats. A summary put together in the
         // cloud asks through Today's own preview gate.
         let review = feed.cloudReview
-        feed.summarizer = { ReconSummarizers.choose(for: cloud?.chatModel(local: model, review: review) ?? model) }
+        feed.summarizer = {
+            ReconSummarizers.choose(for: cloud?.chatModel(local: model, review: review, madeOnSend: true) ?? model)
+        }
         if let cloud { feed.follow(cloudSettings: cloud.$settings.eraseToAnyPublisher()) }
         return feed
     }
@@ -194,9 +200,8 @@ public struct HomeView: View {
     /// rather than an offer whose tap could only fail.
     static func wired(_ chat: ChatController, to feed: FeedModel) -> ChatController {
         chat.lookInto = feed.canLookInto
-            ? { [weak feed] topic, onDevice in feed?.lookInto(topic, onDevice: onDevice) ?? false }
+            ? { [weak feed] topic, onDevice in feed?.start(lookingInto: topic, onDevice: onDevice) ?? .couldNotStart }
             : nil
-        chat.alreadyOn = { [weak feed] topic, onDevice in feed?.alreadyLine(for: topic, onDevice: onDevice) }
         chat.reconReadsExamples = feed.readsExamples
         return chat
     }
@@ -447,8 +452,10 @@ struct HomeScreen: View {
         // What a summary put together in the cloud would send, the same
         // way, from Today's own gate. Whichever preview came first shows
         // first; the other waits, unsent, for it to close.
+        // It says it is for Today's summary, and of what, since it can come
+        // up over the chat or the notes long after the tap that asked.
         .cloudPreview(feed.cloudReview, blocked: cover.anySheetOpen || cover.questionOpen || previewTurn.todayWaits,
-                      waiting: $todayPreviewWaiting)
+                      waiting: $todayPreviewWaiting, purpose: CloudPreviewSheet.todayPurpose)
         .onChange(of: todayPreviewWaiting) { _, waiting in
             var turn = previewTurn
             turn.todayChanged(to: waiting)

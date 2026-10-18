@@ -58,7 +58,7 @@ struct ReconFeedTests {
         #expect(model.readsExamples)
         let controller = ChatController.make(brand: brand, model: LocalStubModel(),
                                              names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil)
-        controller.lookInto = { _, _ in true }
+        controller.lookInto = { _, _ in .started }
         controller.reconReadsExamples = model.readsExamples
         controller.submit("look into the Riverside pool reopening")
         let line = controller.conversation.turns.last?.text ?? ""
@@ -530,9 +530,11 @@ struct ReconFeedTests {
         #expect(model.lookInto(SampleSources.libraryTopic))
         inner.advance(by: 30)
         let task = try #require(runner.tasks.first)
+        // A fresh snapshot, so nothing is held from before.
+        model.refresh()
         let before = engine.reads
         for _ in 0..<10 { #expect(model.summary(for: task) != nil) }
-        #expect(engine.reads - before <= 1)
+        #expect(engine.reads - before == 1)
         // A new snapshot asks again, so a dismissed card has no summary.
         model.dismiss(task)
         #expect(model.summary(for: task) == nil)
@@ -560,8 +562,10 @@ struct ReconFeedTests {
         let gate = Gate()
         let mark = ThreadMark()
         model.summarizer = { HeldSummarizer(gate: gate, mark: mark) }
-        var heardOnMain: [Bool] = []
-        model.announce = { _ in heardOnMain.append(Thread.isMainThread) }
+        // Plain, not tied to the main actor, so a line said off it is noted
+        // rather than stopping the run.
+        let heard = ThreadLog()
+        model.announce = { _ in heard.note() }
         #expect(model.lookInto(SampleSources.libraryTopic))
         engine.advance(by: 30)
         let id = try #require(runner.tasks.first?.id)
@@ -576,8 +580,8 @@ struct ReconFeedTests {
             break
         }
         #expect(model.summary(for: try #require(runner.tasks.first)) != nil)
-        #expect(!heardOnMain.isEmpty)
-        #expect(heardOnMain.allSatisfy { $0 })
+        #expect(!heard.onMain.isEmpty)
+        #expect(heard.onMain.allSatisfy { $0 })
     }
 
     /// A summarizer that comes back on a background queue, as a cloud reply
@@ -834,7 +838,8 @@ struct ReconFeedTests {
         model.forgetTasks()
         // Gone with its sheet, not on a later turn.
         #expect(review.pending == nil)
-        #expect(model.forgotUnderway == ReconWords.forgotWhileInCloud)
+        // No yes was given, so nothing may have gone: no line says it might.
+        #expect(model.forgotUnderway == nil)
         review.answer(.send, for: preview.id)
         // The summary's work has returned, so a late Send had every chance.
         await runner.settleEverything()
@@ -847,6 +852,33 @@ struct ReconFeedTests {
         #expect(runner.summary(for: id) == nil)
         #expect(runner.summariesMayLeaveDevice == 0)
         #expect(!model.feed.groups.flatMap(\.items).contains { $0.id == id })
+    }
+
+    /// The other side: Send was tapped and the request is on its way when
+    /// everything is forgotten. That may have gone, so Today says it may,
+    /// and never that it was sent.
+    @Test func forgettingAfterTheYesSaysTheSourcesMayHaveGone() async throws {
+        let wire = HeldWire(reply: "POINT: The pool reopens on November 10. [2]")
+        let notes = ShowcaseScene.emptyMemory()
+        defer { discard(notes) }
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+                              memory: notes, transport: { URLSessionCloudTransport(load: wire.load) })
+        let (model, engine, runner) = feed()
+        let review = model.cloudReview
+        model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel(), review: review)) }
+        #expect(model.lookInto(SampleSources.poolTopic))
+        engine.advance(by: 12)
+        let preview = await review.shown()
+        review.answer(.send, for: preview.id)
+        await eventually { wire.sentCount == 1 }
+        #expect(wire.sentCount == 1)
+        model.forgetTasks()
+        #expect(model.forgotUnderway == ReconWords.forgotWhileInCloud)
+        #expect(ReconWords.forgotWhileInCloud.contains("may"))
+        #expect(!ReconWords.forgotWhileInCloud.localizedCaseInsensitiveContains("sent"))
+        await wire.gate.open()
+        await runner.settleEverything()
+        #expect(runner.tasks.isEmpty)
     }
 
     // MARK: Taps heard
@@ -875,7 +907,7 @@ struct ReconFeedTests {
         for (accept, line) in [(true, ReconWords.started), (false, ReconWords.offerDeclined)] {
             let controller = ChatController.make(brand: brand, model: LocalStubModel(),
                                                  names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil)
-            controller.lookInto = { _, _ in true }
+            controller.lookInto = { _, _ in .started }
             controller.submit("research quiet dishwashers")
             #expect(ChatView.replyLanded(in: controller, covered: false) == ReconWords.offer("quiet dishwashers"))
             if accept { controller.acceptReconOffer() } else { controller.declineReconOffer() }
@@ -885,7 +917,7 @@ struct ReconFeedTests {
         // A start that couldn't happen is heard too.
         let refused = ChatController.make(brand: brand, model: LocalStubModel(),
                                           names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil)
-        refused.lookInto = { _, _ in false }
+        refused.lookInto = { _, _ in .couldNotStart }
         refused.submit("look into the bus strike")
         refused.acceptReconOffer()
         #expect(ChatView.arrival(for: refused, covered: false) == .reply(ReconWords.couldNotStart))
@@ -897,22 +929,28 @@ struct ReconFeedTests {
     @Test func theOffersButtonsAreFoundAndSayWhatTheyDo() throws {
         #expect(ReconOfferButtons.arrivalFocus == .yes)
         let offer = ReconWords.offer("the pool")
-        #expect(ReconOfferButtons.focusOnceRead(afterFinishing: offer, question: offer) == .yes)
-        #expect(ReconOfferButtons.focusOnceRead(afterFinishing: FirstConversation.thinking, question: offer) == nil)
-        #expect(ReconOfferButtons.focusOnceRead(afterFinishing: nil, question: offer) == nil)
-        #expect(ReconOfferButtons.focusOnceRead(afterFinishing: offer, question: nil) == nil)
+        func focus(_ finished: String?, _ question: String?, read: Bool? = true) -> ReconOfferButtons.Choice? {
+            ReconOfferButtons.focusOnceRead(afterFinishing: finished, question: question, wasSuccessful: read)
+        }
+        #expect(focus(offer, offer) == .yes)
+        #expect(focus(FirstConversation.thinking, offer) == nil)
+        #expect(focus(nil, offer) == nil)
+        #expect(focus(offer, nil) == nil)
         // Read with something before it, or with other spacing, it still
         // counts once the whole question is done. Part of it never does.
-        #expect(ReconOfferButtons.focusOnceRead(afterFinishing: "Pip. " + offer, question: offer) == .yes)
-        #expect(ReconOfferButtons.focusOnceRead(afterFinishing: offer.replacingOccurrences(of: " ", with: "  ") + "\n",
-                                                question: offer) == .yes)
-        #expect(ReconOfferButtons.focusOnceRead(afterFinishing: String(offer.prefix(20)), question: offer) == nil)
-        #expect(ReconOfferButtons.focusOnceRead(afterFinishing: offer, question: "  ") == nil)
+        #expect(focus("Pip. " + offer, offer) == .yes)
+        #expect(focus(offer.replacingOccurrences(of: " ", with: "  ") + "\n", offer) == .yes)
+        #expect(focus(String(offer.prefix(20)), offer) == nil)
+        #expect(focus(offer, "  ") == nil)
+        // Cut off before the end, as when the person swiped on, or with no
+        // word on how it went: focus stays where the person left it.
+        #expect(focus(offer, offer, read: false) == nil)
+        #expect(focus(offer, offer, read: nil) == nil)
         // What the chat announces for an offer is the offer's own line, the
         // one the buttons wait for.
         let controller = ChatController.make(brand: brand, model: LocalStubModel(),
                                              names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil)
-        controller.lookInto = { _, _ in true }
+        controller.lookInto = { _, _ in .started }
         controller.submit("look into the pool")
         let question = try #require(controller.reconOffer.flatMap { offer in
             controller.conversation.turns.first { $0.id == offer.turnID }?.text
@@ -920,7 +958,7 @@ struct ReconFeedTests {
         #expect(question == controller.conversation.turns.last?.text)
         let announced = ChatView.replyLanded(in: controller, covered: false)
         #expect(announced == question)
-        #expect(ReconOfferButtons.focusOnceRead(afterFinishing: announced, question: question) == .yes)
+        #expect(focus(announced, question) == .yes)
         #expect(ImageRenderer(content: ReconOfferButtons(question: offer, onYes: {}, onNo: {}).frame(width: 393)).cgImage != nil)
         #expect(ReconOfferButtons.hint(.no) == "Nothing starts.")
         #expect(ReconOfferButtons.hint(.yes) == ReconWords.offerYesHint)
@@ -970,8 +1008,10 @@ struct ReconFeedTests {
         let runner = played.runner
         let model = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: runner, place: .onDevice,
                               memory: memory, now: { [morning] in morning })
+        // The cloud's own words name the publisher in full. They may: they
+        // are marked as the cloud's. What the note adds must not.
         model.summarizer = { CloudWorded(reply: """
-            POINT: The Gazette reports the pool reopens on November 3. [1]
+            POINT: City of Riverside Parks says the pool reopens on November 10. [1]
             POINT: Family swim is on Saturday mornings. [2]
             """) }
         #expect(model.lookInto(SampleSources.poolTopic))
@@ -984,9 +1024,11 @@ struct ReconFeedTests {
         let publisher = try #require(point.sourceIDs.first.flatMap(summary.source)?.publisher)
         #expect(model.remember(point, in: summary))
         let note = try #require(memory.notes().first)
-        #expect(note.text.hasPrefix(point.text))
-        #expect(note.text.contains("(put into words in the cloud, from the sources it was given)"))
-        #expect(!note.text.contains(publisher))
+        #expect(point.text.contains(publisher))
+        // Word for word: the cloud's line, then that it was the cloud's, and
+        // no credit to any publisher beside it.
+        #expect(note.text == "\(point.text) (put into words in the cloud, from the sources it was given)")
+        #expect(note.text.components(separatedBy: publisher).count == 2)
         #expect(note.source == .lookedUp(""))
         #expect(note.source.label == "From something I looked into")
         #expect(!note.source.label.contains(publisher))
@@ -1063,6 +1105,322 @@ struct ReconFeedTests {
         model.choosingPoint = nil
         model.choosingPoint = summary
         #expect(model.isRemembered(point, in: summary))
+    }
+
+    // MARK: Today with the cloud on, as the home screen makes it
+
+    /// Today as the home screen makes it, with the cloud on, reading `pages`.
+    func cloudToday(reading pages: any SourceProvider = ReconTestData.sources,
+                    transport: @escaping @Sendable () -> any CloudTransport,
+                    notes: MemoryStore) -> (FeedModel, ReconRunner, CloudHelp) {
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+                              memory: notes, transport: transport)
+        let model = HomeView.reconFeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()),
+                                            tasks: nil, drivesTasks: false, reading: pages, place: .mayLeaveDevice,
+                                            memory: notes, model: LocalStubModel(), cloud: cloud,
+                                            now: { [morning] in morning })
+        return (model, model.recon!, cloud)
+    }
+
+    /// Words no line after a yes may use: it was neither taken away
+    /// unanswered nor turned down.
+    func neverSaysNoOneSaidYes(_ line: String?, _ comment: Comment? = nil) {
+        #expect(line != ReconWords.cloudWithdrawn, comment)
+        #expect(line != ReconWords.declinedCloud, comment)
+        for word in ["chose", "declined"] { #expect(line?.contains(word) != true, comment) }
+    }
+
+    /// Send was tapped on Today's preview, then the cloud was off by the
+    /// time the request would go. The card says so with the yes path's
+    /// line, never that nothing was asked or that the person chose.
+    @Test func aYesThenTheCloudOffOnTodaySaysItWasOffByThen() async throws {
+        let maker = TransportMaker()
+        let notes = ShowcaseScene.emptyMemory()
+        defer { discard(notes) }
+        let (model, runner, cloud) = cloudToday(transport: { maker.make() }, notes: notes)
+        #expect(model.lookInto(SampleSources.poolTopic))
+        let id = try #require(runner.tasks.first?.id)
+        runner.advance(by: 12)
+        let preview = await model.cloudReview.shown()
+        // In one turn of the main actor, before the request goes on.
+        model.cloudReview.answer(.send, for: preview.id)
+        _ = cloud.setOn(false)
+        await runner.settle(id)
+        runner.advance(by: 30)
+        let summary = try #require(runner.summary(for: id))
+        #expect(summary.madeOnDevice)
+        #expect(summary.note == ReconWords.cloudOff)
+        neverSaysNoOneSaidYes(summary.note)
+        #expect(maker.wire.sent.isEmpty)
+        #expect(maker.made == 0)
+    }
+
+    /// Send was tapped, then Stop before the request went. The card says
+    /// it was stopped, keeps nothing, and nothing is sent after the Stop.
+    @Test func aYesThenAStopOnTodaySendsNothingAndSaysStopped() async throws {
+        let maker = TransportMaker()
+        let notes = ShowcaseScene.emptyMemory()
+        defer { discard(notes) }
+        let (model, runner, _) = cloudToday(transport: { maker.make() }, notes: notes)
+        #expect(model.lookInto(SampleSources.poolTopic))
+        let id = try #require(runner.tasks.first?.id)
+        runner.advance(by: 12)
+        let preview = await model.cloudReview.shown()
+        model.cloudReview.answer(.send, for: preview.id)
+        model.stop(try #require(runner.tasks.first { $0.id == id }))
+        await runner.settleEverything()
+        let card = try #require(runner.tasks.first { $0.id == id })
+        #expect(card.state == .stopped)
+        #expect(card.step == TaskWords.stopped)
+        #expect(runner.summary(for: id) == nil)
+        neverSaysNoOneSaidYes(card.step)
+        #expect(maker.wire.sent.isEmpty)
+    }
+
+    /// Stop comes first, and a Send lands on the preview after it, before
+    /// the sheet has gone. Nothing is ever sent: a send never starts after
+    /// Stop.
+    @Test func aStopThenAYesOnTodaySendsNothing() async throws {
+        let maker = TransportMaker()
+        let notes = ShowcaseScene.emptyMemory()
+        defer { discard(notes) }
+        let (model, runner, _) = cloudToday(transport: { maker.make() }, notes: notes)
+        #expect(model.lookInto(SampleSources.poolTopic))
+        let id = try #require(runner.tasks.first?.id)
+        runner.advance(by: 12)
+        let preview = await model.cloudReview.shown()
+        model.stop(try #require(runner.tasks.first { $0.id == id }))
+        model.cloudReview.answer(.send, for: preview.id)
+        await runner.settleEverything()
+        #expect(maker.wire.sent.isEmpty)
+        #expect(maker.made == 0)
+        #expect(runner.tasks.first { $0.id == id }?.state == .stopped)
+        #expect(runner.summary(for: id) == nil)
+    }
+
+    /// The other order: Send, the request leaves, and Stop comes while it
+    /// is on its way. It may have arrived, so the card says only that it
+    /// was stopped, keeps nothing, and makes no claim that nothing went.
+    @Test func aStopWhileTodaysSendIsOnItsWayKeepsNothing() async throws {
+        let wire = HeldWire(reply: "POINT: The pool reopens on November 10. [2]")
+        let notes = ShowcaseScene.emptyMemory()
+        defer { discard(notes) }
+        let (model, runner, _) = cloudToday(transport: { URLSessionCloudTransport(load: wire.load) }, notes: notes)
+        #expect(model.lookInto(SampleSources.poolTopic))
+        let id = try #require(runner.tasks.first?.id)
+        runner.advance(by: 12)
+        let preview = await model.cloudReview.shown()
+        model.cloudReview.answer(.send, for: preview.id)
+        await eventually { wire.sentCount == 1 }
+        model.stop(try #require(runner.tasks.first { $0.id == id }))
+        await wire.gate.open()
+        await runner.settleEverything()
+        #expect(wire.sentCount == 1)
+        let card = try #require(runner.tasks.first { $0.id == id })
+        #expect(card.state == .stopped)
+        #expect(runner.summary(for: id) == nil)
+        #expect(!card.step.contains("Nothing went"))
+    }
+
+    /// Pages that touch on hard things, with the cloud on: no preview ever
+    /// shows, nothing is made or sent, and the card says why. The control,
+    /// the same pages without those words, does reach a preview, so this
+    /// passes for the reason it says and not because the cloud is broken.
+    @Test func hardWordsInThePagesNeverReachThePreview() async throws {
+        let maker = TransportMaker()
+        let notes = ShowcaseScene.emptyMemory()
+        defer { discard(notes) }
+        func page(_ text: String) -> ReconSource {
+            ReconSource(id: "test:safety", title: "Riverside pool reopening", publisher: "Riverside Gazette",
+                        url: URL(string: "https://gazette.example.org/safety")!, published: morning - 86_400,
+                        text: text)
+        }
+        let calm = "The Riverside pool reopens on November 10. Family swim at the pool runs on Saturdays."
+        let provider = CountingProvider(now: { [morning] in morning })
+        provider.give([page("A sign by the Riverside pool lists a suicide prevention line. " + calm)])
+        let (model, runner, _) = cloudToday(reading: provider, transport: { maker.make() }, notes: notes)
+        #expect(model.lookInto(SampleSources.poolTopic))
+        let id = try #require(runner.tasks.first?.id)
+        var sawPreview = false
+        runner.advance(by: 12)
+        let deadline = ContinuousClock.now + eventuallyLimit
+        while runner.summary(for: id) == nil, ContinuousClock.now < deadline {
+            if model.cloudReview.pending != nil { sawPreview = true }
+            try await Task.sleep(for: .milliseconds(5))
+            runner.advance(by: 1)
+        }
+        await runner.settleEverything()
+        #expect(!sawPreview)
+        #expect(model.cloudReview.pending == nil)
+        #expect(maker.made == 0)
+        #expect(maker.wire.sent.isEmpty)
+        let summary = try #require(runner.summary(for: id))
+        #expect(summary.madeOnDevice)
+        #expect(summary.note == ReconWords.keptForCare)
+
+        // The control: the same pages without those words reach a preview.
+        let calmProvider = CountingProvider(now: { [morning] in morning })
+        calmProvider.give([page(calm)])
+        let (control, controlRunner, _) = cloudToday(reading: calmProvider, transport: { maker.make() }, notes: notes)
+        #expect(control.lookInto(SampleSources.poolTopic))
+        let controlID = try #require(controlRunner.tasks.first?.id)
+        controlRunner.advance(by: 12)
+        _ = await control.cloudReview.shown()
+        #expect(control.cloudReview.pending != nil)
+        // A transport is made only for a send, so this one made none either.
+        #expect(maker.made == 0)
+        control.cloudReview.cancelPending()
+        await controlRunner.settle(controlID)
+        #expect(maker.wire.sent.isEmpty)
+    }
+
+    /// Today's preview can come up over the chat or the notes, so it says
+    /// what it is for: a summary, for Today, and of what, as it is sent.
+    /// The topic itself is masked, there and in the bytes that go.
+    @Test func todaysPreviewSaysWhatItIsForAndMasksTheTopic() async throws {
+        let maker = TransportMaker()
+        let notes = ShowcaseScene.emptyMemory()
+        defer { discard(notes) }
+        _ = try notes.remember("Swim lessons with Priya on Tuesdays.", source: .toldMe)
+        let (model, runner, _) = cloudToday(transport: { maker.make() }, notes: notes)
+        #expect(model.lookInto("Priya's swim lessons at the Riverside pool"))
+        let id = try #require(runner.tasks.first?.id)
+        runner.advance(by: 12)
+        let preview = await model.cloudReview.shown()
+        let purpose = CloudPreviewSheet.todayPurpose(preview)
+        #expect(purpose == ReconWords.previewForSummary("[name]'s swim lessons at the Riverside pool"))
+        #expect(purpose.contains("Today"))
+        #expect(!purpose.contains("Priya"))
+        #expect(!preview.request.text.contains("Priya"))
+        #expect(preview.request.text.contains("Please look into [name]'s swim lessons"))
+        let sheet = CloudPreviewSheet(preview: preview, purpose: purpose, onSend: {}, onCancel: {})
+        #expect(ImageRenderer(content: sheet.frame(width: 393, height: 900)).cgImage != nil)
+        model.cloudReview.answer(.send, for: preview.id)
+        await runner.settle(id)
+        #expect(maker.wire.sent.count == 1)
+        #expect(maker.wire.sentText.allSatisfy { !$0.contains("Priya") })
+        // A chat's own preview gets no such line.
+        #expect(ReconWords.previewForSummary(nil) == "This is for a summary on Today, not for a chat.")
+    }
+
+    /// Today started one with the cloud on, and the cloud went off before
+    /// its summary step. An on-device chat asking for it still hears that
+    /// it may be put into words in the cloud: the setting is read again
+    /// when the summary is put together, so it could be on again by then,
+    /// and "may" stays true. Nothing goes while it is off.
+    @Test func anOnDeviceChatHearsTheCautiousLineAfterTheCloudWentOff() async throws {
+        let maker = TransportMaker()
+        let notes = ShowcaseScene.emptyMemory()
+        defer { discard(notes) }
+        let (model, runner, cloud) = cloudToday(transport: { maker.make() }, notes: notes)
+        let card = try #require(model.feed.groups.flatMap(\.items).first { $0.id == "sample:pool" })
+        model.perform(card) { _ in }
+        let id = try #require(runner.tasks.first?.id)
+        _ = cloud.setOn(false)
+        let chat = HomeView.wired(ChatController.make(brand: brand, model: LocalStubModel(),
+                                                      names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil,
+                                                      replyBeat: .zero), to: model)
+        chat.submit("look into the Riverside pool reopening")
+        chat.acceptReconOffer()
+        #expect(chat.conversation.turns.last?.text == ReconWords.alreadyOnWithCloud)
+        #expect(ReconWords.alreadyOnWithCloud.contains("may"))
+        runner.advance(by: 30)
+        await runner.settle(id)
+        #expect(runner.summary(for: id)?.note == ReconWords.cloudOff)
+        #expect(maker.wire.sent.isEmpty)
+    }
+
+    // MARK: The production clock
+
+    /// The clock the app gives the home screen when none is passed: the
+    /// wall clock, so a recon says when it was really gathered.
+    @Test func theAppsDefaultClockGathersAtTheWallTime() throws {
+        let model = HomeView.reconFeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: nil,
+                                            drivesTasks: false, reading: ReconTestData.sources, place: .onDevice,
+                                            memory: nil, model: LocalStubModel(), cloud: nil, now: HomeView.wallClock)
+        let runner = try #require(model.recon)
+        let before = Date()
+        #expect(model.lookInto(SampleSources.poolTopic))
+        model.tick(30)
+        let after = Date()
+        let summary = try #require(runner.tasks.first.flatMap { runner.summary(for: $0.id) })
+        #expect(summary.gatheredAt >= before)
+        #expect(summary.gatheredAt <= after)
+    }
+
+    // MARK: Memory refuses an example by itself
+
+    /// The store's own refusal, with no feed in front of it: a looked up
+    /// note without its summary, or with an example's, is never kept.
+    @Test func theStoreAloneRefusesAnExamplesPoint() throws {
+        let memory = ShowcaseScene.emptyMemory()
+        defer { discard(memory) }
+        let pool = try ReconTestData.pool()
+        #expect(pool.isSample)
+        for point in pool.points {
+            #expect(pool.note(for: point) == nil)
+            #expect(pool.memorySource(for: point) == nil)
+            #expect(try memory.remember(point, from: pool) == .notKept)
+            #expect(try memory.remember(point.text, source: .lookedUp("Riverside Gazette")) == .notKept)
+        }
+        #expect(try memory.remember("The pool reopens on November 10.", source: .lookedUp("")) == .notKept)
+        #expect(memory.notes().isEmpty)
+        // The control: the same point from real pages is kept.
+        let real = try ReconTestData.realPool()
+        guard case .saved = try memory.remember(try #require(real.points.first), from: real) else {
+            Issue.record("a real point was not kept")
+            return
+        }
+    }
+
+    // MARK: Examples on screen
+
+    /// An example's pages are made up, so their Open the page never shows,
+    /// on any example, and a real page's does.
+    @Test func anExamplesPagesNeverOpen() throws {
+        let pool = try ReconTestData.pool()
+        for source in pool.sources {
+            #expect(source.link != nil)
+            #expect(ReconSourcesSheet(summary: pool).link(for: source) == nil)
+        }
+        let real = try ReconTestData.realPool()
+        #expect(real.sources.allSatisfy { ReconSourcesSheet(summary: real).link(for: $0) != nil })
+        #expect(real.sources.allSatisfy { ReconSourcesSheet(summary: real, isSample: true).link(for: $0) == nil })
+    }
+
+    /// Every sample card on Today says it is an example, the swim lessons
+    /// card above all, since it says something about the person. So it is
+    /// when Today can't start one and it asks in the chat instead.
+    @Test func everySampleCardSaysItIsAnExample() {
+        for recon in [ReconRunner(engine: LocalFakeEngine(rule: .isolated(), origin: morning), provider: ReconTestData.sources),
+                      ReconRunner(engine: OwnStepsEngine(), provider: ReconTestData.sources)] {
+            let model = FeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()), tasks: recon,
+                                  place: .onDevice, now: { [morning] in morning })
+            let items = model.feed.groups.flatMap(\.items).filter { $0.id.hasPrefix("sample:") }
+            #expect(items.contains { $0.id == "sample:pool" })
+            for item in items {
+                #expect(model.isSample(item), "\(item.id)")
+                let card = FeedCard(item: item, time: "", isSample: model.isSample(item)) {}
+                #expect(card.spoken.hasPrefix(FeedWords.exampleMarker), "\(item.id)")
+            }
+        }
+    }
+
+    /// The card's Look into it names Today, not "here", so it stays true
+    /// wherever it is heard.
+    @Test func lookIntoItsHintNamesToday() {
+        #expect(ReconWords.lookIntoHint.contains("Today"))
+        #expect(!ReconWords.lookIntoHint.contains("here"))
+    }
+
+    /// A summary with no words in its overview shows no blank line under
+    /// the title for VoiceOver to land on.
+    @Test func aBlankOverviewShowsNoLine() throws {
+        let pool = try ReconTestData.pool()
+        #expect(ReconCard(summary: pool, time: "", gathered: "").shownOverview == pool.overview)
+        let blank = ReconSummary(id: pool.id, topic: pool.topic, overview: "  ", points: pool.points,
+                                 sources: pool.sources, gatheredAt: pool.gatheredAt, madeOnDevice: true)
+        #expect(ReconCard(summary: blank, time: "", gathered: "").shownOverview == nil)
     }
 }
 

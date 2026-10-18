@@ -74,8 +74,9 @@ struct CopyDashTests {
             pool.overview, library.overview, cloud.overview, pool.plainText, cloud.plainText,
             ReconWords.overview(topic: topic, sources: 3, backedTwice: 0, disagreements: 2, old: 3),
             ReconWords.disputedBy(pool.sources.map(\.publisher)),
-            ReconWords.gathered(now, now: now), ReconWords.gathered(now - 86_400, now: now),
-            ReconWords.gathered(now - 9 * 86_400, now: now), ReconWords.gathered(now - 400 * 86_400, now: now),
+            // The cloud's cut dispute, which names no side.
+            ReconWords.disputedBy([]), ReconWords.pointTooLong,
+            ReconWords.previewForSummary(topic), ReconWords.previewForSummary(nil),
             ReconWords.reading(2), ReconWords.reading(12), ReconWords.keptSources(2), ReconWords.keptSources(12),
             ReconWords.followUpDraft(topic), ReconWords.askLine(topic), ReconWords.nothingFound(topic),
             ReconWords.morePoints(3), ReconWords.from(pool.sources.map(\.publisher)),
@@ -88,6 +89,18 @@ struct CopyDashTests {
         lines += pool.points.flatMap { [pool.note(for: $0), cloud.note(for: $0), $0.text].compactMap { $0 } }
         lines += pool.disagreements.map(\.text)
         lines += (pool.points + cloud.points).compactMap { pool.memorySource(for: $0)?.label }
+        // The gathered line in the time style of a few places, since a
+        // locale's own style could bring a dash in. The app reads the
+        // person's own locale, so these stand in for what it may be.
+        for identifier in ["en_US", "en_GB", "fr_FR", "ja_JP"] {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.locale = Locale(identifier: identifier)
+            let locale = Locale(identifier: identifier)
+            let dates: [Date] = [now, now - 86_400, now - 9 * 86_400, now - 400 * 86_400]
+            for date in dates {
+                lines.append(ReconWords.gathered(date, now: now, calendar: calendar, locale: locale))
+            }
+        }
         for line in lines {
             #expect(!line.contains(where: Self.dashes.contains), "dash in: \(line)")
         }

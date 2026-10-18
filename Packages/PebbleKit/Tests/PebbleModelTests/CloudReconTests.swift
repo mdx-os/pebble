@@ -3,6 +3,9 @@ import PebbleCore
 import PebbleModel
 import Testing
 
+/// A limit for the whole suite: `HeldYes` and `HeldTransport` park their
+/// callers, so a change that never resumes them fails rather than hangs CI.
+@Suite(.timeLimit(.minutes(1)))
 struct CloudReconTests {
     let endpoint = URL(string: "https://cloud.example.com")!
     let notes = [MemoryNote(text: "Swim lessons with Priya on Tuesdays.", source: .toldMe)]
@@ -292,10 +295,88 @@ struct CloudReconTests {
         work.cancel()
         reviewer.sayYes()
         let summary = await work.value
+        // Stop came before the yes, so nothing was sent, ever: a send never
+        // starts after Stop.
+        #expect(transport.sent.isEmpty)
         #expect(summary.note == ReconWords.cloudStopped)
         #expect(summary.note != ReconWords.cloudWithdrawn)
         #expect(summary.note?.contains("Nothing went") != true)
         #expect(summary.note != ReconWords.declinedCloud)
+    }
+
+    /// The other order: Send, the request leaves, and Stop comes while it
+    /// is on its way. It may have arrived, so the line never says nothing
+    /// went, and it doesn't say anyone chose.
+    @Test func aStopWhileTheSendIsOnItsWaySaysItWasStopped() async {
+        let transport = HeldTransport(reply: Self.goodReply)
+        let notes = notes
+        let model = CloudModel(endpoint: endpoint, transport: transport, reviewer: RecordingReviewer(answer: .send),
+                               redactor: { Redactor(memory: notes, privateWords: []) })
+        let task = task, sources = sources, readOn = readOn
+        let work = Task { await CloudReconSummarizer(model: model).summarize(task, id: "task:1", sources: sources, gatheredAt: readOn) }
+        await transport.sending()
+        work.cancel()
+        let summary = await work.value
+        #expect(transport.sentCount == 1)
+        #expect(summary.madeOnDevice)
+        #expect(summary.note == ReconWords.cloudStopped)
+        #expect(summary.note != ReconWords.cloudWithdrawn)
+        for word in ["chose", "declined", "Nothing went"] {
+            #expect(summary.note?.contains(word) != true, "says: \(word)")
+        }
+    }
+
+    /// Both lines for a yes that couldn't be used, word for word, so a
+    /// change to either is a choice someone made.
+    @Test func theYesPathLinesAreTheseExactly() {
+        #expect(ReconWords.cloudOff == "Help from the cloud was off by then, so I put this together without it.")
+        #expect(ReconWords.cloudStopped
+                == "It was stopped before an answer came back, so I put this together without the cloud.")
+        for line in [ReconWords.cloudOff, ReconWords.cloudStopped] {
+            #expect(line != ReconWords.cloudWithdrawn)
+            #expect(!line.contains("chose") && !line.contains("declined") && !line.contains("Nothing went"))
+        }
+    }
+
+    /// A reply that dresses its labels as a list or in bold is still read,
+    /// and the marks never reach the card.
+    @Test func aDecoratedLabelIsStillRead() throws {
+        let summary = try #require(parsed("""
+            **SUMMARY:** The pool reopens in November. [1][2]
+            - POINT: The pool reopens on November 10. [2]
+            * **POINT:** Family swim is on Saturdays. [2]
+            • POINT: Lessons start the same week. [1]
+            **DISAGREE:** The Gazette says November 3 and the city says November 10. [1][2]
+            - POINTS: Not a label. [1]
+            """))
+        #expect(summary.points.map(\.text).contains("Family swim is on Saturdays."))
+        #expect(summary.points.map(\.text).contains("Lessons start the same week."))
+        #expect(summary.disagreements.count == 1)
+        #expect(!summary.points.contains { $0.text.contains("*") || $0.text.hasPrefix("-") || $0.text.contains("Not a label") })
+    }
+
+    /// The topic a summary's request asks about is read back from what was
+    /// sent, so Today's preview can say what it is for.
+    @Test func theTopicIsReadBackFromTheRequest() async throws {
+        let reviewer = RecordingReviewer(answer: .cancel)
+        let asked = try #require(ReconTask(topic: "Priya's lemon cake order"))
+        _ = await CloudReconSummarizer(model: cloud(RecordingTransport(), reviewer))
+            .summarize(asked, id: "task:1", sources: sources, gatheredAt: readOn)
+        let request = try #require(reviewer.seen.first).request
+        // As it was sent: masked.
+        #expect(CloudReconSummarizer.topic(asked: request) == "[name]'s [private] order")
+        // A chat's own message is no summary.
+        let chat = try CloudModel.preview(for: [ChatTurn(id: UUID(), speaker: .person, text: "Plan my week.")],
+                                          endpoint: endpoint, redactor: Redactor())
+        #expect(CloudReconSummarizer.topic(asked: chat.request) == nil)
+    }
+
+    /// The overview of a summary worded in the cloud is never blank: the
+    /// plain one stands in, so the card never shows an empty line.
+    @Test func aCloudSummaryAlwaysHasAnOverview() throws {
+        let summary = try #require(parsed("POINT: Family swim is on Saturdays. [2]"))
+        #expect(!summary.overview.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(summary.overview == "I read 2 sources on the Riverside pool reopening.")
     }
 
     // MARK: The topic is the person's own words
@@ -389,6 +470,40 @@ final class SwitchingReviewer: CloudReviewing, @unchecked Sendable {
         lock.withLock { count += 1 }
         power.turnOff()
         return .send
+    }
+}
+
+/// Takes the request, then holds the answer until the work is cancelled,
+/// as a send cut short on its way would be. Never touches the network.
+final class HeldTransport: CloudTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    private var watcher: CheckedContinuation<Void, Never>?
+    let reply: String
+    init(reply: String) { self.reply = reply }
+    var sentCount: Int { lock.withLock { count } }
+
+    func send(_ request: CloudRequest) async throws -> Data {
+        let waiting: CheckedContinuation<Void, Never>? = lock.withLock {
+            count += 1
+            defer { watcher = nil }
+            return watcher
+        }
+        waiting?.resume()
+        while !Task.isCancelled { try? await Task.sleep(for: .milliseconds(5)) }
+        throw CancellationError()
+    }
+
+    /// Waits until a request has been handed over.
+    func sending() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let now = lock.withLock { () -> Bool in
+                if count > 0 { return true }
+                watcher = continuation
+                return false
+            }
+            if now { continuation.resume() }
+        }
     }
 }
 

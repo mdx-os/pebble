@@ -71,7 +71,7 @@ public struct CloudReconSummarizer: ReconSummarizer {
     /// What is sent, before redaction. The person sees it, redacted, in the preview.
     public static func prompt(for task: ReconTask, sources: [ReconSource]) -> String {
         var parts = [
-            "Please look into \(task.topic) using only the sources below, and answer in plain words.",
+            "\(askOpening)\(task.topic)\(askClosing), and answer in plain words.",
             "Write one line that starts with SUMMARY:, then three to five lines that start with POINT:. If the sources don't agree, add a line that starts with DISAGREE: that says how. End every line with the numbers of the sources it comes from, like [1][3]. Leave out anything the sources don't say.",
         ]
         let formatter = DateFormatter()
@@ -147,15 +147,33 @@ public struct CloudReconSummarizer: ReconSummarizer {
 
     /// The label and the words after it. Only the label itself followed by
     /// a colon counts, so "POINTS:" or "DISAGREEMENT:" never leave "S:" or
-    /// "MENT:" on the card.
+    /// "MENT:" on the card. A list mark or bold before it, as in
+    /// "- POINT:" or "**POINT:**", is set aside, so a reply dressed up that
+    /// way is still read.
     private static func label(_ line: String) -> (String, String)? {
-        let upper = line.uppercased()
+        let bare = String(line.drop { "-*•_# ".contains($0) })
+        let upper = bare.uppercased()
         for kind in ["SUMMARY", "POINT", "DISAGREE"] where upper.hasPrefix(kind + ":") {
-            let rest = line.dropFirst(kind.count + 1).drop { $0 == " " }
+            let rest = bare.dropFirst(kind.count + 1).drop { "*_ ".contains($0) }
             return (kind, String(rest))
         }
         return nil
     }
+
+    /// The topic a request asks about, as it was sent, so the preview can
+    /// say what it is for. Nil for a request that isn't a summary's.
+    public static func topic(asked request: CloudRequest) -> String? {
+        guard let payload = try? JSONDecoder().decode(CloudPayload.self, from: request.body),
+              let first = payload.messages.first(where: { $0.role == "person" })?.text,
+              first.hasPrefix(askOpening) else { return nil }
+        let rest = first.dropFirst(askOpening.count)
+        guard let end = rest.range(of: askClosing) else { return nil }
+        let topic = rest[..<end.lowerBound].trimmingCharacters(in: .whitespaces)
+        return topic.isEmpty ? nil : topic
+    }
+
+    private static let askOpening = "Please look into "
+    private static let askClosing = " using only the sources below"
 
     private static let ref = try! NSRegularExpression(pattern: #"\[(\d{1,2})\]"#)
 

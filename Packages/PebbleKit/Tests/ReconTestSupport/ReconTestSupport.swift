@@ -15,8 +15,11 @@ public final class ReplayEngine: ScriptedTaskEngine, @unchecked Sendable {
     private var sequence = 0
     private var made = 0
     private var stopHook: (@Sendable (String) -> Void)?
+    /// Counts ids from the start again after `clear`, as an engine may, so
+    /// a newer task can have the id an older one had.
+    private let reusesIDs: Bool
 
-    public init() {}
+    public init(reusesIDs: Bool = false) { self.reusesIDs = reusesIDs }
 
     /// Called inside `stop`, after the engine has given its answer and
     /// before `stop` returns, so a test can land something in the middle.
@@ -90,6 +93,7 @@ public final class ReplayEngine: ScriptedTaskEngine, @unchecked Sendable {
         change {
             let count = list.count
             list.removeAll()
+            if reusesIDs { made = 0 }
             return ClearedTasks(forgotten: count)
         }
     }

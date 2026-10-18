@@ -15,10 +15,10 @@ final class Starts {
     /// Whether each start was asked from a chat that stays on this device.
     var onDevice: [Bool] = []
     var answer = true
-    func start(_ topic: String, onDevice: Bool = true) -> Bool {
+    func start(_ topic: String, onDevice: Bool = true) -> ReconTap {
         topics.append(topic)
         self.onDevice.append(onDevice)
-        return answer
+        return answer ? .started : .couldNotStart
     }
 }
 
@@ -151,10 +151,10 @@ struct ReconUITests {
 
     /// Today over an engine and pages that aren't examples, so its points
     /// may be kept. Move it on through the scripted engine underneath.
-    func realFeed(memory: MemoryStore?) -> (FeedModel, LocalFakeEngine, ReconRunner) {
+    func realFeed(memory: MemoryStore?) throws -> (FeedModel, LocalFakeEngine, ReconRunner) {
         let played = realRecon(at: ShowcaseScene.morning)
         let runner = played.runner
-        let engine = (runner.engine as! PlainEngine).inner
+        let engine = try #require(runner.engine as? PlainEngine).inner
         let model = FeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()), tasks: runner,
                               place: .onDevice, memory: memory, now: { ShowcaseScene.morning })
         return (model, engine, runner)
@@ -342,7 +342,7 @@ struct ReconUITests {
     @Test func aPointIsRememberedOnlyOnTap() throws {
         let memory = scratchMemory()
         defer { discard(memory) }
-        let (model, engine, runner) = realFeed(memory: memory)
+        let (model, engine, runner) = try realFeed(memory: memory)
         #expect(model.lookInto(SampleSources.poolTopic))
         engine.advance(by: 30)
         let id = try #require(runner.tasks.first?.id)
@@ -368,7 +368,7 @@ struct ReconUITests {
     }
 
     @Test func rememberingWithNoMemorySaysSoKindly() throws {
-        let (model, engine, runner) = realFeed(memory: nil)
+        let (model, engine, runner) = try realFeed(memory: nil)
         #expect(model.lookInto(SampleSources.poolTopic))
         engine.advance(by: 30)
         let summary = try #require(runner.tasks.first.flatMap { runner.summary(for: $0.id) })
@@ -379,7 +379,7 @@ struct ReconUITests {
     @Test func forgetEverythingTakesEveryReconAndClosesItsSheets() throws {
         let memory = scratchMemory()
         defer { discard(memory) }
-        let (model, engine, runner) = realFeed(memory: memory)
+        let (model, engine, runner) = try realFeed(memory: memory)
         #expect(model.lookInto(SampleSources.poolTopic))
         engine.advance(by: 30)
         let id = try #require(runner.tasks.first?.id)
@@ -410,7 +410,7 @@ struct ReconUITests {
     @Test func aKeptPointStaysInTheNotesUntilTheyAreForgotten() throws {
         let memory = scratchMemory()
         defer { discard(memory) }
-        let (model, engine, runner) = realFeed(memory: memory)
+        let (model, engine, runner) = try realFeed(memory: memory)
         #expect(model.lookInto(SampleSources.poolTopic))
         engine.advance(by: 30)
         let summary = try #require(runner.tasks.first.flatMap { runner.summary(for: $0.id) })
@@ -434,7 +434,7 @@ struct ReconUITests {
     func forgetEverythingErasesAKeptPointAndStopsARunningRecon() async throws {
         let memory = scratchMemory()
         defer { discard(memory) }
-        let (model, engine, runner) = realFeed(memory: memory)
+        let (model, engine, runner) = try realFeed(memory: memory)
         #expect(model.lookInto(SampleSources.poolTopic))
         engine.advance(by: 30)
         let summary = try #require(runner.tasks.first.flatMap { runner.summary(for: $0.id) })
@@ -464,14 +464,19 @@ struct ReconUITests {
     }
 
     @Test func dismissingAReadyCardClosesItsSheets() throws {
-        let (model, engine, runner) = feed(memory: nil)
+        // Real pages, so the choice of points opens at all.
+        let (model, engine, runner) = try realFeed(memory: nil)
         #expect(model.lookInto(SampleSources.libraryTopic))
         engine.advance(by: 30)
         let task = try #require(runner.tasks.first)
         let summary = try #require(model.summary(for: task))
         model.readingSources = summary
+        model.choosingPoint = summary
+        #expect(model.choosingPoint != nil)
         model.dismiss(task)
         #expect(model.readingSources == nil)
+        // A dismissed recon's points can't stay keepable on screen.
+        #expect(model.choosingPoint == nil)
         #expect(runner.tasks.isEmpty)
         #expect(!model.hasTasks)
     }

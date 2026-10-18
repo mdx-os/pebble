@@ -459,16 +459,13 @@ final class ChatController: ObservableObject {
     @Published private(set) var sentCount = 0
     /// An offer to look into something, waiting for the person's tap.
     @Published private(set) var reconOffer: ReconOffer?
-    /// Starts looking into a topic, after the person taps Look into it.
-    /// Returns false when nothing started. Nil means this chat can't start
-    /// one, so it never offers. The second value is true when this chat
-    /// promised to stay on this device, so the recon keeps that promise.
-    var lookInto: ((_ topic: String, _ onDevice: Bool) -> Bool)?
-    /// What to say when a recon on this topic is already going or ready on
-    /// Today, so a tap on Look into it starts nothing more and says so. Nil
-    /// when nothing is. The second value is true for a chat that stays on
-    /// this device, as for `lookInto`.
-    var alreadyOn: ((_ topic: String, _ onDevice: Bool) -> String?)?
+    /// Starts looking into a topic, after the person taps Look into it, and
+    /// says what came of it: started, one already going or ready on Today
+    /// (with the line to say), or nothing could start. Nil means this chat
+    /// can't start one, so it never offers. The second value is true when
+    /// this chat promised to stay on this device, so the recon keeps that
+    /// promise, and a line about one already going says if it may not.
+    var lookInto: ((_ topic: String, _ onDevice: Bool) -> ReconTap)?
     /// True while the only pages there are to read are examples, so the
     /// offer says so rather than promise real sources.
     var reconReadsExamples = false
@@ -659,12 +656,11 @@ final class ChatController: ObservableObject {
     func acceptReconOffer() {
         guard let offer = reconOffer else { return }
         reconOffer = nil
-        if let line = alreadyOn?(offer.topic, model.runsOnDevice) {
-            say(line)
-            return
+        switch lookInto?(offer.topic, model.runsOnDevice) ?? .couldNotStart {
+        case .started: say(ReconWords.started)
+        case .already(let line): say(line)
+        case .couldNotStart: say(ReconWords.couldNotStart)
         }
-        let started = lookInto?(offer.topic, model.runsOnDevice) ?? false
-        say(started ? ReconWords.started : ReconWords.couldNotStart)
     }
 
     /// The person tapped Not now. Nothing starts.
@@ -762,6 +758,14 @@ final class ChatController: ObservableObject {
     }
 }
 
+/// What came of a tap on Look into it, as Today's runner decided it.
+enum ReconTap: Equatable {
+    case started
+    /// One on that topic is already going or ready. The line says which.
+    case already(String)
+    case couldNotStart
+}
+
 /// An offer in the chat to look into something.
 struct ReconOffer: Equatable {
     let topic: String
@@ -791,9 +795,13 @@ struct ReconOfferButtons: View {
     /// The announcement only has to hold the whole question, not equal it,
     /// so a line read with something before or after it, or with other
     /// spacing, still lands focus once the question is done.
-    static func focusOnceRead(afterFinishing finished: String?, question: String?) -> Choice? {
-        guard let finished = finished.map(tidy), let question = question.map(tidy), !question.isEmpty,
-              finished.contains(question) else { return nil }
+    ///
+    /// Only when it was read to the end: one cut off, as when the person
+    /// swiped on, says it wasn't, and focus stays where they went.
+    static func focusOnceRead(afterFinishing finished: String?, question: String?,
+                              wasSuccessful: Bool?) -> Choice? {
+        guard wasSuccessful == true, let finished = finished.map(tidy), let question = question.map(tidy),
+              !question.isEmpty, finished.contains(question) else { return nil }
         return arrivalFocus
     }
 
@@ -825,7 +833,10 @@ struct ReconOfferButtons: View {
         // come next when the person moves on.
         .onReceive(NotificationCenter.default.publisher(for: UIAccessibility.announcementDidFinishNotification)) { note in
             let finished = note.userInfo?[UIAccessibility.announcementStringValueUserInfoKey] as? String
-            if let choice = Self.focusOnceRead(afterFinishing: finished, question: question) { focus = choice }
+            let read = (note.userInfo?[UIAccessibility.announcementWasSuccessfulUserInfoKey] as? NSNumber)?.boolValue
+            if let choice = Self.focusOnceRead(afterFinishing: finished, question: question, wasSuccessful: read) {
+                focus = choice
+            }
         }
         #endif
     }

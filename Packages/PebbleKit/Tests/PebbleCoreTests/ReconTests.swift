@@ -473,8 +473,9 @@ struct ReconTests {
         let runner = ReconRunner(engine: engine, provider: Self.sources)
         let first = try #require(runner.lookInto(SampleSources.poolTopic))
         engine.advance(by: 60)
-        for _ in 0..<LocalFakeEngine.endedLimit {
-            runner.lookInto(SampleSources.libraryTopic)
+        // A topic of its own each time: one already ready starts nothing more.
+        for round in 0..<LocalFakeEngine.endedLimit {
+            #expect(runner.lookInto("\(SampleSources.libraryTopic), week \(round + 1)") != nil)
             engine.advance(by: 60)
         }
         #expect(!runner.tasks.contains { $0.id == first })
@@ -650,9 +651,8 @@ struct ReconTests {
         #expect(note.hasSuffix(ReconWords.disputedBy(["Riverside Gazette", "City of Riverside Parks"])))
         #expect(note.contains("Riverside Gazette and City of Riverside Parks don't agree on this."))
         // It saves.
-        let memory = MemoryStore(fileURL: FileManager.default.temporaryDirectory
-            .appendingPathComponent("recon-memory-\(UUID().uuidString).json"))
-        defer { discard(memory) }
+        let memory = Self.scratchStore()
+        defer { Self.throwAway(memory) }
         guard case .saved(let saved) = try memory.remember(kept, from: summary) else {
             Issue.record("not saved: \(note)")
             return

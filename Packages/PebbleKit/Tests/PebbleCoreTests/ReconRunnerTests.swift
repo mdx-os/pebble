@@ -160,6 +160,8 @@ struct ReconRunnerTests {
         let runner = ReconRunner(engine: engine, provider: provider)
         let id = try #require(runner.lookInto(SampleSources.poolTopic))
         #expect(provider.asked == 1)
+        // `sources` is the count of the very pages the run still holds, so
+        // 0 means their text has been let go, not only that none are counted.
         #expect(runner.held(id)?.sources == 4)
         #expect(runner.stop(id))
         #expect(runner.held(id)?.sources == 0)
@@ -204,7 +206,114 @@ struct ReconRunnerTests {
         #expect(id == nil)
         #expect(runner.tasks.isEmpty)
         #expect(engine.tasks.isEmpty)
-        if let id { #expect(runner.held(id) == nil) }
+        // Nothing held for it under any id, and its topic is let go.
+        #expect(runner.heldCount == (runs: 0, starting: 0))
+    }
+
+    // MARK: One recon per topic, decided in the runner
+
+    /// Two asks for one topic at once, as a double tap or the feed and a
+    /// chat together, in any case: one engine task between them. The
+    /// second is told one is already on its way.
+    @Test func twoAsksAtOnceStartOneRecon() throws {
+        let engine = ReplayEngine()
+        let provider = CountingProvider(now: { Self.readOn })
+        let runner = ReconRunner(engine: engine, provider: provider, now: { Self.readOn })
+        let second = Answers()
+        // The second ask lands while the first is reading its pages, before
+        // the engine has its task.
+        provider.whileReading = { [runner] in
+            provider.whileReading = nil
+            second.add(runner.start(lookingInto: "The Riverside Pool Reopening?", with: Leaving()))
+        }
+        let first = runner.start(lookingInto: SampleSources.poolTopic, with: Leaving())
+        let id = try #require(first.startedID)
+        #expect(second.list == [.already(id: nil, mayLeaveDevice: true)])
+        #expect(engine.tasks.count == 1)
+        #expect(provider.asked == 1)
+        // Once noted, an ask names it, whatever its case, and starts nothing.
+        #expect(runner.start(lookingInto: "the riverside pool REOPENING") == .already(id: id, mayLeaveDevice: true))
+        engine.finish(id)
+        #expect(runner.start(lookingInto: SampleSources.poolTopic) == .already(id: id, mayLeaveDevice: true))
+        #expect(runner.lookInto(SampleSources.poolTopic) == nil)
+        #expect(engine.tasks.count == 1)
+        #expect(runner.heldCount == (runs: 1, starting: 0))
+        // Another topic still starts.
+        #expect(runner.start(lookingInto: SampleSources.libraryTopic).startedID != nil)
+        #expect(engine.tasks.count == 2)
+    }
+
+    /// The same, on many threads at once: exactly one engine task.
+    @Test func manyAsksOnManyThreadsStartOneRecon() {
+        for _ in 0..<20 {
+            let engine = ReplayEngine()
+            let runner = ReconRunner(engine: engine, provider: CountingProvider(now: { Self.readOn }), now: { Self.readOn })
+            let answers = Answers()
+            DispatchQueue.concurrentPerform(iterations: 8) { index in
+                answers.add(runner.start(lookingInto: index.isMultiple(of: 2) ? SampleSources.poolTopic
+                                                       : SampleSources.poolTopic.uppercased()))
+            }
+            #expect(engine.tasks.count == 1)
+            #expect(answers.list.compactMap(\.startedID).count == 1)
+            #expect(answers.list.filter { $0.startedID == nil }.allSatisfy {
+                if case .already = $0 { return true }
+                return false
+            })
+            #expect(runner.heldCount == (runs: 1, starting: 0))
+        }
+    }
+
+    /// One that stopped, failed or was let go can be asked for again, and a
+    /// topic claimed when everything was forgotten is let go with it.
+    @Test func anEndedReconLetsItsTopicBeAskedAgain() throws {
+        let engine = ReplayEngine()
+        let provider = CountingProvider(now: { Self.readOn })
+        let runner = ReconRunner(engine: engine, provider: provider, now: { Self.readOn })
+        let stopped = try #require(runner.lookInto(SampleSources.poolTopic))
+        #expect(runner.stop(stopped))
+        let again = try #require(runner.lookInto(SampleSources.poolTopic))
+        #expect(again != stopped)
+        engine.finish(again)
+        #expect(runner.dismiss(again))
+        #expect(runner.lookInto(SampleSources.poolTopic) != nil)
+        // Forgotten while it was being started: the topic isn't held.
+        _ = runner.clear()
+        provider.whileReading = { [runner] in _ = runner.clear() }
+        #expect(runner.lookInto(SampleSources.poolTopic) == nil)
+        provider.whileReading = nil
+        #expect(runner.heldCount == (runs: 0, starting: 0))
+        #expect(runner.lookInto(SampleSources.poolTopic) != nil)
+    }
+
+    // MARK: Forget everything and a summary on its way
+
+    /// A summary begun before Forget everything comes back after it, when
+    /// the engine has given a newer card the same id. It never lands there:
+    /// what it read was forgotten.
+    @Test func aSummaryFromBeforeForgetEverythingNeverLandsOnANewerCard() async throws {
+        let engine = ReplayEngine(reusesIDs: true)
+        let runner = ReconRunner(engine: engine, provider: Self.sources, now: { Self.readOn })
+        let (_, _, late) = try waitingRecon(ReplayEngine())
+        let held = Gate()
+        let old = try #require(runner.lookInto(SampleSources.poolTopic, with: GatedSummarizer(gate: held)))
+        engine.finish(old)
+        let begun = try #require(runner.held(old))
+        #expect(begun.working)
+        _ = runner.clear()
+        let new = try #require(runner.lookInto(SampleSources.libraryTopic))
+        #expect(new == old)
+        engine.finish(new)
+        #expect(runner.held(new)?.round == begun.round)
+        #expect(runner.summary(for: new)?.topic == SampleSources.libraryTopic)
+        // The pool summary comes back late, past its work's own check, as
+        // the forget lands: the same id and round, an older generation.
+        runner.finish(new, round: begun.round, generation: begun.generation, with: late)
+        #expect(runner.summary(for: new)?.topic == SampleSources.libraryTopic)
+        // The control: the same call in the live generation lands.
+        runner.finish(new, round: begun.round, generation: try #require(runner.held(new)).generation, with: late)
+        #expect(runner.summary(for: new)?.topic == SampleSources.poolTopic)
+        await held.open()
+        await runner.settleEverything()
     }
 
     // MARK: Retry
@@ -383,6 +492,25 @@ struct ReconRunnerTests {
             let real = played.name == "real"
             #expect(runner.isSample(id) == !real, "\(played.name)")
             #expect(runner.keepsPoints(id) == real, "\(played.name)")
+            // The summary itself says so, so a caller that never asks
+            // `keepsPoints` still can't make a note of it.
+            #expect(summary.isSample == !real, "\(played.name)")
+            let memory = ReconTests.scratchStore()
+            defer { ReconTests.throwAway(memory) }
+            for point in summary.points {
+                #expect((summary.note(for: point) == nil) == !real, "\(played.name): \(point.text)")
+                #expect((summary.memorySource(for: point) == nil) == !real, "\(played.name): \(point.text)")
+                let kept = try memory.remember(point, from: summary)
+                if real {
+                    guard case .saved = kept else {
+                        Issue.record("the real control kept nothing: \(point.text)")
+                        continue
+                    }
+                } else {
+                    #expect(kept == .notKept, "\(played.name): \(point.text)")
+                }
+            }
+            #expect(memory.notes().count == (real ? summary.points.count : 0), "\(played.name)")
         }
         // A task that isn't a recon has no points to keep.
         let real = realRecon(at: Self.readOn).runner
@@ -407,6 +535,22 @@ struct ReconRunnerTests {
         #expect(summary.memorySource(for: point) == nil)
         #expect(runner.isSample(id))
         #expect(!runner.keepsPoints(id))
+    }
+
+    /// An example summary rebuilt through the initializer, as a summarizer
+    /// might, from the pages it was given: those pages say they are
+    /// examples, so the rebuilt one is still one.
+    @Test func aRebuiltExampleSummaryIsStillOne() throws {
+        let stamped = try ReconTests.summary(SampleSources.poolTopic)
+        #expect(stamped.isSample)
+        let rebuilt = ReconSummary(id: stamped.id, topic: stamped.topic, overview: stamped.overview,
+                                   points: stamped.points, sources: stamped.sources, gatheredAt: stamped.gatheredAt,
+                                   madeOnDevice: stamped.madeOnDevice, note: stamped.note)
+        #expect(rebuilt.isSample)
+        let point = try #require(rebuilt.points.first)
+        #expect(rebuilt.note(for: point) == nil)
+        // Pages that don't say so are stamped by the runner instead, as
+        // `anExampleSummaryIsStampedWhoeverPutItTogether` shows.
     }
 
     /// One lookup for "already on it", on the topic as a task tidies it,
@@ -443,6 +587,33 @@ struct ReconRunnerTests {
         let after = Date()
         #expect(summary.gatheredAt >= before)
         #expect(summary.gatheredAt <= after)
+    }
+
+    /// The scripted engine as the home screen makes it, with card times
+    /// from the wall clock: its steps play on its own clock alone. With
+    /// the wall still, they play through; with only the wall moving,
+    /// nothing moves on. The wall clock is read only for times on cards.
+    @Test func stepsPlayOnTheEnginesClockAndCardsTellTheWallTime() throws {
+        let wall = HandClock(Self.readOn)
+        let still = LocalFakeEngine(rule: .isolated(), wallClock: { wall.now })
+        let runner = ReconRunner(engine: still, provider: Self.sources, now: { wall.now })
+        let id = try #require(runner.lookInto(SampleSources.libraryTopic))
+        still.advance(by: 30)
+        let done = try #require(runner.tasks.first { $0.id == id })
+        #expect(done.state == .done)
+        #expect(done.startedAt == Self.readOn)
+        #expect(done.updatedAt == Self.readOn)
+        #expect(runner.summary(for: id)?.gatheredAt == Self.readOn)
+
+        let moving = LocalFakeEngine(rule: .isolated(), wallClock: { wall.now })
+        let other = ReconRunner(engine: moving, provider: Self.sources, now: { wall.now })
+        let waiting = try #require(other.lookInto(SampleSources.poolTopic))
+        wall.now = Self.readOn + 3_600
+        moving.refresh()
+        let shown = try #require(other.tasks.first { $0.id == waiting })
+        #expect(shown.state == .running)
+        #expect(shown.step == ReconWords.planning)
+        #expect(other.held(waiting)?.begun == false)
     }
 
     // MARK: A provider that fails
@@ -495,6 +666,17 @@ struct ReconRunnerTests {
                                  points: [ReconPoint(id: "a", text: "Said.", sourceIDs: [page.id])],
                                  sources: [page], gatheredAt: Self.readOn, madeOnDevice: true)
         #expect(local.note == nil)
+        // A note of its own never takes the cloud's line away: it follows it.
+        let noted = ReconSummary(id: "t", topic: "the pool", overview: "Words.",
+                                 points: [ReconPoint(id: "a", text: "Retold.", sourceIDs: [page.id])],
+                                 sources: [page], gatheredAt: Self.readOn, madeOnDevice: false,
+                                 note: "Two of the pages were short.")
+        #expect(noted.note == "\(ReconWords.wordedInCloud) Two of the pages were short.")
+        let same = ReconSummary(id: "t", topic: "the pool", overview: "Words.",
+                                points: [ReconPoint(id: "a", text: "Retold.", sourceIDs: [page.id])],
+                                sources: [page], gatheredAt: Self.readOn, madeOnDevice: false,
+                                note: ReconWords.wordedInCloud)
+        #expect(same.note == ReconWords.wordedInCloud)
     }
 
     /// The plain overview over the cloud's points says how many sources were
@@ -584,6 +766,23 @@ struct UnmarkedExamples: SourceProvider {
 struct UnmarkingSummarizer: ReconSummarizer {
     func summarize(_ task: ReconTask, id: String, sources: [ReconSource], gatheredAt: Date) async -> ReconSummary {
         LocalReconSummarizer().summary(task, id: id, sources: sources.map(notExample), gatheredAt: gatheredAt)
+    }
+}
+
+/// What each ask to look into something was told, from any thread.
+final class Answers: @unchecked Sendable {
+    private let lock = NSLock()
+    private var answers: [ReconStart] = []
+    var list: [ReconStart] { lock.lock(); defer { lock.unlock() }; return answers }
+    func add(_ answer: ReconStart) { lock.lock(); answers.append(answer); lock.unlock() }
+}
+
+/// Puts the summary together here, but says it may leave the device, as
+/// one through the cloud would.
+struct Leaving: ReconSummarizer {
+    var mayLeaveDevice: Bool { true }
+    func summarize(_ task: ReconTask, id: String, sources: [ReconSource], gatheredAt: Date) async -> ReconSummary {
+        LocalReconSummarizer().summary(task, id: id, sources: sources, gatheredAt: gatheredAt)
     }
 }
 

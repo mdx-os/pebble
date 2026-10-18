@@ -166,7 +166,11 @@ public final class CloudHelp: ObservableObject {
     /// The model for a new chat: `local` unless the cloud is on. A cloud
     /// chat asks the person through `review`, which belongs to that chat
     /// alone, so one window's preview never shows in another.
-    public func chatModel(local: any ModelClient, review: CloudReview) -> any ModelClient {
+    ///
+    /// `madeOnSend` is for a summary, which is chosen at each tap and may
+    /// never send at all: its transport is made only once the person has
+    /// said send, so a summary kept here makes nothing cloud side.
+    public func chatModel(local: any ModelClient, review: CloudReview, madeOnSend: Bool = false) -> any ModelClient {
         chatModelsAsked += 1
         return ModelChoice.model(settings: settings, endpoint: usableEndpoint, local: local) { url in
             reviews.add(review)
@@ -174,7 +178,8 @@ public final class CloudHelp: ObservableObject {
             let memory = self.memory
             let switchedOff = self.switchedOff
             return CloudModel(
-                endpoint: url, transport: makeTransport(), reviewer: review, auth: auth,
+                endpoint: url, transport: madeOnSend ? MadeOnSend(make: makeTransport) : makeTransport(),
+                reviewer: review, auth: auth,
                 // Read fresh for each reply, on this device, so new notes
                 // and private words count right away. Notes or words that
                 // can't be read mean nothing is sent.
@@ -394,6 +399,16 @@ public final class CloudHelp: ObservableObject {
         }
         settings = next
         return .saved
+    }
+}
+
+/// A transport made only when a request is sent, which `CloudModel` does
+/// only after the person's yes.
+struct MadeOnSend: CloudTransport {
+    let make: @Sendable () -> any CloudTransport
+
+    func send(_ request: CloudRequest) async throws -> Data {
+        try await make().send(request)
     }
 }
 
@@ -788,8 +803,17 @@ struct CloudTurnOnSheet: View {
 /// to send it or not.
 struct CloudPreviewSheet: View {
     let preview: CloudPreview
+    /// What the request is for, when it isn't the chat's own message, as
+    /// for Today's summary, which can show over any screen.
+    var purpose: String? = nil
     let onSend: () -> Void
     let onCancel: () -> Void
+
+    /// The purpose line for one of Today's summary previews: the topic it
+    /// asks about, as it is sent, and that it is Today's.
+    static func todayPurpose(_ preview: CloudPreview) -> String {
+        ReconWords.previewForSummary(CloudReconSummarizer.topic(asked: preview.request))
+    }
 
     /// What the payload card shows: the very request that will be sent.
     static func shownText(_ preview: CloudPreview) -> String { preview.request.shownText }
@@ -832,6 +856,12 @@ struct CloudPreviewSheet: View {
                     Text(CloudWords.previewTitle)
                         .font(.system(.title2, design: .rounded).weight(.bold))
                         .accessibilityAddTraits(.isHeader)
+                    if let purpose {
+                        Text(purpose)
+                            .font(.subheadline.weight(.semibold))
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("previewPurpose")
+                    }
                     Text(CloudWords.previewDetail)
                         .font(.subheadline)
                         .foregroundStyle(Theme.secondaryText)
@@ -917,10 +947,14 @@ extension View {
     /// one sheet can show at a time, so the preview waits, unsent, until it
     /// closes. `waiting` is told whenever a preview is pending, shown or
     /// not, so `HomeCover` can count it as covering the screen.
+    ///
+    /// `purpose` says what a preview is for, when it isn't the chat's own
+    /// message (see `CloudPreviewSheet.purpose`).
     @ViewBuilder
-    func cloudPreview(_ review: CloudReview?, blocked: Bool = false, waiting: Binding<Bool>? = nil) -> some View {
+    func cloudPreview(_ review: CloudReview?, blocked: Bool = false, waiting: Binding<Bool>? = nil,
+                      purpose: ((CloudPreview) -> String)? = nil) -> some View {
         if let review {
-            modifier(CloudPreviewPresenter(review: review, blocked: blocked, waiting: waiting))
+            modifier(CloudPreviewPresenter(review: review, blocked: blocked, waiting: waiting, purpose: purpose))
         } else {
             self.onAppear { waiting?.wrappedValue = false }
         }
@@ -937,6 +971,7 @@ struct CloudPreviewPresenter: ViewModifier {
     @ObservedObject var review: CloudReview
     let blocked: Bool
     let waiting: Binding<Bool>?
+    var purpose: ((CloudPreview) -> String)? = nil
 
     /// The preview to put on screen now: none while something else is open.
     static func shown(_ pending: CloudPreview?, blocked: Bool) -> CloudPreview? {
@@ -951,7 +986,7 @@ struct CloudPreviewPresenter: ViewModifier {
             item: Binding(get: { Self.shown(review.pending, blocked: blocked) },
                           set: { if $0 == nil, !blocked { review.cancelPending() } })
         ) { preview in
-            CloudPreviewSheet(preview: preview,
+            CloudPreviewSheet(preview: preview, purpose: purpose?(preview),
                               onSend: { review.answer(.send, for: preview.id) },
                               onCancel: { review.answer(.cancel, for: preview.id) })
         }

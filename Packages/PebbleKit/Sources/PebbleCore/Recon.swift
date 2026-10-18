@@ -118,7 +118,15 @@ public struct ReconSummary: Identifiable, Sendable, Equatable {
         self.gatheredAt = gatheredAt
         self.madeOnDevice = madeOnDevice
         self.isSample = isSample || sources.contains(where: \.isSample)
-        self.note = note ?? (madeOnDevice ? nil : ReconWords.wordedInCloud)
+        // Put into words in the cloud, it always says so: a note of its own
+        // comes after that line, never in its place.
+        if madeOnDevice {
+            self.note = note
+        } else if let note, note != ReconWords.wordedInCloud {
+            self.note = "\(ReconWords.wordedInCloud) \(note)"
+        } else {
+            self.note = ReconWords.wordedInCloud
+        }
         self.points = Array(points.compactMap { point -> ReconPoint? in
             let ids = Self.unique(point.sourceIDs.filter(known.contains))
             let text = point.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -548,8 +556,11 @@ public enum ReconWords {
         count == 1 ? "1 more point is in Open sources." : "\(count) more points are in Open sources."
     }
     public static let olderLabel = "More than a year old"
-    public static func gathered(_ date: Date, now: Date, calendar: Calendar = .current) -> String {
-        let time = date.formatted(date: .omitted, time: .shortened)
+    /// `locale` is the person's own unless a test says which, so the time
+    /// and the date read in their style.
+    public static func gathered(_ date: Date, now: Date, calendar: Calendar = .current,
+                                locale: Locale = .autoupdatingCurrent) -> String {
+        let time = date.formatted(Date.FormatStyle(date: .omitted, time: .shortened).locale(locale))
         if calendar.isDate(date, inSameDayAs: now) { return "Gathered today at \(time)" }
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: yesterday) {
             return "Gathered yesterday at \(time)"
@@ -557,9 +568,9 @@ public enum ReconWords {
         // The year too once it isn't this one, so a summary kept past New
         // Year never reads as this year's.
         guard calendar.component(.year, from: date) == calendar.component(.year, from: now) else {
-            return "Gathered on \(date.formatted(.dateTime.month(.wide).day().year()))"
+            return "Gathered on \(date.formatted(.dateTime.month(.wide).day().year().locale(locale)))"
         }
-        return "Gathered on \(date.formatted(.dateTime.month(.wide).day()))"
+        return "Gathered on \(date.formatted(.dateTime.month(.wide).day().locale(locale)))"
     }
     /// What VoiceOver says after a point, such as "From Riverside Gazette and City of Riverside Parks."
     public static func from(_ publishers: [String]) -> String {
@@ -588,9 +599,16 @@ public enum ReconWords {
     /// Under a summary put into words in the cloud: its points are a
     /// retelling, not the sources' own words.
     public static let wordedInCloud = "Put into words in the cloud, from these sources. Open sources to read what each one says."
-    /// Kept on Today after Forget everything, when a summary was being put
-    /// together in the cloud. What may already have gone can't be called back.
-    public static let forgotWhileInCloud = "If I'd already sent sources to the cloud for a summary, that can't be called back. Nothing else was sent."
+    /// Kept on Today after Forget everything, when a summary was on its way
+    /// to the cloud after the person's yes. What may already have gone
+    /// can't be called back. It never says anything went: that isn't known.
+    public static let forgotWhileInCloud = "Sources for a summary may already have gone to the cloud, and that can't be called back."
+    /// Above Today's cloud preview, which can show over the chat or the
+    /// notes, so the person knows what it is for before reading the request.
+    public static func previewForSummary(_ topic: String?) -> String {
+        guard let topic, !topic.isEmpty else { return "This is for a summary on Today, not for a chat." }
+        return "This is for the summary of \(topic) on Today, not for a chat."
+    }
 
     // The actions.
     public static let openSourcesTitle = "Open sources"
@@ -659,7 +677,8 @@ public enum ReconWords {
 
     // A feed card that offers to look into something.
     public static let lookIntoTitle = "Look into it"
-    public static let lookIntoHint = "Starts looking into it. It shows up here when it's ready."
+    /// Names Today rather than "here", so it stays true wherever it is read.
+    public static let lookIntoHint = "Starts looking into it. It shows up in Today when it's ready."
     /// What the person would say, put in the chat when the feed can't start it.
     public static func askLine(_ topic: String) -> String { "Look into \(topic) for me." }
 
@@ -670,7 +689,7 @@ public enum ReconWords {
          started, offerDeclined,
          couldNotStart, title("the pool"),
          planning, looking, reading(1), reading(4), checkingDates, puttingTogether, doneLine, nothingFoundLine,
-         couldNotRead, wordedInCloud, forgotWhileInCloud,
+         couldNotRead, wordedInCloud, forgotWhileInCloud, previewForSummary("the pool"), previewForSummary(nil),
          memoryNote("The pool opens.", from: ["A", "B"], disagreement: "Sources don't agree on this."),
          memoryNote("The pool opens.", from: [], wordedInCloud: true),
          memoryNote("The pool opens.", from: [], disagreement: disputedBy([]), wordedInCloud: true),

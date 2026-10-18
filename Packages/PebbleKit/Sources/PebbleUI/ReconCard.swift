@@ -105,11 +105,19 @@ struct ReconCard: View {
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
-            Text(summary.overview)
-                .font(.subheadline)
-                .foregroundStyle(Theme.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
+            // Never a blank line under the title for VoiceOver to land on.
+            if let overview = shownOverview {
+                Text(overview)
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
+    }
+
+    /// The overview under the title, or nil when there are no words in it.
+    var shownOverview: String? {
+        summary.overview.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : summary.overview
     }
 
     private var sourcesList: some View {
@@ -335,6 +343,12 @@ struct ReconSourcesSheet: View {
         summary.points.map { ReconPointRow(point: $0, summary: summary) }
     }
 
+    /// The page a source's Open the page goes to: only an https one, and
+    /// never for an example, whose made up pages have nowhere real to go.
+    func link(for source: ReconSource) -> URL? {
+        isSample || summary.isSample || source.isSample ? nil : source.link
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -384,8 +398,9 @@ struct ReconSourcesSheet: View {
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
                             // Only an https page opens. Any other kind of
-                            // address a provider gives is never followed.
-                            if let link = source.link {
+                            // address a provider gives is never followed,
+                            // and an example's page isn't either.
+                            if let link = link(for: source) {
                                 Link(destination: link) {
                                     Label(ReconWords.pageLinkTitle, systemImage: "safari")
                                         .font(.subheadline.weight(.semibold))

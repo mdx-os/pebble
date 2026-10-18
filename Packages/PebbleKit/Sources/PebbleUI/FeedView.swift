@@ -355,15 +355,17 @@ final class FeedModel: ObservableObject {
         case .task(let task):
             if task.question != nil { review(task) } else { open(task) }
         case .lookInto(let topic):
-            // A second tap while the first is under way, or once it is
-            // ready, starts nothing more: the card for it is already here,
-            // and VoiceOver hears so, rather than nothing at all.
-            if let line = alreadyLine(for: topic) {
+            switch start(lookingInto: topic) {
+            case .started: break
+            case .already(let line):
+                // A second tap while the first is under way, or once it is
+                // ready, starts nothing more: the card for it is already
+                // here, and VoiceOver hears so, rather than nothing at all.
                 announce(TaskAnnouncer.Line(text: line, urgent: false))
-                return
+            case .couldNotStart:
+                // The chat offers it instead, still one tap away.
+                talk(ReconWords.askLine(topic))
             }
-            // Without a runner, the chat offers it instead, still one tap away.
-            if recon == nil || !lookInto(topic) { talk(ReconWords.askLine(topic)) }
         case nil: break
         }
     }
@@ -371,17 +373,33 @@ final class FeedModel: ObservableObject {
     // MARK: Looking into something
 
     /// Starts looking into `topic`, after the person's tap. False when
-    /// nothing started, as for words of crisis.
+    /// nothing new started: one on that topic is already going or ready,
+    /// or nothing could start, as for words of crisis.
+    @discardableResult
+    func lookInto(_ topic: String, onDevice: Bool = false) -> Bool {
+        start(lookingInto: topic, onDevice: onDevice) == .started
+    }
+
+    /// Starts looking into `topic`, after the person's tap, and says what
+    /// came of it. The runner itself decides whether one on that topic is
+    /// already going, so two taps at once, here and in a chat, start one.
     ///
     /// `onDevice` is true when it was asked from a chat that promised to stay
     /// on this device. That promise holds: the summary is put together here,
-    /// whatever the cloud setting is now.
-    @discardableResult
-    func lookInto(_ topic: String, onDevice: Bool = false) -> Bool {
+    /// whatever the cloud setting is now. If the one already going may be
+    /// put into words in the cloud, the line says so.
+    func start(lookingInto topic: String, onDevice: Bool = false) -> ReconTap {
+        guard let recon else { return .couldNotStart }
         let summarizer: any ReconSummarizer = onDevice ? LocalReconSummarizer() : summarizer()
-        guard let recon, recon.lookInto(topic, with: summarizer) != nil else { return false }
-        refresh()
-        return true
+        switch recon.start(lookingInto: topic, with: summarizer) {
+        case .started:
+            refresh()
+            return .started
+        case .already(let id, let leaves):
+            return .already(alreadyLine(id: id, mayLeaveDevice: leaves, onDevice: onDevice))
+        case .notStarted:
+            return .couldNotStart
+        }
     }
 
     /// True while the only pages to read are examples, so the chat's offer says so.
@@ -421,8 +439,14 @@ final class FeedModel: ObservableObject {
     /// the cloud, the line says so, so that promise stays true.
     func alreadyLine(for topic: String, onDevice: Bool = false) -> String? {
         guard let recon, let id = recon.activeRecon(for: topic) else { return nil }
-        if recon.tasks.first(where: { $0.id == id })?.state == .done { return ReconWords.alreadyReady }
-        return onDevice && recon.mayLeaveDevice(id) ? ReconWords.alreadyOnWithCloud : ReconWords.alreadyOn
+        return alreadyLine(id: id, mayLeaveDevice: recon.mayLeaveDevice(id), onDevice: onDevice)
+    }
+
+    /// The line for one already going or ready, from what the runner said
+    /// of it. One still being started is going.
+    private func alreadyLine(id: String?, mayLeaveDevice: Bool, onDevice: Bool) -> String {
+        if let id, recon?.tasks.first(where: { $0.id == id })?.state == .done { return ReconWords.alreadyReady }
+        return onDevice && mayLeaveDevice ? ReconWords.alreadyOnWithCloud : ReconWords.alreadyOn
     }
 
     /// The summary a finished recon card shows. Asked of the runner once
@@ -606,8 +630,11 @@ final class FeedModel: ObservableObject {
         rememberStatus = nil
         askedBy.removeAll()
         // Asked before clearing: a summary going through the cloud may have
-        // sent what it read already, and that can't be called back.
-        let inCloud = (recon?.summariesMayLeaveDevice ?? 0) > 0
+        // sent what it read already, and that can't be called back. Only
+        // one past the person's yes: one whose preview still waits on
+        // Today's gate has sent nothing, and goes with its sheet below.
+        let waiting = cloudReview.pending == nil ? 0 : 1
+        let inCloud = (recon?.summariesMayLeaveDevice ?? 0) - waiting > 0
         // A preview still waiting goes at once, with its sheet, so a Send
         // tapped on it later sends nothing from a recon that is forgotten.
         // Clearing cancels the work too, but that answers only on a later

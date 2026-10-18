@@ -578,10 +578,50 @@ struct CloudHelpTests {
         review.cancelPending()
         await controller.settled()
         #expect(controller.failure == CloudWords.withdrawn)
-        #expect(controller.draft.contains("Plan my week"))
-        #expect(controller.draft.contains("Write a note to the school"))
+        // The second line first, then the draft that was already there,
+        // each once.
+        #expect(controller.draft == "Write a note to the school\nPlan my week")
         #expect(personTurns(controller).isEmpty)
         #expect(maker.wire.sent.isEmpty)
+    }
+
+    /// Send was tapped, and the cloud was off by the time the request would
+    /// go. A yes was given, so the chat never says it was taken away
+    /// unanswered, nor that anyone chose or declined.
+    @Test func aYesThenTheCloudOffInAChatNeverSaysWithdrawn() async throws {
+        let maker = TransportMaker()
+        let cloud = help(CloudHelpSettings(isOn: true), endpoint: endpoint, maker: maker)
+        let controller = chat(cloud)
+        let review = try #require(controller.review)
+        controller.submit("Plan my week")
+        let preview = await review.shown()
+        // In one turn of the main actor, before the reply goes on.
+        review.answer(.send, for: preview.id)
+        cloud.setOn(false)
+        await controller.settled()
+        #expect(maker.wire.sent.isEmpty)
+        let failure = try #require(controller.failure)
+        #expect(failure == CloudWords.turnedOff)
+        #expect(failure != CloudWords.withdrawn)
+        for word in ["chose", "declined"] { #expect(!failure.contains(word), "says: \(word)") }
+    }
+
+    /// Send was tapped, then the reply was stopped before it came. Nothing
+    /// says it was withdrawn or declined, and nothing is sent after Stop.
+    @Test func aYesThenAStopInAChatNeverSaysWithdrawn() async throws {
+        let maker = TransportMaker()
+        let cloud = help(CloudHelpSettings(isOn: true), endpoint: endpoint, maker: maker)
+        let controller = chat(cloud)
+        let review = try #require(controller.review)
+        controller.submit("Plan my week")
+        let preview = await review.shown()
+        review.answer(.send, for: preview.id)
+        controller.stopReplying()
+        await controller.settled()
+        #expect(maker.wire.sent.isEmpty)
+        #expect(controller.failure != CloudWords.withdrawn)
+        #expect(controller.failure != CloudWords.notSent)
+        #expect(!controller.conversation.turns.contains { $0.text == CloudWords.withdrawn })
     }
 
     @Test func stoppingAReplyClosesThePreviewAndSendsNothing() async throws {
