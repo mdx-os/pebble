@@ -39,8 +39,13 @@ public final class CloudHelp: ObservableObject {
     private let store: any CloudHelpStoring
     private let auth: any CloudAuth
     private let makeTransport: @Sendable () -> any CloudTransport
+    /// The file a setting that couldn't be opened would have read.
+    private let unopenedFile: (@Sendable () throws -> any CloudHelpStoring)?
     /// Every chat's preview gate, so turning the cloud off closes them all.
     private let reviews = NSHashTable<CloudReview>.weakObjects()
+    /// How many chats have asked for a model, so tests can see that a
+    /// rebuilt home screen asks for none.
+    private(set) var chatModelsAsked = 0
     /// Sign-in after the person's yes. Tests wait on it. Cancelled when the
     /// cloud goes off, so a sign-in under way never finishes after that.
     private(set) var signingIn: Task<Void, Never>?
@@ -58,7 +63,7 @@ public final class CloudHelp: ObservableObject {
         transport: @escaping @Sendable () -> any CloudTransport = { URLSessionCloudTransport() }
     ) {
         self.init(store: store, endpoint: endpoint, memory: memory, auth: auth, transport: transport,
-                  storeOpened: true)
+                  storeOpened: true, unopenedFile: nil)
     }
 
     private init(
@@ -67,7 +72,8 @@ public final class CloudHelp: ObservableObject {
         memory: MemoryStore?,
         auth: any CloudAuth,
         transport: @escaping @Sendable () -> any CloudTransport,
-        storeOpened: Bool
+        storeOpened: Bool,
+        unopenedFile: (@Sendable () throws -> any CloudHelpStoring)?
     ) {
         self.store = store
         self.endpoint = endpoint
@@ -75,15 +81,34 @@ public final class CloudHelp: ObservableObject {
         self.memory = memory
         self.auth = auth
         self.makeTransport = transport
+        self.unopenedFile = unopenedFile
         settings = storeOpened ? store.loadOrOff() : .off
     }
 
     /// The setting when its file couldn't be opened at launch. It reads as
     /// off and can't be turned on, so no private word is ever typed into
     /// something that would quietly forget it, and no chat uses the cloud.
-    public static func couldNotOpen(endpoint: URL?, memory: MemoryStore?) -> CloudHelp {
+    ///
+    /// `file` reaches the file it would have read, so private words kept
+    /// there from an earlier launch can still be erased. See
+    /// `eraseWordsWithoutNotes`.
+    public static func couldNotOpen(endpoint: URL?, memory: MemoryStore?,
+                                    file: (@Sendable () throws -> any CloudHelpStoring)? = nil) -> CloudHelp {
         CloudHelp(store: InMemoryCloudHelpStore(), endpoint: endpoint, memory: memory, auth: NoCloudAuth(),
-                  transport: { URLSessionCloudTransport() }, storeOpened: false)
+                  transport: { URLSessionCloudTransport() }, storeOpened: false, unopenedFile: file)
+    }
+
+    /// Erases the private words when the notes won't open, as the memory
+    /// screen in their place does along with the tasks. A setting opened
+    /// at launch erases them as Forget everything does. One that couldn't
+    /// be opened erases the whole file it would have read, if that can be
+    /// reached now; with no file it reads as off next time too. True when
+    /// no private words are kept any more.
+    func eraseWordsWithoutNotes() -> Bool {
+        if storeOpened { return (try? forgetPrivateWords()) != nil }
+        // Nothing to reach means nothing was ever kept, as in tests.
+        guard let unopenedFile else { return true }
+        return (try? unopenedFile().erase()) != nil
     }
 
     /// False when no address is set up, or the setting's file couldn't be
@@ -119,7 +144,8 @@ public final class CloudHelp: ObservableObject {
     /// chat asks the person through `review`, which belongs to that chat
     /// alone, so one window's preview never shows in another.
     public func chatModel(local: any ModelClient, review: CloudReview) -> any ModelClient {
-        ModelChoice.model(settings: settings, endpoint: usableEndpoint, local: local) { url in
+        chatModelsAsked += 1
+        return ModelChoice.model(settings: settings, endpoint: usableEndpoint, local: local) { url in
             reviews.add(review)
             let store = self.store
             let memory = self.memory

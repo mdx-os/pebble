@@ -432,6 +432,129 @@ struct CloudPromiseTests {
         #expect(next.contains(".accessibilityHidden(true)"))
     }
 
+    // MARK: Fix round 5
+
+    /// The home screen as the app builds it again on a redraw, with the
+    /// same setting and notes.
+    func rebuildHome(_ cloud: CloudHelp) -> HomeView {
+        HomeView(brand: brand, model: local, names: InMemoryAgentNameStore(stored: "Pip"),
+                 onboarding: InMemoryOnboardingStore(finished: true), memory: cloud.memory,
+                 looks: UserDefaults(suiteName: "cloud-promise-\(UUID().uuidString)")!,
+                 conversation: nil, section: .today, needsYou: NeedsYou(rule: .isolated()), cloud: cloud)
+    }
+
+    /// A cloud chat is open and the cloud is turned off. Rebuilding the
+    /// home screen leaves the setting saying "Off for new chats", never
+    /// the device promise, while that chat is open.
+    @Test func rebuildingTheHomeScreenKeepsAnOpenCloudChatsPlace() {
+        let cloud = help(CloudHelpSettings(isOn: true))
+        let chat = newChat(cloud)
+        // What the home screen's `onChange` of its surface flag does.
+        cloud.place = surface(cloud, chat: chat)
+        cloud.setOn(false)
+        cloud.place = surface(cloud, chat: chat)
+        #expect(CloudHelpView.detail(for: cloud) == CloudWords.offDetail(.mayLeaveDevice))
+
+        _ = rebuildHome(cloud)
+        _ = rebuildHome(cloud)
+        #expect(cloud.place == .mayLeaveDevice)
+        #expect(CloudHelpView.detail(for: cloud) == CloudWords.offDetail(.mayLeaveDevice))
+        #expect(CloudHelpView.detail(for: cloud) == "Off for new chats.")
+        #expect(!Self.promises(CloudHelpView.detail(for: cloud)))
+    }
+
+    /// Building the home screen struct, as every redraw does, makes no
+    /// chat: no model asked for, no preview gate, no transport.
+    @Test func buildingTheHomeScreenTwiceMakesNothingCloudSide() {
+        let maker = TransportMaker()
+        let cloud = help(CloudHelpSettings(isOn: true), maker: maker)
+        _ = rebuildHome(cloud)
+        _ = rebuildHome(cloud)
+        #expect(cloud.chatModelsAsked == 0)
+        #expect(maker.made == 0)
+        // A chat started for real still asks once and makes one transport.
+        _ = newChat(cloud)
+        #expect(cloud.chatModelsAsked == 1)
+        #expect(maker.made == 1)
+    }
+
+    /// The init never writes the setting's flag, and the app holds the
+    /// setting without observing it, so its changes don't rebuild home.
+    @Test func neitherTheHomeInitNorTheAppObservesOrWritesTheFlag() throws {
+        let home = try String(contentsOf: Self.sources.appendingPathComponent("PebbleUI/HomeView.swift"),
+                              encoding: .utf8)
+        let start = try #require(home.range(of: "package init("))
+        let end = try #require(home.range(of: "static func newChat("))
+        #expect(!home[start.upperBound..<end.lowerBound].contains("cloud?.place ="))
+        let app = try String(contentsOf: Self.repo.appendingPathComponent("App/Sources/PebbleApp.swift"), encoding: .utf8)
+        #expect(app.contains("@State private var cloud: CloudHelp"))
+        #expect(!app.contains("@StateObject private var cloud"))
+    }
+
+    /// The Forget everything question reads the setting as it is now, and
+    /// watches it, so it can't show the "notes and tasks" words while
+    /// private words are kept.
+    @Test func theForgetEverythingQuestionFollowsThePrivateWords() throws {
+        let cloud = help()
+        #expect(MemoryView.forgetEverythingDetail(for: nil) == MemoryWords.forgetEverythingDetail)
+        #expect(MemoryView.forgetEverythingDetail(for: cloud) == MemoryWords.forgetEverythingDetail)
+        cloud.newPrivateWord = "lemon cake"
+        cloud.addPrivateWord()
+        #expect(MemoryView.forgetEverythingDetail(for: cloud) == CloudWords.forgetEverythingDetail)
+        let source = try String(contentsOf: Self.sources.appendingPathComponent("PebbleUI/MemoryView.swift"),
+                                encoding: .utf8)
+        let dialog = try #require(source.range(of: "private struct ForgetEverythingDialog"))
+        let watching = source[dialog.upperBound...].prefix(1_200)
+        #expect(watching.contains("@ObservedObject var help: CloudHelp"))
+        #expect(watching.contains("forgetEverythingDetail(for: help)"))
+    }
+
+    /// The notes folder won't open, but a words file from an earlier launch
+    /// is there. Forgetting the tasks erases it too, and says so.
+    @Test func theFallbackMemoryScreenErasesKeptPrivateWords() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("cloud-fallback-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = CloudHelpFileStore(fileURL: folder.appendingPathComponent("cloud-help.json"))
+        try file.save(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"]))
+        let cloud = CloudHelp.couldNotOpen(endpoint: endpoint, memory: nil, file: { file })
+        var tasksGone = false
+        let erased = HomeView.forgetWithoutNotes(cloud: cloud) { tasksGone = true }
+        #expect(tasksGone)
+        #expect(erased == true)
+        #expect(!FileManager.default.fileExists(atPath: file.fileURL.path))
+        #expect(try file.load() == .off)
+        let view = MemoryUnavailableView(hasTasks: false, forgotten: true, wordsErased: erased, erasesWords: true,
+                                         onForgetTasks: {})
+        #expect(view.status == CloudWords.tasksAndWordsForgotten)
+        #expect(view.detail == CloudWords.forgetTasksAndWordsDetail)
+        #expect(view.detail.contains("words you asked me to hide"))
+    }
+
+    /// The words file can't be reached either: the tasks still go, and the
+    /// line says plainly that the words remain.
+    @Test func theFallbackMemoryScreenSaysWhenTheWordsRemain() {
+        struct Unreachable: Error {}
+        let cloud = CloudHelp.couldNotOpen(endpoint: endpoint, memory: nil, file: { throw Unreachable() })
+        var tasksGone = false
+        let erased = HomeView.forgetWithoutNotes(cloud: cloud) { tasksGone = true }
+        #expect(tasksGone)
+        #expect(erased == false)
+        let view = MemoryUnavailableView(hasTasks: false, forgotten: true, underway: TaskWords.forgotUnderway(1),
+                                         wordsErased: erased, erasesWords: true, onForgetTasks: {})
+        #expect(view.status == CloudWords.tasksForgottenNotWords + " " + TaskWords.forgotUnderway(1))
+        #expect(CloudWords.tasksForgottenNotWords.contains("couldn't erase the words"))
+        // With no cloud setting, the plain words, as before.
+        #expect(HomeView.forgetWithoutNotes(cloud: nil) {} == nil)
+        #expect(MemoryUnavailableView(hasTasks: false, forgotten: true, onForgetTasks: {}).status
+                == TaskWords.tasksForgotten)
+        #expect(MemoryUnavailableView(hasTasks: true, onForgetTasks: {}).detail == TaskWords.forgetTasksDetail)
+    }
+
+    @Test func theAppLetsAnUnopenedSettingEraseItsFile() throws {
+        let app = try String(contentsOf: Self.repo.appendingPathComponent("App/Sources/PebbleApp.swift"), encoding: .utf8)
+        #expect(app.contains("file: { try CloudHelpFileStore.onDevice() }"))
+    }
+
     // MARK: Helpers
 
     static let repo = URL(fileURLWithPath: #filePath)

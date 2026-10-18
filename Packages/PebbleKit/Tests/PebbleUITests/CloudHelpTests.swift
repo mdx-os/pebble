@@ -751,6 +751,14 @@ struct CloudHelpTests {
         #expect(line(false, .some(nil), true) == CloudWords.forgotTasksNotNotesOrWords)
         #expect(line(false, nil, false) == MemoryWords.couldNotForget)
         #expect(line(false, nil, true) == MemoryWords.couldNotForgetNotes)
+        // The three lines where tasks went speak in one voice.
+        for went in [CloudWords.forgotNotesAndTasksNotWords, CloudWords.forgotTasksAndWordsNotNotes,
+                     CloudWords.forgotTasksNotNotesOrWords] {
+            #expect(went.hasPrefix("Your "), "\(went)")
+            #expect(went.contains("tasks") && went.contains(" are gone, but I couldn't erase your "), "\(went)")
+            #expect(!went.contains("I forgot"), "\(went)")
+        }
+        #expect(CloudWords.forgotTasksNotNotesOrWords.hasPrefix("Your tasks are gone, but"))
         // The cloud's question says tasks go and stop, like the plain one.
         #expect(CloudWords.forgetEverythingDetail.contains("every task"))
         #expect(CloudWords.forgetEverythingDetail.contains("stops any task still going"))

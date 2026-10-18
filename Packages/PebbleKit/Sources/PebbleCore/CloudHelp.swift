@@ -309,7 +309,7 @@ public enum CloudWords {
     /// The same, when there were tasks and they went too.
     public static let forgotTasksAndWordsNotNotes = "Your tasks and private words are gone, but I couldn't erase your notes just now. Please try Forget everything again in a moment."
     /// The tasks went, but neither the notes nor the private words could.
-    public static let forgotTasksNotNotesOrWords = "I forgot your tasks, but I couldn't erase your notes or private words just now. Please try Forget everything again in a moment."
+    public static let forgotTasksNotNotesOrWords = "Your tasks are gone, but I couldn't erase your notes or private words just now. Please try Forget everything again in a moment."
     /// Forget everything erased the notes, and the private words could only
     /// be erased with the whole cloud setting, which turned it off.
     public static let forgotAndCloudOff = "Gone. I no longer have it. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. You can turn it on again anytime."
@@ -317,6 +317,14 @@ public enum CloudWords {
     public static let forgotWordsAndCloudNotNotes = "Your private words are gone. To be sure of that I cleared the cloud setting too, so help from the cloud is off. I couldn't erase your notes just now. Please try Forget everything again in a moment."
     /// The same, when there were tasks and they went too.
     public static let forgotTasksAndWordsAndCloudNotNotes = "Your tasks and private words are gone. To be sure of that I cleared the cloud setting too, so help from the cloud is off. I couldn't erase your notes just now. Please try Forget everything again in a moment."
+    /// Forgetting tasks when the notes can't be opened, like
+    /// `TaskWords.forgetTasksDetail`, when the words always hidden go too.
+    /// There may be none, so it says "any".
+    public static let forgetTasksAndWordsDetail = "This stops any task still going, and removes every task, what you told me for it and any words you asked me to hide from this device. It can't be undone. Your notes aren't touched."
+    /// The tasks and any private words went.
+    public static let tasksAndWordsForgotten = "Your tasks are forgotten, and so are any words you asked me to hide."
+    /// The tasks went, but the private words' file couldn't be reached.
+    public static let tasksForgottenNotWords = "Your tasks are forgotten, but I couldn't erase the words you asked me to hide. Closing and reopening the app may help."
 
     public static let all: [String] = [
         title, toggleTitle, offDetail(.onDevice), offDetail(.mayLeaveDevice), onDetail, unavailable, couldNotOpen,
@@ -331,6 +339,7 @@ public enum CloudWords {
         notSent, turnedOff, staysHere, notesUnreadable, forgetEverythingDetail,
         forgotNotesNotWords, forgotWordsNotNotes, forgotAndCloudOff, forgotWordsAndCloudNotNotes,
         forgotNotesAndTasksNotWords, forgotTasksAndWordsNotNotes, forgotTasksNotNotesOrWords,
-        forgotTasksAndWordsAndCloudNotNotes,
+        forgotTasksAndWordsAndCloudNotNotes, forgetTasksAndWordsDetail, tasksAndWordsForgotten,
+        tasksForgottenNotWords,
     ] + askPoints + Redaction.Kind.allCases.map(\.spoken)
 }

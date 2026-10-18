@@ -12,7 +12,11 @@ struct PebbleApp: App {
     /// Off until the person turns it on, and unavailable while
     /// Config/Cloud.local.xcconfig has no address. Its settings and private
     /// words are kept next to the notes, out of backups.
-    @StateObject private var cloud: CloudHelp
+    ///
+    /// Held, not observed: the body reads nothing from it, so a change to
+    /// the setting must not re-run the body and rebuild the home screen.
+    /// The screens that show it observe it themselves.
+    @State private var cloud: CloudHelp
 
     init() {
         guard let brand = Brand(infoDictionary: Bundle.main.infoDictionary) else {
@@ -29,9 +33,11 @@ struct PebbleApp: App {
         if memory != nil, let store = try? CloudHelpFileStore.onDevice() {
             cloud = CloudHelp(store: store, endpoint: endpoint, memory: memory)
         } else {
-            cloud = CloudHelp.couldNotOpen(endpoint: endpoint, memory: memory)
+            // It can still erase private words kept from an earlier launch.
+            cloud = CloudHelp.couldNotOpen(endpoint: endpoint, memory: memory,
+                                           file: { try CloudHelpFileStore.onDevice() })
         }
-        _cloud = StateObject(wrappedValue: cloud)
+        _cloud = State(initialValue: cloud)
         #if os(macOS)
         SnapshotMode.runIfRequested(brand: brand)
         #endif
