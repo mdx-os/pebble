@@ -47,7 +47,9 @@ final class FeedModel: ObservableObject {
         }
     }
 
-    isolated deinit {
+    /// Plain, not isolated: the observation and `needsYou` are Sendable and
+    /// `stopObserving` takes its own lock, so this runs safely anywhere.
+    deinit {
         if let observation { needsYou.stopObserving(observation) }
     }
 

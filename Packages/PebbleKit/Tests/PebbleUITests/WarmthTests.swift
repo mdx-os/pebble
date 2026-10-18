@@ -70,6 +70,21 @@ private struct SpyModel: ModelClient {
     }
 }
 
+/// Answers a continuation once, with whichever side finishes first, and
+/// stops the backstop when the reply wins.
+@MainActor
+private final class FirstOf {
+    var done: CheckedContinuation<Bool, Never>?
+    var backstop: Task<Void, Never>?
+
+    func finish(_ finished: Bool) {
+        guard let done else { return }
+        self.done = nil
+        backstop?.cancel()
+        done.resume(returning: finished)
+    }
+}
+
 /// A model that does not run here, like a cloud model would.
 private struct RemoteModel: ModelClient {
     func reply(to transcript: [ChatTurn]) async throws -> String { "From afar." }
@@ -79,10 +94,29 @@ private struct RemoteModel: ModelClient {
 struct WarmthTests {
     let brand = Brand(name: "Nova")
 
-    /// Waits for the reply on its way to finish. No polling and no deadline:
-    /// it returns exactly when the reply task does.
-    private func settle(_ controller: ChatController) async {
-        await controller.replyTask?.value
+    /// Waits for the reply on its way to finish. No polling: it returns
+    /// exactly when the reply task does. The deadline is only a backstop, far
+    /// past any real reply, so a gate left shut fails the test instead of
+    /// hanging CI.
+    private func settle(_ controller: ChatController, deadline: Duration = .seconds(60),
+                        sourceLocation: SourceLocation = #_sourceLocation) async {
+        guard let reply = controller.replyTask else { return }
+        // Awaiting a task's value can't be cancelled, so the two race to
+        // answer one continuation rather than sharing a task group, which
+        // would wait on the stuck reply anyway.
+        let race = FirstOf()
+        let finished = await withCheckedContinuation { done in
+            race.done = done
+            race.backstop = Task { @MainActor in
+                try? await Task.sleep(for: deadline)
+                race.finish(false)
+            }
+            Task { @MainActor in
+                await reply.value
+                race.finish(true)
+            }
+        }
+        #expect(finished, "the reply never finished; is a gate still shut?", sourceLocation: sourceLocation)
     }
 
     @Test func theThinkingPresenceShowsWhileAReplyComesAndThenGoes() async {
@@ -267,20 +301,57 @@ struct WarmthTests {
     }
 
     /// A reply that lands while a sheet covers the chat is not read over the
-    /// sheet. It stays in the transcript to read once the sheet goes, but
-    /// nothing reads it aloud then. The second check only shows that the
-    /// same reply is spoken when nothing covers the chat.
-    @Test func aReplyThatLandsWhileCoveredIsNotReadOverTheSheet() async throws {
-        let controller = ChatController(brand: brand, model: LocalStubModel(),
+    /// sheet, and is read exactly once when the sheet goes. The test takes
+    /// the same steps the chat does: the turn lands, then the cover lifts,
+    /// then the screen comes and goes again.
+    @Test func aReplyThatLandsWhileCoveredIsReadOnceWhenUncovered() async throws {
+        let gate = Gate()
+        let controller = ChatController(brand: brand, model: GatedModel(gate: gate),
                                         names: InMemoryAgentNameStore(stored: "Pip"), replyBeat: .zero)
+        var spoken: [String] = []
         let covered = covers(usesSidebar: true, section: .chat, showsShortcuts: true)
         #expect(covered)
-        controller.submit("Help me plan my morning.")
+        controller.submit("Plan my day")
+        #expect(ChatView.replyLanded(in: controller, covered: covered) == nil, "the person's own line")
+        await gate.release()
         await settle(controller)
         let reply = try #require(controller.conversation.turns.last)
         #expect(reply.speaker == .agent)
-        #expect(ChatView.announcement(for: controller.conversation, covered: covered) == nil)
-        #expect(ChatView.announcement(for: controller.conversation, covered: false) == reply.text)
+        // Lands under the sheet: quiet, and kept.
+        if let line = ChatView.replyLanded(in: controller, covered: covered) { spoken.append(line) }
+        #expect(spoken.isEmpty)
+        #expect(controller.unheardReply == reply.text)
+        // The sheet goes: read once.
+        if case .reply(let line) = ChatView.arrival(for: controller, covered: false) { spoken.append(line) }
+        // Covered again and uncovered, or the chat coming back: never again.
+        #expect(ChatView.arrival(for: controller, covered: true) == .nothing)
+        if case .reply(let line) = ChatView.arrival(for: controller, covered: false) { spoken.append(line) }
+        #expect(spoken == [reply.text])
+    }
+
+    /// With nothing over the chat, the reply is read as it lands and never
+    /// again when a sheet later comes and goes.
+    @Test func aReplyReadAsItLandsIsNotReadAgainOnUncover() async throws {
+        let controller = ChatController(brand: brand, model: LocalStubModel(),
+                                        names: InMemoryAgentNameStore(stored: "Pip"), replyBeat: .zero)
+        controller.submit("Help me plan my morning.")
+        await settle(controller)
+        let reply = try #require(controller.conversation.turns.last)
+        #expect(ChatView.replyLanded(in: controller, covered: false) == reply.text)
+        #expect(controller.unheardReply == nil)
+        #expect(ChatView.arrival(for: controller, covered: false) == .nothing)
+    }
+
+    /// A reply still on its way when the sheet goes gets its "thinking".
+    @Test func aReplyStillComingWhenUncoveredGetsItsThinking() async {
+        let gate = Gate()
+        let controller = ChatController(brand: brand, model: GatedModel(gate: gate),
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
+        controller.submit("Plan my day")
+        #expect(ChatView.arrival(for: controller, covered: true) == .nothing)
+        #expect(ChatView.arrival(for: controller, covered: false) == .thinking)
+        await gate.release()
+        await settle(controller)
     }
 
     // MARK: Sent from Today
@@ -305,6 +376,40 @@ struct WarmthTests {
         #expect(TodayComposer.spokenFailure(today.failure, inFront: false) == nil)
         let renderer = ImageRenderer(content: today.frame(width: 393))
         #expect(renderer.cgImage != nil)
+    }
+
+    /// "What you wrote is still here" goes once the person clears the words
+    /// by hand, on Today and in the chat alike. Editing them keeps it.
+    @Test func theFailureLineGoesWhenTheRestoredWordsAreCleared() async {
+        let gate = Gate()
+        let controller = ChatController(brand: brand, model: GatedModel(gate: gate, fails: true),
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
+        let today = TodayComposer(chat: controller, inFront: true, send: { _ in })
+        controller.draft = "Plan my day"
+        #expect(HomeView.sendsFromToday(controller.draft, chat: controller))
+        await gate.release()
+        await settle(controller)
+        #expect(today.failure == FirstConversation.couldNotAnswer)
+        controller.draft = "Plan my week"
+        #expect(today.failure == FirstConversation.couldNotAnswer)
+        controller.draft = "  "
+        #expect(today.failure == nil)
+        #expect(controller.failure == nil)
+    }
+
+    /// The kept draft line points at the bubble, which stays true whatever
+    /// the draft holds, so clearing the draft leaves it.
+    @Test func theKeptDraftLineStaysWhenTheDraftIsCleared() async {
+        let gate = Gate()
+        let controller = ChatController(brand: brand, model: GatedModel(gate: gate, fails: true),
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
+        controller.submit("Plan my day")
+        controller.draft = "Something else"
+        await gate.release()
+        await settle(controller)
+        #expect(controller.failure == FirstConversation.couldNotAnswerKeptDraft)
+        controller.draft = ""
+        #expect(controller.failure == FirstConversation.couldNotAnswerKeptDraft)
     }
 
     /// With a newer draft kept, the words honestly say where the line is,
@@ -340,7 +445,7 @@ struct WarmthTests {
                                         names: InMemoryAgentNameStore(), replyBeat: .zero)
         controller.submit("Plan my day")
         await settle(controller)
-        controller.replyWasSeen()
+        #expect(ChatView.replyLanded(in: controller, covered: false) != nil)
         #expect(ChatView.arrival(for: controller, covered: false) == .nothing)
     }
 

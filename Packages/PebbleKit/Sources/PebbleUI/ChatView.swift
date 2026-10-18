@@ -121,8 +121,7 @@ public struct ChatView: View {
             }
             .onChange(of: controller.conversation.turns.count) {
                 Self.scrollToLatest(controller.conversation, with: scroller, animated: !reduceMotion)
-                controller.replyWasSeen()
-                if let line = Self.announcement(for: controller.conversation, covered: covered) {
+                if let line = Self.replyLanded(in: controller, covered: covered) {
                     AccessibilityNotification.Announcement(line).post()
                 }
             }
@@ -146,10 +145,12 @@ public struct ChatView: View {
                 }
             }
             .onChange(of: covered) { _, covered in
-                // A sheet came over the chat, so a pending "thinking" stays quiet.
-                guard !Self.speaks(covered: covered) else { return }
+                // A sheet came over the chat, so a pending "thinking" stays
+                // quiet. When it goes, a reply that landed under it is read
+                // once, or "thinking" follows a reply still on its way.
                 thinkingNotice?.cancel()
                 thinkingNotice = nil
+                speak(Self.arrival(for: controller, covered: covered))
             }
             }
             composer
@@ -163,11 +164,7 @@ public struct ChatView: View {
         .onAppear {
             // Sent from Today, the line may be answered, or still on its
             // way, before this screen was here to see it change.
-            switch Self.arrival(for: controller, covered: covered) {
-            case .reply(let line): AccessibilityNotification.Announcement(line).post()
-            case .thinking: sayThinkingSoon()
-            case .nothing: break
-            }
+            speak(Self.arrival(for: controller, covered: covered))
         }
         .onDisappear {
             // Never say "thinking" over another screen.
@@ -274,7 +271,15 @@ public struct ChatView: View {
         }
     }
 
-    /// What the chat says as it comes on screen.
+    private func speak(_ arrival: Arrival) {
+        switch arrival {
+        case .reply(let line): AccessibilityNotification.Announcement(line).post()
+        case .thinking: sayThinkingSoon()
+        case .nothing: break
+        }
+    }
+
+    /// What the chat says as it comes on screen, or as a sheet over it goes.
     enum Arrival: Equatable {
         case nothing
         /// A reply that landed while no chat was on screen.
@@ -316,6 +321,15 @@ public struct ChatView: View {
             return nil
         }
         return last.text
+    }
+
+    /// A new turn landed in the chat. The reply is marked heard only when it
+    /// is actually spoken, so one that lands under a sheet is kept and read
+    /// once the sheet goes.
+    static func replyLanded(in controller: ChatController, covered: Bool) -> String? {
+        guard let line = announcement(for: controller.conversation, covered: covered) else { return nil }
+        controller.replyWasSeen()
+        return line
     }
 
     private var transcript: some View {
@@ -387,7 +401,16 @@ final class ChatController: ObservableObject {
     private let names: any AgentNameStoring
     @Published private(set) var naming: AgentRenameState
     @Published var conversation: Conversation
-    @Published var draft = ""
+    @Published var draft = "" {
+        didSet {
+            // "What you wrote is still here" stops being true once the
+            // person clears the words, so the line goes with them.
+            if failure == FirstConversation.couldNotAnswer,
+               draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                failure = nil
+            }
+        }
+    }
     @Published var isReplying = false
     /// The reply on its way. Tests await it so ordering never rests on timing.
     private(set) var replyTask: Task<Void, Never>?
@@ -542,8 +565,8 @@ final class ChatController: ObservableObject {
         isReplying = false
     }
 
-    /// A chat on screen saw the newest reply land, spoken or not, so it is
-    /// never read again later.
+    /// A chat on screen read the newest reply aloud, so it is never read
+    /// again later.
     func replyWasSeen() {
         unheardReply = nil
     }
