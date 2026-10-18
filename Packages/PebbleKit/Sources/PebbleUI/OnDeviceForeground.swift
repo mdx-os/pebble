@@ -9,52 +9,39 @@ import UIKit
 
 /// Where the app is, as on-device replies need to know it.
 public enum AppPlace: Sendable, Equatable {
+    /// Active: a window is in front and taking touches.
     case foreground
+    /// Inactive or in the background: on its way off the screen, or gone.
     case background
 }
 
-/// Which scenes are active. One window leaving does not count while another
-/// is still active. The gate closes when the last one deactivates.
-struct OnDeviceActiveScenes: Equatable {
-    private var active: Set<ObjectIdentifier> = []
-
-    var isInFront: Bool { !active.isEmpty }
-
-    /// True when this scene is the one that made the app active.
-    mutating func activate(_ id: ObjectIdentifier) -> Bool {
-        let wasEmpty = active.isEmpty
-        active.insert(id)
-        return wasEmpty
-    }
-
-    /// True when no scene is active after this one deactivates.
-    mutating func deactivate(_ id: ObjectIdentifier) -> Bool {
-        active.remove(id)
-        return active.isEmpty
-    }
-}
-
-/// Ties on-device replies to the app being active, on iPhone and iPad.
+/// Ties on-device replies to the app being in front, on iPhone and iPad.
 ///
-/// There the system refuses new work on the graphics chip once the app is
-/// no longer active, and the model can end the app over it. The gate closes
-/// when the last scene deactivates, the reply under way is cancelled, and
-/// loading, prompt reading, and generation synchronize the chip before the
-/// background callback returns. A stopped reply's message stays in the chat,
+/// There the system refuses work on the graphics chip from the background,
+/// and the model can end the app over it. So as soon as no window is active,
+/// before the app reaches the background, the runner takes no new reply and
+/// stops the one under way, and the app is kept open until its work on the
+/// graphics chip has drained. A stopped reply's message stays in the chat,
 /// ready to send again. On the Mac replies go on as before.
 @MainActor
 public final class OnDeviceForeground {
     private let runner: OnDeviceRunner
     private let stopsInBackground: Bool
+    private let keepOpen: @MainActor (Task<Void, Never>) -> Void
     private var place = AppPlace.foreground
-    private var scenes = OnDeviceActiveScenes()
-    private let sceneWatch = SceneWatch()
+    /// The latest drain. Tests await it.
+    private(set) var settling: Task<Void, Never>?
 
-    /// - Parameter stopsInBackground: True on iPhone and iPad, false on the Mac.
+    /// - Parameters:
+    ///   - stopsInBackground: True on iPhone and iPad, false on the Mac.
+    ///   - keepOpen: Asks the system for time to finish `Task`, as the app
+    ///     leaves the screen, and gives it back once `Task` has ended.
     public init(runner: OnDeviceRunner = .shared,
-                stopsInBackground: Bool = OnDeviceForeground.platformStopsInBackground) {
+                stopsInBackground: Bool = OnDeviceForeground.platformStopsInBackground,
+                keepOpen: @escaping @MainActor (Task<Void, Never>) -> Void = OnDeviceForeground.keepOpen) {
         self.runner = runner
         self.stopsInBackground = stopsInBackground
+        self.keepOpen = keepOpen
     }
 
     public nonisolated static var platformStopsInBackground: Bool {
@@ -65,80 +52,34 @@ public final class OnDeviceForeground {
         #endif
     }
 
-    /// The app moved. Leaving blocks until the reply under way has
-    /// synchronized the graphics chip, so a background callback that calls
-    /// this does not return while that work is still submitted.
+    /// The app moved. Leaving closes the runner's gate before this returns,
+    /// so nothing starts on the model from here, and keeps the app open
+    /// until the stopped reply has drained. Coming back opens the gate; a
+    /// reply asked for then still waits for that drain.
     public func moved(to next: AppPlace) {
         guard stopsInBackground, next != place else { return }
         place = next
         switch next {
-        case .background: runner.leaveForegroundAndWait()
-        case .foreground: runner.returnToForegroundNow()
+        case .background:
+            runner.closeGate()
+            let runner = runner
+            let drain = Task.detached { await runner.drained() }
+            settling = drain
+            keepOpen(drain)
+        case .foreground:
+            runner.returnToForeground()
         }
     }
 
-    /// A scene became active. The app is in front again when the first one does.
-    func sceneActivated(_ id: ObjectIdentifier) {
-        guard scenes.activate(id) else { return }
-        moved(to: .foreground)
-    }
-
-    /// A scene will deactivate. When it is the last active scene, close the
-    /// gate now, before the background callback.
-    func sceneDeactivated(_ id: ObjectIdentifier) {
-        guard scenes.deactivate(id) else { return }
-        moved(to: .background)
-    }
-
-    /// A scene entered the background. If nothing is still active, do not
-    /// return until the graphics chip is idle. Deactivation usually did this
-    /// already; this is the callback that has to have it done.
-    func sceneEnteredBackground(_ id: ObjectIdentifier) {
-        _ = scenes.deactivate(id)
-        guard !scenes.isInFront else { return }
-        moved(to: .background)
-    }
-
-    #if os(iOS)
-    /// Scene notifications, delivered on the thread that posts them so the
-    /// background callback is still on the stack while the chip drains.
-    public func watchSystemScenes() {
-        guard stopsInBackground, sceneWatch.isEmpty else { return }
-        let center = NotificationCenter.default
-        sceneWatch.add(center.addObserver(
-            forName: UIScene.didActivateNotification, object: nil, queue: nil
-        ) { [weak self] note in
-            guard let scene = note.object as? UIScene else { return }
-            let id = ObjectIdentifier(scene)
-            self?.performOnMain { $0.sceneActivated(id) }
-        })
-        sceneWatch.add(center.addObserver(
-            forName: UIScene.willDeactivateNotification, object: nil, queue: nil
-        ) { [weak self] note in
-            guard let scene = note.object as? UIScene else { return }
-            let id = ObjectIdentifier(scene)
-            self?.performOnMain { $0.sceneDeactivated(id) }
-        })
-        sceneWatch.add(center.addObserver(
-            forName: UIScene.didEnterBackgroundNotification, object: nil, queue: nil
-        ) { [weak self] note in
-            guard let scene = note.object as? UIScene else { return }
-            let id = ObjectIdentifier(scene)
-            self?.performOnMain { $0.sceneEnteredBackground(id) }
-        })
-    }
-    #else
-    public func watchSystemScenes() {}
-    #endif
-
     #if canImport(SwiftUI)
-    /// The app's scene phase as a place. Inactive is the last scene leaving
-    /// the active state, which is when submissions have to stop.
+    /// The app's scene phase as a place. The app's phase is active while
+    /// any window is, so it turns inactive when the last active one does.
+    /// Inactive, as with the app switcher or Control Center, already counts
+    /// as away, so nothing new reaches the graphics chip on the way out.
     public nonisolated static func place(for phase: ScenePhase) -> AppPlace {
         switch phase {
         case .active: .foreground
-        case .inactive, .background: .background
-        @unknown default: .background
+        default: .background
         }
     }
 
@@ -147,41 +88,32 @@ public final class OnDeviceForeground {
     }
     #endif
 
-    private nonisolated func performOnMain(_ body: @MainActor (OnDeviceForeground) -> Void) {
-        let run = {
-            MainActor.assumeIsolated {
-                body(self)
-            }
+    /// Asks for background time on iPhone and iPad until `work` ends.
+    public static func keepOpen(_ work: Task<Void, Never>) {
+        #if os(iOS)
+        let application = UIApplication.shared
+        let ticket = BackgroundTicket()
+        ticket.id = application.beginBackgroundTask(withName: "OnDeviceModelStop") {
+            ticket.end(application)
         }
-        if Thread.isMainThread {
-            run()
-        } else {
-            DispatchQueue.main.sync(execute: run)
+        Task { @MainActor in
+            await work.value
+            ticket.end(application)
         }
+        #endif
     }
 }
 
-/// Notification tokens for the scene watch. Removed when the watcher goes.
-private final class SceneWatch: @unchecked Sendable {
-    private let lock = NSLock()
-    private var tokens: [any NSObjectProtocol] = []
+#if os(iOS)
+/// One background task's id, ended once.
+@MainActor
+private final class BackgroundTicket {
+    var id = UIBackgroundTaskIdentifier.invalid
 
-    var isEmpty: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return tokens.isEmpty
-    }
-
-    func add(_ token: any NSObjectProtocol) {
-        lock.lock()
-        tokens.append(token)
-        lock.unlock()
-    }
-
-    deinit {
-        let center = NotificationCenter.default
-        for token in tokens {
-            center.removeObserver(token)
-        }
+    func end(_ application: UIApplication) {
+        guard id != .invalid else { return }
+        application.endBackgroundTask(id)
+        id = .invalid
     }
 }
+#endif

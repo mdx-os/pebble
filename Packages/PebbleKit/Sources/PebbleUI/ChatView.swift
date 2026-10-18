@@ -2,6 +2,9 @@ import PebbleCore
 import PebbleModel
 #if canImport(SwiftUI)
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 /// The first screen: the agent has a face, a name, and a conversation.
 public struct ChatView: View {
@@ -94,6 +97,13 @@ public struct ChatView: View {
                             .padding(.bottom, 8)
                     }
                     transcript
+                    if let offer = controller.reconOffer {
+                        ReconOfferButtons(question: controller.conversation.turns.first { $0.id == offer.turnID }?.text,
+                                          onYes: { controller.acceptReconOffer() },
+                                          onNo: { controller.declineReconOffer() })
+                            .id(Self.offerID)
+                            .transition(Motion.arrival(reduceMotion: reduceMotion))
+                    }
                     if controller.conversation.isWaitingForPerson {
                         starterJobs
                     }
@@ -116,11 +126,11 @@ public struct ChatView: View {
             .onAppear {
                 // Wait one pass so layout is done before jumping to the end.
                 DispatchQueue.main.async {
-                    Self.scrollToLatest(controller.conversation, with: scroller, animated: false)
+                    Self.scrollToLatest(controller, with: scroller, animated: false)
                 }
             }
             .onChange(of: controller.conversation.turns.count) {
-                Self.scrollToLatest(controller.conversation, with: scroller, animated: !reduceMotion)
+                Self.scrollToLatest(controller, with: scroller, animated: !reduceMotion)
                 if let line = Self.replyLanded(in: controller, covered: covered) {
                     AccessibilityNotification.Announcement(line).post()
                 }
@@ -254,14 +264,25 @@ public struct ChatView: View {
     }
 
     /// New replies land below the fold on small screens, so follow them.
-    private static func scrollToLatest(_ conversation: Conversation, with scroller: ScrollViewProxy, animated: Bool) {
-        guard let last = conversation.turns.last?.id else { return }
-        if animated {
-            withAnimation(.easeOut(duration: 0.25)) { scroller.scrollTo(last, anchor: .bottom) }
+    /// An offer's buttons sit under its line, so they come into view too.
+    private static func scrollToLatest(_ controller: ChatController, with scroller: ScrollViewProxy, animated: Bool) {
+        let target: AnyHashable
+        if controller.reconOffer != nil {
+            target = offerID
+        } else if let last = controller.conversation.turns.last?.id {
+            target = last
         } else {
-            scroller.scrollTo(last, anchor: .bottom)
+            return
+        }
+        if animated {
+            withAnimation(.easeOut(duration: 0.25)) { scroller.scrollTo(target, anchor: .bottom) }
+        } else {
+            scroller.scrollTo(target, anchor: .bottom)
         }
     }
+
+    /// Where an offer's buttons sit, so the chat can follow them.
+    static let offerID = "reconOffer"
 
     /// Says "thinking" once, a beat after the dots appear, unless the reply
     /// lands first.
@@ -469,6 +490,18 @@ final class ChatController: ObservableObject {
     /// Goes up by one each time the person sends something by hand, from
     /// the chat or from Today. `SendTap` plays the light tap for it.
     @Published private(set) var sentCount = 0
+    /// An offer to look into something, waiting for the person's tap.
+    @Published private(set) var reconOffer: ReconOffer?
+    /// Starts looking into a topic, after the person taps Look into it, and
+    /// says what came of it: started, one already going or ready on Today
+    /// (with the line to say), or nothing could start. Nil means this chat
+    /// can't start one, so it never offers. The second value is this chat's
+    /// model's place: when it stays on this device the recon keeps that
+    /// promise, and a line about one already going says if it may not.
+    var lookInto: ((_ topic: String, _ place: PrivacyPlace) -> ReconTap)?
+    /// True while the only pages there are to read are examples, so the
+    /// offer says so rather than promise real sources.
+    var reconReadsExamples = false
     /// True while the chat's last line is the person's and no reply took
     /// it: the reply failed or was stopped. Only then are the same words
     /// sent again a retry rather than a new line.
@@ -593,6 +626,19 @@ final class ChatController: ObservableObject {
         if byHand { sentCount += 1 }
         failure = nil
         unheardReply = nil
+        // Saying something else lets an old offer go.
+        reconOffer = nil
+        // Care comes first: only a message that gets no care reply can be
+        // an offer, and the offer starts nothing until the person taps it.
+        if lookInto != nil, !CareCheck.answersWithCare(conversation.turns),
+           let topic = ReconIntent.topic(in: trimmed),
+           let offered = try? conversation.appendingAgent(
+               ReconWords.offer(topic, examples: reconReadsExamples, place: privacyPlace)) {
+            conversation = offered
+            reconOffer = ReconOffer(topic: topic, turnID: offered.turns.last?.id)
+            unheardReply = offered.turns.last?.text
+            return
+        }
         isReplying = true
         replyGeneration += 1
         let generation = replyGeneration
@@ -647,12 +693,48 @@ final class ChatController: ObservableObject {
         }
     }
 
+    /// The person tapped Look into it. Starts it once, and says so. A chat
+    /// that said it stays on this device keeps the recon here too. One
+    /// already on that topic, from Today or another chat, isn't run twice.
+    func acceptReconOffer() {
+        guard let offer = reconOffer else { return }
+        reconOffer = nil
+        switch lookInto?(offer.topic, model.privacyPlace) ?? .couldNotStart {
+        case .started: say(ReconWords.started)
+        case .already(let line): say(line)
+        case .couldNotStart: say(ReconWords.couldNotStart)
+        }
+    }
+
+    /// Forget everything ran: the offer goes with no line said, so a tap
+    /// can never start a recon on a topic from before it.
+    func forgetReconOffer() {
+        reconOffer = nil
+    }
+
+    /// The person tapped Not now. Nothing starts.
+    func declineReconOffer() {
+        guard reconOffer != nil else { return }
+        reconOffer = nil
+        say(ReconWords.offerDeclined)
+    }
+
+    /// Adds a line said on this device, waiting to be read aloud like any
+    /// reply, so the answer to a tap is heard as well as seen.
+    private func say(_ line: String) {
+        guard let next = try? conversation.appendingAgent(line) else { return }
+        unheardReply = next.turns.last?.text
+        conversation = next
+    }
+
     /// What to say when no reply came. Choosing not to send is not a failure.
     nonisolated static func failureLine(for error: Error?) -> String {
         if error as? MLXChatModelError == .tooLong { return OnDeviceModelWords.tooLong }
         if error as? MLXChatModelError == .interrupted { return OnDeviceModelWords.interrupted }
         return switch error as? CloudModelError {
         case .notSent: CloudWords.notSent
+        // Taken away unanswered, so it never says the person chose.
+        case .withdrawn: CloudWords.withdrawn
         case .off: CloudWords.turnedOff
         case .staysHere: CloudWords.staysHere
         case .notesUnreadable: CloudWords.notesUnreadable
@@ -663,8 +745,8 @@ final class ChatController: ObservableObject {
     /// True for a line that says the words are back in the composer, so it
     /// goes once the person clears them.
     nonisolated static func pointsAtTheDraft(_ failure: String) -> Bool {
-        [FirstConversation.couldNotAnswer, CloudWords.notSent, CloudWords.turnedOff, CloudWords.notesUnreadable,
-         OnDeviceModelWords.tooLong, OnDeviceModelWords.interrupted]
+        [FirstConversation.couldNotAnswer, CloudWords.notSent, CloudWords.withdrawn, CloudWords.turnedOff,
+         CloudWords.notesUnreadable, OnDeviceModelWords.tooLong, OnDeviceModelWords.interrupted]
             .contains(failure)
     }
 
@@ -704,7 +786,7 @@ final class ChatController: ObservableObject {
         if error as? MLXChatModelError == .tooLong { return true }
         if error as? CloudTransportError == .headersNotShown { return true }
         return switch error as? CloudModelError {
-        case .notSent, .off, .staysHere, .notesUnreadable: true
+        case .notSent, .withdrawn, .off, .staysHere, .notesUnreadable: true
         case .unreadableReply, nil: false
         }
     }
@@ -775,6 +857,104 @@ final class ChatController: ObservableObject {
     func takeUnheardFailure() -> String? {
         defer { unheardFailure = nil }
         return unheardFailure
+    }
+}
+
+/// What came of a tap on Look into it, as Today's runner decided it.
+enum ReconTap: Equatable {
+    case started
+    /// One on that topic is already going or ready. The line says which.
+    case already(String)
+    case couldNotStart
+}
+
+/// An offer in the chat to look into something.
+struct ReconOffer: Equatable {
+    let topic: String
+    /// The agent's line that made the offer.
+    let turnID: UUID?
+}
+
+/// The two choices under an offer to look into something. Nothing starts
+/// until Look into it is tapped.
+struct ReconOfferButtons: View {
+    /// The offer as it was said, so focus waits until VoiceOver has read it.
+    var question: String? = nil
+    let onYes: () -> Void
+    let onNo: () -> Void
+
+    enum Choice: Hashable { case yes, no }
+
+    /// Where VoiceOver goes once the question has been read, so a person who
+    /// just heard it lands on its answers rather than hunting.
+    static let arrivalFocus: Choice = .yes
+
+    /// Where focus goes when VoiceOver finishes saying `finished`. Only
+    /// once the question itself is done: moving focus sooner would cut it
+    /// off, and the person would hear "Look into it" without the offer.
+    /// Nil for any other line, so focus stays where the person left it.
+    ///
+    /// The announcement only has to hold the whole question, not equal it,
+    /// so a line read with something before or after it, or with other
+    /// spacing, still lands focus once the question is done.
+    ///
+    /// Only when it was read to the end: one cut off, as when the person
+    /// swiped on, says it wasn't, and focus stays where they went.
+    static func focusOnceRead(afterFinishing finished: String?, question: String?,
+                              wasSuccessful: Bool?) -> Choice? {
+        guard wasSuccessful == true, let finished = finished.map(tidy), let question = question.map(tidy),
+              !question.isEmpty, finished.contains(question) else { return nil }
+        return arrivalFocus
+    }
+
+    /// Spacing and case set aside, so only the words count.
+    private static func tidy(_ line: String) -> String {
+        line.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ").lowercased()
+    }
+
+    /// What VoiceOver says each choice does.
+    static func hint(_ choice: Choice) -> String {
+        switch choice {
+        case .yes: ReconWords.offerYesHint
+        case .no: ReconWords.offerNoHint
+        }
+    }
+
+    @AccessibilityFocusState private var focus: Choice?
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) { buttons }
+            VStack(alignment: .leading, spacing: 8) { buttons }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("reconOffer")
+        #if os(iOS)
+        // Only after VoiceOver has finished reading the question. On the Mac
+        // there is no such signal, so focus is left alone and the buttons
+        // come next when the person moves on.
+        .onReceive(NotificationCenter.default.publisher(for: UIAccessibility.announcementDidFinishNotification)) { note in
+            let finished = note.userInfo?[UIAccessibility.announcementStringValueUserInfoKey] as? String
+            let read = (note.userInfo?[UIAccessibility.announcementWasSuccessfulUserInfoKey] as? NSNumber)?.boolValue
+            if let choice = Self.focusOnceRead(afterFinishing: finished, question: question, wasSuccessful: read) {
+                focus = choice
+            }
+        }
+        #endif
+    }
+
+    @ViewBuilder
+    private var buttons: some View {
+        Button(ReconWords.offerYes, action: onYes)
+            .buttonStyle(CardButtonStyle(kind: .primary))
+            .accessibilityHint(Self.hint(.yes))
+            .accessibilityFocused($focus, equals: .yes)
+            .accessibilityIdentifier("reconOfferYes")
+        Button(ReconWords.offerNo, action: onNo)
+            .buttonStyle(CardButtonStyle(kind: .quiet))
+            .accessibilityHint(Self.hint(.no))
+            .accessibilityFocused($focus, equals: .no)
+            .accessibilityIdentifier("reconOfferNo")
     }
 }
 

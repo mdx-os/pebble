@@ -1,6 +1,4 @@
 import Foundation
-import MLX
-import MLXLMCommon
 import PebbleCore
 @testable import PebbleModel
 import Testing
@@ -78,6 +76,55 @@ private struct CountingGenerator: OnDeviceGenerating {
     private static func finishLastWork(_ seconds: TimeInterval) {
         Thread.sleep(forTimeInterval: seconds)
     }
+
+    func drain() async {}
+}
+
+/// What happened on the model, in order.
+private final class Events: @unchecked Sendable {
+    private let lock = NSLock()
+    private var all: [String] = []
+
+    func add(_ event: String) {
+        lock.withLock { all.append(event) }
+    }
+
+    var list: [String] {
+        lock.withLock { all }
+    }
+
+    /// Waits until `event` has happened, up to half a minute.
+    func waitFor(_ event: String) async {
+        for _ in 0..<6000 where !list.contains(event) {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+}
+
+/// Stands in for MLX reading a long prompt in chunks: a stop throws at
+/// once, before the last evaluation, so work sent to the graphics chip is
+/// still running when `reply` ends. Only `drain` waits for it.
+private struct PrefillGenerator: OnDeviceGenerating {
+    let events: Events
+
+    func reply(to transcript: [ChatTurn]) async throws -> String {
+        let text = transcript.last?.text ?? ""
+        events.add("start \(text)")
+        while true {
+            try Task.checkCancellation()
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+    }
+
+    func drain() async {
+        Self.waitForTheChip()
+        events.add("drained")
+    }
+
+    /// Blocks, as a synchronize does.
+    private static func waitForTheChip() {
+        Thread.sleep(forTimeInterval: 0.1)
+    }
 }
 
 struct OnDeviceRunnerTests {
@@ -138,159 +185,53 @@ struct OnDeviceRunnerTests {
         #expect(inFlight.started == 1)
         #expect(!MLXChatModelError.interrupted.isLoadFailure)
 
-        await runner.returnToForeground()
+        runner.returnToForeground()
         let quick = MLXChatModel(directory: folder, runner: runner,
                                  generator: CountingGenerator(inFlight: inFlight, runs: .milliseconds(5)))
         #expect(try await quick.reply(to: turns("back")) == "back")
     }
 
-    /// The blocking stop, as the background callback calls it, does not
-    /// return while the reply is still finishing its last work.
-    @Test func leaveForegroundAndWaitBlocksUntilTheReplyEnds() async throws {
-        let inFlight = InFlight()
+    /// A reply stopped while the prompt is read throws with work still on
+    /// the graphics chip. The next reply starts only after that work drained.
+    @Test func aReplyStoppedInPrefillDrainsBeforeTheNextStarts() async throws {
+        let events = Events()
         let runner = OnDeviceRunner()
-        let model = MLXChatModel(directory: folder, runner: runner,
-                                 generator: CountingGenerator(inFlight: inFlight, runs: .seconds(60), settles: 0.05))
-        let under = Task { try await model.reply(to: turns("under way")) }
-        await inFlight.waitForStarts(1)
-        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-            DispatchQueue.global(qos: .userInitiated).async {
-                runner.leaveForegroundAndWait()
-                done.resume()
-            }
-        }
-        #expect(inFlight.running == 0)
-        await #expect(throws: MLXChatModelError.interrupted) { try await under.value }
-    }
-
-    /// Cancelling between real prefill chunks throws before the finishing
-    /// eval. The runner synchronizes the chip before the next reply starts.
-    @Test func aCancelBetweenPrefillChunksSyncsBeforeTheNextReply() async throws {
-        let order = PrefillOrder()
-        let prefill = ChunkedPrefill(order: order)
-        let runner = OnDeviceRunner {
-            OnDeviceGPU.finish()
-            order.synced()
-        }
-        let model = MLXChatModel(directory: folder, runner: runner, generator: prefill)
-        let first = Task { try await model.reply(to: turns("a long prompt")) }
-        await prefill.waitForFirstChunk()
+        let model = MLXChatModel(directory: folder, runner: runner, generator: PrefillGenerator(events: events))
+        let stopped = Task { try await model.reply(to: turns("stopped")) }
+        await events.waitFor("start stopped")
         let next = Task { try await model.reply(to: turns("next")) }
-        first.cancel()
-        prefill.releaseFirstChunk()
-        await #expect(throws: CancellationError.self) { try await first.value }
-        #expect(try await next.value == "next")
-        // The first reply ends, then the chip is synced, then the next reply
-        // starts. A sync that runs before the prefill returns, or a next reply
-        // that starts before the sync, fails this.
-        #expect(order.events == ["first@0", "ended@0", "sync@1", "next@1", "sync@2"])
-        #expect(prefill.submitted >= 1)
-        #expect(prefill.submitted == prefill.submittedWhenNextStarted)
-    }
-}
-
-/// Order of prefill, graphics-chip sync, and the next reply.
-private final class PrefillOrder: @unchecked Sendable {
-    private let lock = NSLock()
-    private var syncs = 0
-    private(set) var events: [String] = []
-
-    func record(_ name: String) {
-        lock.lock()
-        events.append("\(name)@\(syncs)")
-        lock.unlock()
+        stopped.cancel()
+        await #expect(throws: CancellationError.self) { try await stopped.value }
+        await events.waitFor("start next")
+        next.cancel()
+        _ = try? await next.value
+        #expect(events.list == ["start stopped", "drained", "start next", "drained"])
     }
 
-    func synced() {
-        lock.lock()
-        syncs += 1
-        events.append("sync@\(syncs)")
-        lock.unlock()
-    }
-}
-
-/// The chunk loop `LLMModel.prepare` uses. Each chunk submits with
-/// `asyncEval`. Cancellation throws on the next chunk, before `eval`.
-private final class ChunkedPrefill: OnDeviceGenerating, @unchecked Sendable {
-    let order: PrefillOrder
-    private let gate = NSCondition()
-    private var release = false
-    private let lock = NSLock()
-    private var calls = 0
-    private var chunksSubmitted = 0
-    private var chunksAtNextStart = 0
-    /// Arrays kept until the reply returns, so a sync after the throw still sees them.
-    private var held: [MLXArray] = []
-
-    init(order: PrefillOrder) {
-        self.order = order
+    /// Leaving the foreground returns only once the stopped reply's work
+    /// on the graphics chip has drained.
+    @Test func leavingTheForegroundWaitsForTheDrain() async throws {
+        let events = Events()
+        let runner = OnDeviceRunner()
+        let model = MLXChatModel(directory: folder, runner: runner, generator: PrefillGenerator(events: events))
+        let under = Task { try await model.reply(to: turns("under way")) }
+        await events.waitFor("start under way")
+        await runner.leaveForeground()
+        events.add("background done")
+        await #expect(throws: MLXChatModelError.interrupted) { try await under.value }
+        #expect(events.list == ["start under way", "drained", "background done"])
     }
 
-    var submittedWhenNextStarted: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return chunksAtNextStart
-    }
-
-    func reply(to transcript: [ChatTurn]) async throws -> String {
-        lock.lock()
-        calls += 1
-        let call = calls
-        if call > 1 { chunksAtNextStart = chunksSubmitted }
-        lock.unlock()
-        order.record(call == 1 ? "first" : "next")
-        if call > 1 { return transcript.last?.text ?? "" }
-        defer { order.record("ended") }
-
-        let prefill = PrefillParameters(stepSize: 2)
-        var chunks = 0
-        _ = try prefill.forEachChunk(total: 8, reserving: 1) { _ in
-            let squared = MLXArray([Float(1), Float(2), Float(3)]) * MLXArray([Float(1), Float(2), Float(3)])
-            self.hold(squared)
-            asyncEval(squared)
-            chunks += 1
-            self.noteChunk()
-            if chunks == 1 { self.waitUntilReleased() }
-        }
-        return transcript.last?.text ?? ""
-    }
-
-    var submitted: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return chunksSubmitted
-    }
-
-    func waitForFirstChunk() async {
-        for _ in 0..<6000 where submitted == 0 {
-            try? await Task.sleep(for: .milliseconds(5))
-        }
-    }
-
-    func releaseFirstChunk() {
-        gate.lock()
-        release = true
-        gate.broadcast()
-        gate.unlock()
-    }
-
-    private func hold(_ value: MLXArray) {
-        lock.lock()
-        held.append(value)
-        lock.unlock()
-    }
-
-    private func noteChunk() {
-        lock.lock()
-        chunksSubmitted += 1
-        lock.unlock()
-    }
-
-    private func waitUntilReleased() {
-        gate.lock()
-        while !release {
-            gate.wait()
-        }
-        gate.unlock()
+    /// Once the gate is closed nothing is let onto the model, even a reply
+    /// asked for in the same moment.
+    @Test func aClosedGateAdmitsNothing() async throws {
+        let events = Events()
+        let runner = OnDeviceRunner()
+        let model = MLXChatModel(directory: folder, runner: runner, generator: PrefillGenerator(events: events))
+        runner.closeGate()
+        #expect(runner.isAway)
+        await #expect(throws: MLXChatModelError.interrupted) { try await model.reply(to: turns("late")) }
+        await runner.drained()
+        #expect(events.list.isEmpty)
     }
 }

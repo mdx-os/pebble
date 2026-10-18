@@ -1,192 +1,133 @@
 import Foundation
-import MLX
 
 /// Lets one on-device reply run at a time, from loading and reading the
 /// prompt to the last word or a stop, and none while the app is away.
 ///
 /// Each reply holds its own cache, about 450 MB at the full context, so two
 /// at once, as from two windows, would pass the memory the model was let in
-/// with. A reply that comes while another runs waits its turn. A stopped
-/// reply has finished all its work on the model, including a graphics-chip
-/// sync, before the next one starts. That sync covers a cancel while the
-/// prompt is still being read: the iterator can throw before its last
-/// `eval`, and before a generation task exists to wait on.
+/// with. A reply that comes while another runs waits its turn. However a
+/// reply ends, its work on the graphics chip is drained before the turn
+/// passes, so a stopped reply has finished all its work before the next one
+/// starts.
 ///
 /// On iPhone and iPad the system refuses work on the graphics chip once the
-/// app is no longer active, so leaving the foreground stops the reply under
-/// way and waits until that sync has finished. No new one starts until the
-/// app is active again.
+/// app is in the background. `closeGate` shuts the way in at once and stops
+/// the reply under way, `drained` waits for it to drain, and no new one
+/// starts until `returnToForeground`.
 public actor OnDeviceRunner {
     /// The app's one runner, shared by every on-device model it makes.
     public static let shared = OnDeviceRunner()
 
-    /// Shared with the foreground watcher so a scene callback can wait
-    /// without hopping onto this actor.
-    nonisolated private let state: RunnerState
-    private let synchronize: @Sendable () -> Void
+    private var busy = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private let gate = Gate()
 
-    public init(synchronize: @escaping @Sendable () -> Void = OnDeviceGPU.finish) {
-        self.synchronize = synchronize
-        self.state = RunnerState()
-    }
+    public init() {}
 
-    /// Runs `work` once no other reply is running. Throws
-    /// `MLXChatModelError.interrupted` when the app is away, or goes away
-    /// before `work` ends. Synchronizes the graphics chip before returning
-    /// the turn, whether `work` finished, threw, or was cancelled.
-    func run(_ work: @escaping @Sendable () async throws -> String) async throws -> String {
-        try await state.acquire()
-        defer {
-            synchronize()
-            state.release()
-        }
-        guard !state.isAway else { throw MLXChatModelError.interrupted }
+    /// Runs `work` once no other reply is running, then `drain`, whether
+    /// `work` returned, threw or was stopped, before the next one starts.
+    /// Throws `MLXChatModelError.interrupted` when the app is away, or goes
+    /// away before `work` ends.
+    func run(_ work: @escaping @Sendable () async throws -> String,
+             drain: @escaping @Sendable () async -> Void) async throws -> String {
+        guard !gate.isClosed else { throw MLXChatModelError.interrupted }
+        await takeTurn()
+        defer { passTurn() }
         try Task.checkCancellation()
-        let task = Task { try await work() }
-        state.setCurrent(task)
+        guard let task = gate.admit(work) else { throw MLXChatModelError.interrupted }
         let result = await withTaskCancellationHandler {
             await task.result
         } onCancel: {
             task.cancel()
         }
-        if case .failure = result, state.isAway { throw MLXChatModelError.interrupted }
+        await drain()
+        gate.finished(task)
+        if case .failure = result, gate.isClosed { throw MLXChatModelError.interrupted }
         return try result.get()
     }
 
-    /// The app left the active state. No reply starts from here, the one
-    /// under way is stopped, and this returns once its graphics-chip work
-    /// has been synchronized.
+    /// The app is leaving the screen. From this call on no reply starts,
+    /// and the one under way is stopped. Returns at once; `leaveForeground`
+    /// waits for the stopped reply to drain.
+    public nonisolated func closeGate() {
+        gate.close()
+    }
+
+    /// The app left the foreground. Closes the gate, then returns once the
+    /// reply under way has stopped and drained.
     public func leaveForeground() async {
-        state.markAwayAndCancel()
-        await state.waitUntilIdle()
+        gate.close()
+        await drained()
     }
 
-    /// Same stop as `leaveForeground`, but blocks the caller until the
-    /// graphics chip is idle. The scene callback that is about to enter the
-    /// background calls this and does not return first.
-    public nonisolated func leaveForegroundAndWait() {
-        state.markAwayAndCancel()
-        state.waitUntilIdleBlocking()
+    /// Returns once the reply under way, if any, has ended and drained.
+    /// Leaves the gate as it is.
+    public func drained() async {
+        await takeTurn()
+        passTurn()
     }
 
-    /// The app is active again, so replies can start.
-    public func returnToForeground() {
-        state.markBack()
-    }
-
-    /// Same as `returnToForeground`, for the scene callback.
-    public nonisolated func returnToForegroundNow() {
-        state.markBack()
+    /// The app is in front again, so replies can start.
+    public nonisolated func returnToForeground() {
+        gate.open()
     }
 
     /// True while the app is away and nothing new starts.
-    public var isAway: Bool { state.isAway }
-}
+    public nonisolated var isAway: Bool { gate.isClosed }
 
-/// Finishes graphics-chip work the model already submitted.
-enum OnDeviceGPU {
-    static func finish() {
-        Stream.defaultStream.synchronize()
-    }
-}
-
-/// The turn and the away flag, so a scene callback can close the gate and
-/// wait without the actor.
-private final class RunnerState: @unchecked Sendable {
-    private let condition = NSCondition()
-    private var away = false
-    private var busy = false
-    private var current: Task<String, Error>?
-    private var turnWaiters: [CheckedContinuation<Void, Never>] = []
-    private var idleWaiters: [CheckedContinuation<Void, Never>] = []
-
-    var isAway: Bool {
-        condition.lock()
-        defer { condition.unlock() }
-        return away
-    }
-
-    /// Takes the turn. Throws `MLXChatModelError.interrupted` when the app
-    /// is already away. After this returns, the caller holds the turn until
-    /// `release`.
-    func acquire() async throws {
-        condition.lock()
-        if away {
-            condition.unlock()
-            throw MLXChatModelError.interrupted
-        }
-        if !busy {
+    private func takeTurn() async {
+        guard busy else {
             busy = true
-            condition.unlock()
             return
         }
-        await withCheckedContinuation { (waiter: CheckedContinuation<Void, Never>) in
-            turnWaiters.append(waiter)
-            condition.unlock()
-        }
+        await withCheckedContinuation { waiting.append($0) }
     }
 
-    /// Ends the turn. The next reply waiting in line takes it, or it is free
-    /// and anyone waiting for the chip to go idle is told.
-    func release() {
-        condition.lock()
-        current = nil
-        if turnWaiters.isEmpty {
+    /// Hands the turn straight to the next in line, or frees it.
+    private func passTurn() {
+        if waiting.isEmpty {
             busy = false
-            let idle = idleWaiters
-            idleWaiters.removeAll()
-            condition.broadcast()
-            condition.unlock()
-            for waiter in idle { waiter.resume() }
         } else {
-            let next = turnWaiters.removeFirst()
-            condition.unlock()
-            next.resume()
+            waiting.removeFirst().resume()
+        }
+    }
+}
+
+/// The way in to the model, closed and checked under one lock, so a reply
+/// either starts before the gate closes, and is stopped by it, or never starts.
+private final class Gate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var closed = false
+    private var current: Task<String, Error>?
+
+    var isClosed: Bool {
+        lock.withLock { closed }
+    }
+
+    func close() {
+        lock.withLock {
+            closed = true
+            current?.cancel()
         }
     }
 
-    func setCurrent(_ task: Task<String, Error>) {
-        condition.lock()
-        current = task
-        let shouldCancel = away
-        condition.unlock()
-        if shouldCancel { task.cancel() }
+    func open() {
+        lock.withLock { closed = false }
     }
 
-    func markAwayAndCancel() {
-        condition.lock()
-        away = true
-        let task = current
-        condition.unlock()
-        task?.cancel()
-    }
-
-    func markBack() {
-        condition.lock()
-        away = false
-        condition.unlock()
-    }
-
-    func waitUntilIdle() async {
-        await withCheckedContinuation { (waiter: CheckedContinuation<Void, Never>) in
-            condition.lock()
-            if !busy {
-                condition.unlock()
-                waiter.resume()
-                return
-            }
-            idleWaiters.append(waiter)
-            condition.unlock()
+    /// Starts `work` unless the gate is closed.
+    func admit(_ work: @escaping @Sendable () async throws -> String) -> Task<String, Error>? {
+        lock.withLock {
+            guard !closed else { return nil }
+            let task = Task { try await work() }
+            current = task
+            return task
         }
     }
 
-    /// Blocks until the turn is free. Called on the main thread from the
-    /// background callback, which is not a Swift concurrency thread.
-    func waitUntilIdleBlocking() {
-        condition.lock()
-        while busy {
-            condition.wait()
+    func finished(_ task: Task<String, Error>) {
+        lock.withLock {
+            if current == task { current = nil }
         }
-        condition.unlock()
     }
 }

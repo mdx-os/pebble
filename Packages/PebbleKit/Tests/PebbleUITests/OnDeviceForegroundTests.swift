@@ -54,6 +54,59 @@ private final class SlowGenerator: OnDeviceGenerating, @unchecked Sendable {
         if by > 0 { began += 1 }
         lock.unlock()
     }
+
+    func drain() async {}
+}
+
+/// What happened, in order: on the model, and as the app left the screen.
+private final class Events: @unchecked Sendable {
+    private let lock = NSLock()
+    private var all: [String] = []
+
+    func add(_ event: String) {
+        lock.withLock { all.append(event) }
+    }
+
+    var list: [String] {
+        lock.withLock { all }
+    }
+
+    /// Waits until `event` has happened, up to half a minute.
+    func waitFor(_ event: String) async {
+        for _ in 0..<6000 where !list.contains(event) {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+}
+
+/// Stands in for MLX: runs until stopped, and leaves work on the graphics
+/// chip that only `drain` waits for.
+private struct DrainingGenerator: OnDeviceGenerating {
+    let events: Events
+
+    func reply(to transcript: [ChatTurn]) async throws -> String {
+        events.add("start \(transcript.last?.text ?? "")")
+        while true {
+            try Task.checkCancellation()
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+    }
+
+    func drain() async {
+        Self.waitForTheChip()
+        events.add("drained")
+    }
+
+    /// Blocks, as a synchronize does.
+    private static func waitForTheChip() {
+        Thread.sleep(forTimeInterval: 0.1)
+    }
+}
+
+/// Every task the controller asked to keep the app open for.
+@MainActor
+private final class KeptOpen {
+    var tasks: [Task<Void, Never>] = []
 }
 
 @MainActor
@@ -65,23 +118,28 @@ struct OnDeviceForegroundTests {
         [ChatTurn(id: UUID(), speaker: .person, text: text)]
     }
 
-    /// iPhone and iPad: leaving the active state stops the reply under way
-    /// before the call returns, and refuses new ones until the app is active again.
+    /// iPhone and iPad: going to the background stops the reply under way,
+    /// keeps the app open until it has ended, and refuses new ones until
+    /// the app is back in front.
     @Test func goingToTheBackgroundStopsTheReplyAndWaitsForIt() async throws {
         let runner = OnDeviceRunner()
         let generator = SlowGenerator()
         let model = MLXChatModel(directory: folder, runner: runner, generator: generator)
-        let foreground = OnDeviceForeground(runner: runner, stopsInBackground: true)
+        let kept = KeptOpen()
+        let foreground = OnDeviceForeground(runner: runner, stopsInBackground: true) { kept.tasks.append($0) }
 
         let reply = Task { try await model.reply(to: turns("Plan my week")) }
         await generator.waitForStart()
         foreground.moved(to: .background)
+        #expect(kept.tasks.count == 1)
+        await foreground.settling?.value
         #expect(generator.running == 0)
         await #expect(throws: MLXChatModelError.interrupted) { try await reply.value }
         await #expect(throws: MLXChatModelError.interrupted) { try await model.reply(to: turns("Still there?")) }
         #expect(generator.started == 1)
 
         foreground.moved(to: .foreground)
+        await foreground.settling?.value
         let quick = MLXChatModel(directory: folder, runner: runner, generator: SlowGenerator(runs: .milliseconds(5)))
         #expect(try await quick.reply(to: turns("Hello")) == "An answer to Hello")
     }
@@ -91,88 +149,86 @@ struct OnDeviceForegroundTests {
         let runner = OnDeviceRunner()
         let generator = SlowGenerator(runs: .milliseconds(100))
         let model = MLXChatModel(directory: folder, runner: runner, generator: generator)
-        let foreground = OnDeviceForeground(runner: runner, stopsInBackground: false)
+        let kept = KeptOpen()
+        let foreground = OnDeviceForeground(runner: runner, stopsInBackground: false) { kept.tasks.append($0) }
 
         let reply = Task { try await model.reply(to: turns("Plan my week")) }
         await generator.waitForStart()
         foreground.moved(to: .background)
+        #expect(foreground.settling == nil)
+        #expect(kept.tasks.isEmpty)
         #expect(try await reply.value == "An answer to Plan my week")
-        #expect(await !runner.isAway)
+        #expect(!runner.isAway)
     }
 
-    /// Moves run in order, so back in front after a quick trip away ends in front.
+    /// Moves take effect in order, so back in front after a quick trip away ends in front.
     @Test func movesRunInOrder() async throws {
         let runner = OnDeviceRunner()
-        let foreground = OnDeviceForeground(runner: runner, stopsInBackground: true)
+        let foreground = OnDeviceForeground(runner: runner, stopsInBackground: true) { _ in }
         foreground.moved(to: .background)
         foreground.moved(to: .foreground)
-        #expect(await !runner.isAway)
+        await foreground.settling?.value
+        #expect(!runner.isAway)
         foreground.moved(to: .background)
-        #expect(await runner.isAway)
+        await foreground.settling?.value
+        #expect(runner.isAway)
     }
 
-    /// Inactive is the last scene leaving the active state, so it closes the
-    /// gate the same way the background does. The chip is refused from then.
-    @Test func deactivationClosesTheGate() async throws {
+    /// The last active window turning inactive closes the gate before the
+    /// handler returns: the reply under way is stopped, nothing asked for
+    /// after it reaches the model, and the kept-open time ends only after
+    /// the stopped reply's work on the graphics chip has drained.
+    @Test func inactiveClosesTheGateAndDrainsBeforeTheBackgroundEnds() async throws {
+        let events = Events()
+        let runner = OnDeviceRunner()
+        let model = MLXChatModel(directory: folder, runner: runner, generator: DrainingGenerator(events: events))
+        let kept = KeptOpen()
+        let foreground = OnDeviceForeground(runner: runner, stopsInBackground: true) { work in
+            kept.tasks.append(Task {
+                await work.value
+                events.add("background done")
+            })
+        }
+
+        let under = Task { try await model.reply(to: turns("under way")) }
+        await events.waitFor("start under way")
+        foreground.follow(.inactive)
+        #expect(runner.isAway)
+        #expect(kept.tasks.count == 1, "the app is kept open from the moment it turns inactive")
+        let late = Task { try await model.reply(to: turns("after inactive")) }
+        foreground.follow(.background)
+        #expect(kept.tasks.count == 1)
+        for task in kept.tasks { await task.value }
+        await #expect(throws: MLXChatModelError.interrupted) { try await under.value }
+        await #expect(throws: MLXChatModelError.interrupted) { try await late.value }
+        #expect(events.list == ["start under way", "drained", "background done"])
+    }
+
+    /// With nothing running, a reply asked for after the app turned
+    /// inactive, while it is still on its way out, never reaches the model.
+    @Test func nothingIsAdmittedAfterInactive() async throws {
+        let events = Events()
+        let runner = OnDeviceRunner()
+        let model = MLXChatModel(directory: folder, runner: runner, generator: DrainingGenerator(events: events))
+        let foreground = OnDeviceForeground(runner: runner, stopsInBackground: true) { _ in }
+        foreground.follow(.inactive)
+        let late = Task { try await model.reply(to: turns("after inactive")) }
+        try await Task.sleep(for: .milliseconds(100))
+        foreground.follow(.background)
+        await foreground.settling?.value
+        await #expect(throws: MLXChatModelError.interrupted) { try await late.value }
+        #expect(events.list.isEmpty)
+    }
+
+    /// Anything but active is away: inactive, as with the app switcher, is
+    /// on the way out, and nothing new should reach the graphics chip.
+    @Test func anythingButActiveIsAway() {
         #expect(OnDeviceForeground.place(for: .active) == .foreground)
-        #expect(OnDeviceForeground.place(for: .inactive) == .background)
         #expect(OnDeviceForeground.place(for: .background) == .background)
+        #expect(OnDeviceForeground.place(for: .inactive) == .background)
         #if os(macOS)
         #expect(!OnDeviceForeground.platformStopsInBackground)
         #endif
-
-        let runner = OnDeviceRunner()
-        let generator = SlowGenerator()
-        let model = MLXChatModel(directory: folder, runner: runner, generator: generator)
-        let foreground = OnDeviceForeground(runner: runner, stopsInBackground: true)
-        let reply = Task { try await model.reply(to: turns("Plan my week")) }
-        await generator.waitForStart()
-        foreground.follow(.inactive)
-        #expect(generator.running == 0)
-        await #expect(throws: MLXChatModelError.interrupted) { try await reply.value }
-    }
-
-    /// One window deactivating leaves a reply alone while another is still
-    /// active. The last one stops it before the call returns.
-    @Test func theLastActiveSceneStopsTheReply() async throws {
-        let runner = OnDeviceRunner()
-        let generator = SlowGenerator()
-        let model = MLXChatModel(directory: folder, runner: runner, generator: generator)
-        let foreground = OnDeviceForeground(runner: runner, stopsInBackground: true)
-        let front = NSObject()
-        let other = NSObject()
-        foreground.sceneActivated(ObjectIdentifier(front))
-        foreground.sceneActivated(ObjectIdentifier(other))
-
-        let reply = Task { try await model.reply(to: turns("Plan my week")) }
-        await generator.waitForStart()
-        foreground.sceneDeactivated(ObjectIdentifier(other))
-        #expect(generator.running == 1)
-        #expect(await !runner.isAway)
-
-        foreground.sceneDeactivated(ObjectIdentifier(front))
-        #expect(generator.running == 0)
-        await #expect(throws: MLXChatModelError.interrupted) { try await reply.value }
-
-        foreground.sceneActivated(ObjectIdentifier(front))
-        let quick = MLXChatModel(directory: folder, runner: runner, generator: SlowGenerator(runs: .milliseconds(5)))
-        #expect(try await quick.reply(to: turns("Hello")) == "An answer to Hello")
-    }
-
-    /// Entering the background with no scene still active does not return
-    /// until the reply has ended.
-    @Test func enteringTheBackgroundWaitsForTheReply() async throws {
-        let runner = OnDeviceRunner()
-        let generator = SlowGenerator()
-        let model = MLXChatModel(directory: folder, runner: runner, generator: generator)
-        let foreground = OnDeviceForeground(runner: runner, stopsInBackground: true)
-        let window = NSObject()
-        foreground.sceneActivated(ObjectIdentifier(window))
-        let reply = Task { try await model.reply(to: turns("Plan my week")) }
-        await generator.waitForStart()
-        foreground.sceneEnteredBackground(ObjectIdentifier(window))
-        #expect(generator.running == 0)
-        await #expect(throws: MLXChatModelError.interrupted) { try await reply.value }
     }
 
     /// In the chat: the message whose reply was stopped stays, its words
@@ -182,13 +238,14 @@ struct OnDeviceForegroundTests {
         let runner = OnDeviceRunner()
         let generator = SlowGenerator()
         let model = OnDeviceChat(MLXChatModel(directory: folder, runner: runner, generator: generator))
-        let foreground = OnDeviceForeground(runner: runner, stopsInBackground: true)
+        let foreground = OnDeviceForeground(runner: runner, stopsInBackground: true) { _ in }
         let controller = ChatController(brand: brand, model: model, names: InMemoryAgentNameStore(),
                                         replyBeat: .zero)
         controller.draft = "Plan my week"
         controller.submit(controller.draft)
         await generator.waitForStart()
         foreground.moved(to: .background)
+        await foreground.settling?.value
         await controller.settled()
 
         #expect(controller.failure == OnDeviceModelWords.interrupted)
@@ -199,6 +256,7 @@ struct OnDeviceForegroundTests {
         #expect(model.active is MLXChatModel, "a stop is not a load failure")
 
         foreground.moved(to: .foreground)
+        await foreground.settling?.value
         let people = controller.conversation.turns.filter { $0.speaker == .person }.count
         let quick = MLXChatModel(directory: folder, runner: runner, generator: SlowGenerator(runs: .milliseconds(5)))
         model.use(quick)

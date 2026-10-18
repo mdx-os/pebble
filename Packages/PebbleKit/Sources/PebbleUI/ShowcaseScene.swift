@@ -24,6 +24,9 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// moment: working, trying another way, waiting on the person, and done.
     /// `tasksLive` plays the same tasks in real time.
     case taskRunning, taskRetrying, taskWaiting, taskDone, tasksLive
+    /// Looking into something: the offer in the chat, the live card while it
+    /// reads, and the summary with its sources. On the sample sources.
+    case reconOffer, reconRunning, reconReady
     /// Today after background work: this morning's summary, made late
     /// because the device was locked, and yesterday's, which never ran.
     /// `memoryBackground` is the memory screen with background work on and
@@ -95,6 +98,16 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     }
             case .todaySummary:
                 summaryHome(brand: brand, looks: looks, at: morning)
+            case .reconOffer:
+                HomeView(
+                    brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
+                    onboarding: InMemoryOnboardingStore(finished: true), memory: Self.sampleMemory(),
+                    looks: looks, conversation: Self.sampleFirstChat(), section: .chat,
+                    feed: [SampleFeedSource()], needsYou: needsYou(at: morning) ?? NeedsYou(rule: .isolated()),
+                    now: { morning }, chatLine: Self.reconRequest
+                )
+            case .reconRunning, .reconReady:
+                reconHome(brand: brand, looks: looks)
             case .shortcuts:
                 KeyboardShortcutsView()
             case .hello, .name, .look, .ideas:
@@ -208,7 +221,8 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         switch self {
         case .todayNeedsYou, .todaySummary: Self.sampleQuestion(at: now)
         case .today, .todayEmpty, .home, .homeMemory: NeedsYou(rule: .isolated())
-        case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive,
+        case .reconOffer: NeedsYou(rule: .isolated())
+        case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive, .reconRunning, .reconReady,
              .askWaiting, .askSheet, .askAnswered, .askClosed, .askLive: NeedsYou(rule: rule)
         default: nil
         }
@@ -217,10 +231,11 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// The scripted tasks a scene shows, asking through `rule`. Nil for
     /// scenes without tasks.
     @MainActor
-    func tasks(rule: AskFirst) -> LocalFakeEngine? {
+    func tasks(rule: AskFirst) -> (any TaskEngine)? {
         switch self {
         case .tasksLive: Self.liveTasks(rule: rule)
         case .taskRunning, .taskRetrying, .taskWaiting, .taskDone: Self.sampleTasks(self, rule: rule)
+        case .reconRunning, .reconReady: Self.sampleRecon(ready: self == .reconReady, rule: rule)
         case .askWaiting, .askSheet, .askAnswered, .askClosed: Self.askTasks(self, rule: rule)
         case .askLive: Self.liveAsks().engine
         default: nil
@@ -419,7 +434,23 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
             tasks: tasks(rule: rule),
             drivesTasks: live,
             kept: kept(), notifier: notifier, opensQuestion: self == .askSheet,
-            now: live ? { Date() } : { morning }
+            now: { @Sendable in live ? Date() : morning }
+        )
+    }
+
+    /// Today looking into the pool reopening. The recon and the feed share
+    /// one rule of their own, as the task scenes do.
+    @MainActor
+    private func reconHome(brand: Brand, looks: UserDefaults) -> HomeView {
+        let rule = AskFirst.isolated()
+        let morning = Self.morning
+        return HomeView(
+            brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
+            onboarding: InMemoryOnboardingStore(finished: true), memory: Self.sampleMemory(),
+            looks: looks, conversation: Self.sampleFirstChat(), section: .today,
+            feed: [SampleFeedSource()], needsYou: needsYou(at: morning, rule: rule) ?? NeedsYou(rule: rule),
+            tasks: tasks(rule: rule),
+            now: { morning }
         )
     }
 
@@ -465,6 +496,23 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
             engine.advance(by: at - 30)
         }
         return engine
+    }
+
+    /// What the person says in the offer scene.
+    static let reconRequest = "Can you look into the Riverside pool reopening for me?"
+
+    /// Looking into the pool reopening on the scripted engine, with the
+    /// sample sources, played to the moment the scene shows: reading the
+    /// sources, or done. The engine's clock lands on 9:40.
+    @MainActor
+    static func sampleRecon(ready: Bool, rule: AskFirst) -> ReconRunner {
+        let at: TimeInterval = ready ? 16 : 4
+        let engine = LocalFakeEngine(rule: rule, origin: morning - at)
+        // Pages dated by the engine's clock, so they read as days old at 9:40.
+        let runner = ReconRunner(engine: engine, provider: SampleSources(now: { [engine] in engine.currentDate }))
+        runner.lookInto(SampleSources.poolTopic)
+        engine.advance(by: at)
+        return runner
     }
 
     /// Today with the cards background work left. The summary counted a

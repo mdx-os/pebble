@@ -113,9 +113,12 @@ public enum MLXChatModelError: Error, Equatable, Sendable {
 
 /// One whole reply from the on-device model: loading if needed, reading
 /// the prompt, and generating to the end. Stops soon after its task is
-/// cancelled, and has finished all its work on the model when it returns.
+/// cancelled.
 protocol OnDeviceGenerating: Sendable {
     func reply(to transcript: [ChatTurn]) async throws -> String
+    /// Waits for every piece of work already sent to the graphics chip.
+    /// Runs after each reply, however it ended, before the next one starts.
+    func drain() async
 }
 
 /// On-device MLX adapter for `ModelClient`.
@@ -154,7 +157,8 @@ public final class MLXChatModel: ModelClient, Sendable {
             throw ModelClientError.noPersonTurn
         }
         let generator = generator
-        return try await runner.run { try await generator.reply(to: transcript) }
+        return try await runner.run({ try await generator.reply(to: transcript) },
+                                    drain: { await generator.drain() })
     }
 
     /// The reply's length and the cache's size, both inside `OnDeviceModel.contextTokens`.
@@ -172,9 +176,20 @@ actor MLXGenerator: OnDeviceGenerating {
     private let directory: URL
     private var loaded: ModelContainer?
     private var loadFailure: MLXChatModelError?
+    /// True once MLX was asked to load, so there may be work to wait for.
+    private var touchedModel = false
 
     init(directory: URL) {
         self.directory = directory
+    }
+
+    /// A stop while the prompt is read throws before its last evaluation,
+    /// and the weights' evaluation runs on through a stopped load, so work
+    /// can still be on the graphics chip when `reply` ends. Waits for it.
+    func drain() {
+        guard touchedModel else { return }
+        MLX.Stream.gpu.synchronize()
+        MLX.Stream.cpu.synchronize()
     }
 
     func reply(to transcript: [ChatTurn]) async throws -> String {
@@ -188,9 +203,7 @@ actor MLXGenerator: OnDeviceGenerating {
     }
 
     /// Reads the prompt and generates the reply. When cancelled, stops
-    /// taking new tokens. `TokenIterator` can throw while reading the prompt,
-    /// before its last `eval` and before a generation task exists. The runner
-    /// synchronizes the graphics chip after this returns, including that throw.
+    /// taking new tokens and waits for the model's last work to end.
     private static func generate(_ lines: [OnDeviceTranscriptLine], context: ModelContext) async throws -> String {
         let input = try await context.processor.prepare(input: UserInput(chat: messages(for: lines)))
         try Task.checkCancellation()
@@ -241,6 +254,7 @@ actor MLXGenerator: OnDeviceGenerating {
 
     private func performLoad() async throws -> ModelContainer {
         try preflight()
+        touchedModel = true
         Memory.cacheLimit = MLXChatModel.cacheLimitBytes
         return try await LLMModelFactory.shared.loadContainer(
             from: directory,

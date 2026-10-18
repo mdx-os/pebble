@@ -53,10 +53,15 @@ fails_with App/Sources/ModelDownload.swift 'let session = URLSession.shared'
 # Hub clients and snapshots fail even in the allowed files.
 fails_with Packages/PebbleKit/Sources/PebbleModel/ModelDownload.swift 'let hub = HubClient()'
 fails_with Packages/PebbleKit/Sources/PebbleModel/ModelDownload.swift 'try await snapshot(from: repo)'
+fails_with Packages/PebbleKit/Sources/PebbleModel/MLXChatModel.swift 'let folder = try await hub.snapshot( from: repo, matching: ["*.json"])'
 fails_with Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift 'let model = try await from(pretrained: id)'
 fails_with Packages/PebbleKit/Sources/PebbleCore/Leak.swift 'import Network'
 
 passes "the tree with every planted line taken out"
+
+# A task's own snapshot is not a download.
+printf '%s\n' 'let made = snapshot(advancing: false)' >> "$work/Packages/PebbleKit/Sources/PebbleCore/Tasks.swift"
+passes "a task snapshot"
 
 # A missing allowed file must fail, so its name can't be taken over.
 mv "$work/Packages/PebbleKit/Sources/PebbleModel/ModelDownload.swift" "$work/moved"

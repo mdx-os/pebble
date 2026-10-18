@@ -37,7 +37,9 @@ for file in $allowed; do
   fi
 done
 
-banned='HubClient|InferenceClient|snapshot\(|from\(pretrained:|import Network|NWConnection|NWPathMonitor'
+# A model snapshot download is `snapshot(from:`. A task's own
+# `snapshot(advancing:)` reads nothing from the network, so it passes.
+banned='HubClient|InferenceClient|snapshot\([[:space:]]*from|from\(pretrained:|import Network|NWConnection|NWPathMonitor'
 # shellcheck disable=SC2086
 if hits="$(grep -RInE -e "$banned" $dirs)"; then
   echo "local-only-check: a network client is mentioned in the app, the plain types, the background runner or the model adapter:"
