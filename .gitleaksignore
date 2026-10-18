@@ -1,0 +1,8 @@
+# Findings the secrets check may skip, one fingerprint per line
+# (commit:file:rule:line). Each must be a made up test value, never a real
+# secret, with the reason written above it.
+#
+# Made up identity tokens shaped like Apple's (three base64url parts), used
+# only as test inputs on the cloud policy branch. They sign nothing.
+6b41bc86500326f29aa759e214e01ff6ca75e885:Packages/PebbleKit/Tests/PebbleUITests/CloudPolicyScreenTests.swift:jwt:14
+6b41bc86500326f29aa759e214e01ff6ca75e885:Packages/PebbleKit/Tests/PebbleModelTests/AppleCloudAuthTests.swift:jwt:16
