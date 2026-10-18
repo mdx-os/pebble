@@ -467,12 +467,27 @@ struct TodayFollowupsTests {
             showing.append(scene)
             #expect(examples, "\(scene) shows a sample question not marked as an example")
         }
-        #expect(Set(showing) == [.confirm, .confirmTimedOut, .todayNeedsYou])
+        #expect(Set(showing) == [.confirm, .confirmTimedOut, .todayNeedsYou,
+                                 .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive])
+    }
+
+    /// A scripted task's question, opened from its card's Approve as Today
+    /// does, is an example in the sheet too.
+    @Test func aSampleTaskQuestionOpensAsAnExample() throws {
+        let rule = AskFirst.isolated()
+        let scene = ShowcaseScene.taskWaiting
+        let model = FeedModel(sources: [SampleFeedSource()], needsYou: try #require(scene.needsYou(rule: rule)),
+                              tasks: scene.tasks(rule: rule), place: .onDevice, now: { ShowcaseScene.morning })
+        let task = try #require(model.feed.needsYou.compactMap(\.task).first { $0.question != nil })
+        model.review(task)
+        let request = try #require(model.reviewing)
+        #expect(model.isSample(request))
     }
 
     /// The showcase builds a sheet only from what the guard above reads: no
     /// `ConfirmationSheet(` there that doesn't pass the sample's own flag,
-    /// and the Today scenes take their questions from `needsYou(at:)`.
+    /// and the Today scenes take their questions from `needsYou(at:)` and
+    /// their tasks from `tasks(rule:)`.
     @Test func theShowcaseBuildsSheetsOnlyFromWhatTheGuardReads() throws {
         let root = SwiftSource.repositoryRoot(from: #filePath)
         let text = try String(contentsOf: root.appendingPathComponent("Packages/PebbleKit/Sources/PebbleUI/ShowcaseScene.swift"),
@@ -484,7 +499,10 @@ struct TodayFollowupsTests {
             #expect(sheet.arguments.contains("isExample: sheet.isExample"), "line \(sheet.line): \(sheet.arguments)")
         }
         for home in source.calls(named: ["HomeView"]) {
-            #expect(home.arguments.contains("needsYou: needsYou(at: morning)"), "line \(home.line)")
+            #expect(home.arguments.contains("needsYou: needsYou(at: morning"), "line \(home.line)")
+            if home.arguments.contains("tasks:") {
+                #expect(home.arguments.contains("tasks: tasks(rule: rule)"), "line \(home.line)")
+            }
         }
     }
 

@@ -38,7 +38,8 @@ public struct HomeView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     /// `feed` is where finished work comes from. Questions come only from
-    /// `needsYou`, which asks through `AskFirst`.
+    /// `needsYou` and `tasks`, which both ask through `AskFirst`. `tasks`
+    /// shows long work on live cards.
     public init(
         brand: Brand,
         model: any ModelClient,
@@ -47,10 +48,11 @@ public struct HomeView: View {
         memory: MemoryStore?,
         looks: UserDefaults = .standard,
         feed: [any FeedSource] = [EmptyFeedSource()],
-        needsYou: NeedsYou = NeedsYou()
+        needsYou: NeedsYou = NeedsYou(),
+        tasks: (any TaskEngine)? = nil
     ) {
         self.init(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
-                  looks: looks, conversation: nil, section: .today, feed: feed, needsYou: needsYou)
+                  looks: looks, conversation: nil, section: .today, feed: feed, needsYou: needsYou, tasks: tasks)
     }
 
     /// Opens on a given conversation, section and feed, for screenshots and tests.
@@ -67,6 +69,8 @@ public struct HomeView: View {
         // No default: screenshots and tests pass their own rule, so they
         // never touch the app's `AskFirst.shared`.
         needsYou: NeedsYou,
+        tasks: (any TaskEngine)? = nil,
+        drivesTasks: Bool = false,
         now: @escaping () -> Date = { Date() }
     ) {
         self.brand = brand
@@ -75,7 +79,8 @@ public struct HomeView: View {
         self.onboarding = onboarding
         self.memory = memory
         self.looks = looks
-        _feed = StateObject(wrappedValue: Self.feedModel(sources: feed, needsYou: needsYou, model: model, now: now))
+        _feed = StateObject(wrappedValue: Self.feedModel(sources: feed, needsYou: needsYou, tasks: tasks,
+                                                         drivesTasks: drivesTasks, model: model, now: now))
         let needed = OnboardingFlow.isNeeded(store: onboarding, names: names)
         // People who named their agent before the first run existed count as finished.
         if !needed, !onboarding.hasFinished() { onboarding.markFinished() }
@@ -88,15 +93,18 @@ public struct HomeView: View {
 
     /// Today's model, which takes its privacy place from the active model,
     /// so the example note never promises the device when words may leave.
-    static func feedModel(sources: [any FeedSource], needsYou: NeedsYou, model: any ModelClient,
+    static func feedModel(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)? = nil,
+                          drivesTasks: Bool = false, model: any ModelClient,
                           now: @escaping () -> Date) -> FeedModel {
-        FeedModel(sources: sources, needsYou: needsYou, place: model.privacyPlace, now: now)
+        FeedModel(sources: sources, needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
+                  place: model.privacyPlace, now: now)
     }
 
     /// The memory screen's model, with its privacy place from the active
-    /// model, the same way.
-    static func memoryModel(store: MemoryStore, model: any ModelClient) -> MemoryModel {
-        MemoryModel(store: store, place: model.privacyPlace)
+    /// model, the same way. Forget everything forgets the tasks too.
+    static func memoryModel(store: MemoryStore, model: any ModelClient,
+                            onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) -> MemoryModel {
+        MemoryModel(store: store, place: model.privacyPlace, onForgetEverything: onForgetEverything)
     }
 
     /// True when the window is wide enough for a sidebar.
@@ -168,7 +176,7 @@ public struct HomeView: View {
         // asked. Closing it any way but yes withdraws the question.
         .sheet(item: $feed.reviewing, onDismiss: { feed.refresh() }) { request in
             ConfirmationSheet(request: request, look: AgentLook.load(from: looks), rule: feed.rule,
-                              isExample: feed.needsYou.isSample,
+                              isExample: feed.isSample(request),
                               onApprove: { feed.approved($0) },
                               onDecline: { feed.closedQuestion(request) })
                 .onDisappear { feed.closedQuestion(request) }
@@ -357,16 +365,13 @@ public struct HomeView: View {
     @ViewBuilder
     private var memoryScreen: some View {
         if let memory {
-            MemoryView(model: Self.memoryModel(store: memory, model: model))
+            MemoryView(model: Self.memoryModel(store: memory, model: model,
+                                               onForgetEverything: { feed.forgetTasks() }))
         } else {
             // The store couldn't be opened. Say so rather than hide memory.
-            // It is only opened again at launch, so the words say that.
-            ZStack {
-                Backdrop()
-                GentleNotice(text: MemoryWords.couldNotOpen)
-                    .padding(Theme.gutter)
-                    .frame(maxWidth: Theme.readableWidth)
-            }
+            // Tasks can still be forgotten here, since Forget everything isn't.
+            MemoryUnavailableView(hasTasks: feed.hasTasks, forgotten: feed.tasksForgotten,
+                                  underway: feed.forgotUnderway, onForgetTasks: { feed.forgetTasks() })
         }
     }
 }

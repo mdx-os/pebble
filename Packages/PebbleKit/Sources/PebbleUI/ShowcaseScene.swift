@@ -17,6 +17,10 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// A reply on its way, a new chat with its starters, a memory with
     /// nothing in it yet, and a note just saved.
     case thinking, newChat, memoryEmpty, memorySaved
+    /// Today with live task cards on the scripted engine, held still at a
+    /// moment: working, trying another way, waiting on the person, and done.
+    /// `tasksLive` plays the same tasks in real time.
+    case taskRunning, taskRetrying, taskWaiting, taskDone, tasksLive
 
     public static let launchKey = "pebbleScreen"
 
@@ -47,6 +51,8 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     needsYou: needsYou(at: morning) ?? NeedsYou(rule: .isolated()),
                     now: { morning }
                 )
+            case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive:
+                taskHome(brand: brand, looks: looks)
             case .shortcuts:
                 KeyboardShortcutsView()
             case .hello, .name, .look, .ideas:
@@ -117,22 +123,40 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
 
     /// The questions a home screen scene has waiting, which Today's cards
     /// open in the confirmation sheet. Nil for scenes without a home screen.
-    func needsYou(at now: Date = morning) -> NeedsYou? {
+    /// The task scenes ask through `rule`, the one their tasks share.
+    func needsYou(at now: Date = morning, rule: AskFirst = .isolated()) -> NeedsYou? {
         switch self {
         case .todayNeedsYou: Self.sampleQuestion(at: now)
         case .today, .todayEmpty, .home, .homeMemory: NeedsYou(rule: .isolated())
+        case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive: NeedsYou(rule: rule)
+        default: nil
+        }
+    }
+
+    /// The scripted tasks a scene shows, asking through `rule`. Nil for
+    /// scenes without tasks.
+    @MainActor
+    func tasks(rule: AskFirst) -> LocalFakeEngine? {
+        switch self {
+        case .tasksLive: Self.liveTasks(rule: rule)
+        case .taskRunning, .taskRetrying, .taskWaiting, .taskDone: Self.sampleTasks(self, rule: rule)
         default: nil
         }
     }
 
     /// Whether every confirmation sheet this scene can show says it is an
-    /// example: its own sample sheet, or the sheet a waiting question opens
-    /// from Today, which follows `NeedsYou.isSample`. Nil when the scene can
-    /// show no question at all.
+    /// example: its own sample sheet, the sheet a waiting question opens
+    /// from Today, which follows `NeedsYou.isSample`, or the sheet a task's
+    /// Approve opens, which follows the engine's `isSample`. Any task may
+    /// come to ask, so a scene with tasks counts even before one does. Nil
+    /// when the scene can show no question at all.
+    @MainActor
     var confirmationSheetsAreExamples: Bool? {
         if let sheet = sampleSheet { return sheet.isExample }
-        if let asks = needsYou(), !asks.items(now: Self.morning).isEmpty { return asks.isSample }
-        return nil
+        var examples: [Bool] = []
+        if let asks = needsYou(), !asks.items(now: Self.morning).isEmpty { examples.append(asks.isSample) }
+        if let tasks = tasks(rule: .isolated()), !tasks.tasks.isEmpty { examples.append(tasks.isSample) }
+        return examples.isEmpty ? nil : !examples.contains(false)
     }
 
     /// Today at 9:40, so the feed's times sit just before the 9:41 the
@@ -153,6 +177,75 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
             price: Price(minorUnits: 1450, currency: "CAD")
         ), at: now - 4 * 60)
         return asks
+    }
+
+    /// Today with the scripted tasks. Questions from the tasks and the feed
+    /// share one rule of their own, so the showcase never touches the app's.
+    @MainActor
+    private func taskHome(brand: Brand, looks: UserDefaults) -> HomeView {
+        let rule = AskFirst.isolated()
+        let live = self == .tasksLive
+        let morning = Self.morning
+        return HomeView(
+            brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
+            onboarding: InMemoryOnboardingStore(finished: true), memory: Self.sampleMemory(),
+            looks: looks, conversation: Self.sampleFirstChat(), section: .today,
+            feed: [SampleFeedSource()], needsYou: needsYou(at: morning, rule: rule) ?? NeedsYou(rule: rule),
+            tasks: tasks(rule: rule),
+            drivesTasks: live,
+            now: live ? { Date() } : { morning }
+        )
+    }
+
+    /// The scripted tasks, played to the moment each scene shows, so the
+    /// engine's clock lands on 9:40. Nothing here is really done.
+    ///
+    /// With the standard retry policy the dentist search finds its list at
+    /// 6 seconds, hangs on Saturday hours until 26, tries again at 28,
+    /// reads reviews from 36 and asks for a yes at 42. The plan is done
+    /// after 22. The lunch menu hangs three times and asks at 66.
+    @MainActor
+    static func sampleTasks(_ scene: ShowcaseScene, rule: AskFirst) -> LocalFakeEngine {
+        // When each scene stops: seconds since the first task began.
+        let at: TimeInterval = switch scene {
+        case .taskRetrying: 31
+        case .taskWaiting: 68
+        case .taskDone: 80
+        default: 39
+        }
+        let engine = LocalFakeEngine(rule: rule, origin: morning - at)
+        switch scene {
+        case .taskWaiting:
+            engine.start(SampleTasks.lunch)
+            engine.advance(by: 24)
+            engine.start(SampleTasks.dentist)
+            engine.advance(by: at - 24)
+        case .taskDone:
+            engine.start(SampleTasks.dentist)
+            engine.advance(by: 20)
+            engine.start(SampleTasks.plan)
+            engine.advance(by: 43 - 20)
+            // The yes goes through the sheet's own state, as a tap on Yes would.
+            if let task = engine.tasks.first(where: { $0.title == SampleTasks.dentistTitle }), let question = task.question {
+                let sheet = ConfirmationState(request: question, rule: rule,
+                                              onApprove: { _ = engine.resume(task.id, with: $0) }, onDecline: {})
+                sheet.tapPrimary()
+            }
+            engine.advance(by: at - 43)
+        default:
+            engine.start(SampleTasks.dentist)
+            engine.advance(by: 30)
+            if scene == .taskRunning { engine.start(SampleTasks.plan) }
+            engine.advance(by: at - 30)
+        }
+        return engine
+    }
+
+    /// Every sample task from the start, played in real time.
+    static func liveTasks(rule: AskFirst) -> LocalFakeEngine {
+        let engine = LocalFakeEngine(rule: rule)
+        for script in SampleTasks.all { engine.start(script) }
+        return engine
     }
 
     /// The morning starter played through the on-device model.

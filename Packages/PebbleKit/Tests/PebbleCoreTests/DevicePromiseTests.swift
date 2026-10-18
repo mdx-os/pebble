@@ -35,9 +35,13 @@ enum DevicePromise {
     }
 
     static let allowed: [Allowed] = [
-        Allowed(file: "PebbleCore/Memory.swift", quoting: "This removes every note from this device",
-                reason: "MemoryWords.forgetEverythingDetail is about where the notes are, not where the chat goes. "
-                    + "Notes live only in MemoryStore's local file whatever the model is, so it is true with a cloud model too."),
+        Allowed(file: "PebbleCore/Memory.swift", quoting: "This removes every note and every task from this device",
+                reason: "MemoryWords.forgetEverythingDetail is about where the notes and tasks are, not where the chat goes. "
+                    + "Notes live only in MemoryStore's local file and tasks only in the engine in this process, "
+                    + "whatever the model is, so it is true with a cloud model too."),
+        Allowed(file: "PebbleCore/Tasks.swift", quoting: "removes every task and what you told me for it from this device",
+                reason: "TaskWords.forgetTasksDetail names where the tasks are erased from, not that nothing left. "
+                    + "\"From this device\" is the honest limit: without it, a cloud model's copy would seem erased too."),
         Allowed(file: "PebbleModel/LocalStubModel.swift", quoting: "a small helper that runs only on this device",
                 reason: "LocalStubModel.fallback is only ever said by the on-device stub, which always runs here."),
         Allowed(file: "PebbleModel/LocalStubModel.swift", quoting: "I'll keep it on this device",
@@ -53,6 +57,7 @@ enum DevicePromise {
     /// entry in `allowed` for the reason.
     static let allowedLines: [String] = [
         MemoryWords.forgetEverythingDetail,
+        TaskWords.forgetTasksDetail,
         FeedWords.sampleNote(.mayLeaveDevice),
     ]
 

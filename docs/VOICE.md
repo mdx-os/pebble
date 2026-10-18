@@ -3,7 +3,7 @@
 How the agent talks, everywhere: the first run, the chat, memory, and the
 questions it asks before it acts. Read this before writing any words a
 person will see. The words themselves live in `PebbleCore` (`FirstRunWords`,
-`FirstConversation`, `MemoryWords`, `ConfirmationWords`, `FeedWords` and friends), so a
+`FirstConversation`, `MemoryWords`, `ConfirmationWords`, `FeedWords`, `TaskWords` and friends), so a
 change here usually means a change there.
 
 ## Who the agent is
@@ -149,6 +149,27 @@ screens for colors outside them.
 
 Show a calm presence instead of a spinner. The thinking dots hold still
 with Reduce Motion on, and VoiceOver hears "Thinking it over." once.
+
+### Long work
+
+A task card says what the agent is doing now, in plain words, not what
+the machine is doing. When a step is slow, say so and say what happens
+next: "That page was slow, so I'm trying another way." Only after a few
+tries does the card ask the person, and then it offers Try again. Stop
+says what was kept and what was not done. VoiceOver hears each new step
+once, politely, never every tick of progress. Never say a change was
+taken and then ask about the old thing: a step that can't change is left
+undone, and the card says so ("You changed course, so I didn't hold a
+Saturday visit."). A closed question says "You closed the question", which
+is true for Not now and a sheet swiped away alike. A step the person said
+yes to may already be under way, so never say it wasn't done: a change of
+course lets it finish ("You'd already said yes to this, so I'm finishing
+it."), and a stop says it may be done. A yes that didn't go through says
+so on the card, so a tap is never met with silence, and so does an
+Approve tapped after its question timed out. Forget everything says it
+stops tasks still going. If a step said yes to was under way, a short line
+stays on Today to say it may be done, naming nothing the task held. A
+scripted task's card says "Example", like every other example.
 
 ### Confirmations
 
