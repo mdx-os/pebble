@@ -135,10 +135,11 @@ public enum MemoryWords {
     // summaries to erase, and it says that turns off and its summaries,
     // kept in the same folder as the notes, are erased. Without, it never
     // promises to turn off what is already off, or to erase what isn't there.
+    // Either way the nudge choice stays, since it holds nothing of the person's.
     public static func forgetEverythingDetail(background: Bool) -> String {
         background
-            ? "This removes every note, every task and every morning summary from this device, stops any task still going, and turns off work while you're away. It can't be undone."
-            : "This removes every note and every task from this device, and stops any task still going. It can't be undone."
+            ? "This removes every note, every task and every morning summary from this device, stops any task still going, and turns off work while you're away. It can't be undone. Your choice about nudges stays as it is."
+            : "This removes every note and every task from this device, and stops any task still going. It can't be undone. Your choice about nudges stays as it is."
     }
     /// See the note above `empty`.
     public static func privacyNote(_ place: PrivacyPlace) -> String {

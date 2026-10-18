@@ -2,21 +2,21 @@
 import Foundation
 import PebbleCore
 
-/// For the UI tests only. A launch with `-pebbleBackgroundSeed on` runs the
+/// For the UI tests only. A launch with `-backgroundSeed on` runs the
 /// app's own runner and service, started the way the app starts them, over
 /// a scratch folder set up as an earlier version left it: the switch on in
 /// `UserDefaults`, which the test's launch arguments give, and the morning
 /// summary queued in the runner's file. Nothing of the person's is touched.
-/// `-pebbleBackgroundSeed again` opens the same folder as the launch before
+/// `-backgroundSeed again` opens the same folder as the launch before
 /// left it, seeding nothing, so a test can see what that launch kept.
 /// Any launch without either removes that folder, so the test leaves
 /// nothing behind once the app opens again.
 public enum BackgroundSeed {
-    public static let launchKey = "pebbleBackgroundSeed"
+    public static let launchKey = "backgroundSeed"
 
     /// Where the seeded runner keeps its files.
     public static var scratchFolder: URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("pebble-ui-background-seed")
+        FileManager.default.temporaryDirectory.appendingPathComponent("ui-background-seed")
     }
 
     public static func launched(defaults: UserDefaults = .standard, folder: URL = scratchFolder)

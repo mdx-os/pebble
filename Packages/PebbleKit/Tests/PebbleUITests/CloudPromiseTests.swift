@@ -711,7 +711,8 @@ struct CloudPromiseTests {
         let source = try String(contentsOf: Self.sources.appendingPathComponent("PebbleUI/MemoryView.swift"),
                                 encoding: .utf8)
         #expect(source.contains(".onAppear { cloud?.refresh() }"))
-        #expect(source.contains("model.hasSomethingToForget || help.mayHavePrivateWords"))
+        #expect(source.contains("hasNotes: model.hasSomethingToForget, mayHaveWords: help.mayHavePrivateWords"))
+        #expect(MemoryView.showsForgetEverything(hasNotes: false, mayHaveWords: true, holdsMore: false))
         // Which shows for the notes file, and for background work's summaries.
         #expect(source.contains("var hasSomethingToForget: Bool { hasStoredFile || hasBackgroundToForget }"))
     }

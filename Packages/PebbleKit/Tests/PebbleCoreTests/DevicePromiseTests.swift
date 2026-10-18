@@ -40,17 +40,17 @@ enum DevicePromise {
 
     static let allowed: [Allowed] = [
         Allowed(file: "PebbleCore/Memory.swift",
-                literal: "This removes every note, every task and every morning summary from this device, stops any task still going, and turns off work while you're away. It can't be undone.",
+                literal: "This removes every note, every task and every morning summary from this device, stops any task still going, and turns off work while you're away. It can't be undone. Your choice about nudges stays as it is.",
                 reason: "MemoryWords.forgetEverythingDetail is about where the notes, tasks and summaries are, not where "
                     + "the chat goes. Notes live only in MemoryStore's local file, tasks only in the engine in this "
                     + "process, and summaries only in BackgroundStore's file beside the notes, whatever the model is, "
                     + "so it is true with a cloud model too."),
         Allowed(file: "PebbleCore/Memory.swift",
-                literal: "This removes every note and every task from this device, and stops any task still going. It can't be undone.",
+                literal: "This removes every note and every task from this device, and stops any task still going. It can't be undone. Your choice about nudges stays as it is.",
                 reason: "MemoryWords.forgetEverythingDetail with no background work: where the notes and tasks are, "
                     + "not where the chat goes, so it is true with a cloud model too."),
         Allowed(file: "PebbleCore/Tasks.swift",
-                literal: "This stops any task still going, and removes every task and what you told me for it from this device. It can't be undone. Your notes aren't touched.",
+                literal: "This stops any task still going, and removes every task and what you told me for it from this device. It can't be undone. Your notes aren't touched, and your choice about nudges stays as it is.",
                 reason: "TaskWords.forgetTasksDetail names where the tasks are erased from, not that nothing left. "
                     + "\"From this device\" is the honest limit: without it, a cloud model's copy would seem erased too."),
         Allowed(file: "PebbleModel/LocalStubModel.swift",
@@ -152,11 +152,11 @@ enum DevicePromise {
                 literal: "Sorry, I can't read your notes or private words just now, so I can't tell what to take out. I didn't send anything. If the device is locked, unlock it and try again.",
                 reason: privateWordsName),
         Allowed(file: "PebbleCore/CloudHelp.swift",
-                literal: "This removes every note, every task and every word you asked me to hide from this device, and stops any task still going. It can't be undone.",
+                literal: "This removes every note, every task and every word you asked me to hide from this device, and stops any task still going. It can't be undone. Your choice about nudges stays as it is.",
                 reason: "CloudWords.forgetEverythingDetail, like MemoryWords.forgetEverythingDetail: it names where the "
                     + "notes, tasks and private words are erased from, all local files, whatever the model is."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
-                literal: "This removes every note, every task, every morning summary and every word you asked me to hide from this device, stops any task still going, and turns off work while you're away. It can't be undone.",
+                literal: "This removes every note, every task, every morning summary and every word you asked me to hide from this device, stops any task still going, and turns off work while you're away. It can't be undone. Your choice about nudges stays as it is.",
                 reason: "CloudWords.forgetEverythingWithSummariesDetail, like MemoryWords.forgetEverythingDetail with "
                     + "background work: it names where the notes, tasks, summaries and private words are erased from, "
                     + "all local files, whatever the model is."),
@@ -197,7 +197,7 @@ enum DevicePromise {
                 literal: "Your tasks and private words are gone. To be sure of that I cleared the cloud setting too, so help from the cloud is off. I couldn't erase your notes just now. Please try Forget everything again in a moment.",
                 reason: privateWordsName),
         Allowed(file: "PebbleCore/CloudHelp.swift",
-                literal: "This stops any task still going, and removes every task, what you told me for it and any words you asked me to hide from this device. It can't be undone. Your notes aren't touched.",
+                literal: "This stops any task still going, and removes every task, what you told me for it and any words you asked me to hide from this device. It can't be undone. Your notes aren't touched, and your choice about nudges stays as it is.",
                 reason: "CloudWords.forgetTasksAndWordsDetail, like TaskWords.forgetTasksDetail: \"from this device\" is "
                     + "the honest limit of what is erased, local files only, whatever the model is."),
         Allowed(file: "PebbleCore/Redactor.swift", literal: "[private]",

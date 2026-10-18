@@ -68,7 +68,12 @@ in lint, a skill, or CI.
 - Most background runs end quiet. iOS usually starts a fresh process for
   them, and Needs you lives only in memory, so the run counts nothing, makes
   no card and moves the job to tomorrow. A missing morning card after a
-  night in the background is expected, not a bug.
+  night in the background is expected, not a bug. The runner counts
+  `NeedsYou`, not the asks `TaskStore` keeps for a task while the app is
+  closed, so those are not in the summary yet.
+- Forget everything clears the runner (its file and the switch's) and
+  everything `TaskStore` keeps (saved tasks, receipts, nudges) in one tap.
+  `BackgroundFeedTests` guards both together.
 - "Locked" for the runner means its file can't be opened yet, found by
   trying the file (`BackgroundConditions.background(store:...)`). Never
   derive it from `isProtectedDataAvailable` or the screen lock: a phone
@@ -93,6 +98,9 @@ Things no test here can reach. Check each on a real iPhone before a release.
 - The product name lives only in `Config/Brand.xcconfig`. Code reads it from
   `Brand` and never spells it. `make brand-check` enforces this.
 - Code, modules, bundle IDs and the repo use the codename `pebble`.
+- But never in a new key, path, folder or launch argument, where it would
+  be written down and outlive a rename: `make brand-check` fails on a new
+  lowercase `pebble` in Swift. Old ones stay in `scripts/brand-check-known.txt`.
 - Each user may name their own agent. Never confuse the agent's name with a
   person in the user's contacts.
 
@@ -113,6 +121,14 @@ Things no test here can reach. Check each on a real iPhone before a release.
 - No em dashes or en dashes in commits, PR bodies or UI copy.
 - No co-authored-by footers unless the founder asks.
 - Squash merge.
+
+## Learned the hard way
+
+- `UNUserNotificationCenterDelegate`: use the completion-handler methods, not
+  the async ones. The async ones answer UIKit off the main thread and crash
+  the app as a notification opens. `NeedsYouFlowModelTests` guards this.
+- `onReceive` of a `@Published` publisher replays its value each time the
+  body runs. To react to a change, observe the object and use `onChange`.
 
 ## Never
 

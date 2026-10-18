@@ -28,14 +28,22 @@ struct PebbleApp: App {
     /// Work done while the app is closed. Off until the person turns it on
     /// from the memory screen. Its runner is nil if its folder can't be made.
     private let background: BackgroundService
+    /// Tasks and receipts kept while the app is closed. If the folder
+    /// can't be opened they are kept in memory, and Forget everything still
+    /// deletes a file an earlier launch left.
+    private let kept: TaskStore
 
     init() {
         guard let brand = Brand(infoDictionary: Bundle.main.infoDictionary) else {
             preconditionFailure("\(Brand.infoKey) is missing from Info.plist. Set BRAND_NAME in Config/Brand.xcconfig.")
         }
         self.brand = brand
+        // Before launch finishes, so a nudge opened from the lock screen
+        // reaches Today even when it starts the app. Asks for nothing.
+        LocalQuestionNotifier.shared.install()
         let memory = try? MemoryStore.onDevice()
         self.memory = memory
+        kept = (try? TaskStore.onDevice()) ?? TaskStore.forgetOnly()
         let endpoint = CloudEndpoint.url(infoDictionary: Bundle.main.infoDictionary)
         // The setting is kept next to the notes. If either can't be opened,
         // nothing typed into the setting could be kept, so it reads as off,
@@ -94,6 +102,8 @@ struct PebbleApp: App {
             memory: memory,
             needsYou: needsYou,
             tasks: tasks,
+            kept: kept,
+            notifier: LocalQuestionNotifier.shared,
             cloud: cloud,
             background: background.runner
         )

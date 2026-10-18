@@ -13,7 +13,7 @@ final class HomeLayoutUITests: XCTestCase {
 
     private func launch(_ screen: String, textSize: String? = nil) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-pebbleScreen", screen]
+        app.launchArguments = ["-showcaseScreen", screen]
         if let textSize { app.launchArguments += ["-UIPreferredContentSizeCategoryName", textSize] }
         app.launch()
         return app
@@ -232,14 +232,14 @@ final class HomeLayoutUITests: XCTestCase {
             clean.terminate()
         }
         let app = XCUIApplication()
-        app.launchArguments = ["-pebbleBackgroundSeed", "on", "-backgroundWork.on", "YES",
+        app.launchArguments = ["-backgroundSeed", "on", "-backgroundWork.on", "YES",
                                "-pebble.onboarding.finished", "YES", "-pebble.agent.displayName", "Pip"]
         app.launch()
         expectOnInMemoryScreen(app, "still on after the launch")
         app.terminate()
 
         // The same folder, without the earlier version's setting.
-        app.launchArguments = ["-pebbleBackgroundSeed", "again",
+        app.launchArguments = ["-backgroundSeed", "again",
                                "-pebble.onboarding.finished", "YES", "-pebble.agent.displayName", "Pip"]
         app.launch()
         expectOnInMemoryScreen(app, "on, read from the switch's own file")
@@ -359,7 +359,7 @@ final class ShowcaseShots: XCTestCase {
             XCUIDevice.shared.orientation = orientation
             for screen in screens {
                 let app = XCUIApplication()
-                app.launchArguments = ["-pebbleScreen", screen]
+                app.launchArguments = ["-showcaseScreen", screen]
                 app.launch()
                 // Let entrances and the sidebar settle.
                 Thread.sleep(forTimeInterval: 2.5)

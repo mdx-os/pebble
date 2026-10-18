@@ -288,7 +288,7 @@ struct BackgroundServiceTests {
 
     /// The seed's launch argument, written here so this file builds in
     /// Release, where the seed isn't. `theSeedKeyIsTheSeeds` pins it.
-    static let seedKey = "pebbleBackgroundSeed"
+    static let seedKey = "backgroundSeed"
 
     #if DEBUG
     @Test func theSeedKeyIsTheSeeds() {

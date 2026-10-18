@@ -605,7 +605,8 @@ struct TodayFollowupsTests {
             #expect(examples, "\(scene) shows a sample question not marked as an example")
         }
         #expect(Set(showing) == [.confirm, .confirmTimedOut, .todayNeedsYou, .todaySummary,
-                                 .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive])
+                                 .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive,
+                                 .askWaiting, .askSheet, .askAnswered, .askClosed, .askLive])
     }
 
     /// A scripted task's question, opened from its card's Approve as Today

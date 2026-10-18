@@ -344,10 +344,10 @@ public enum CloudWords {
     /// The question before Forget everything, when private words go too.
     /// Tasks go as well, so it says running ones stop, like
     /// `MemoryWords.forgetEverythingDetail`.
-    public static let forgetEverythingDetail = "This removes every note, every task and every word you asked me to hide from this device, and stops any task still going. It can't be undone."
+    public static let forgetEverythingDetail = "This removes every note, every task and every word you asked me to hide from this device, and stops any task still going. It can't be undone. Your choice about nudges stays as it is."
     /// The same, when the screen has the switch for work while away, like
     /// `MemoryWords.forgetEverythingDetail(background: true)`.
-    public static let forgetEverythingWithSummariesDetail = "This removes every note, every task, every morning summary and every word you asked me to hide from this device, stops any task still going, and turns off work while you're away. It can't be undone."
+    public static let forgetEverythingWithSummariesDetail = "This removes every note, every task, every morning summary and every word you asked me to hide from this device, stops any task still going, and turns off work while you're away. It can't be undone. Your choice about nudges stays as it is."
     /// Forget everything erased the notes but not the private words.
     public static let forgotNotesNotWords = "Your notes are gone, but I couldn't erase your private words just now. Please try Forget everything again in a moment."
     /// The same, when there were tasks and they went too.
@@ -389,7 +389,7 @@ public enum CloudWords {
     /// Forgetting tasks when the notes can't be opened, like
     /// `TaskWords.forgetTasksDetail`, when the words always hidden go too.
     /// There may be none, so it says "any".
-    public static let forgetTasksAndWordsDetail = "This stops any task still going, and removes every task, what you told me for it and any words you asked me to hide from this device. It can't be undone. Your notes aren't touched."
+    public static let forgetTasksAndWordsDetail = "This stops any task still going, and removes every task, what you told me for it and any words you asked me to hide from this device. It can't be undone. Your notes aren't touched, and your choice about nudges stays as it is."
     /// The tasks and any private words went.
     public static let tasksAndWordsForgotten = "Your tasks are forgotten, and so are any words you asked me to hide."
     /// The same, when the words could only go with the whole cloud setting,

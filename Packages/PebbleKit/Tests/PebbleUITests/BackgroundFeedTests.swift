@@ -10,6 +10,29 @@ import TestScratch
 import Testing
 @testable import PebbleUI
 
+/// Stands in for the system's notifications, for Forget everything: holds
+/// the nudges still to show, and counts the forgets that reach it.
+private final class ForgetNotifier: QuestionNotifying, @unchecked Sendable {
+    private let lock = NSLock()
+    private var held: [String]
+    private var forgot = 0
+
+    init(waiting: [String]) { held = waiting }
+
+    var waiting: [String] { lock.lock(); defer { lock.unlock() }; return held }
+    var forgets: Int { lock.lock(); defer { lock.unlock() }; return forgot }
+
+    func permission() async -> NudgePermission { .notDetermined }
+    func requestPermission() async -> Bool { false }
+    func post(_ nudge: QuestionNudge, after delay: TimeInterval) {
+        lock.lock(); held.append(nudge.id); lock.unlock()
+    }
+    func remove(_ ids: [String]) { lock.lock(); held.removeAll { ids.contains($0) }; lock.unlock() }
+    func removeAll() { lock.lock(); held = []; lock.unlock() }
+    func forget() { lock.lock(); held = []; forgot += 1; lock.unlock() }
+    func onOpen(_ handler: @escaping @MainActor @Sendable (String) -> Void) {}
+}
+
 /// Background work as Today and the memory screen show it: the cards it
 /// leaves, the catch up when the app opens, the switch, and Forget everything.
 @MainActor
@@ -406,6 +429,116 @@ struct BackgroundFeedTests {
         #expect(!runner.isOn)
     }
 
+    /// Background work and Needs you, both with something kept on disk:
+    /// the summaries' file and the switch's, and the saved tasks, receipts
+    /// and a nudge still to show.
+    private struct BothKept {
+        let runner: BackgroundRunner
+        let toggle: FileBackgroundSwitch
+        let store: TaskStore
+        let tasksURL: URL
+        let notifier: ForgetNotifier
+        let engine: LocalFakeEngine
+        let feed: FeedModel
+    }
+
+    private func bothKept(faults: BackgroundStoreFaults? = nil) throws -> BothKept {
+        let toggle = FileBackgroundSwitch(fileURL: Scratch.url("background-switch-ui"))
+        let runner = BackgroundRunner(store: scratchStore(faults: faults), toggle: toggle, needsYou: Self.oneWaiting(),
+                                      watchingSince: .distantPast, calendar: Self.calendar)
+        runner.turnOn(now: Self.at(6))
+        runner.runDue(now: Self.at(7), conditions: .foreground)
+        #expect(!runner.results.isEmpty)
+        #expect(runner.store.hasStoredFile)
+        #expect(FileManager.default.fileExists(atPath: toggle.fileURL.path))
+
+        // A task said yes to, with its receipt, and a task still asking,
+        // kept in Needs you's own file.
+        let tasksURL = Scratch.url("tasks-ui")
+        let store = TaskStore(fileURL: tasksURL, forgetMarker: Scratch.url("tasks-forgotten-ui"))
+        let rule = AskFirst.isolated()
+        let engine = LocalFakeEngine(rule: rule, origin: Self.at(9))
+        engine.start(SampleTasks.dentist)
+        engine.advance(by: 42)
+        let question = try #require(engine.tasks.first?.question)
+        guard case .approved(let approval) = rule.sayYes(to: question) else { throw CancellationError() }
+        _ = engine.resume(engine.tasks[0].id, with: approval)
+        engine.advance(by: 4)
+        engine.start(SampleTasks.dentist)
+        engine.advance(by: 42)
+        store.keep(engine)
+        #expect(!store.receipts.isEmpty)
+        #expect(!store.tasks.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: tasksURL.path))
+        let notifier = ForgetNotifier(waiting: ["a nudge still to show"])
+        let flow = NeedsYouFlow(store: store, notifier: notifier, agentName: { "Pip" })
+        let feed = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: rule), tasks: engine,
+                             place: .onDevice, flow: flow, background: runner, calendar: Self.calendar,
+                             now: { Self.at(9) })
+        return BothKept(runner: runner, toggle: toggle, store: store, tasksURL: tasksURL, notifier: notifier,
+                        engine: engine, feed: feed)
+    }
+
+    /// PERMANENT GUARD. One Forget everything, from the memory screen as the
+    /// home screen wires it, clears background work and everything Needs
+    /// you keeps while the app is closed: the summaries and the switch's
+    /// file, and the saved tasks, receipts and nudges.
+    @Test func forgetEverythingClearsBackgroundWorkAndWhatNeedsYouKeeps() async throws {
+        let kept = try bothKept()
+        let notes = scratchMemory()
+        _ = try notes.remember("Sam's birthday is May 14.", source: .toldMe)
+        let memory = HomeView.memoryModel(store: notes, place: .onDevice, background: kept.runner,
+                                          onForgetEverything: { kept.feed.forgetEverything() })
+        memory.forgetEverything()
+        await kept.feed.settled()
+
+        // Background work.
+        #expect(!kept.runner.isOn)
+        #expect(kept.runner.results.isEmpty)
+        expectNoSummaryFiles(kept.runner.store)
+        #expect(!FileManager.default.fileExists(atPath: kept.toggle.fileURL.path), "the switch's file went too")
+        // Needs you.
+        #expect(kept.store.receipts.isEmpty)
+        #expect(kept.store.tasks.isEmpty)
+        #expect(!kept.store.holdsSomething)
+        #expect(!FileManager.default.fileExists(atPath: kept.tasksURL.path))
+        #expect(kept.notifier.forgets == 1)
+        #expect(kept.notifier.waiting.isEmpty, "no nudge is left to show")
+        #expect(kept.engine.tasks.isEmpty)
+        // And what the screens say.
+        #expect(kept.feed.feed.isEmpty)
+        #expect(!kept.feed.hasSomethingToForget)
+        #expect(!memory.hasSomethingToForget)
+        #expect(memory.status == MemoryWords.forgotten)
+    }
+
+    /// When the summaries' file can't be erased, Needs you's part still
+    /// goes, and the line names both: what went, and that the summaries
+    /// stayed.
+    @Test func aSummaryFileThatCantBeErasedStillClearsWhatNeedsYouKeeps() async throws {
+        let faults = BackgroundStoreFaults()
+        let kept = try bothKept(faults: faults)
+        faults.eraseFails = true
+        let memory = HomeView.memoryModel(store: scratchMemory(), place: .onDevice, background: kept.runner,
+                                          onForgetEverything: { kept.feed.forgetEverything() })
+        memory.forgetEverything()
+        await kept.feed.settled()
+
+        #expect(kept.runner.store.hasStoredFile, "the summaries' file stayed")
+        #expect(!kept.runner.isOn)
+        #expect(kept.store.receipts.isEmpty)
+        #expect(kept.store.tasks.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: kept.tasksURL.path))
+        #expect(kept.notifier.waiting.isEmpty)
+        #expect(memory.status == MemoryWords.couldNotForgetSummaries(notes: false, tasks: true, words: false))
+        #expect(memory.hasSomethingToForget, "the summaries can be tried again")
+
+        faults.eraseFails = false
+        memory.forgetEverything()
+        expectNoSummaryFiles(kept.runner.store)
+        #expect(memory.status == MemoryWords.forgotten)
+    }
+
     /// With the private words too, each step runs whatever the others did:
     /// the notes can't be erased here, but the summaries and the words go,
     /// and the line says exactly that.
@@ -585,6 +718,9 @@ struct BackgroundFeedTests {
         "PebbleUI/ShowcaseScene.swift: UserDefaults(":
             "The showcase, Debug only, uses a throwaway UserDefaults suite for the look it shows, emptied each "
             + "launch. It holds no chat.",
+        "PebbleUI/ShowcaseScene.swift: UserDefaults.":
+            "The showcase, Debug only, reads two of its own launch arguments from UserDefaults.standard: whether "
+            + "to keep its sample asks and how long to hold a scene. It only reads them and writes no chat.",
         "PebbleUI/ShowcaseScene.swift: BackgroundStore":
             "The showcase, Debug only, runs background work on BackgroundStore.memoryOnly, which writes nothing "
             + "anywhere and holds only counts and times.",

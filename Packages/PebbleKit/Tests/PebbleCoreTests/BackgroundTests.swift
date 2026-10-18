@@ -2246,7 +2246,7 @@ struct BackgroundWordsTests {
             let code = String(SwiftSource(file.text).code)
             return asks.firstMatch(in: code, range: NSRange(code.startIndex..., in: code)) != nil
         }
-        #expect(asking.map(\.name) == ["PebbleUITests/FileModes.swift"])
+        #expect(asking.map(\.name) == ["TestScratch/FileModes.swift"])
         // The sweep would catch each way.
         for way in ["getuid() != 0", "geteuid() == 0", "ProcessInfo.processInfo.userName == \"root\"",
                     "@Test(.enabled(if: x))", "@Test(.disabled(if: x))", "NSUserName()"] {
@@ -2261,7 +2261,7 @@ struct BackgroundWordsTests {
     @Test func everyFileModesTestFailsAsRoot() throws {
         let tests = SwiftSource.repositoryRoot(from: #filePath).appendingPathComponent("Packages/PebbleKit/Tests")
         var lists = 0
-        for file in try SwiftSource.files(under: tests) where file.name != "PebbleUITests/FileModes.swift" {
+        for file in try SwiftSource.files(under: tests) where file.name != "TestScratch/FileModes.swift" {
             let code = String(SwiftSource(file.text).code)
             let uses = code.components(separatedBy: ".fileModesHoldOrCI").count - 1
             let traits = Self.traitLists(in: code).filter { $0.contains(".fileModesHoldOrCI") }
@@ -2274,7 +2274,7 @@ struct BackgroundWordsTests {
         #expect(lists > 0, "the sweep found the tests it is for")
         // In the code, not a comment. `FileModesTests` checks the detector
         // itself finds CI by either name.
-        let modes = SwiftSource(try String(contentsOf: tests.appendingPathComponent("PebbleUITests/FileModes.swift"),
+        let modes = SwiftSource(try String(contentsOf: tests.appendingPathComponent("TestScratch/FileModes.swift"),
                                            encoding: .utf8))
         for name in ["TEST_RUNNER_CI", "CI"] {
             let read = modes.literals.contains { literal in

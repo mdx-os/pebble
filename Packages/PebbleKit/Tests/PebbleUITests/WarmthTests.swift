@@ -4,6 +4,7 @@ import PebbleCore
 import PebbleModel
 import SourceScan
 import SwiftUI
+import TestScratch
 import Testing
 @testable import PebbleUI
 

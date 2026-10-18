@@ -1,3 +1,4 @@
+import TestScratch
 import Testing
 
 /// CI is found by either name, so a test that needs file modes fails as

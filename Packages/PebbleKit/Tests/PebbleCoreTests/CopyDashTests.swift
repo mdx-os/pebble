@@ -40,6 +40,7 @@ struct CopyDashTests {
         ConfirmationWords.heading, ConfirmationWords.toLabel, ConfirmationWords.fromLabel,
         ConfirmationWords.whatLabel, ConfirmationWords.whereLabel, ConfirmationWords.priceLabel,
         ConfirmationWords.expired, ConfirmationWords.closeTitle, ConfirmationWords.promise,
+        ConfirmationWords.sharedLabel, ConfirmationWords.happensLabel,
         ProposedAction.yesTitle, ProposedAction.noTitle, ProposedAction.declined,
         HomeWords.chatTitle, HomeWords.newChatTitle, HomeWords.goMenuTitle, HomeWords.shortcutsTitle,
         CareCheck.reply, CareCheck.followUp,
@@ -53,6 +54,8 @@ struct CopyDashTests {
       + TaskWords.all
       + BackgroundWordsTests.all
       + MemoryWords.couldNotForgetSummariesLines
+      + ReceiptWords.all
+      + NudgeWords.all
 
     @Test func noScreenWordsUseADash() {
         for line in Self.copy {
@@ -123,7 +126,15 @@ struct CopyDashTests {
         #expect(!MemoryWords.forgetEverythingDetail(background: false).contains("away"))
         #expect(!MemoryWords.forgetEverythingDetail(background: false).contains("summary"))
         #expect(TaskWords.forgetTasksDetail.contains("stops any task still going"))
-        #expect(TaskWords.forgetTasksDetail.hasSuffix("Your notes aren't touched."))
+        #expect(TaskWords.forgetTasksDetail.contains("Your notes aren't touched"))
+        // Forget everything keeps the nudge choice, so every way it is
+        // offered says so, and "everything" never misleads.
+        for detail in [MemoryWords.forgetEverythingDetail(background: false),
+                       MemoryWords.forgetEverythingDetail(background: true), CloudWords.forgetEverythingDetail,
+                       CloudWords.forgetEverythingWithSummariesDetail,
+                       TaskWords.forgetTasksDetail, CloudWords.forgetTasksAndWordsDetail] {
+            #expect(detail.localizedCaseInsensitiveContains("your choice about nudges stays as it is."), "\(detail)")
+        }
         #expect(CareCheck.reply.contains("988"))
         #expect(CareCheck.followUp.contains("988"))
         #expect(ConfirmationWords.promise.contains("once, exactly as shown"))
@@ -148,7 +159,7 @@ extension TaskWords {
     /// line takes some. The one list the dash test and the warmth test read.
     static var all: [String] {
         [workingHeading, workingDetail, runningLabel, stalledLabel, retryingLabel, stoppedLabel, failedLabel,
-         stalled, retrying, stuck, waitingForYes, redirected, stopped, failed, keptNothing, stillWorking,
+         stalled, retrying, stuck, waitingForYes, redirected, stopped, interrupted, failed, keptNothing, stillWorking,
          approveTitle, redirectTitle, redirectPlaceholder, redirectSendTitle, redirectCancelTitle, stopTitle,
          tryAgainTitle, dismissTitle, youSaidYes, finishingApproved, yesNotUsed,
          forgetTasksTitle, forgetTasksQuestion, forgetTasksDetail, questionTimedOut, tasksForgotten,
