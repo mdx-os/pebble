@@ -8,6 +8,10 @@ out="${1:-build/screenshots}"
 derived="build/DerivedData"
 bundle_id="com.mdxos.pebble"
 mkdir -p "$out" build
+# The tree these screenshots show, taken before the build. Written to
+# $out/STAMP once they are all made, and checked by `make verify`.
+rm -f "$out/STAMP"
+tree="$(sh scripts/screenshot-stamp.sh tree)"
 
 # Simulators are shared with other worktrees, so whatever happens, one
 # switched to dark goes back to the appearance it had when we found it.
@@ -119,3 +123,4 @@ echo "screenshots: $out/mac-sheet.png"
 "$mac_app/Contents/MacOS/$exe" -snapshotPath "$PWD/$out/mac-sheet-dark.png" -showcaseScreen homeMemory \
   -snapshotSheet YES -snapshotDark YES
 echo "screenshots: $out/mac-sheet-dark.png"
+sh scripts/screenshot-stamp.sh write "$out" "$tree"

@@ -11,6 +11,9 @@ set -eu
 out="${1:-build/screenshots/devices}"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
+# The tree these screenshots show, written to $out/STAMP once they are made.
+rm -f "$out/STAMP"
+tree="$(sh scripts/screenshot-stamp.sh tree)"
 derived="build/DerivedData"
 devices="${PEBBLE_DEVICES:-iPad Pro 13-inch (M5)
 iPad mini (A17 Pro)
@@ -33,3 +36,4 @@ done
 # landscape ones upright.
 find "$out" -name '*-landscape.png' -newer "$stamp" -exec sips -r 270 {} \; >/dev/null
 find "$out" -name '*.png' | sort
+sh scripts/screenshot-stamp.sh write "$out" "$tree"

@@ -23,6 +23,8 @@ in lint, a skill, or CI.
   orange fill that `scripts/check-screenshots.sh` checks. Worktrees share simulators and
   the bundle ID, so when another session runs at once pass free ones:
   `make verify PEBBLE_IPAD="iPad Air 13-inch (M4)" PEBBLE_IPHONE="iPhone 17e"`
+- The screenshots also get a `STAMP` with the commit and the working tree's hash. `make verify` makes them and then fails with "screenshots are stale, rerun make screenshots" if the stamp is missing or the tree has changed since. The tree hash is the contract: the same files make the same screenshots, so committing or amending them with nothing changed keeps them fresh. The commit line is only there to read. Screenshots always show the code as it is now
+- `make screenshots-check`: that check alone, and `make screenshots-check-test` its self-test
 - `make generate`: regenerate `Pebble.xcodeproj` after editing `project.yml`
 - `make secrets-check`: gitleaks over git history
 
@@ -34,9 +36,66 @@ in lint, a skill, or CI.
   - `PebbleCore`: plain types. No SwiftUI, no networking.
   - `PebblePulse`: competitor watch fetching and snapshots. Imports PebbleCore.
   - `PebbleModel`: model adapter. `ModelClient`, the on-device placeholder and `CloudModel` (off by default, every request previewed and redacted by `Redactor` in PebbleCore). Imports PebbleCore. MLX and Ollama adapters plug in here.
+  - `PebbleBackground`: gives the background runner time (`BGTaskScheduler` on iOS, `NSBackgroundActivityScheduler` on the Mac). Imports PebbleCore. Scheduling decisions are pure functions in `BackgroundPlan`; the runner, its store and its switch live in PebbleCore's `Background.swift`, so no platform code goes there.
   - `PebbleUI`: SwiftUI views shared by every platform. Imports PebbleCore and PebbleModel.
 - New code goes in a package, not in `App/`. New layers get added to
   `Package.swift` with their place in the order written down.
+
+## Background work
+
+- On iPhone and iPad the app has the background fetch capability:
+  `UIBackgroundModes: fetch` and one identifier in
+  `BGTaskSchedulerPermittedIdentifiers`, both from `project.yml`. It lets
+  the system wake the app for a short `BGAppRefreshTask`, so the morning
+  summary can be made while the app is closed. It is off until the person
+  turns on "Work while you're away".
+- That run never touches the network. It counts what is already on the
+  device and writes counts and times to its own file. Nothing in
+  `PebbleBackground` or the runner opens a connection.
+- The summary's file uses `completeUntilFirstUserAuthentication`, so it
+  opens once the device has been unlocked since it started. Notes and
+  private words keep `.complete`, and the summary never copies their words.
+- The switch lives in `background-switch.json` with no file protection
+  (`.none`), so a run before the first unlock can read it. It holds only a
+  bool, dates and a reason (on or off, the next due time, why a run waited,
+  whether a Forget everything is pending), never anything of the person's.
+  Keep it that way: nothing else goes in that file. `UserDefaults` can't be
+  read before the first unlock, so the switch is not kept there. Beside it,
+  an empty `.background-switch.json.kept` marks that an earlier version's
+  keys were seen in `UserDefaults`, so they never move over again. It holds
+  no data and stays through Forget everything, so it is the one sign left
+  that the switch was set; people who never had those keys get none.
+- A switch write that fails is tried again at the next read, and an off
+  that hasn't gone in makes the switch unknown. While the switch is
+  unknown the runner never reads or writes its own file and shows no cards:
+  a Forget everything still waiting is kept in the switch.
+- Most background runs end quiet. iOS usually starts a fresh process for
+  them, and Needs you lives only in memory, so the run counts nothing, makes
+  no card and moves the job to tomorrow. A missing morning card after a
+  night in the background is expected, not a bug. The runner counts
+  `NeedsYou`, not the asks `TaskStore` keeps for a task while the app is
+  closed, so those are not in the summary yet.
+- Forget everything clears the runner (its file and the switch's) and
+  everything `TaskStore` keeps (saved tasks, receipts, nudges) in one tap.
+  `BackgroundFeedTests` guards both together.
+- "Locked" for the runner means its file can't be opened yet, found by
+  trying the file (`BackgroundConditions.background(store:...)`). Never
+  derive it from `isProtectedDataAvailable` or the screen lock: a phone
+  locked after its first unlock still makes the summary overnight.
+- After a Forget everything erases the summary's file, the switch file
+  goes too, with the keys an earlier version kept in `UserDefaults`.
+
+## Manual checks before release
+
+Things no test here can reach. Check each on a real iPhone before a release.
+
+- `BackgroundStore.shutError` is `EPERM`. With "Work while you're away" on,
+  restart the phone in the evening and leave it locked, never unlocked,
+  until after 7:00. Unlock it but don't open the app, and download the
+  app's container from Xcode's Devices window: `background-switch.json`
+  (or the job in `background.json`) should hold `"locked"`. If neither
+  does, opening the file failed with another error, and the runner took
+  it as a disk error.
 
 ## The name
 
