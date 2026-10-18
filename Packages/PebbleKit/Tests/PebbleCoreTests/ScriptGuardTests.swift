@@ -207,7 +207,7 @@ struct ScriptGuardTests {
         defer { try? FileManager.default.removeItem(at: folder) }
         let check = Self.script("release-endpoint-check.sh")
         let policy = try Self.currentPolicy()
-        #expect(policy == "mdx-zero-retention-1")
+        #expect(policy == "mdx-zero-retention-2")
         func run(_ endpoint: String, _ policy: String, configuration: String = "Release",
                  action: String = "build") throws -> (status: Int32, text: String) {
             try Self.output(["sh", check], in: folder, environment: Self.inBuild(folder).merging([
@@ -221,11 +221,14 @@ struct ScriptGuardTests {
         #expect(none.status == 1)
         #expect(none.text.contains("PEBBLE_CLOUD_POLICY is not set"))
         #expect(none.text.contains("Set PEBBLE_CLOUD_POLICY = \(policy) in Config/Cloud.xcconfig"))
-        // Another policy version fails, and names both.
-        for other in ["mdx-zero-retention-0", policy + "x", "MDX-ZERO-RETENTION-1"] {
+        // Another policy version fails, says the policy changed, and names
+        // both. The version before this one, which the words no longer
+        // describe, is among them.
+        for other in ["mdx-zero-retention-1", "mdx-zero-retention-0", policy + "x", "MDX-ZERO-RETENTION-2"] {
             let wrong = try run(address, other)
             #expect(wrong.status == 1, "\(other)")
-            #expect(wrong.text.contains("PEBBLE_CLOUD_POLICY is \(other), but the app shows the \(policy) policy."), "\(other)")
+            #expect(wrong.text.contains("The cloud policy changed: PEBBLE_CLOUD_POLICY is \(other), but the app shows the \(policy) policy."),
+                    "\(other)")
         }
         // Plain http, or an address that isn't plain, fails.
         for bad in ["http://secret-host.example.com", "HTTPS://secret-host.example.com", "https://",
@@ -276,6 +279,9 @@ struct ScriptGuardTests {
         #expect(none.text.contains("PEBBLE_CLOUD_POLICY is not set"))
         #expect(try status(address, "").status == 1)
         #expect(try status(address, "mdx-zero-retention-0").status == 1)
+        let old = try status(address, "mdx-zero-retention-1")
+        #expect(old.status == 1)
+        #expect(old.text.contains("The cloud policy changed: PEBBLE_CLOUD_POLICY is mdx-zero-retention-1, but the app shows the \(policy) policy."))
         #expect(try status("http://secret-host.example.com", policy).status == 1)
         #expect(try status(address, policy).status == 0)
         #expect(try status("", nil).status == 0)
@@ -617,6 +623,7 @@ struct ScriptGuardTests {
         #expect(probe.contains("#if DEBUG\nprint(\"release-probe: built as Debug, so it proves nothing\")\nexit(1)\n#else"))
         #expect(probe.contains("if CloudEndpoint.url(from: raw) != nil || reads([CloudEndpoint.infoKey: raw])\n"))
         #expect(probe.contains("    || reads([CloudEndpoint.infoKey: raw, CloudEndpoint.policyKey: policy + \"-other\"])\n"))
+        #expect(probe.contains("    || reads([CloudEndpoint.infoKey: raw, CloudEndpoint.policyKey: \"mdx-zero-retention-1\"])\n"))
         #expect(probe.contains("    || reads([CloudEndpoint.infoKey: \"http://cloud.example.com\", CloudEndpoint.policyKey: policy])\n"))
         #expect(probe.contains("    || reads([CloudEndpoint.infoKey: \"\", CloudEndpoint.policyKey: policy]) {\n"))
         #expect(probe.contains("if !reads([CloudEndpoint.infoKey: raw, CloudEndpoint.policyKey: policy]) {\n"))

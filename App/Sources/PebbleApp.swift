@@ -41,9 +41,10 @@ struct PebbleApp: App {
         _cloud = State(initialValue: CloudHelp.forApp(
             memory: try? MemoryStore.onDevice(),
             endpoint: CloudEndpoint.url(infoDictionary: Bundle.main.infoDictionary),
-            // Sign in with Apple, sending only Apple's anonymous ID and a
-            // key made on this device (`CloudPolicy`). Told to forget when
-            // the cloud is turned off and by Forget everything.
+            // Sign in with Apple, sending only Apple's identity token, a
+            // one-time nonce and a key made on this device (`CloudPolicy`).
+            // Told to forget when the cloud is turned off and by Forget
+            // everything.
             auth: AppleCloudAuth(),
             openStore: { try CloudHelpFileStore.onDevice() }
         ))

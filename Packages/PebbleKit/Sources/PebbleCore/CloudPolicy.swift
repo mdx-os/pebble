@@ -14,7 +14,7 @@ import Foundation
 public struct CloudPolicy: Sendable, Equatable {
     /// The version every check compares against. The Release check reads
     /// this line from the source, so keep it on one line, as it is.
-    public static let currentVersion = "mdx-zero-retention-1"
+    public static let currentVersion = "mdx-zero-retention-2"
 
     public let version: String
     /// Who runs the server: the people who make the app, not a third party.
@@ -25,8 +25,10 @@ public struct CloudPolicy: Sendable, Equatable {
     /// of problems, with nothing from any message in them.
     public let countsKeptForDays: Int
     /// The names of the values signing in sends, and nothing else: Apple's
-    /// anonymous ID for the person with this app, and a random key made on
-    /// this device. No email and no name, ever.
+    /// identity token, the one-time nonce made for that one sign-in, and a
+    /// random key made on this device. No email and no name, ever. The
+    /// server checks the token once, keeps only Apple's anonymous ID from
+    /// it and the key, and throws the token away.
     public let signInFields: [String]
 
     public init(version: String, runBy: String, keepsWhatIsSent: Bool, countsKeptForDays: Int, signInFields: [String]) {
@@ -42,7 +44,7 @@ public struct CloudPolicy: Sendable, Equatable {
         runBy: "MDx",
         keepsWhatIsSent: false,
         countsKeptForDays: 7,
-        signInFields: ["appleUser", "deviceKey"]
+        signInFields: ["appleToken", "nonce", "deviceKey"]
     )
 
     /// Who runs it, said plainly.
@@ -58,16 +60,27 @@ public struct CloudPolicy: Sendable, Equatable {
     /// What signing in sends. Values are covered in the preview, so this
     /// says what they are.
     public var signInLine: String {
-        "Signing in sends just two things: the anonymous ID Apple gives this app for you, and a random key I made for signing in. Never your email or your name."
+        "Signing in sends just three things: a sign-in token from Apple, a one-time code I made for it, and a random key I made for signing in. Never your email or your name."
+    }
+
+    /// What the server does with them.
+    public var tokenLine: String {
+        "\(runBy) checks Apple's token once and then throws it away. It keeps only the anonymous ID Apple gives this app for you, and that key."
     }
 
     /// What turning the cloud off and Forget everything do to sign-in.
     public var forgetLine: String {
-        "Turning this off or using Forget everything erases that ID and key, so I sign in fresh next time."
+        "Turning this off or using Forget everything erases my copy of that key, so I sign in fresh next time with a new one."
     }
 
     /// The policy as the cloud setting shows it, in order.
-    public var lines: [String] { [whoLine, keepsLine, signInLine, forgetLine] }
+    public var lines: [String] { [whoLine, keepsLine, signInLine, tokenLine, forgetLine] }
+
+    /// What the preview says over a sign-in hop, whose values are covered,
+    /// so the person knows what goes under the dots.
+    public var previewSignInLine: String {
+        "To sign in, this carries an Apple sign-in token, used once, with a one-time code and the key I made. Never your email or your name."
+    }
 
     /// The one line the preview shows, under where it goes.
     public var previewLine: String {

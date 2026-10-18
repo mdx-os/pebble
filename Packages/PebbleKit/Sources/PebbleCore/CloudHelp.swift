@@ -409,6 +409,7 @@ public enum CloudWords {
         CloudPolicy.current.whoLine,
         CloudPolicy.current.keepsLine,
         CloudPolicy.current.signInLine,
+        CloudPolicy.current.tokenLine,
         "If you tell me you might be in danger, I answer here and send nothing.",
         "You can turn this off anytime.",
     ]
@@ -421,6 +422,9 @@ public enum CloudWords {
     public static var policyLines: [String] { CloudPolicy.current.lines }
     /// The preview's line under where it goes (`CloudPolicy.previewLine`).
     public static var previewPolicy: String { CloudPolicy.current.previewLine }
+    /// What a sign-in hop carries under its dots, said over it on the card
+    /// and aloud (`CloudPolicy.previewSignInLine`).
+    public static var previewSignInCarries: String { CloudPolicy.current.previewSignInLine }
 
     public static let privateTitle = "Words I always hide"
     // Says "this device" without asking `PrivacyPlace`, like
@@ -608,6 +612,6 @@ public enum CloudWords {
         forgotTasksAndWordsAndCloudNotNotes, forgetTasksAndWordsDetail, tasksAndWordsForgotten,
         tasksAndWordsAndCloudForgotten, tasksForgottenNotWords,
         chatEnded, signInRefused, forgotAfterSending, forgotAndCloudOffAfterSending, sentCantBeErased,
-        policyTitle, previewPolicy,
+        policyTitle, previewPolicy, previewSignInCarries,
     ] + askPoints + policyLines + Redaction.Kind.allCases.map(\.spoken)
 }

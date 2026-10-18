@@ -308,11 +308,13 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     @MainActor
     static func cloudPreviewChat(brand: Brand, looks: UserDefaults) -> some View {
         let memory = sampleMemory()
-        // The real Apple sign-in, with a made up Apple ID and key kept in
-        // memory, so the card shows the very hop a person would see.
-        let auth = AppleCloudAuth(keychain: InMemoryCloudKeychain([
-            AppleCloudAuth.appleUserAccount: "000000.madeupsample.0000",
-        ]), makeKey: { AppleCloudAuth.letters("made up sample key") })
+        // The real Apple sign-in, with a made up token, nonce and key kept
+        // in memory, so the card shows the very hop a person would see.
+        let auth = AppleCloudAuth(keychain: InMemoryCloudKeychain(),
+                                  makeKey: { AppleCloudAuth.letters("made up sample key") },
+                                  makeNonce: { AppleCloudAuth.letters("made up nonce") })
+        _ = auth.startAppleSignIn()
+        try? auth.accept(identityToken: Data("made.up.sample".utf8))
         let help = CloudHelp(
             store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: sampleEndpoint, privateWords: ["lemon cake"])),
             endpoint: sampleEndpoint, memory: memory, auth: auth, transport: { NoSendTransport() }

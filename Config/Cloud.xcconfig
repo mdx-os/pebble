@@ -13,6 +13,6 @@ PEBBLE_CLOUD_ENDPOINT =
 // could ship may have an address only when this equals
 // CloudPolicy.currentVersion, so it shows the words of the service it
 // reaches. Change it only together with CloudPolicy.
-PEBBLE_CLOUD_POLICY = mdx-zero-retention-1
+PEBBLE_CLOUD_POLICY = mdx-zero-retention-2
 
 #include? "Cloud.local.xcconfig"

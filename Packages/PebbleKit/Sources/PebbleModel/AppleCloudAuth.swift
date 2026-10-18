@@ -3,12 +3,15 @@ import PebbleCore
 #if canImport(AuthenticationServices)
 import AuthenticationServices
 #endif
+#if canImport(CryptoKit)
+import CryptoKit
+#endif
 #if canImport(Security)
 import Security
 #endif
 
-/// Where sign-in keeps its two values. The app's is the Keychain, this
-/// device only (`SystemCloudKeychain`); tests keep them in memory.
+/// Where sign-in keeps the device key. The app's is the Keychain, this
+/// device only (`SystemCloudKeychain`); tests keep it in memory.
 public protocol CloudKeychain: Sendable {
     func read(_ account: String) throws -> String?
     func write(_ value: String, for account: String) throws
@@ -16,22 +19,34 @@ public protocol CloudKeychain: Sendable {
 }
 
 /// Sign in with Apple for the cloud, as `CloudPolicy` says: the sign-in hop
-/// carries exactly two values, Apple's anonymous ID for the person with
-/// this app and a random key made on this device, under the names in
-/// `CloudPolicy.signInFields`. No email and no name: the Apple request asks
-/// for no scopes (`appleIDRequest`), and only the credential's `user` is
-/// ever read (`accept(_:)`).
+/// carries exactly three values, under the names in
+/// `CloudPolicy.signInFields`: Apple's identity token, the nonce made for
+/// that one sign-in, and a random key made on this device. No email and no
+/// name: the Apple request asks for no scopes (`appleIDRequest`), and only
+/// the credential's identity token is ever read (`accept(_:)`).
 ///
-/// Nothing here reaches the network. The hop is built while the preview is
-/// built, shown with its values covered, and sent only by the person's yes
-/// (`CloudModel`). Turning the cloud off and Forget everything call
-/// `forget`, which removes both values from the Keychain and drops the
-/// session.
+/// Each Apple sign-in gets a fresh random nonce (`startAppleSignIn`). Apple
+/// is given its SHA-256 and puts that in the token; the server is sent the
+/// nonce itself, once, and checks the two match and that the nonce was
+/// never used before. The server also checks Apple's signature, the
+/// issuer, that the audience is this app, and that the token hasn't
+/// expired, then keeps only Apple's anonymous ID and the device key.
 ///
-/// Apple's ID goes as Apple gives it, digits, dots and hex, which the
-/// redactor leaves as it is (`theHopPassesThePreviewChecks`). The key is
-/// letters only (`letters(_:)`), so it can't look like a phone number, a
-/// card or an address, and the sign-in is never refused for one.
+/// The token and the nonce are held in memory only, never in the Keychain,
+/// a file or the log, and only until the next preview is built: building
+/// the hop takes them (`signIn(for:)`), so from then on only that hop holds
+/// them, and it goes at most once. Whatever happens to it, sent, refused or
+/// not sent, nothing here holds them after. Apple's sign-in ending without
+/// a token (`appleSignInEnded`), turning the cloud off and Forget
+/// everything (`forget`) drop them too.
+///
+/// Nothing here reaches the network. The hop is shown with its values
+/// covered, and sent only by the person's yes (`CloudModel`).
+///
+/// Every value goes as letters only (`letters(_:)`): the token's bytes two
+/// letters each, and a nonce and key made as letters. So nothing in them
+/// can look like a phone number, a card or an address, and the sign-in is
+/// never refused for one.
 public final class AppleCloudAuth: CloudAuth, @unchecked Sendable {
     /// Where the hop goes, under the configured address.
     public static let signInPath = "v1/sign-in"
@@ -39,64 +54,126 @@ public final class AppleCloudAuth: CloudAuth, @unchecked Sendable {
     /// the card like every sign-in value.
     public static let sessionHeader = "Cloud-Session"
 
-    /// The Keychain accounts the two values are kept under.
-    package static let appleUserAccount = "cloud.appleUser"
+    /// The one Keychain account sign-in keeps anything under.
     package static let deviceKeyAccount = "cloud.deviceKey"
 
-    /// The longest Apple ID taken, the most a sign-in value may hold
+    /// The longest identity token taken, in bytes. It goes as two letters a
+    /// byte, so it fits the most a sign-in value may hold
     /// (`CloudSignIn.maxValueLength`).
-    package static let maxAppleUserLength = CloudSignIn.maxValueLength
+    package static let maxTokenLength = CloudSignIn.maxValueLength / 2
 
     private let keychain: any CloudKeychain
     private let makeKey: @Sendable () -> String?
+    private let makeNonce: @Sendable () -> String?
     private let lock = NSLock()
     /// What the server answered the last sign-in with. Held in memory only,
     /// so every launch signs in again.
     private var session: String?
+    /// The nonce of the Apple sign-in under way, until Apple answers.
+    private var waitingNonce: String?
+    /// Apple's token and its nonce, from Apple's answer until the next
+    /// preview takes them for its hop.
+    private var unsent: (token: String, nonce: String)?
 
     public init(keychain: any CloudKeychain = SystemCloudKeychain(),
-                makeKey: @escaping @Sendable () -> String? = AppleCloudAuth.randomKey) {
+                makeKey: @escaping @Sendable () -> String? = AppleCloudAuth.randomKey,
+                makeNonce: @escaping @Sendable () -> String? = AppleCloudAuth.randomKey) {
         self.keychain = keychain
         self.makeKey = makeKey
+        self.makeNonce = makeNonce
+    }
+
+    /// Starts one Apple sign-in: makes a fresh nonce, held in memory, and
+    /// gives back its SHA-256 for Apple's request. Any token not yet sent,
+    /// and any nonce of an earlier sign-in, is dropped, so a nonce is used
+    /// for one sign-in only. Nil, with nothing held, when no nonce can be
+    /// made.
+    public func startAppleSignIn() -> String? {
+        let nonce = makeNonce()
+        let hashed = nonce.flatMap(Self.sha256)
+        lock.withLock {
+            waitingNonce = hashed == nil ? nil : nonce
+            unsent = nil
+        }
+        CloudLog.note(hashed == nil ? "Apple sign-in not started" : "Apple sign-in started")
+        return hashed
     }
 
     #if canImport(AuthenticationServices)
     /// The Apple sign-in request: no scopes, so Apple shares neither the
-    /// person's email nor their name.
-    public static func appleIDRequest() -> ASAuthorizationAppleIDRequest {
+    /// person's email nor their name, and the SHA-256 of a fresh nonce. Nil
+    /// when no nonce can be made.
+    public func appleIDRequest() -> ASAuthorizationAppleIDRequest? {
+        guard let hashed = startAppleSignIn() else { return nil }
         let request = ASAuthorizationAppleIDProvider().createRequest()
         request.requestedScopes = []
+        request.nonce = hashed
         return request
     }
 
-    /// Keeps Apple's anonymous ID from `credential`, and nothing else from it.
+    /// Takes Apple's identity token from `credential`, and nothing else
+    /// from it.
     public func accept(_ credential: ASAuthorizationAppleIDCredential) throws {
-        try accept(appleUser: credential.user)
+        try accept(identityToken: credential.identityToken ?? Data())
     }
     #endif
 
     public enum Refused: Error, Equatable {
-        /// An Apple ID that is empty, too long, or not plain printable ASCII.
-        case appleUser
+        /// No Apple sign-in was under way, so there is no nonce for it.
+        case noSignInUnderWay
+        /// A token that is empty, too long, or not three plain parts.
+        case identityToken
     }
 
-    /// Keeps `appleUser`, Apple's anonymous ID, in the Keychain. A new one
-    /// drops any session from the last.
-    public func accept(appleUser: String) throws {
-        guard !appleUser.isEmpty, appleUser.utf8.count <= Self.maxAppleUserLength,
-              appleUser.unicodeScalars.allSatisfy({ (0x21...0x7E).contains($0.value) }) else { throw Refused.appleUser }
-        try lock.withLock {
+    /// Holds `identityToken`, with the nonce of the sign-in under way, for
+    /// the next preview's hop. The nonce is used up either way, so a token
+    /// can't be paired with it twice. A new token drops any session from
+    /// the last.
+    public func accept(identityToken: Data) throws {
+        let token = String(decoding: identityToken, as: UTF8.self)
+        let refused: Refused? = lock.withLock {
+            guard let nonce = waitingNonce else { return .noSignInUnderWay }
+            waitingNonce = nil
+            guard Self.isPlainToken(identityToken) else { return .identityToken }
             session = nil
-            try keychain.write(appleUser, for: Self.appleUserAccount)
+            unsent = (token, nonce)
+            return nil
+        }
+        if let refused {
+            CloudLog.note("Apple sign-in token refused")
+            throw refused
+        }
+        CloudLog.note("Apple sign-in token held for the next preview")
+    }
+
+    /// Apple's sign-in ended without a token, cancelled or failed: its
+    /// nonce is dropped.
+    public func appleSignInEnded() {
+        lock.withLock { waitingNonce = nil }
+        CloudLog.note("Apple sign-in ended without a token")
+    }
+
+    /// A token as Apple writes one: three parts of letters, digits, `-` and
+    /// `_`, joined by dots, at most `maxTokenLength` bytes.
+    static func isPlainToken(_ token: Data) -> Bool {
+        guard (1...maxTokenLength).contains(token.count) else { return false }
+        let parts = token.split(separator: UInt8(ascii: "."), omittingEmptySubsequences: false)
+        return parts.count == 3 && parts.allSatisfy { part in
+            !part.isEmpty && part.allSatisfy { byte in
+                (UInt8(ascii: "a")...UInt8(ascii: "z")).contains(byte) || (UInt8(ascii: "A")...UInt8(ascii: "Z")).contains(byte)
+                    || (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte) || byte == UInt8(ascii: "-") || byte == UInt8(ascii: "_")
+            }
         }
     }
 
-    /// Exactly the two values the hop sends, under `CloudPolicy`'s names, or
-    /// nil when there is no Apple ID yet or no key can be kept. The key is
-    /// made here the first time, on this device.
-    package func signInFields() -> [String: String]? {
+    /// Exactly the three values the hop sends, under `CloudPolicy`'s names,
+    /// or nil when there is no token yet or no key can be kept. Takes the
+    /// token and its nonce, so nothing here holds them after, even when no
+    /// hop can be made. The key is made here the first time, on this device.
+    package func takeSignInFields() -> [String: String]? {
         lock.withLock {
-            guard let user = try? keychain.read(Self.appleUserAccount), !user.isEmpty else { return nil }
+            guard let held = unsent else { return nil }
+            unsent = nil
             var key = try? keychain.read(Self.deviceKeyAccount)
             if key == nil || key?.isEmpty == true {
                 guard let made = makeKey(), (try? keychain.write(made, for: Self.deviceKeyAccount)) != nil else { return nil }
@@ -104,40 +181,65 @@ public final class AppleCloudAuth: CloudAuth, @unchecked Sendable {
             }
             guard let key else { return nil }
             let names = CloudPolicy.current.signInFields
-            return [names[0]: user, names[1]: key]
+            return [names[0]: Self.letters(held.token), names[1]: held.nonce, names[2]: key]
         }
+    }
+
+    /// True while a token or a nonce is held here: from the start of an
+    /// Apple sign-in until the next preview takes them.
+    package var holdsTokenOrNonce: Bool {
+        lock.withLock { waitingNonce != nil || unsent != nil }
     }
 
     public func headers(for url: URL) -> [String: String] {
         lock.withLock { session.map { [Self.sessionHeader: $0] } ?? [:] }
     }
 
-    /// The hop, while signed in to Apple and not yet to the server.
+    /// The hop, once Apple has given a token and while not yet signed in to
+    /// the server. Takes the token either way.
     public func signIn(for endpoint: URL) -> CloudSignIn? {
-        guard lock.withLock({ session == nil }), let fields = signInFields(),
+        let signedIn = lock.withLock { session != nil }
+        guard let fields = takeSignInFields(), !signedIn,
               let body = try? CloudSignIn.encoded(fields) else { return nil }
+        CloudLog.note("sign-in hop made for the preview")
         return CloudSignIn(path: Self.signInPath, body: body)
     }
 
     /// Keeps the server's `{"session": "..."}` in memory, when it is only
     /// letters, as `docs/CLOUD.md` asks of the server, so it can never read
     /// as a personal detail. Anything else is dropped, and the next message
-    /// signs in again.
+    /// needs a new Apple sign-in.
     public func signedIn(_ answer: Data) {
         guard let reply = try? JSONDecoder().decode([String: String].self, from: answer),
               let token = reply["session"], (16...CloudSignIn.maxValueLength).contains(token.count),
-              token.unicodeScalars.allSatisfy({ ("a"..."z").contains($0) || ("A"..."Z").contains($0) }) else { return }
+              token.unicodeScalars.allSatisfy({ ("a"..."z").contains($0) || ("A"..."Z").contains($0) }) else {
+            CloudLog.note("sign-in answer dropped")
+            return
+        }
         lock.withLock { session = token }
+        CloudLog.note("signed in to the cloud")
     }
 
-    /// Removes the Apple ID and the key from the Keychain and drops the
-    /// session. Each is tried even when another can't go.
+    /// Removes the key from the Keychain, and drops the session and any
+    /// token or nonce. Each is let go even when the key can't be.
     public func forget() {
         lock.withLock {
             session = nil
-            try? keychain.remove(Self.appleUserAccount)
+            waitingNonce = nil
+            unsent = nil
             try? keychain.remove(Self.deviceKeyAccount)
         }
+        CloudLog.note("sign-in forgotten")
+    }
+
+    /// The SHA-256 of `nonce`'s bytes as lowercase hex, as Apple's request
+    /// takes it. Nil where there is no CryptoKit, so no sign-in starts.
+    public static func sha256(_ nonce: String) -> String? {
+        #if canImport(CryptoKit)
+        SHA256.hash(data: Data(nonce.utf8)).map { String(format: "%02x", $0) }.joined()
+        #else
+        nil
+        #endif
     }
 
     /// `text`'s bytes, each as two letters from a to p, high half first.
@@ -151,8 +253,9 @@ public final class AppleCloudAuth: CloudAuth, @unchecked Sendable {
         return String(bytes.flatMap { [alphabet[Int($0 >> 4)], alphabet[Int($0 & 0x0F)]] })
     }
 
-    /// 32 random bytes from the system, in letters. Nil if the system can't
-    /// give them, so no weak key is ever made.
+    /// 32 random bytes from the system, in letters: a device key, or a
+    /// nonce. Nil if the system can't give them, so no weak key or nonce is
+    /// ever made.
     public static let randomKey: @Sendable () -> String? = {
         var bytes = [UInt8](repeating: 0, count: 32)
         #if canImport(Security)

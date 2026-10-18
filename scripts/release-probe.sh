@@ -41,6 +41,7 @@ let policy = CloudPolicy.currentVersion
 func reads(_ info: [String: Any]) -> Bool { CloudEndpoint.url(infoDictionary: info) != nil }
 if CloudEndpoint.url(from: raw) != nil || reads([CloudEndpoint.infoKey: raw])
     || reads([CloudEndpoint.infoKey: raw, CloudEndpoint.policyKey: policy + "-other"])
+    || reads([CloudEndpoint.infoKey: raw, CloudEndpoint.policyKey: "mdx-zero-retention-1"])
     || reads([CloudEndpoint.infoKey: "http://cloud.example.com", CloudEndpoint.policyKey: policy])
     || reads([CloudEndpoint.infoKey: "", CloudEndpoint.policyKey: policy]) {
     print("release-probe: a Release build read a cloud address without the current policy and a plain https address")

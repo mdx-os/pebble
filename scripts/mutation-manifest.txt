@@ -14,9 +14,9 @@
 #   testThePrivateWordsSayWhatTheyCanMiss: anotherSpellingCanStillSlipBy
 #   testTurningOnAsksFirst: theQuestionPromisesSignInCarriesNothingPrivate,
 #     theCloudWordsReadThePolicy
-#   testThePreviewShowsTheRequestAndReadsWell (the Apple hop and the
-#     policy line): theSignInHopCarriesExactlyTheTwoValues,
-#     theSettingAndThePreviewShowThePolicy
+#   testThePreviewShowsTheRequestAndReadsWell (the Apple hop, what it
+#     carries and the policy line): theSignInHopCarriesExactlyTheThreeValues,
+#     thePreviewSaysWhatTheAppleHopCarries, theSettingAndThePreviewShowThePolicy
 #   testTheSettingSaysWhoRunsItAndWhatItKeeps: theSettingAndThePreviewShowThePolicy,
 #     theLinesArePinnedToTheirVersion
 # A new UI test that guards a promise gets a twin here before it lands.
@@ -464,7 +464,16 @@ perl: s~        PebbleCloudPolicy: \$\(PEBBLE_CLOUD_POLICY\)\n~~
 
 test: theBuildNamesThePolicyTheCodeShows
 file: Config/Cloud.xcconfig
-perl: s~PEBBLE_CLOUD_POLICY = mdx-zero-retention-1~PEBBLE_CLOUD_POLICY = mdx-zero-retention-0~
+perl: s~PEBBLE_CLOUD_POLICY = mdx-zero-retention-2~PEBBLE_CLOUD_POLICY = mdx-zero-retention-1~
+
+# A build still naming the version before fails and says the policy changed.
+test: theReleaseCheckPassesAShippedBuildOnlyWithTheCurrentPolicy theReleaseCheckOnItsOwnPassesOnlyWithTheCurrentPolicy
+file: scripts/release-endpoint-check.sh
+perl: s~"The cloud policy changed: PEBBLE_CLOUD_POLICY is~"PEBBLE_CLOUD_POLICY is~
+
+test: theReleaseCheckPassesAShippedBuildOnlyWithTheCurrentPolicy theReleaseCheckOnItsOwnPassesOnlyWithTheCurrentPolicy
+file: scripts/release-endpoint-check.sh
+perl: s~if \[ "\$policy" != "\$expected" \]; then~if [ "\$policy" != "\$expected" ] && [ "\$policy" != mdx-zero-retention-1 ]; then~
 
 test: theBuildNamesThePolicyTheCodeShows
 file: App/Info.plist
@@ -478,7 +487,7 @@ perl: s~countsKeptForDays: 7,~countsKeptForDays: 30,~
 
 test: thePolicyIsTheOneDecided
 file: Packages/PebbleKit/Sources/PebbleCore/CloudPolicy.swift
-perl: s~signInFields: \["appleUser", "deviceKey"\]~signInFields: ["appleUser", "deviceKey", "email"]~
+perl: s~signInFields: \["appleToken", "nonce", "deviceKey"\]~signInFields: ["appleToken", "nonce", "deviceKey", "email"]~
 
 test: thePolicyIsTheOneDecided
 file: Packages/PebbleKit/Sources/PebbleCore/CloudPolicy.swift
@@ -506,7 +515,7 @@ perl: s~kept for 7 days\. Sign-in~kept for a week. Sign-in~
 
 test: theDocsSayTheSameInTheSameWords
 file: README.md
-perl: s~ Sign-in sends only Apple's anonymous user ID and a key made on the device, never an email or a name\.~~
+perl: s~ keeps only Apple's anonymous user ID \(sub\) and the device key,~ keeps Apple's anonymous user ID (sub) and the device key,~
 
 test: theDocsSayTheSameInTheSameWords
 file: AGENTS.md
@@ -533,47 +542,161 @@ test: theSettingAndThePreviewShowThePolicy
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
 perl: s~\n\s*Label\(Self\.policyLine, systemImage: "building\.2"\)~~
 
-# Sign in with Apple sends exactly two values, asks for no scopes, and
-# keeps nothing once the cloud is off or Forget everything has run.
-test: theSignInHopCarriesExactlyTheTwoValues theHopPassesThePreviewChecks nothingIsSentWithoutTheYes
+# Sign in with Apple sends exactly Apple's token, a fresh nonce and the
+# device key, asks for no scopes, holds the token and nonce only until the
+# hop is made, never keeps or logs them, and keeps nothing once the cloud
+# is off or Forget everything has run.
+test: theSignInHopCarriesExactlyTheThreeValues theHopPassesThePreviewChecks nothingIsSentWithoutTheYes
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
-perl: s~return \[names\[0\]: user, names\[1\]: key\]~return [names[0]: user, names[1]: key, "email": "sam\@example.com"]~
+perl: s~names\[2\]: key\]~names[2]: key, "email": "sam\@example.com"]~
 
-test: theSignInHopCarriesExactlyTheTwoValues theHopPassesThePreviewChecks
+test: theSignInHopCarriesExactlyTheThreeValues
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
-perl: s~return \[names\[0\]: user, names\[1\]: key\]~return [names[0]: user, names[1]: key, "name": "made"]~
+perl: s~names\[2\]: key\]~names[2]: key, "name": "made"]~
 
-test: theSignInHopCarriesExactlyTheTwoValues
+test: theSignInHopCarriesExactlyTheThreeValues
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
-perl: s~return \[names\[0\]: user, names\[1\]: key\]~return [names[0]: user]~
+perl: s~, names\[1\]: held\.nonce, names\[2\]: key\]~, names[2]: key]~
 
-test: theSignInHopCarriesExactlyTheTwoValues
+test: theSignInHopCarriesExactlyTheThreeValues theHopPassesThePreviewChecks
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~names\[0\]: Self\.letters\(held\.token\)~names[0]: held.token~
+
+test: theSignInHopCarriesExactlyTheThreeValues
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
 perl: s~if key == nil \|\| key\?\.isEmpty == true \{~if true {~
 
-test: theSignInHopCarriesExactlyTheTwoValues
+test: theSignInHopCarriesExactlyTheThreeValues
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
 perl: s~let alphabet = Array\("abcdefghijklmnop"\)~let alphabet = Array("0123456789012345")~
 
-test: noAppleIDMeansNoHopAndNoKey
-file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
-perl: s~guard let user = try\? keychain\.read\(Self\.appleUserAccount\), !user\.isEmpty else \{ return nil \}~let user = (try? keychain.read(Self.appleUserAccount)) ?? ""~
-
-test: noAppleIDMeansNoHopAndNoKey
+test: noTokenMeansNoHopAndNoKey
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
 perl: s~guard let made = makeKey\(\),~guard let made = makeKey() ?? Optional("weak"),~
 
-test: anOddAppleIDIsRefused
+test: noTokenMeansNoHopAndNoKey aNonceIsNeverReused afterTheHopTheAuthHoldsNoTokenOrNonce
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
-perl: s~appleUser\.unicodeScalars\.allSatisfy\(\{ \(0x21\.\.\.0x7E\)\.contains\(\$0\.value\) \}\)~true~
+perl: s~guard let nonce = waitingNonce else \{ return \.noSignInUnderWay \}~let nonce = waitingNonce ?? "made-up"~
+
+test: aNonceIsNeverReused anOddTokenIsRefused
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~\n\s*waitingNonce = nil\n(\s*)guard Self\.isPlainToken~\n$1guard Self.isPlainToken~
+
+test: aNonceIsNeverReused
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~(waitingNonce = hashed == nil \? nil : nonce)\n\s*unsent = nil~$1~
+
+test: aNonceIsNeverReused theAppleRequestAsksForNoScopesAndCarriesTheNoncesHash
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~makeNonce: \@escaping \@Sendable \(\) -> String\? = AppleCloudAuth\.randomKey~makeNonce: \@escaping \@Sendable () -> String? = { "abcdefgh" }~
+
+test: aNonceIsNeverReused theAppleRequestAsksForNoScopesAndCarriesTheNoncesHash
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~SHA256\.hash\(data: Data\(nonce\.utf8\)\)~SHA256.hash(data: Data((nonce + "x").utf8))~
+
+test: theAppleRequestAsksForNoScopesAndCarriesTheNoncesHash theCodeReadsOnlyTheIdentityToken
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~request\.nonce = hashed~request.nonce = "abc"~
+
+test: anOddTokenIsRefused
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~return parts\.count == 3 &&~return parts.count >= 2 \&\&~
+
+test: anOddTokenIsRefused
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~guard \(1\.\.\.maxTokenLength\)\.contains\(token\.count\) else~guard !token.isEmpty else~
+
+test: afterTheHopTheAuthHoldsNoTokenOrNonce noTokenMeansNoHopAndNoKey theSessionIsKeptOnlyWhenItIsLetters
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~(guard let held = unsent else \{ return nil \})\n\s*unsent = nil~$1~
+
+test: afterTheHopTheAuthHoldsNoTokenOrNonce turningTheCloudOffRemovesTheDeviceKey forgetEverythingRemovesTheDeviceKey
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~(session = nil\n\s*waitingNonce = nil)\n\s*unsent = nil~$1~
+
+test: afterTheHopTheAuthHoldsNoTokenOrNonce
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~(public func forget\(\) \{\n\s*lock\.withLock \{\n\s*session = nil)\n\s*waitingNonce = nil~$1~
+
+test: afterTheHopTheAuthHoldsNoTokenOrNonce
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~lock\.withLock \{ waitingNonce = nil \}~lock.withLock { }~
+
+test: theSessionIsKeptOnlyWhenItIsLetters
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~guard let fields = takeSignInFields\(\), !signedIn,~guard let fields = takeSignInFields(),~
+
+test: theSessionIsKeptOnlyWhenItIsLetters
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~guard let fields = takeSignInFields\(\), !signedIn,~guard !signedIn, let fields = takeSignInFields(),~
+
+test: theTokenIsNeverKeptOrLogged nothingInTheCloudCodeLogsAValue
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~(guard let held = unsent else \{ return nil \})~$1\n            try? keychain.write(held.token, for: "cloud.token")~
+
+test: theTokenIsNeverKeptOrLogged
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~(guard let held = unsent else \{ return nil \})~$1\n            UserDefaults.standard.set(held.nonce, forKey: "cloud.nonce")~
+
+test: nothingInTheCloudCodeLogsAValue
+file: Packages/PebbleKit/Sources/PebbleModel/CloudLog.swift
+perl: s~public static func note\(_ event: StaticString\)~public static func note(_ event: String)~
+
+test: nothingInTheCloudCodeLogsAValue
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~(CloudLog\.note\("Apple sign-in token held for the next preview"\))~$1\n        print(token.count)~
+
+test: theTokenIsNeverKeptOrLogged
+file: Packages/PebbleKit/Sources/PebbleModel/CloudLog.swift
+perl: s~for watcher in lock\.withLock\(\{ Array\(watchers\.values\) \}\) \{ watcher\(line\) \}~~
+
+test: thePreviewSaysWhatTheAppleHopCarries
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~return signInBodyNames\(signIn\.body\) == CloudPolicy\.current\.signInFields\.sorted\(\)~return false~
+
+test: thePreviewSaysWhatTheAppleHopCarries
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~\n\s*\+ \(carriesAppleSignIn\(preview\) \? \[CloudWords\.previewSignInCarries\] : \[\]\)~~
+
+test: thePreviewSaysWhatTheAppleHopCarries
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~\n\s*Label\(CloudWords\.previewSignInCarries, systemImage: "apple\.logo"\)~\n                        Text(CloudWords.previewSignInCarries)~
+
+test: thePreviewSaysWhatTheAppleHopCarries
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~return signInBodyNames\(signIn\.body\) == CloudPolicy\.current\.signInFields\.sorted\(\)~return true~
+
+test: theCloudWordsReadThePolicy
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~policyTitle, previewPolicy, previewSignInCarries,~policyTitle, previewPolicy,~
+
+test: theCloudWordsReadThePolicy
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~\n\s*CloudPolicy\.current\.tokenLine,\n~\n~
+
+test: theLinesArePinnedToTheirVersion theDocsSayTheSameInTheSameWords
+file: Packages/PebbleKit/Sources/PebbleCore/CloudPolicy.swift
+perl: s~checks Apple's token once and then throws it away~checks Apple's token~
+
+test: theLinesArePinnedToTheirVersion theDocsSayTheSameInTheSameWords thePreviewSaysWhatTheAppleHopCarries
+file: Packages/PebbleKit/Sources/PebbleCore/CloudPolicy.swift
+perl: s~an Apple sign-in token, used once,~an Apple sign-in token,~
+
+test: theDocsSayTheSameInTheSameWords
+file: docs/CLOUD.md
+perl: s~ \(Apple's signature, iss, aud, exp and the nonce\)~~
+
+test: theDocsSayTheSameInTheSameWords
+file: docs/CLOUD.md
+perl: s~1\. Turn on the Sign in with Apple capability for the app's App ID\.\n~~
+
+test: theDocsSayTheSameInTheSameWords
+file: docs/CLOUD.md
+perl: s~- "MDx checks Apple's token once~- "MDx checks the token once~
 
 test: forgetRemovesTheDeviceKey turningTheCloudOffRemovesTheDeviceKey forgetEverythingRemovesTheDeviceKey
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
 perl: s~\n\s*try\? keychain\.remove\(Self\.deviceKeyAccount\)~~
-
-test: forgetRemovesTheDeviceKey turningTheCloudOffRemovesTheDeviceKey forgetEverythingRemovesTheDeviceKey
-file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
-perl: s~\n\s*try\? keychain\.remove\(Self\.appleUserAccount\)~~
 
 test: forgetRemovesTheDeviceKey
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
@@ -591,10 +714,6 @@ test: theSessionIsKeptOnlyWhenItIsLetters
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
 perl: s~token\.unicodeScalars\.allSatisfy\(\{ \("a"\.\.\."z"\)\.contains\(\$0\) \|\| \("A"\.\.\."Z"\)\.contains\(\$0\) \}\)~true~
 
-test: theSessionIsKeptOnlyWhenItIsLetters
-file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
-perl: s~guard lock\.withLock\(\{ session == nil \}\), let fields~guard let fields~
-
 test: theDeviceKeyIsRandom
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
 perl: s~var bytes = \[UInt8\]\(repeating: 0, count: 32\)~var bytes = [UInt8](repeating: 0, count: 16)~
@@ -611,13 +730,13 @@ test: theKeyIsKeptForThisDeviceOnly
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
 perl: s~kSecAttrSynchronizable as String: false,~kSecAttrSynchronizable as String: true,~
 
-test: theAppleRequestAsksForNoScopes theCodeReadsOnlyTheAppleID
+test: theAppleRequestAsksForNoScopesAndCarriesTheNoncesHash theCodeReadsOnlyTheIdentityToken
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
 perl: s~request\.requestedScopes = \[\]~request.requestedScopes = [.email, .fullName]~
 
-test: theCodeReadsOnlyTheAppleID
+test: theCodeReadsOnlyTheIdentityToken
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
-perl: s~try accept\(appleUser: credential\.user\)~try accept(appleUser: credential.email ?? credential.user)~
+perl: s~try accept\(identityToken: credential\.identityToken \?\? Data\(\)\)~try accept(identityToken: Data((credential.email ?? credential.user).utf8))~
 
 # An empty address, even with the policy named, can't be turned on.
 test: anEmptyAddressCantBeTurnedOn

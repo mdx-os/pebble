@@ -54,7 +54,7 @@ in lint, a skill, or CI.
   on iPhone. Shared pieces live in `PebbleUI/Presence.swift`.
 - Private by default: personal content never leaves the device without consent.
 - Local open-weight models by default; cloud models only when the user chooses.
-- The cloud service and its promises are in `docs/CLOUD.md`, and the app's words for them in `CloudPolicy`. MDx runs the cloud service itself. It stores no message bodies, only counts of requests and errors, kept for 7 days. Sign-in sends only Apple's anonymous user ID and a key made on the device, never an email or a name. A change to any of it gets a new policy version.
+- The cloud service and its promises are in `docs/CLOUD.md`, and the app's words for them in `CloudPolicy`. MDx runs the cloud service itself. It stores no message bodies, only counts of requests and errors, kept for 7 days. Sign-in sends only Apple's identity token, a one-time nonce and a key made on the device, never an email or a name. The server checks the token once (Apple's signature, iss, aud, exp and the nonce), keeps only Apple's anonymous user ID (sub) and the device key, and throws the token away. The app holds the token and nonce in memory for that one hop only, and logs cloud events only through `CloudLog`, which takes fixed words. A change to any of it gets a new policy version.
 - Every action the agent can take is a capability with a permission and a log entry.
 
 ## Pull requests

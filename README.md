@@ -72,7 +72,7 @@ chooses one.
 - Cloud: `CloudModel` sends to the address in `Config/Cloud.local.xcconfig`,
   which git ignores and which doesn't exist by default, so the setting can't
   be turned on. The service and what it promises are in
-  [docs/CLOUD.md](docs/CLOUD.md). In short: MDx runs the cloud service itself. It stores no message bodies, only counts of requests and errors, kept for 7 days. Sign-in sends only Apple's anonymous user ID and a key made on the device, never an email or a name.
+  [docs/CLOUD.md](docs/CLOUD.md). In short: MDx runs the cloud service itself. It stores no message bodies, only counts of requests and errors, kept for 7 days. Sign-in sends only Apple's identity token, a one-time nonce and a key made on the device, never an email or a name. The server checks the token once (Apple's signature, iss, aud, exp and the nonce), keeps only Apple's anonymous user ID (sub) and the device key, and throws the token away.
   A build that could ship may have an address only when
   `PEBBLE_CLOUD_POLICY` in `Config/Cloud.xcconfig` names the policy the app
   shows (`CloudPolicy.currentVersion`) and the address is plain https; any
@@ -91,8 +91,10 @@ chooses one.
   words can't be read. The setting and the private words are kept next to
   the notes, out of backups, and Forget everything ends every open cloud
   chat first. Sign-in is a `CloudAuth`: the app's is `AppleCloudAuth`,
-  Sign in with Apple with no scopes, whose hop carries exactly
-  `appleUser` and `deviceKey`. A sign-in is a hop shown in the same preview, its values
+  Sign in with Apple with no scopes and a fresh nonce each time, whose hop
+  carries exactly `appleToken`, `nonce` and `deviceKey`. The token and
+  nonce are held only in memory until the hop is made, then dropped, and
+  are never kept or logged. A sign-in is a hop shown in the same preview, its values
   covered on screen, and sent only by its yes, so no request of ours goes
   unshown. Its values are covered, though not their combined length,
   which the hop's Content-Length still shows. Since its values are

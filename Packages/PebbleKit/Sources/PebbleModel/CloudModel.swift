@@ -224,7 +224,7 @@ public struct CloudSignIn: Sendable, Equatable {
     /// bound on shape: a value this long with no name in it passes the
     /// redactor, so what keeps it to a credential is `CloudAuth`'s
     /// contract.
-    public static let maxValueLength = 512
+    public static let maxValueLength = 4096
 
     /// The longest name a sign-in body part or header may have.
     public static let maxNameLength = 64
@@ -488,7 +488,10 @@ public struct CloudModel: ModelClient {
             for: transcript, endpoint: endpoint, redactor: try session.widened(by: current),
             headers: auth.headers(for: Self.url(for: endpoint)), signIn: auth.signIn(for: endpoint)
         )
-        guard await reviewer.review(preview) == .send else { throw CloudModelError.notSent }
+        guard await reviewer.review(preview) == .send else {
+            CloudLog.note("preview declined")
+            throw CloudModelError.notSent
+        }
         // Under way from the yes until the reply is back, so Forget
         // everything ends this chat even between sends, when nothing is on
         // the wire and nothing may be hidden yet.
@@ -498,6 +501,7 @@ public struct CloudModel: ModelClient {
             if let signIn = preview.signIn {
                 try readyToSend()
                 let answer = try await session.send(signIn, through: transport)
+                CloudLog.note("sign-in hop answered")
                 // A switch off or Forget everything may have come while it
                 // was on the wire; then nothing it brought back is kept.
                 // `isOn` is read first, off the chat's lock, so it may take

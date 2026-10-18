@@ -71,7 +71,7 @@ check_shipping() {
       "Set PEBBLE_CLOUD_POLICY = $expected in Config/Cloud.xcconfig, the policy the app shows (CloudPolicy.currentVersion)."
   fi
   if [ "$policy" != "$expected" ]; then
-    refuse "$1" "PEBBLE_CLOUD_POLICY is $policy, but the app shows the $expected policy." \
+    refuse "$1" "The cloud policy changed: PEBBLE_CLOUD_POLICY is $policy, but the app shows the $expected policy." \
       "Set PEBBLE_CLOUD_POLICY = $expected, or change CloudPolicy and docs/CLOUD.md to the new policy first."
   fi
   address="$(printf '%s' "$2" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"

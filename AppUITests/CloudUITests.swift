@@ -39,13 +39,17 @@ final class CloudUITests: XCTestCase {
         XCTAssertLessThan(hop.frame.minY, app.staticTexts["Then, your message:"].frame.minY)
         XCTAssertLessThan(app.staticTexts["Then, your message:"].frame.minY, labels.frame.minY)
         // The hop's own Host and length, the length a real number: the
-        // showcase's Sign in with Apple body, a made up Apple ID and key,
-        // is 91 bytes.
+        // showcase's Sign in with Apple body, a made up token, nonce and
+        // key, is 133 bytes.
         XCTAssertTrue(hop.label.contains("Host, cloud.example.com"))
-        XCTAssertEqual(Self.contentLength(in: hop.label), 91)
-        // Its body is read with every value hidden: exactly Apple's ID and
-        // the device key, nothing else.
-        XCTAssertTrue(app.staticTexts["Sent with the sign-in: appleUser, hidden. deviceKey, hidden."].exists)
+        XCTAssertEqual(Self.contentLength(in: hop.label), 133)
+        // Its body is read with every value hidden: exactly Apple's token,
+        // the nonce and the device key, nothing else.
+        XCTAssertTrue(app.staticTexts["Sent with the sign-in: appleToken, hidden. deviceKey, hidden. nonce, hidden."].exists)
+        // And the sheet says what goes under the dots.
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@",
+                                                           "To sign in, this carries an Apple sign-in token, used once"))
+            .firstMatch.exists)
         // Not signed in yet, so the message carries no sign-in label.
         XCTAssertFalse(labels.label.contains("sign-in value"))
         // A plain word, never the product's name.
@@ -58,7 +62,8 @@ final class CloudUITests: XCTestCase {
             .firstMatch.exists)
         // No sign-in value anywhere on screen or in what VoiceOver reads:
         // every kind of element, by its label or its value.
-        for value in ["madeupsample", "gngbgegfcahfhacahdgbgnhagmgfcaglgfhj"] {
+        for value in ["made.up.sample", "gngbgegfcohfhacohdgbgnhagmgf", "gngbgegfcahfhacagogpgogdgf",
+                      "gngbgegfcahfhacahdgbgnhagmgfcaglgfhj"] {
             let leaked = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", value, value))
             XCTAssertEqual(leaked.count, 0, value)
@@ -175,7 +180,7 @@ final class CloudUITests: XCTestCase {
         for _ in 0..<6 where !signIn.isHittable { app.swipeUp() }
         XCTAssertTrue(signIn.isHittable)
         // Who runs it and what signing in sends, before the yes.
-        let apple = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Signing in sends just two things:")).firstMatch
+        let apple = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Signing in sends just three things:")).firstMatch
         XCTAssertTrue(apple.exists)
         for _ in 0..<6 where !apple.isHittable { app.swipeUp() }
         XCTAssertTrue(apple.isHittable)
@@ -191,7 +196,8 @@ final class CloudUITests: XCTestCase {
         let app = launch("cloudOff")
         XCTAssertTrue(app.staticTexts["Where it goes"].waitForExistence(timeout: 10))
         for start in ["Your messages go to a server MDx runs itself.", "MDx doesn't save what you send.",
-                      "Signing in sends just two things:", "Turning this off or using Forget everything erases that ID and key"] {
+                      "Signing in sends just three things:", "MDx checks Apple's token once and then throws it away.",
+                      "Turning this off or using Forget everything erases my copy of that key"] {
             let line = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", start)).firstMatch
             XCTAssertTrue(line.exists, start)
             for _ in 0..<6 where !line.isHittable { app.swipeUp() }

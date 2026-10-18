@@ -1131,6 +1131,14 @@ struct CloudPreviewSheet: View {
         preview.signIn != nil || preview.request.headers.contains { isSignIn($0.key, $0.value) }
     }
 
+    /// True when the sign-in hop is Sign in with Apple's: its body's names
+    /// are exactly `CloudPolicy.signInFields`. The sheet then says what
+    /// goes under its dots (`CloudWords.previewSignInCarries`).
+    static func carriesAppleSignIn(_ preview: CloudPreview) -> Bool {
+        guard let signIn = preview.signIn else { return false }
+        return signInBodyNames(signIn.body) == CloudPolicy.current.signInFields.sorted()
+    }
+
     /// Who runs the server and what it keeps, from `CloudPolicy` alone.
     static var policyLine: String { CloudWords.previewPolicy }
 
@@ -1153,6 +1161,7 @@ struct CloudPreviewSheet: View {
             return covered + spokenLines(preview.request, isSignInHop: false)
         }
         return [CloudWords.previewSignInFirst, CloudWords.previewSignInCovered]
+            + (carriesAppleSignIn(preview) ? [CloudWords.previewSignInCarries] : [])
             + spokenLines(signIn, isSignInHop: true)
             + [CloudWords.previewThenMessage] + spokenLines(preview.request, isSignInHop: false)
     }
@@ -1201,6 +1210,11 @@ struct CloudPreviewSheet: View {
                     if Self.coversAnything(preview) {
                         Label(CloudWords.previewSignInCovered, systemImage: "key")
                             .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if Self.carriesAppleSignIn(preview) {
+                        Label(CloudWords.previewSignInCarries, systemImage: "apple.logo")
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("cloudPreviewSignInCarries")
                     }
                 }
                 .font(.subheadline.weight(.medium))
