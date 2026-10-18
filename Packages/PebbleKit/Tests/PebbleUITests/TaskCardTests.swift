@@ -989,6 +989,121 @@ struct TaskCardTests {
         #expect(!model.isSample(real))
     }
 
+    // MARK: Not now stays Not now
+
+    /// Not now on a task's question, with `NeedsYou` watched by this model
+    /// and another that builds the feed again at once, says the person
+    /// closed it, never that it timed out. `NeedsYou`'s own question stays.
+    @Test func notNowOnATaskQuestionSaysDeclinedWithNeedsYouWatched() throws {
+        let rule = AskFirst.isolated()
+        let asks = NeedsYou(rule: rule)
+        let real = try #require(asks.ask(Self.bakery))
+        let engine = LocalFakeEngine(rule: rule)
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        let model = FeedModel(sources: [], needsYou: asks, tasks: engine, place: .onDevice,
+                              now: { ShowcaseScene.morning })
+        let watcher = asks.observe { MainActor.assumeIsolated { model.refresh() } }
+        defer { asks.stopObserving(watcher) }
+        model.review(try #require(engine.task(id)))
+        let request = try #require(model.reviewing)
+        let sheet = ConfirmationState(request: request, rule: model.rule,
+                                      onApprove: { model.approved($0) }, onDecline: { model.closedQuestion(request) })
+        #expect(sheet.cancel() == .closed)
+        let declined = TaskWords.declined("hold a Saturday visit")
+        let timedOut = TaskWords.timedOut("hold a Saturday visit")
+        #expect(engine.task(id)?.history.last?.text == declined)
+        // The sheet then goes: its `onDismiss` refresh, then `onDisappear`.
+        model.refresh()
+        sheet.disappeared()
+        model.closedQuestion(request)
+        let history = try #require(engine.task(id)?.history)
+        #expect(history.filter { $0.text == declined }.count == 1)
+        #expect(!history.contains { $0.text == timedOut })
+        #expect(model.feed.needsYou.contains { $0.request == real })
+    }
+
+    /// Swiped away, the sheet withdraws the question and `onDismiss` builds
+    /// the feed again before `onDisappear` tells the model. That refresh
+    /// still says the person closed it.
+    @Test func aRefreshBeforeTheModelHearsStillSaysDeclined() throws {
+        let rule = AskFirst.isolated()
+        let engine = LocalFakeEngine(rule: rule)
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        let model = model(engine)
+        var heard: [TaskAnnouncer.Line] = []
+        model.announce = { heard.append($0) }
+        model.review(try #require(engine.task(id)))
+        let request = try #require(model.reviewing)
+        let sheet = ConfirmationState(request: request, rule: model.rule,
+                                      onApprove: { model.approved($0) }, onDecline: { model.closedQuestion(request) })
+        sheet.disappeared()
+        model.refresh()
+        model.closedQuestion(request)
+        let history = try #require(engine.task(id)?.history)
+        #expect(history.last?.text == TaskWords.declined("hold a Saturday visit"))
+        #expect(!history.contains { $0.text == TaskWords.timedOut("hold a Saturday visit") })
+        #expect(!heard.contains { $0.text.contains("timed out") })
+    }
+
+    // MARK: Approve while something covers Today
+
+    /// A task's Approve tapped while a sheet is closing with a step held
+    /// for after it hands off to the question sheet, as a `NeedsYou`
+    /// question does: the question opens, covers the chat, and the held
+    /// step is dropped rather than sweep the question away.
+    @Test func aTaskApproveUnderACoverHandsOffLikeANeedsYouQuestion() throws {
+        let rule = AskFirst.isolated()
+        let asks = NeedsYou(rule: rule)
+        _ = try #require(asks.ask(Self.bakery))
+        let engine = LocalFakeEngine(rule: rule)
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        let model = FeedModel(sources: [], needsYou: asks, tasks: engine, place: .onDevice,
+                              now: { ShowcaseScene.morning })
+        let place = SheetHandoff.Place(section: .today, usesSidebar: false)
+        let task = try #require(model.feed.needsYou.first { $0.id == id })
+        let question = try #require(model.feed.needsYou.first { $0.request != nil })
+        for item in [task, question] {
+            var handoff = SheetHandoff()
+            var ran = false
+            // The reader is closing, with a step held for after it.
+            let closing = HomeCover(usesSidebar: false, section: .today, showsShortcuts: false,
+                                    readerOpen: true, questionOpen: model.reviewing != nil)
+            #expect(handoff.start({ ran = true }, sheetOpen: closing.anySheetOpen, at: place) == nil)
+            model.perform(item, talk: { _ in })
+            let opened = try #require(model.reviewing)
+            let cover = HomeCover(usesSidebar: false, section: .today, showsShortcuts: false,
+                                  readerOpen: false, questionOpen: model.reviewing != nil)
+            #expect(cover.questionOpen && cover.chatIsCovered && !cover.anySheetOpen)
+            handoff.sheetClosed(stillOpen: cover.anySheetOpen, questionOpen: cover.questionOpen)?()
+            #expect(!ran, "\(item.id)")
+            #expect(handoff.waiting == nil)
+            // The question is the one the card asked, in the same sheet.
+            #expect(opened == (item.task?.question ?? item.request))
+            model.reviewing = nil
+        }
+    }
+
+    /// Every pair a task card button draws is one `Theme.textPairs` checks,
+    /// over the card, and each reads.
+    @Test(arguments: [ColorScheme.light, .dark])
+    func everyCardButtonPairIsChecked(scheme: ColorScheme) {
+        let pairs = Theme.textPairs(scheme)
+        for base in ["backdrop top", "backdrop bottom", "sheet"] {
+            for (text, background) in [("accentText", "accent wash on the card on \(base)"),
+                                       ("secondaryText", "card on \(base)"),
+                                       ("secondaryText", "disabled button on the card on \(base)")] {
+                let pair = pairs.first { $0.text == text && $0.background == background }
+                #expect(pair != nil, "\(text) on \(background)")
+                #expect((pair?.contrast ?? 0) >= 4.5, "\(text) on \(background)")
+            }
+        }
+        let primary = pairs.first { $0.text == "onAccent" && $0.background == "accent" }
+        #expect((primary?.contrast ?? 0) >= 4.5)
+    }
+
     /// The task card's Send, before there are words, is gray words on a
     /// neutral fill over the card, and that pair is checked.
     @Test(arguments: [ColorScheme.light, .dark])

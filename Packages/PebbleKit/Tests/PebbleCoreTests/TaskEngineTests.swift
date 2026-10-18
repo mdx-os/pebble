@@ -506,6 +506,34 @@ struct TaskEngineTests {
         #expect(task.wrapUp?.notDoneLine == "I didn't hold a Saturday visit.")
     }
 
+    /// A question the sheet withdrew, noticed by a refresh before the engine
+    /// was told, is the person's no, not a timeout.
+    @Test func aWithdrawnQuestionSettlesAsDeclinedNotTimedOut() throws {
+        let rule = AskFirst.isolated()
+        let (engine, id, question) = try waiting(rule)
+        rule.withdraw(question)
+        #expect(rule.wasWithdrawn(question))
+        engine.refresh()
+        #expect(engine.task(id)?.history.last?.text == TaskWords.declined("hold a Saturday visit"))
+        // Told afterwards, nothing changes.
+        engine.questionClosed(question)
+        #expect(engine.task(id)?.history.filter { $0.mark == .skipped }.count == 1)
+    }
+
+    /// Close on a question that had already run out of time says it timed
+    /// out, whichever way the engine hears of it.
+    @Test func closingATimedOutQuestionSaysItTimedOut() throws {
+        let clock = TestClock()
+        let rule = AskFirst.isolated(now: clock.now)
+        let (engine, id, question) = try waiting(rule)
+        clock.advance(AskFirst.defaultWindow + 1)
+        // The sheet's Close withdraws it, but it had already run out.
+        rule.withdraw(question)
+        #expect(!rule.wasWithdrawn(question))
+        engine.questionClosed(question)
+        #expect(engine.task(id)?.history.last?.text == TaskWords.timedOut("hold a Saturday visit"))
+    }
+
     @Test func aQuestionThatTimesOutOnScreenIsNoticed() throws {
         let clock = TestClock()
         let rule = AskFirst.isolated(now: clock.now)

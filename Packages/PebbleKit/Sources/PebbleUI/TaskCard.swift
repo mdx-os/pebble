@@ -454,7 +454,11 @@ struct CardButtonStyle: ButtonStyle {
             .pointerHover(in: Capsule())
     }
 
-    // Every pair here is in `Theme.textPairs`, over the card. A button that
+    // Every pair here is in `Theme.textPairs`, over the card: primary is
+    // "onAccent" on "accent", secondary is "accentText" on "accent wash on
+    // the card on ...", quiet is "secondaryText" on "card on ...", and a
+    // disabled one is "secondaryText" on "disabled button on the card on
+    // ...". `TaskCardTests` checks each by name. A button that
     // can't be pressed yet goes quiet gray on a neutral fill, as
     // `AccentButtonStyle` does, rather than fading its words out.
     private var foreground: AnyShapeStyle {

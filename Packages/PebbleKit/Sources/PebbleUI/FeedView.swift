@@ -406,10 +406,19 @@ final class FeedModel: ObservableObject {
 
     /// The sheet closed without a yes, by Not now, Close, or going away.
     /// The sheet has already withdrawn the question.
+    ///
+    /// A task's question goes to its engine first, before anything can
+    /// build the feed again: a refresh in between, from a `NeedsYou` hook
+    /// or the sheet's `onDismiss`, would otherwise find the question closed
+    /// and settle it as it saw fit. Only a question `NeedsYou` asked is
+    /// handed to `NeedsYou`.
     func closedQuestion(_ request: ConfirmationRequest) {
-        askedBy[request.id] = nil
-        needsYou.dismissed(request)
-        tasks?.questionClosed(request)
+        let asking = askedBy.removeValue(forKey: request.id) ?? taskAsked[request.id]
+        if asking != nil {
+            tasks?.questionClosed(request)
+        } else {
+            needsYou.dismissed(request)
+        }
         if reviewing?.id == request.id { reviewing = nil }
         refresh()
     }
@@ -521,7 +530,10 @@ struct FeedView: View {
         // whether Today is showing or not, so the sidebar's count is true too.
         // Its `refresh` also has the engine notice task questions that timed out.
         .task(id: model.drivesTasks) {
-            // The live showcase plays its scripted tasks in real time.
+            // The live showcase plays its scripted tasks in real time. It
+            // ticks only while Today is on screen, on purpose: the scripted
+            // clock pauses elsewhere and picks up from there on return. It is
+            // a labelled example, and `keepFresh` still runs from the root.
             guard model.drivesTasks else { return }
             var last = ContinuousClock.now
             while !Task.isCancelled {

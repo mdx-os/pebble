@@ -309,7 +309,8 @@ public protocol TaskEngine: AnyObject, Sendable {
     func resume(_ id: String, with approval: Approval) -> TaskApproval
 
     /// The question was closed without a yes: Not now, Close, or the sheet
-    /// went away. The task goes on without that step.
+    /// went away. The task goes on without that step, and its line says
+    /// the person closed it, or that it timed out if the rule says so.
     func questionClosed(_ request: ConfirmationRequest)
 
     /// Looks again at anything that changes with time, such as a question
