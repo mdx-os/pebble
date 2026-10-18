@@ -11,7 +11,8 @@ import Testing
 @MainActor
 struct CloudPolicyScreenTests {
     let endpoint = URL(string: "https://cloud.example.com")!
-    let token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIwMDEyMzQifQ.c2lnbmF0dXJl"
+    let token = MadeUpToken.make(header: #"{"alg":"RS256"}"#, payload: #"{"sub":"001234"}"#,
+                                 signature: MadeUpToken.base64url("signature"))
 
     func memory() -> MemoryStore {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("policy-memory-\(UUID().uuidString).json")

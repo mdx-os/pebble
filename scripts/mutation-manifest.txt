@@ -1265,3 +1265,17 @@ perl: s~WritingOptions = \[\.noFileProtection\]~WritingOptions = [.noFileProtect
 test: verifyRunsTheCommentLintAndTheMutationCheck
 file: Makefile
 perl: s~(\nverify:[^\n]*) build build-release screenshots~$1 build screenshots~
+
+# No Swift file holds a string literal shaped like a token, in the package
+# tests or the app's UI tests. Perl puts the dots in, so no line here holds one.
+test: noSourceHoldsATokenShapedLiteral
+file: Packages/PebbleKit/Tests/PebbleModelTests/MadeUpToken.swift
+perl: s~(enum MadeUpToken \{)~$1\n    static let whole = "eyJhbGci\x2eeyJzdWIi\x2ec2ln"~
+
+test: noSourceHoldsATokenShapedLiteral
+file: AppUITests/CloudUITests.swift
+perl: s~(import XCTest\n)~$1let whole = #"eyJhbGci\x2eeyJzdWIi\x2ec2ln"#\n~
+
+test: theSweepFindsATokenShapedLiteral
+file: Packages/PebbleKit/Tests/PebbleCoreTests/TokenLiteralTests.swift
+perl: s~\\\.\[A-Za-z0-9_-\]\+/ \}~/ }~

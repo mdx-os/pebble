@@ -13,7 +13,8 @@ struct AppleCloudAuthTests {
     let endpoint = URL(string: "https://cloud.example.com")!
     /// Shaped like Apple's: three base64url parts joined by dots. Read
     /// plain, its digit runs could look like a phone number or a card.
-    static let token = "eyJraWQiOiJXNldjT0tCIiwiYWxnIjoiUlMyNTYifQ.eyJzdWIiOiIwMDEyMzQuNDE2NTU1MDE5OSJ9.4111111111111111-x_9"
+    static let token = MadeUpToken.make(header: #"{"kid":"W6WcOKB","alg":"RS256"}"#,
+                                        payload: #"{"sub":"001234.4165550199"}"#, signature: "4111111111111111-x_9")
 
     /// Signed in to Apple: a sign-in started, and `token` given for it.
     /// Returns the SHA-256 the Apple request carried.
@@ -72,7 +73,7 @@ struct AppleCloudAuthTests {
         let redactor = Redactor(memory: [MemoryNote(text: "Sam's birthday is May 14.", source: .toldMe)],
                                 privateWords: ["lemon cake"])
         let transcript = [ChatTurn(id: UUID(), speaker: .person, text: "Hi there")]
-        let shapes = [Self.token, "a.4165550199.b", "eyJ.4111-1111-1111-1111.c", "Sam.lemon-cake.sam_lee",
+        let shapes = [Self.token, "a.4165550199.b", MadeUpToken.joined("eyJ", "4111-1111-1111-1111", "c"), "Sam.lemon-cake.sam_lee",
                       String(repeating: "A", count: AppleCloudAuth.maxTokenLength - 4) + ".b.c"]
         for _ in 0..<4 {
             for token in shapes {
@@ -227,6 +228,14 @@ struct AppleCloudAuthTests {
         let store = CloudHelpFileStore(fileURL: folder.appendingPathComponent("cloud-help.json"))
         try store.save(CloudHelpSettings(isOn: true, for: endpoint, privateWords: ["lemon cake"]))
         var secrets: [String] = []
+        // Code that breaks the promise leaves nothing in the test runner's
+        // defaults once the test is done with it.
+        defer {
+            for (key, value) in UserDefaults.standard.dictionaryRepresentation()
+            where secrets.contains(where: { String(describing: value).contains($0) }) {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
         for (transport, answer) in [(RecordingTransport() as any CloudTransport, CloudConsent.send),
                                     (RefusingTransport(), .send), (RecordingTransport(), .cancel)] {
             let keychain = InMemoryCloudKeychain()
