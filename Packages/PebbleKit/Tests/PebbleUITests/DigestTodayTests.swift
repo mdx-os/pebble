@@ -3,6 +3,7 @@ import Combine
 import Foundation
 import PebbleCore
 import PebbleModel
+import TestScratch
 import Testing
 @testable import PebbleUI
 
@@ -437,7 +438,7 @@ struct DigestTodayTests {
 
     /// An edit the store couldn't write tells Today nothing, and says so
     /// plainly, without calling the notes unreadable.
-    @Test(.enabled(if: getuid() != 0, "root can write to a locked folder"))
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
     func anEditThatCantBeWrittenTellsTodayNothing() throws {
         var told = 0
         let memory = MemoryModel(store: notes, place: .onDevice, onNotesChanged: { told += 1 })
@@ -456,15 +457,23 @@ struct DigestTodayTests {
     /// Tasks whose file couldn't be erased are never said to be gone.
     @Test func theLineIsHonestWhenTheTaskFileStays() {
         let stayed = ClearedTasks(forgotten: 1, underway: 0, erased: false)
-        let line = MemoryModel.forgotLineWithTasks
+        let line = { MemoryModel.forgotLineWithTasks(notesGone: $0, rest: $1, cleared: $2) }
         #expect(line(true, nil, stayed) == TaskWords.forgotNotesNotTasks)
-        #expect(line(false, nil, stayed) == MemoryWords.couldNotForget + " " + TaskWords.couldNotEraseTasks)
+        #expect(line(false, nil, stayed)
+            == "Sorry, I couldn't erase that just now. " + TaskWords.tasksStayed + " Please try again in a moment.")
+        // The summaries that stayed are said too, and the ask to try again
+        // comes once, last.
+        let both = MemoryModel.forgotLineWithTasks(notesGone: false, rest: nil, cleared: stayed, summaries: .stayed)
+        #expect(both.contains(MemoryWords.summariesStayed))
+        #expect(both.contains(TaskWords.tasksStayed))
+        #expect(both.components(separatedBy: "again in a moment").count == 2, "\(both)")
+        #expect(both.hasSuffix("again in a moment."))
         let gone = ClearedTasks(forgotten: 1, underway: 0, erased: true)
         #expect(line(true, nil, gone) == MemoryWords.forgotten)
         #expect(line(false, nil, gone) == MemoryWords.couldNotForgetNotes)
     }
 
-    @Test(.enabled(if: getuid() != 0, "root can remove files from a locked folder"))
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
     func aTaskFileThatStaysIsSaidSo() throws {
         _ = try startAndAsk()
         try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
@@ -474,7 +483,7 @@ struct DigestTodayTests {
         memory.forgetEverything()
         #expect(engine.tasks.isEmpty)
         #expect(!feed.tasksForgotten)
-        #expect(memory.status?.contains(TaskWords.couldNotEraseTasks) == true)
+        #expect(memory.status?.contains(TaskWords.tasksStayed) == true)
         #expect(memory.hasStoredFile)
     }
 

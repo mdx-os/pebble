@@ -2,6 +2,7 @@ import Foundation
 import PebbleCore
 import PebbleModel
 import SourceScan
+import TestScratch
 import Testing
 
 /// A wall clock and a monotonic clock that tests move by hand.
@@ -666,7 +667,7 @@ struct DeviceTaskEngineTests {
         #expect(engine.forgetQuotes(of: old) == .notQuoted)
     }
 
-    @Test(.enabled(if: getuid() != 0, "root can read a locked file"))
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
     func aDigestFromATaskFileLeftUnreadIsNeverCalledClean() throws {
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: tasksFile.path) }
         let file = tasksFile
@@ -719,7 +720,7 @@ struct DeviceTaskEngineTests {
 
     /// Notes that can't be read when a note's earlier words are named: it
     /// says they stay, and takes them out at the next look that can read.
-    @Test(.enabled(if: getuid() != 0, "root can read a locked file"))
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
     func earlierWordsNamedWhileTheNotesAreLockedGoOnceTheyOpen() throws {
         let kept = try keepDigest().2
         // Changed by a writer no engine hears, and the notes locked before
@@ -754,7 +755,7 @@ struct DeviceTaskEngineTests {
 
     /// The notes are read once for the cards, not on every look. What was
     /// read stays until the notes change or `refresh()` asks again.
-    @Test(.enabled(if: getuid() != 0, "root can read a locked file"))
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
     func theNotesAreReadOnceUntilTheyChange() throws {
         let (engine, id, kept) = try keepDigest()
         #expect(engine.tasks.first { $0.id == id }?.result == kept.text)
@@ -948,25 +949,27 @@ struct DeviceTaskEngineTests {
     }
 
     /// A file left unreadable at launch, as on a locked device, is read on
-    /// refresh, and its tasks join those started meanwhile, which keep
-    /// going and keep their question.
-    @Test(.enabled(if: getuid() != 0, "root can read a locked file"))
-    func aLateFirstReadKeepsTasksStartedMeanwhile() throws {
+    /// refresh. Until then no task starts, so nothing is held in memory to
+    /// write later; once read, its tasks are there and a digest can start.
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
+    func nothingStartsBeforeALateFirstRead() throws {
         let (_, keptID, _) = try keepDigest()
+        let before = try Data(contentsOf: tasksFile)
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: tasksFile.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: tasksFile.path) }
         let locked = try engine()
         #expect(locked.tasks.isEmpty)
-        let (task, question) = try runToQuestion(locked)
+        locked.start(DigestTask.request)
+        for _ in 0..<3 { locked.runPending() }
+        #expect(locked.tasks.isEmpty, "nothing starts while the store is shut")
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: tasksFile.path)
+        #expect(try Data(contentsOf: tasksFile) == before, "nothing was written")
         locked.refresh()
-        let ids = locked.tasks.map(\.id)
-        #expect(ids == [task.id, keptID])
-        #expect(locked.tasks.first?.state == .waitingOnYou)
-        #expect(locked.tasks.first?.question == question)
+        #expect(locked.tasks.map(\.id) == [keptID])
+        let (task, question) = try runToQuestion(locked)
+        #expect(locked.tasks.map(\.id) == [task.id, keptID])
         #expect(!rule.isClosed(question))
-        // Both are written once the file has been read.
-        #expect(try self.engine().tasks.map(\.id) == ids)
+        #expect(try self.engine().tasks.map(\.id) == [task.id, keptID])
     }
 
     @Test func aTaskGoingWhenTheAppClosedComesBackStoppedNeverDone() throws {
@@ -1040,7 +1043,7 @@ struct DeviceTaskEngineTests {
         #expect(try self.engine().tasks.isEmpty)
     }
 
-    @Test(.enabled(if: getuid() != 0, "root can remove files from a locked folder"))
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
     func aFileThatCantBeErasedIsNeverCalledGone() throws {
         let engine = try engine()
         _ = try runToQuestion(engine)

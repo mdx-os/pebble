@@ -29,6 +29,11 @@ final class FeedModel: ObservableObject {
     /// mentions the device never drifts from it. `HomeView` keeps it up to
     /// date as chats start and the cloud setting changes.
     @Published var place: PrivacyPlace
+    /// Work done while the app was closed. Its cards join the feed as a
+    /// source, and Today runs whatever is due each time it refreshes, so a
+    /// summary the system never woke the app for is made once it opens.
+    let background: BackgroundRunner?
+    private var backgroundWatch: BackgroundRunner.Observation?
     private let sources: [any FeedSource]
     /// This model's watch on `needsYou`, ended when the model goes, so a
     /// closed window leaves nothing behind.
@@ -100,10 +105,13 @@ final class FeedModel: ObservableObject {
     let window = UUID()
 
     init(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)? = nil,
-         drivesTasks: Bool = false, place: PrivacyPlace, flow: NeedsYouFlow? = nil, calendar: Calendar = .current,
+         drivesTasks: Bool = false, place: PrivacyPlace, flow: NeedsYouFlow? = nil,
+         background: BackgroundRunner? = nil, calendar: Calendar = .current,
          now: @escaping () -> Date = { Date() },
          clock: @escaping () -> ContinuousClock.Instant = { ContinuousClock.now }) {
         self.sources = sources + (flow.map { [ReceiptFeed(store: $0.store)] } ?? [])
+            + (background.map { [BackgroundFeed(runner: $0, calendar: calendar)] } ?? [])
+        self.background = background
         self.needsYou = needsYou
         self.tasks = tasks
         self.drivesTasks = drivesTasks
@@ -151,6 +159,10 @@ final class FeedModel: ObservableObject {
         // refresh always waits for the next turn of the main actor.
         observation = needsYou.observe { [weak self] in
             hops.add { self?.refresh() }
+        }
+        // A card made in the background, or the cards forgotten, show at once.
+        backgroundWatch = background?.observe { [weak self] in
+            hops.add { self?.rebuild() }
         }
         // A receipt made or cleared shows at once, the same way, and so do
         // tasks a late read of the store found.
@@ -208,6 +220,7 @@ final class FeedModel: ObservableObject {
     /// The task watch ends on its own as `watching` is released.
     deinit {
         if let observation { needsYou.stopObserving(observation) }
+        if let backgroundWatch { background?.stopObserving(backgroundWatch) }
         if let storeObservation, let store { store.stopObserving(storeObservation) }
         // The flow is the app's, so it is told this window has gone.
         if let flow {
@@ -289,17 +302,28 @@ final class FeedModel: ObservableObject {
     /// The rule for every question in the sheet, a task's included.
     var rule: AskFirst { needsYou.rule }
 
-    /// Builds the feed again. Questions that timed out drop away here.
+    /// Builds the feed again. Questions that timed out drop away here, and
+    /// background work that is due runs, with the person here.
     func refresh() {
         tasks?.refresh()
+        if inFront { background?.runDue(now: now(), conditions: .foreground) }
         rebuild()
     }
+
+    /// True while the app is active, so the person is here and the device
+    /// unlocked. `keepFresh` may tick once more as the app leaves the
+    /// screen, perhaps as it locks; background work then waits for the
+    /// platform's own run, which knows whether it is locked. False until
+    /// the scene says it is active, since a scene may be built during a
+    /// launch in the background, while locked.
+    var inFront = false
 
     private func rebuild() {
         let next = Feed.build(from: sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
         if next != feed { feed = next }
         let offered = Self.offers(from: tasks)
         if offered != offers { offers = offered }
+        closeSummaryGone()
         followCards()
         flow?.pinned(Self.pinnedTasks(in: feed), rule: rule, from: window)
     }
@@ -342,6 +366,14 @@ final class FeedModel: ObservableObject {
     /// True while the engine, or the store it shares, keeps a file of
     /// tasks, so Forget everything is offered even with no notes left.
     var tasksStored: Bool { tasks?.hasStoredFile == true || store?.hasFile == true }
+
+    /// A summary open to read whose card is gone, as after Forget
+    /// everything in another window, closes with it.
+    private func closeSummaryGone() {
+        guard let reading, reading.id.hasPrefix(BackgroundFeed.idPrefix) else { return }
+        let cards = background?.results ?? []
+        if !cards.contains(where: { $0.itemID == reading.id }) { self.reading = nil }
+    }
 
     /// Each task card's section: Needs you, Working on it, or a time group.
     static func sections(of feed: Feed) -> [String: String] {
@@ -543,6 +575,18 @@ final class FeedModel: ObservableObject {
         if let line = cleared.underwayLine {
             announce(TaskAnnouncer.Line(text: line, urgent: true))
         }
+        return cleared
+    }
+
+    /// Forget everything, from the memory screen: every task goes, as in
+    /// `forgetTasks`. The memory screen forgets the background work just
+    /// before, so it can say if its file couldn't be erased; here a summary
+    /// still open to read closes, and Today shows the cards gone.
+    @discardableResult
+    func forgetEverything() -> ClearedTasks {
+        if let reading, reading.id.hasPrefix(BackgroundFeed.idPrefix) { self.reading = nil }
+        let cleared = forgetTasks()
+        rebuild()
         return cleared
     }
 
@@ -1219,6 +1263,7 @@ struct FeedReader: View {
                 ToolbarItem(placement: .confirmationAction) {
                     DoneButton(title: FeedWords.doneTitle) { dismiss() }
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
         }
         .presentationDragIndicator(.visible)

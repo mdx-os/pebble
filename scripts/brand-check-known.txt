@@ -1,6 +1,8 @@
 AppUITests/CloudUITests.swift: XCTAssertTrue(labels.label.contains("User-Agent, pebble"))
 AppUITests/CloudUITests.swift: app.launchArguments = ["-pebble.onboarding.finished", "YES", "-pebble.agent.displayName", "Pip"]
 AppUITests/DigestUITests.swift: app.launchArguments = ["-pebble.onboarding.finished", "YES", "-pebble.agent.displayName", "Pip"]
+AppUITests/HomeLayoutUITests.swift: "-pebble.onboarding.finished", "YES", "-pebble.agent.displayName", "Pip"]
+AppUITests/HomeLayoutUITests.swift: clean.launchArguments = ["-pebble.onboarding.finished", "YES"]
 Packages/PebbleKit/Sources/PebbleCore/AgentLook.swift: public static let storageKey = "pebble.agent.look"
 Packages/PebbleKit/Sources/PebbleCore/AgentName.swift: public static let storageKey = "pebble.agent.displayName"
 Packages/PebbleKit/Sources/PebbleCore/Memory.swift: var folder = base.appendingPathComponent("pebble", isDirectory: true)
@@ -33,4 +35,3 @@ Packages/PebbleKit/Tests/PebbleUITests/CloudHelpTests.swift: #expect(spoken.cont
 Packages/PebbleKit/Tests/PebbleUITests/FirstRunScreensTests.swift: let suite = "pebble.ui.onboarding.\(UUID().uuidString)"
 Packages/PebbleKit/Tests/PebbleUITests/FirstRunScreensTests.swift: let suite = "pebble.ui.skip.\(UUID().uuidString)"
 Packages/PebbleKit/Tests/PebbleUITests/FirstRunScreensTests.swift: let url = FileManager.default.temporaryDirectory.appendingPathComponent("pebble-ui-\(UUID().uuidString).json")
-Packages/PebbleKit/Tests/PebbleUITests/FirstRunScreensTests.swift: looks: UserDefaults(suiteName: "pebble.ui.hidden")!, page: .hello, draftName: "", onFinish: { _ in })

@@ -156,9 +156,9 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     /// device is locked at launch. Nothing is written over it until it has
     /// been read.
     private var loaded = false
-    /// True when a change came while the file was unread, so it is written
-    /// once it has been.
-    private var unsaved = false
+    /// How and when the tasks whose cards went had ended, for a week, so
+    /// the morning summary counts them too. States and times only.
+    private var pastEnds: [TaskEnd] = []
     private var seen = Seen.unread
     private var watchingNotes: TaskObservation?
     /// True when the tasks that kept digests are not known: the file was
@@ -206,7 +206,9 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         self.pace = pace
         self.clock = clock
         lock.lock()
-        loadFile()
+        // A task still going when the app closed is settled as stopped and
+        // written so, once the store opens. While it is shut, nothing is.
+        if loadFile() { saveFile() }
         // `published` is set by the first look below, which reads the
         // notes once for the cards too.
         let orphaned = orphans
@@ -243,9 +245,22 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     /// Forget everything is offered while there is anything to erase.
     public var hasStoredFile: Bool { store.hasFile }
 
+    /// Every task that ended, from the task store: those on cards and
+    /// those whose cards went in the past week. Locked while the store
+    /// hasn't been read and can't be now, so nothing is counted as zero.
+    public var endings: TaskEndings {
+        lock.lock()
+        let settled = !loaded && loadFile()
+        if settled { saveFile() }
+        let ends = loaded ? runs.filter { !$0.task.isActive }.map { TaskEnd(state: $0.task.state, at: $0.task.updatedAt) }
+            + pastEnds : nil
+        lock.unlock()
+        return ends.map(TaskEndings.kept) ?? .locked
+    }
+
     @discardableResult
     public func start(_ request: TaskRequest) -> String {
-        let id = mutate { () -> String in
+        let id = change(or: "") { () -> String in
             // One digest at a time: asking again shows the one going.
             if let going = runs.first(where: { $0.task.title == request.title && $0.task.isActive }) {
                 return going.task.id
@@ -292,7 +307,7 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     /// any task still has a step to do on its own.
     @discardableResult
     public func runPending() -> Bool {
-        mutate {
+        change(or: runs.contains { [.reading, .picking, .writing].contains($0.stage) }) {
             for index in runs.indices { step(&runs[index]) }
             return runs.contains { [.reading, .picking, .writing].contains($0.stage) }
         }
@@ -308,7 +323,7 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         guard !words.isEmpty else { return false }
         let said = words.count > LocalFakeEngine.maxInstructionLength
             ? String(words.prefix(LocalFakeEngine.maxInstructionLength)) + "..." : words
-        return mutate {
+        return change(or: false) {
             guard let index = runs.firstIndex(where: { $0.task.id == id }), runs[index].task.isActive else { return false }
             let now = clock()
             runs[index].task.record(TaskStep(TaskWords.youSaid(said), mark: .redirected, at: now))
@@ -329,7 +344,7 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
 
     @discardableResult
     public func stop(_ id: String) -> Bool {
-        mutate {
+        change(or: false) {
             guard let index = runs.firstIndex(where: { $0.task.id == id }), runs[index].task.isActive else { return false }
             withdrawQuestion(&runs[index])
             let saving = runs[index].stage == .saving
@@ -342,11 +357,18 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
 
     @discardableResult
     public func dismiss(_ id: String) -> Bool {
-        mutate {
+        change(or: false) {
             guard let index = runs.firstIndex(where: { $0.task.id == id }), !runs[index].task.isActive else { return false }
-            keepLinks(of: runs.remove(at: index))
+            letGo(of: runs.remove(at: index))
             return true
         }
+    }
+
+    /// An ended task's card went. Its kept digest's ids stay, and how and
+    /// when it ended, for the morning summary.
+    private func letGo(of run: Run) {
+        keepLinks(of: run)
+        pastEnds.append(TaskEnd(state: run.task.state, at: run.task.updatedAt))
     }
 
     /// A kept digest's ids outlive its card, so its lines still go when
@@ -377,6 +399,7 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
             let forgotten = runs.count
             runs.removeAll()
             letGo = []
+            pastEnds = []
             seen = .unread
             lastLines = [:]
             pendingForgotten = []
@@ -388,7 +411,6 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
             // The notes go after the tasks, and may not: until a look finds
             // no note the agent kept, a digest may still quote a note.
             tasksLost = true
-            unsaved = false
             store.forget()
             let erased = !store.hasFile
             return ClearedTasks(forgotten: forgotten, underway: underway, erased: erased)
@@ -405,7 +427,7 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         lock.unlock()
         guard let asked, asked.id == approval.id else { return .refused }
         let verdict = rule.verdict(asked.action, approval: approval)
-        let digest: String? = mutate {
+        let digest: String? = change(or: nil) {
             guard let index = runs.firstIndex(where: { $0.task.id == id }),
                   runs[index].stage == .waiting, runs[index].question == asked else { return nil }
             switch verdict {
@@ -525,7 +547,9 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
 
     public func questionClosed(_ request: ConfirmationRequest) {
         let ranOut = rule.isClosed(request) && !rule.wasWithdrawn(request)
-        mutate {
+        // While the store is shut this waits: `refresh()` settles it from
+        // the rule once the store opens.
+        change(or: ()) {
             guard let index = runs.firstIndex(where: { $0.stage == .waiting && $0.question == request }) else { return }
             withdrawals.append(request)
             runs[index].question = nil
@@ -543,8 +567,7 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         let open = runs.compactMap { $0.stage == .waiting ? $0.question : nil }
         lock.unlock()
         let closed = open.filter { rule.isClosed($0) }.map { ($0, rule.wasWithdrawn($0)) }
-        mutate {
-            if !loaded { loadFile() }
+        change(or: ()) {
             for (request, withdrawn) in closed {
                 guard let index = runs.firstIndex(where: { $0.stage == .waiting && $0.question == request }) else { continue }
                 runs[index].question = nil
@@ -593,6 +616,13 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     /// read only when some task or kept digest points at them.
     private func sweepOnce(_ asked: [UUID: String], read: Bool) -> [MemoryNote]? {
         lock.lock()
+        // With the task store shut, a look would change what it keeps, so
+        // it waits for the next one: a note named now is looked for then.
+        guard mayChange() else {
+            pendingForgotten.formUnion(asked.keys)
+            lock.unlock()
+            return nil
+        }
         let anything = read || !pendingForgotten.isEmpty || !letGo.isEmpty || tasksLost
             || runs.contains { $0.kept != nil || $0.task.isActive }
         lock.unlock()
@@ -939,6 +969,22 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         runs[index].task.updatedAt = clock()
     }
 
+    /// With the lock held. True when the tasks may change now: the task
+    /// store has been read, reading it now if it wasn't, and opens. While
+    /// it is shut, as while the device is locked, nothing changes and
+    /// nothing is held to write later; what was wanted is worked out again
+    /// from what is there once it opens.
+    private func mayChange() -> Bool {
+        if !loaded { _ = loadFile() }
+        return loaded && !store.isShut
+    }
+
+    /// `mutate`, only while the tasks may change; otherwise nothing changes
+    /// and `refused` is the answer.
+    private func change<T>(or refused: @autoclosure () -> T, _ body: () -> T) -> T {
+        mutate { mayChange() ? body() : refused() }
+    }
+
     /// Runs a change inside the lock, asks and withdraws outside it, keeps
     /// the file in step, then tells observers once. A question whose task
     /// went in the change is withdrawn, so no sheet is left open with
@@ -950,6 +996,7 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         let linksBefore = runs.map(\.links)
         let questionsBefore = runs.compactMap { run in run.question.map { (run.task.id, $0) } }
         let letGoBefore = letGo
+        let endsBefore = pastEnds
         let value = change()
         let ids = Set(runs.map(\.task.id))
         for (id, question) in questionsBefore where !ids.contains(id) && !withdrawals.contains(question) {
@@ -970,8 +1017,8 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         }
         lock.lock()
         dropOldEnded()
-        if unsaved || before != runs.map(\.task) || stagesBefore != runs.map(\.stage) || linksBefore != runs.map(\.links)
-            || letGoBefore != letGo {
+        if before != runs.map(\.task) || stagesBefore != runs.map(\.stage) || linksBefore != runs.map(\.links)
+            || letGoBefore != letGo || endsBefore != pastEnds {
             saveFile()
         }
         Self.open.update(ObjectIdentifier(self), rule: rule, open: Dictionary(
@@ -992,7 +1039,7 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     private func dropOldEnded() {
         let ended = runs.indices.filter { !runs[$0].task.isActive }
         guard ended.count > Self.endedLimit else { return }
-        for index in ended.prefix(ended.count - Self.endedLimit).reversed() { keepLinks(of: runs.remove(at: index)) }
+        for index in ended.prefix(ended.count - Self.endedLimit).reversed() { letGo(of: runs.remove(at: index)) }
     }
 
     /// Moves steps along on its own while any are waiting, one at a time
@@ -1027,18 +1074,21 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     // MARK: The task store
 
     /// Reads what the store keeps for this engine. A task that was still
-    /// going when the app closed comes back stopped, and says so. Read
-    /// late, as once a locked device opens, the tasks it holds join any
-    /// started since, which stay as they are. A file the store let go
-    /// unread, as one it couldn't understand, leaves the tasks that kept
-    /// digests unknown.
-    private func loadFile() {
+    /// going when the app closed comes back stopped, and says so: true
+    /// then, so the caller writes it so. Until the store has been read no
+    /// task can start, so a late read, as once a locked device opens,
+    /// finds nothing here to join. A file the store let go unread, as one
+    /// it couldn't understand, leaves the tasks that kept digests unknown.
+    @discardableResult
+    private func loadFile() -> Bool {
         // Can't be opened right now: leave it, and look again on refresh.
-        guard let read = store.deviceTasks() else { return }
+        guard let read = store.deviceTasks() else { return false }
         loaded = true
         if read.lost { tasksLost = true }
-        guard let stored = read.file else { return }
+        guard let stored = read.file else { return false }
+        pastEnds = stored.ended ?? []
         let going = Set(runs.map(\.task.id))
+        let settled = stored.tasks.contains { !$0.hadEnded }
         let back = stored.tasks.filter { !going.contains($0.id) }.map { stored in
             Run(task: stored.restored(at: clock()), stage: .ended, kept: stored.kept, drewFrom: stored.drewFrom ?? [],
                 quoted: stored.quoted, more: stored.more, byHand: stored.byHand == true,
@@ -1051,26 +1101,27 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         // A question an engine before this one asked for these tasks, in
         // this app, can't be answered here: they came back stopped.
         orphans += Self.open.take(Set(back.map(\.task.id)), notOwnedBy: ObjectIdentifier(self))
+        return settled
     }
 
-    /// Keeps every task and the ids of every digest let go in the store,
-    /// or nothing once there are none. Only what the card shows is kept,
-    /// and never a note's words: not the notes read, not a draft, and not
-    /// a digest once kept.
+    /// Keeps every task, the ids of every digest let go, and the past
+    /// week's endings in the store, or nothing once there are none. Only
+    /// what the card shows is kept, and never a note's words: not the
+    /// notes read, not a draft, and not a digest once kept. Never before
+    /// the store has been read, and the store itself takes nothing while
+    /// it is shut, so no change waits in memory to be written later.
     private func saveFile() {
-        guard loaded else {
-            unsaved = true
-            return
-        }
-        unsaved = false
-        if runs.isEmpty && letGo.isEmpty {
+        guard loaded else { return }
+        let weekAgo = clock() - 8 * 24 * 60 * 60
+        pastEnds.removeAll { $0.at < weekAgo }
+        if runs.isEmpty && letGo.isEmpty && pastEnds.isEmpty {
             store.keepDevice(nil)
             return
         }
         store.keepDevice(StoredFile(tasks: runs.map {
             StoredTask($0.task, saving: $0.stage == .saving, kept: $0.kept, drewFrom: $0.drewFrom,
                        quoted: $0.quoted, more: $0.more, byHand: $0.byHand, hidesQuote: $0.hidesQuote, gone: $0.gone)
-        }, kept: letGo.isEmpty ? nil : letGo))
+        }, kept: letGo.isEmpty ? nil : letGo, ended: pastEnds.isEmpty ? nil : pastEnds))
     }
 
     /// Every engine's open questions in this app.

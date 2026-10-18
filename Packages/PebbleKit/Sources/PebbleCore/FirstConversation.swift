@@ -52,10 +52,10 @@ public enum FirstConversation {
     public static let nameTooLong = "That's a little long. Try a name of \(AgentName.maxLength) letters or fewer."
 
     /// Only promise that words stay here when the model really runs here.
-    /// `onDevice` comes from the same `PrivacyPlace` as every other device
-    /// line; `Conversation` keeps it so a saved opening can be checked.
-    public static func opening(named name: String, onDevice: Bool = false) -> String {
-        onDevice
+    /// `place` is the same `PrivacyPlace` as every other device line;
+    /// `Conversation` keeps it so a saved opening can be checked.
+    public static func opening(named name: String, place: PrivacyPlace = .mayLeaveDevice) -> String {
+        place.staysOnDevice
             ? "Hi, I'm \(name). I'm glad you're here. I run on this device, so what you tell me stays here. Pick a place to start, or tell me what's on your mind."
             : "Hi, I'm \(name). I'm glad you're here. Pick a place to start, or tell me what's on your mind."
     }

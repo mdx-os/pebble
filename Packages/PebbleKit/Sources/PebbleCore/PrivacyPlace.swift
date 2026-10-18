@@ -25,7 +25,16 @@ import Foundation
 /// it, so another one builds the chat, `FeedModel` and `MemoryModel` again.
 /// Anything new that keeps the place must either follow the pushes above
 /// or be rebuilt the same way.
-public enum PrivacyPlace: Sendable, Equatable {
+///
+/// Switching the model that runs here clears the chat. The new screen starts
+/// with only its own opening line, nothing said to the old model, and no
+/// Forget everything left waiting for an answer. That is the privacy-safe
+/// default: words told to a model on this device are never carried to one
+/// whose words may leave, and a question asked under one promise is never
+/// answered under another. Whether a switch may keep the chat is decided
+/// before any model picker ships. `aNewModelStartsAFreshChat` fails if a
+/// change keeps either one.
+public enum PrivacyPlace: Sendable, Hashable {
     /// The model runs here and nothing the person says leaves the device.
     case onDevice
     /// Some words may leave the device, as with a cloud model. Copy makes
@@ -41,8 +50,9 @@ public enum PrivacyPlace: Sendable, Equatable {
 
     /// `.onDevice` only when every place given is. A line read by more than
     /// one chat, or by a chat and the next one, promises only what all of
-    /// them keep.
-    public static func all(_ places: PrivacyPlace...) -> PrivacyPlace {
-        PrivacyPlace(staysOnDevice: places.allSatisfy(\.staysOnDevice))
+    /// them keep. It takes at least one place, since an empty list would
+    /// promise the device with no model behind it.
+    public static func all(_ first: PrivacyPlace, _ rest: PrivacyPlace...) -> PrivacyPlace {
+        ([first] + rest).allSatisfy(\.staysOnDevice) ? .onDevice : .mayLeaveDevice
     }
 }

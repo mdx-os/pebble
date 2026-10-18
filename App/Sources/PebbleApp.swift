@@ -1,3 +1,4 @@
+import PebbleBackground
 import PebbleCore
 import PebbleModel
 import PebbleUI
@@ -12,8 +13,9 @@ struct PebbleApp: App {
     /// The model that runs here. The task engine takes its place from it.
     private let model = LocalStubModel()
     /// The real task engine: on this device only, reading the same notes,
-    /// its tasks kept in `kept`, the one task store. None when the notes
-    /// can't be opened.
+    /// its tasks kept in `kept`, the one task store. Shared by Today and the
+    /// background runner, so the summary counts the tasks Today shows. None
+    /// when the notes can't be opened.
     private let tasks: DeviceTaskEngine?
     /// Off until the person turns it on, and unavailable while
     /// Config/Cloud.local.xcconfig has no address. Its settings and private
@@ -23,6 +25,12 @@ struct PebbleApp: App {
     /// the setting must not re-run the body and rebuild the home screen.
     /// The screens that show it observe it themselves.
     @State private var cloud: CloudHelp
+    /// The app's questions, shared by Today and the background runner, so
+    /// anything the runner asks waits in the same Needs you.
+    private let needsYou: NeedsYou
+    /// Work done while the app is closed. Off until the person turns it on
+    /// from the memory screen. Its runner is nil if its folder can't be made.
+    private let background: BackgroundService
     /// Tasks and receipts kept while the app is closed. If the folder
     /// can't be opened they are kept in memory, and Forget everything still
     /// deletes a file an earlier launch left.
@@ -41,7 +49,8 @@ struct PebbleApp: App {
         let kept = (try? TaskStore.onDevice()) ?? TaskStore.forgetOnly()
         self.kept = kept
         let model = self.model
-        tasks = memory.flatMap { OnDeviceTasks.engine(model: model, notes: $0, store: kept) }
+        let tasks = memory.flatMap { OnDeviceTasks.engine(model: model, notes: $0, store: kept) }
+        self.tasks = tasks
         let endpoint = CloudEndpoint.url(infoDictionary: Bundle.main.infoDictionary)
         // The setting is kept next to the notes. If either can't be opened,
         // nothing typed into the setting could be kept, so it reads as off,
@@ -58,16 +67,36 @@ struct PebbleApp: App {
         #if os(macOS)
         SnapshotMode.runIfRequested(brand: brand)
         #endif
+        let asks = NeedsYou()
+        needsYou = asks
+        // Registered here, before launch ends, or the system won't run it.
+        let wiring: BackgroundWiring
+        #if DEBUG
+        if let seeded = BackgroundSeed.launched() {
+            wiring = .app(needsYou: asks, tasks: tasks, store: { seeded.store }, toggle: { seeded.toggle })
+        } else {
+            wiring = .app(needsYou: asks, tasks: tasks)
+        }
+        #else
+        wiring = .app(needsYou: asks, tasks: tasks)
+        #endif
+        background = wiring.service
+        background.start()
     }
 
     var body: some Scene {
         WindowGroup {
             #if DEBUG
-            if let scene = UserDefaults.standard.string(forKey: ShowcaseScene.launchKey).flatMap(ShowcaseScene.init(rawValue:)) {
-                scene.view(brand: brand)
-            } else {
-                home
+            // scripts/screenshots.sh launches with -showcaseStill YES, so the
+            // screen settles and two shots of it match.
+            Group {
+                if let scene = UserDefaults.standard.string(forKey: ShowcaseScene.launchKey).flatMap(ShowcaseScene.init(rawValue:)) {
+                    scene.view(brand: brand)
+                } else {
+                    home
+                }
             }
+            .environment(\.holdsStill, UserDefaults.standard.bool(forKey: ShowcaseScene.stillKey))
             #else
             home
             #endif
@@ -82,10 +111,12 @@ struct PebbleApp: App {
             names: UserDefaultsAgentNameStore(),
             onboarding: UserDefaultsOnboardingStore(),
             memory: memory,
+            needsYou: needsYou,
             tasks: tasks,
             kept: kept,
             notifier: LocalQuestionNotifier.shared,
-            cloud: cloud
+            cloud: cloud,
+            background: background.runner
         )
     }
 }

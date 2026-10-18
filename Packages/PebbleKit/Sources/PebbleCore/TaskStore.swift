@@ -242,6 +242,23 @@ public protocol QuestionNotifying: AnyObject, Sendable {
     func onOpen(_ handler: @escaping @MainActor @Sendable (String) -> Void)
 }
 
+/// Stands in for a task store file that won't open, as while the device is
+/// locked, for tests, so they never need file modes, which root ignores.
+/// What it says can change while a test runs, as the device unlocks.
+package final class TaskStoreFaults: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isShut: Bool
+
+    package init(shut: Bool = false) {
+        isShut = shut
+    }
+
+    package var shut: Bool {
+        get { lock.withLock { isShut } }
+        set { lock.withLock { isShut = newValue } }
+    }
+}
+
 /// Everything about tasks that outlives the app being closed: the tasks
 /// still going, the receipts for what the person said yes to, whether they
 /// want a nudge, and what the on-device task engine keeps. The app's one
@@ -265,6 +282,13 @@ public protocol QuestionNotifying: AnyObject, Sendable {
 /// A write that fails leaves the store dirty, and each read and change
 /// tries it again, so a receipt cleared here never comes back from the
 /// file.
+///
+/// While the file is there but can't be opened, as while the device is
+/// locked, nothing about tasks changes: not the tasks, not the receipts,
+/// not the engine's tasks. A change then is refused, not held in memory to
+/// write later, so a launch killed before the next unlock loses nothing.
+/// Whoever wanted it works it out again once the file opens. Only the
+/// nudge choice, kept apart with nothing of the person's, still changes.
 public final class TaskStore: @unchecked Sendable {
     public struct State: Codable, Equatable, Sendable {
         public var tasks: [SavedTask] = []
@@ -307,11 +331,11 @@ public final class TaskStore: @unchecked Sendable {
     /// deleted, so nothing is written over it. Each read and change tries
     /// again.
     private var loaded: Bool
-    /// What changed in memory while the file couldn't be read. A late read
-    /// never takes these back.
-    private var changedTasks = false
+    /// The nudge choice changed in memory while the file couldn't be read.
+    /// A late read never takes it back. Nothing else changes then.
     private var changedNudges = false
-    private var changedDevice = false
+    /// Stands in for a file that won't open, for tests.
+    private let faults: TaskStoreFaults?
     /// A file was let go unread, as one that couldn't be understood or one
     /// owed a forget, so what the engine kept in it is not known. Told to
     /// the engine once, by `deviceTasks()`.
@@ -335,11 +359,14 @@ public final class TaskStore: @unchecked Sendable {
 
     /// `forgetMarker` is where a forget still owed is written down. Nil
     /// keeps it in memory only. Never left out: a test that forgot it would
-    /// share a marker with every other.
-    package init(fileURL: URL?, forgetMarker: URL?) {
+    /// share a marker with every other. Tests may stand in for a file that
+    /// won't open, as while the device is locked, with `faults`, so they
+    /// never need file modes, which root ignores.
+    package init(fileURL: URL?, forgetMarker: URL?, faults: TaskStoreFaults? = nil) {
         self.fileURL = fileURL
         knownURL = fileURL
         markerURL = forgetMarker
+        self.faults = faults
         choiceURL = Self.choice(beside: forgetMarker)
         loaded = fileURL == nil
         lock.lock()
@@ -363,6 +390,7 @@ public final class TaskStore: @unchecked Sendable {
         fileURL = nil
         knownURL = forgets
         markerURL = forgetMarker
+        faults = nil
         choiceURL = Self.choice(beside: forgetMarker)
         loaded = true
         lock.lock()
@@ -588,6 +616,27 @@ public final class TaskStore: @unchecked Sendable {
         return Self.leftovers(of: knownURL).contains { FileManager.default.fileExists(atPath: $0.path) }
     }
 
+    /// True while the file is there but can't be opened, as while the
+    /// device is locked. Found by trying it. Nothing about tasks changes
+    /// then.
+    package var isShut: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return opensNot()
+    }
+
+    /// With the lock held. True while the file is there and won't open.
+    private func opensNot() -> Bool {
+        guard let fileURL, !mustDelete, FileManager.default.fileExists(atPath: fileURL.path) else { return false }
+        if faults?.shut == true { return true }
+        let descriptor = open(fileURL.path, O_RDONLY)
+        guard descriptor < 0 else {
+            close(descriptor)
+            return false
+        }
+        return true
+    }
+
     /// Forget everything: every saved task and every receipt. Only the nudge
     /// choice stays, since it holds nothing the person said or did.
     ///
@@ -656,14 +705,17 @@ public final class TaskStore: @unchecked Sendable {
         loadIfNeeded()
         var next = state
         body(&next)
+        // A file there but shut, unread or not, takes no change to tasks:
+        // none is held here to write later. Only the nudge choice goes on.
+        if (!loaded && !mustDelete) || opensNot() {
+            next.tasks = state.tasks
+            next.receipts = state.receipts
+            next.device = state.device
+        }
         let changed = next != state
         if changed {
             if next.nudges != state.nudges { writeChoice(next.nudges) }
-            if !loaded {
-                if next.tasks != state.tasks { changedTasks = true }
-                if next.nudges != state.nudges { changedNudges = true }
-                if next.device != state.device { changedDevice = true }
-            }
+            if !loaded, next.nudges != state.nudges { changedNudges = true }
             state = next
             if loaded { save(next) }
             tellWatchers = true
@@ -689,10 +741,10 @@ public final class TaskStore: @unchecked Sendable {
     /// owed a forget is never read, only deleted.
     ///
     /// A file read late, as when it was locked until the device was first
-    /// unlocked, never takes back what changed in memory since launch: the
-    /// tasks and the nudge choice made here stand, and the receipts from
-    /// both are kept. Its tasks that aren't here are kept too, as arrived
-    /// late, until an engine picks them up. Then the whole is written back.
+    /// unlocked, is taken as it is: nothing about tasks changed meanwhile,
+    /// since nothing could. Only a nudge choice made here stands over its
+    /// copy. Its tasks are kept as arrived late, until an engine picks
+    /// them up.
     private func loadIfNeeded() {
         if mustDelete { deleteIfOwed() }
         if loaded, dirty { save(state) }
@@ -702,7 +754,7 @@ public final class TaskStore: @unchecked Sendable {
             loaded = true
             return
         }
-        guard let data = try? Data(contentsOf: fileURL) else { return }
+        guard faults?.shut != true, let data = try? Data(contentsOf: fileURL) else { return }
         guard var saved = try? JSONDecoder().decode(State.self, from: data) else {
             // Gone as Forget everything would take it, so a file that won't
             // go is still never read and goes as soon as it can. Today says
@@ -720,24 +772,15 @@ public final class TaskStore: @unchecked Sendable {
         // A receipt changed into one no question could have shown never
         // reaches a card that says "You said yes".
         saved.receipts = saved.receipts.filter(\.couldHaveBeenAsked)
-        let here = changedTasks ? state.tasks : []
-        let late = saved.tasks.filter { task in !here.contains { $0.id == task.id } }
         var merged = saved
-        merged.tasks = here + late
         if changedNudges || choiceKnown { merged.nudges = state.nudges }
-        if changedDevice { merged.device = state.device }
         // A file from before the choice was kept apart hands it over once.
         if !choiceKnown && merged.nudges != .notAsked { writeChoice(merged.nudges) }
-        for receipt in state.receipts where !merged.receipts.contains(where: { $0.id == receipt.id }) {
-            merged.receipts.append(receipt)
-        }
         merged.receipts = Self.newest(merged.receipts)
         if merged != state { tellWatchers = true }
-        arrivedLate = late
+        arrivedLate = saved.tasks
         state = merged
-        changedTasks = false
         changedNudges = false
-        changedDevice = false
         if merged != decoded { save(merged) }
     }
 
@@ -755,9 +798,7 @@ public final class TaskStore: @unchecked Sendable {
         }
         mustDelete = false
         if let markerURL { try? manager.removeItem(at: markerURL) }
-        changedTasks = false
         changedNudges = false
-        changedDevice = false
         if fileURL != nil {
             loaded = true
             if state != State() { save(state) }

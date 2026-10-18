@@ -29,15 +29,19 @@ package struct KeptDigest: Codable, Equatable, Sendable {
     }
 }
 
-/// What the on-device task engine keeps in `TaskStore`: every task, and
-/// the kept digests let go.
+/// What the on-device task engine keeps in `TaskStore`: every task, the
+/// kept digests let go, and how and when the tasks whose cards went had
+/// ended, for the morning summary.
 package struct StoredFile: Codable, Equatable, Sendable {
     package let tasks: [StoredTask]
     package let kept: [KeptDigest]?
+    /// States and times only, for a week. Absent when there are none.
+    package let ended: [TaskEnd]?
 
-    package init(tasks: [StoredTask], kept: [KeptDigest]?) {
+    package init(tasks: [StoredTask], kept: [KeptDigest]?, ended: [TaskEnd]? = nil) {
         self.tasks = tasks
         self.kept = kept
+        self.ended = ended
     }
 }
 
@@ -105,6 +109,9 @@ package struct StoredTask: Codable, Equatable, Sendable {
         self.hidesQuote = kept != nil && hidesQuote ? true : nil
         self.gone = gone
     }
+
+    /// True when it had ended, so it comes back as it was.
+    package var hadEnded: Bool { TaskState(rawValue: state)?.isFinished == true }
 
     /// The task as it comes back after the app closed. One that ended
     /// comes back as it was, full only if it was done. One that was still

@@ -72,7 +72,7 @@ struct CloudPromiseTests {
             MemoryWords.saved(surface),
             MemoryWords.privacyNote(surface),
             FeedWords.sampleNote(surface),
-            FirstRunWords.helloDetail(onDevice: surface.staysOnDevice),
+            FirstRunWords.helloDetail(surface),
             CloudWords.offDetail(surface),
         ]
     }
@@ -100,7 +100,20 @@ struct CloudPromiseTests {
         #expect(PrivacyPlace.all(.onDevice, .onDevice) == .onDevice)
         #expect(PrivacyPlace.all(.onDevice, .mayLeaveDevice) == .mayLeaveDevice)
         #expect(PrivacyPlace.all(.mayLeaveDevice, .onDevice) == .mayLeaveDevice)
-        #expect(PrivacyPlace.all() == .onDevice)
+        #expect(PrivacyPlace.all(.onDevice) == .onDevice)
+        #expect(PrivacyPlace.all(.mayLeaveDevice) == .mayLeaveDevice)
+        // `PrivacyPlace.all()` with no place does not compile, and
+        // `everyPlaceIsAPrivacyPlace` flags it if the signature loosens.
+    }
+
+    /// The cloud model says its place two ways: the static one its own
+    /// words read, and the one every model reports from `runsOnDevice`.
+    /// They are one answer.
+    @Test func theCloudModelsTwoPlacesAgree() {
+        let model = CloudModel(endpoint: endpoint, transport: RefusingTransport(), reviewer: CloudReview())
+        #expect(model.privacyPlace == CloudModel.place)
+        #expect(CloudModel.place == .mayLeaveDevice)
+        #expect((model as any ModelClient).privacyPlace == CloudModel.place)
     }
 
     // MARK: Item 11
@@ -431,21 +444,24 @@ struct CloudPromiseTests {
         #expect(next.contains(".accessibilityHidden(true)"))
     }
 
-    // MARK: Fix round 5
+    // MARK: Rebuilding the home screen
 
     /// The home screen as the app builds it again on a redraw, with the
-    /// same setting and notes.
-    func rebuildHome(_ cloud: CloudHelp) -> HomeView {
+    /// same setting, notes and looks.
+    func rebuildHome(_ cloud: CloudHelp, looks: UserDefaults) -> HomeView {
         HomeView(brand: brand, model: local, names: InMemoryAgentNameStore(stored: "Pip"),
                  onboarding: InMemoryOnboardingStore(finished: true), memory: cloud.memory,
-                 looks: UserDefaults(suiteName: "cloud-promise-\(UUID().uuidString)")!,
+                 looks: looks,
                  conversation: nil, section: .today, needsYou: NeedsYou(rule: .isolated()), cloud: cloud)
     }
 
     /// A cloud chat is open and the cloud is turned off. Rebuilding the
     /// home screen leaves the setting saying "Off for new chats", never
     /// the device promise, while that chat is open.
-    @Test func rebuildingTheHomeScreenKeepsAnOpenCloudChatsPlace() {
+    @Test func rebuildingTheHomeScreenKeepsAnOpenCloudChatsPlace() throws {
+        let suite = "cloud-promise-\(UUID().uuidString)"
+        let looks = try #require(UserDefaults(suiteName: suite))
+        defer { looks.removePersistentDomain(forName: suite) }
         let cloud = help(CloudHelpSettings(isOn: true))
         let chat = newChat(cloud)
         cloud.setOn(false)
@@ -453,8 +469,8 @@ struct CloudPromiseTests {
         #expect(CloudHelpView.detail(for: cloud, place: surface(cloud, chat: chat))
                 == CloudWords.offDetail(.mayLeaveDevice))
 
-        _ = rebuildHome(cloud)
-        _ = rebuildHome(cloud)
+        _ = rebuildHome(cloud, looks: looks)
+        _ = rebuildHome(cloud, looks: looks)
         let place = surface(cloud, chat: chat)
         #expect(place == .mayLeaveDevice)
         #expect(CloudHelpView.detail(for: cloud, place: place) == "Off for new chats.")
@@ -463,11 +479,14 @@ struct CloudPromiseTests {
 
     /// Building the home screen struct, as every redraw does, makes no
     /// chat: no model asked for, no preview gate, no transport.
-    @Test func buildingTheHomeScreenTwiceMakesNothingCloudSide() {
+    @Test func buildingTheHomeScreenTwiceMakesNothingCloudSide() throws {
+        let suite = "cloud-promise-\(UUID().uuidString)"
+        let looks = try #require(UserDefaults(suiteName: suite))
+        defer { looks.removePersistentDomain(forName: suite) }
         let maker = TransportMaker()
         let cloud = help(CloudHelpSettings(isOn: true), maker: maker)
-        _ = rebuildHome(cloud)
-        _ = rebuildHome(cloud)
+        _ = rebuildHome(cloud, looks: looks)
+        _ = rebuildHome(cloud, looks: looks)
         #expect(cloud.chatModelsAsked == 0)
         #expect(maker.made == 0)
         // A chat started for real still asks once and makes one transport.
@@ -483,21 +502,24 @@ struct CloudPromiseTests {
     /// and no chat model or transport is made again. The copy still moves,
     /// through `surfacePlace`.
     @MainActor
-    @Test func turningTheCloudOffAndOnKeepsTheOpenCloudChat() {
+    @Test func turningTheCloudOffAndOnKeepsTheOpenCloudChat() throws {
+        let suite = "cloud-promise-\(UUID().uuidString)"
+        let looks = try #require(UserDefaults(suiteName: suite))
+        defer { looks.removePersistentDomain(forName: suite) }
         let maker = TransportMaker()
         let cloud = help(CloudHelpSettings(isOn: true), maker: maker)
-        let host = NSHostingView(rootView: rebuildHome(cloud))
+        let host = NSHostingView(rootView: rebuildHome(cloud, looks: looks))
         host.frame = CGRect(x: 0, y: 0, width: 600, height: 800)
         host.layoutSubtreeIfNeeded()
         #expect(cloud.chatModelsAsked == 1)
         cloud.setOn(false)
-        host.rootView = rebuildHome(cloud)
+        host.rootView = rebuildHome(cloud, looks: looks)
         host.layoutSubtreeIfNeeded()
         // The cloud chat is still the one open, and no new chat was made.
         #expect(cloud.chatModelsAsked == 1)
         cloud.setOn(true)
         cloud.confirmTurnOn()
-        host.rootView = rebuildHome(cloud)
+        host.rootView = rebuildHome(cloud, looks: looks)
         host.layoutSubtreeIfNeeded()
         #expect(cloud.chatModelsAsked == 1, "the same screen keeps the same chat")
         #expect(maker.made == 1)
@@ -525,17 +547,30 @@ struct CloudPromiseTests {
     /// private words are kept.
     @Test func theForgetEverythingQuestionFollowsThePrivateWords() throws {
         let cloud = help()
-        #expect(MemoryView.forgetEverythingDetail(for: nil) == MemoryWords.forgetEverythingDetail)
-        #expect(MemoryView.forgetEverythingDetail(for: cloud) == MemoryWords.forgetEverythingDetail)
+        #expect(MemoryView.forgetEverythingDetail(for: nil) == MemoryWords.forgetEverythingDetail(background: false))
+        #expect(MemoryView.forgetEverythingDetail(for: cloud) == MemoryWords.forgetEverythingDetail(background: false))
         cloud.newPrivateWord = "lemon cake"
         cloud.addPrivateWord()
         #expect(MemoryView.forgetEverythingDetail(for: cloud) == CloudWords.forgetEverythingDetail)
+        // With background work, the summaries and the switch are named too,
+        // with the private words or without.
+        #expect(MemoryView.forgetEverythingDetail(for: cloud, background: true)
+                == CloudWords.forgetEverythingWithSummariesDetail)
+        #expect(MemoryView.forgetEverythingDetail(for: help(), background: true)
+                == MemoryWords.forgetEverythingDetail(background: true))
+        #expect(MemoryView.forgetEverythingDetail(for: nil, background: true)
+                == MemoryWords.forgetEverythingDetail(background: true))
         let source = try String(contentsOf: Self.sources.appendingPathComponent("PebbleUI/MemoryView.swift"),
                                 encoding: .utf8)
         let dialog = try #require(source.range(of: "private struct ForgetEverythingDialog"))
-        let watching = source[dialog.upperBound...].prefix(1_200)
+        // The struct's own body, up to its closing brace at the start of a
+        // line: the types inside it close indented.
+        let after = source[dialog.upperBound...]
+        let end = try #require(after.range(of: "\n}\n"), "ForgetEverythingDialog's closing brace")
+        let watching = after[..<end.lowerBound]
+        #expect(!watching.contains("\nstruct ") && !watching.contains("\nprivate struct "), "only the one struct")
         #expect(watching.contains("@ObservedObject var help: CloudHelp"))
-        #expect(watching.contains("forgetEverythingDetail(for: help)"))
+        #expect(watching.contains("forgetEverythingDetail(for: help, background: background)"))
     }
 
     /// The notes folder won't open, but a words file from an earlier launch
@@ -610,7 +645,7 @@ struct CloudPromiseTests {
         #expect(app.contains("file: { try CloudHelpFileStore.onDevice() }"))
     }
 
-    // MARK: Fix round 6
+    // MARK: A setting that couldn't be opened
 
     /// The notes opened but the setting's file didn't, so the normal memory
     /// screen shows. Forget everything still erases the words kept in that
@@ -676,7 +711,7 @@ struct CloudPromiseTests {
         // None kept, read fine: the plain words.
         let empty = help()
         #expect(!empty.mayHavePrivateWords)
-        #expect(MemoryView.forgetEverythingDetail(for: empty) == MemoryWords.forgetEverythingDetail)
+        #expect(MemoryView.forgetEverythingDetail(for: empty) == MemoryWords.forgetEverythingDetail(background: false))
 
         // Opened, read and erased: nothing left to name.
         try cloud.forgetPrivateWords()
@@ -689,7 +724,7 @@ struct CloudPromiseTests {
         let unopened = CloudHelp.couldNotOpen(endpoint: endpoint, memory: scratchMemory(), file: { file })
         #expect(MemoryView.forgetEverythingDetail(for: unopened) == CloudWords.forgetEverythingDetail)
         try unopened.forgetPrivateWords()
-        #expect(MemoryView.forgetEverythingDetail(for: unopened) == MemoryWords.forgetEverythingDetail)
+        #expect(MemoryView.forgetEverythingDetail(for: unopened) == MemoryWords.forgetEverythingDetail(background: false))
         // With nothing to reach, nothing was ever kept.
         #expect(!CloudHelp.couldNotOpen(endpoint: endpoint, memory: nil).mayHavePrivateWords)
 
@@ -698,8 +733,10 @@ struct CloudPromiseTests {
         let source = try String(contentsOf: Self.sources.appendingPathComponent("PebbleUI/MemoryView.swift"),
                                 encoding: .utf8)
         #expect(source.contains(".onAppear { cloud?.refresh() }"))
-        #expect(source.contains("mayHaveWords: help.mayHavePrivateWords"))
+        #expect(source.contains("hasNotes: model.hasSomethingToForget, mayHaveWords: help.mayHavePrivateWords"))
         #expect(MemoryView.showsForgetEverything(hasNotes: false, mayHaveWords: true, holdsMore: false))
+        // Which shows for the notes file, and for background work's summaries.
+        #expect(source.contains("var hasSomethingToForget: Bool { hasStoredFile || hasBackgroundToForget }"))
     }
 
     /// The setting's changes reach the home screen through one publisher,
@@ -725,7 +762,7 @@ struct CloudPromiseTests {
         #expect(detail.contains("memoryScreen"))
     }
 
-    // MARK: Fix round 8
+    // MARK: More than one window
 
     /// Two windows share one setting. Window B has a cloud chat open, the
     /// cloud goes off, and window A starts an on-device chat. A's setting

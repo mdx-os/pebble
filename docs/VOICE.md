@@ -3,7 +3,7 @@
 How the agent talks, everywhere: the first run, the chat, memory, and the
 questions it asks before it acts. Read this before writing any words a
 person will see. The words themselves live in `PebbleCore` (`FirstRunWords`,
-`FirstConversation`, `MemoryWords`, `ConfirmationWords`, `FeedWords`, `TaskWords` and friends), so a
+`FirstConversation`, `MemoryWords`, `ConfirmationWords`, `FeedWords`, `TaskWords`, `BackgroundWords` and friends), so a
 change here usually means a change there.
 
 ## Who the agent is
@@ -137,8 +137,9 @@ action.
 An empty state promises only what exists today. Today's empty state says
 "It's just us for now. Write to me below, and I'll answer in the chat." with
 the composer under it. It is true whether or not a chat is already going, so
-it never promises a new one, and it says nothing about work done in the
-background until a real feed source ships.
+it never promises a new one. Background work is a real feed source now, and
+the line still holds: it shows only while nothing has been made, so it never
+hides a card, and it never promises a summary the system may not give time for.
 
 Examples are always labeled. Sample cards start with "Example" for
 VoiceOver, and a sample opened to read or a sample question says "This is
@@ -192,6 +193,51 @@ could have been reworded. A digest the agent takes out of the notes itself,
 because every note it quoted went, says so ("I took the weekly digest out
 of your notes, because the notes it quoted are gone or changed."), never
 that the person removed it.
+
+### Work while you're away
+
+Background work is off until the person turns it on, from the switch on the
+memory screen, and the line under the switch says what it does and when:
+"I try to make it overnight if you've unlocked since your last restart, and
+otherwise when you open the app." on iPhone and iPad, since the summary's
+file opens only after that first unlock, and the system may not give it
+time even then. It says "try", never that it will. On the Mac it says
+"while the app is open". It
+names "what finished overnight" only when there are tasks to count and the
+app keeps running, as on the Mac: on iPhone and iPad a summary made while
+closed almost never knows what finished. It says
+"when there's something to tell you", since a quiet morning leaves no card.
+Under it, "I'll look next at 7:00 AM tomorrow." says when it looks, not that
+a card comes. It always ends by saying nothing is sent, bought or shared
+without asking.
+
+The morning summary only counts what is really there, and says so in the
+past tense ("One thing was waiting for you."), since a question may have
+timed out by the time it is read. Opened, it says where to look ("at the top
+of Today, under Needs you") and from when it counted. A summary made late
+says why, once: "I waited until you unlocked, so this came later than
+planned." What is waiting is open now, so it is always said when Needs you
+can be seen. A count it couldn't know, because nothing could be counted or the
+app wasn't running for the whole time, is left out, never said as zero.
+What finished is read from where the tasks are kept, so it is known even
+after a night with the app closed; when that is locked away with the
+screen, the summary says so ("Your tasks stay locked away while your screen
+is locked, so I couldn't count what finished.") rather than leave it out. It
+says "overnight" only for one night, and "since Tuesday" for longer. With
+tasks to count, a morning that never ran gets its own card that names the
+day and the reason, and promises nothing about the next one; several missed
+in a row share one card that names them all and says only what is true of
+each. With no tasks to count, that morning would almost always have been
+quiet, so no card claims a summary was missed. None of these lines
+mention the device: they are about time and power, not where words go.
+The words live in `BackgroundWords`.
+
+Forget everything says what went in plain words, and names only what was
+really there: the notes and the tasks only when there were some, and the
+words to hide only when they were erased. If the summaries' file couldn't
+be erased, it says so and asks to try again. It never says "no trace": once
+an earlier version's setting was seen, an empty marker file stays beside the
+switch, holding nothing, but its being there shows the switch was once set.
 
 ### Confirmations
 

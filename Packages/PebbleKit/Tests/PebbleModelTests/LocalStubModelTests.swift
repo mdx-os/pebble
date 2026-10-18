@@ -149,8 +149,8 @@ struct LocalStubModelTests {
 
     @Test func theOnDeviceFlagSurvivesSending() async throws {
         let job = try #require(FirstConversation.jobs.first { $0.id == "morning" })
-        let convo = try await Conversation.firstRun(named: "Nova", onDevice: true).sending(job.prompt, with: model)
-        #expect(convo.onDevice)
+        let convo = try await Conversation.firstRun(named: "Nova", place: .onDevice).sending(job.prompt, with: model)
+        #expect(convo.place == .onDevice)
     }
 
     @Test func aMorningAnswerWithNoItemsGetsTheFallback() async throws {
@@ -191,17 +191,17 @@ struct LocalStubModelTests {
         }
         #expect(LocalStubModel().runsOnDevice)
         #expect(!Remote().runsOnDevice)
-        let local = Conversation.firstRun(named: "Nova", onDevice: true)
+        let local = Conversation.firstRun(named: "Nova", place: .onDevice)
         let promised = try local.appendingPerson("hi")
         await #expect(throws: ConversationError.leavesDevice) {
             _ = try await promised.appendingReply(from: Remote())
         }
-        let remote = Conversation.firstRun(named: "Nova", onDevice: false)
+        let remote = Conversation.firstRun(named: "Nova", place: .mayLeaveDevice)
         #expect(local.turns.first?.text.contains("stays here") == true)
         #expect(remote.turns.first?.text.contains("stays here") == false)
         guard case .accepted(let pip) = AgentName.decide("Pip") else { Issue.record("Pip refused"); return }
         let renamed = local.renamingAgent(to: pip)
-        #expect(renamed.turns.first?.text == FirstConversation.opening(named: "Pip", onDevice: true))
+        #expect(renamed.turns.first?.text == FirstConversation.opening(named: "Pip", place: .onDevice))
     }
 
     /// The one source for every device line is the model itself.
@@ -236,7 +236,7 @@ struct LocalStubModelTests {
                 return "reached-model"
             }
         }
-        let promised = try Conversation.firstRun(named: "Nova", onDevice: true)
+        let promised = try Conversation.firstRun(named: "Nova", place: .onDevice)
             .appendingPerson("I want to kill myself")
         let next = try await promised.appendingReply(from: Remote())
         #expect(next.turns.last?.text == CareCheck.reply)
@@ -251,7 +251,7 @@ struct LocalStubModelTests {
             _ = try await pick.appendingReply(from: Remote())
         }
         // Ordinary words still refuse a remote model after the privacy promise.
-        let ordinary = try Conversation.firstRun(named: "Nova", onDevice: true)
+        let ordinary = try Conversation.firstRun(named: "Nova", place: .onDevice)
             .appendingPerson("plan my morning")
         await #expect(throws: ConversationError.leavesDevice) {
             _ = try await ordinary.appendingReply(from: Remote())

@@ -483,8 +483,9 @@ public enum FeedWords {
     public static let talkHint = "Opens the chat with a line ready. Nothing is sent."
     public static let reviewHint = "Opens the question."
     public static let emptyTitle = "A quiet start"
-    /// Only what is true today: the chat is right below. Nothing here says
-    /// the agent works in the background until a real feed source does.
+    /// Only what is true today: the chat is right below. It shows only while
+    /// nothing has been made, background work included, so it never hides
+    /// a card or promises a summary the system may not give time for.
     /// True whether or not a chat is already going, so it never promises a
     /// new one: a line sent from here joins the chat there is.
     public static let empty = "It's just us for now. Write to me below, and I'll answer in the chat."

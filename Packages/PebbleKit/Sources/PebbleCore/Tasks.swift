@@ -97,7 +97,7 @@ public enum TaskProgress: Sendable, Equatable {
     }
 }
 
-public enum TaskState: String, Sendable, Equatable, CaseIterable {
+public enum TaskState: String, Codable, Sendable, Equatable, CaseIterable {
     /// Working through its steps.
     case running
     /// Needs the person: a yes from `AskFirst`, or a choice after the
@@ -337,6 +337,9 @@ public protocol TaskEngine: AnyObject, Sendable {
     /// earlier words, so nothing the engine kept still quotes them. Says
     /// whether every copy of those words is gone.
     func forgetQuotes(of note: MemoryNote) -> QuotesForgotten
+
+    /// How the tasks that ended can be counted, for the morning summary.
+    var endings: TaskEndings { get }
 }
 
 extension TaskEngine {
@@ -344,6 +347,31 @@ extension TaskEngine {
     public var builtIns: [TaskRequest] { [] }
     public var hasStoredFile: Bool { false }
     public func forgetQuotes(of note: MemoryNote) -> QuotesForgotten { .notQuoted }
+    public var endings: TaskEndings { .watched }
+}
+
+/// How the tasks that ended can be counted. Only states and times, never
+/// what a task held.
+public enum TaskEndings: Sendable, Equatable {
+    /// From `tasks` alone, which live in memory: only what ended while the
+    /// app was watching.
+    case watched
+    /// Every task that ended, as kept on disk, whenever the app was running.
+    case kept([TaskEnd])
+    /// Kept on disk, but the file can't be opened now, as while the device
+    /// is locked, so nothing about them is known.
+    case locked
+}
+
+/// One task that ended: how, and when. Nothing else.
+public struct TaskEnd: Codable, Sendable, Equatable {
+    public let state: TaskState
+    public let at: Date
+
+    public init(state: TaskState, at: Date) {
+        self.state = state
+        self.at = at
+    }
 }
 
 /// What became of a forgotten note's words in what a task kept, such as a
@@ -625,7 +653,9 @@ public enum TaskWords {
     /// Forgetting tasks when their file couldn't be erased. They stopped
     /// and left the screen, but may come back, so it says so.
     public static let forgotNotesNotTasks = "Your notes are gone. I stopped your tasks, but I couldn't erase them just now. Please try Forget everything again in a moment."
-    public static let couldNotEraseTasks = "I stopped your tasks, but I couldn't erase them just now. Please try Forget everything again in a moment."
+    public static let couldNotEraseTasks = tasksStayed + " Please try Forget everything again in a moment."
+    /// The same, said within a line that already ends by asking to try again.
+    public static let tasksStayed = "I stopped your tasks, but I couldn't erase them just now."
     /// Kept on Today after forgetting, while a step the person said yes to
     /// may have happened. Names nothing the task held.
     public static func forgotUnderway(_ count: Int) -> String {
