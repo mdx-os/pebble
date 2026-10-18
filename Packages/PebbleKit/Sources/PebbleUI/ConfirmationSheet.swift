@@ -134,7 +134,11 @@ public struct ConfirmationSheet: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @AccessibilityFocusState private var footnoteFocused: Bool
     /// Room for the longest label, "What happens", growing with the text.
-    @ScaledMetric(relativeTo: .subheadline) private var labelWidth: CGFloat = 96
+    @ScaledMetric(relativeTo: .subheadline) private var labelWidth: CGFloat = Self.labelColumn
+    /// The label column's width at the usual text size, and the room
+    /// between it and the value.
+    static let labelColumn: CGFloat = 96
+    static let labelSpacing: CGFloat = 12
     @State private var detent: PresentationDetent = .large
 
     public init(
@@ -253,21 +257,9 @@ public struct ConfirmationSheet: View {
                     .accessibilityAddTraits(.isHeader)
             }
             VStack(spacing: 0) {
-                row(action.kind == .purchase ? ConfirmationWords.fromLabel : ConfirmationWords.toLabel, action.recipient.displayName)
-                if let handle = action.recipient.handle {
-                    Divider().overlay(Theme.hairline(scheme))
-                    row(ConfirmationWords.whereLabel, handle)
-                }
-                Divider().overlay(Theme.hairline(scheme))
-                row(Self.detailsLabel(action.kind), action.details)
-                if let price = action.price {
-                    Divider().overlay(Theme.hairline(scheme))
-                    row(ConfirmationWords.priceLabel, price.formatted())
-                }
-                // What a yes will do, so nothing about it is left to guess.
-                if let outcome = action.outcome {
-                    Divider().overlay(Theme.hairline(scheme))
-                    row(ConfirmationWords.happensLabel, outcome)
+                ForEach(Array(Self.rows(action).enumerated()), id: \.offset) { index, row in
+                    if index > 0 { Divider().overlay(Theme.hairline(scheme)) }
+                    self.row(row.label, row.value)
                 }
             }
             .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
@@ -299,6 +291,25 @@ public struct ConfirmationSheet: View {
         .frame(maxWidth: .infinity)
     }
 
+    /// The sheet's rows, each a label and its value: who, where, what goes
+    /// or is shared, the price, and what a yes will do, so nothing about it
+    /// is left to guess.
+    static func rows(_ action: ProposedAction) -> [(label: String, value: String)] {
+        var out: [(String, String)] = [(action.kind == .purchase ? ConfirmationWords.fromLabel : ConfirmationWords.toLabel,
+                                        action.recipient.displayName)]
+        if let handle = action.recipient.handle { out.append((ConfirmationWords.whereLabel, handle)) }
+        out.append((detailsLabel(action.kind), action.details))
+        if let price = action.price { out.append((ConfirmationWords.priceLabel, price.formatted())) }
+        if let outcome = action.outcome { out.append((ConfirmationWords.happensLabel, outcome)) }
+        return out
+    }
+
+    /// What VoiceOver reads for each row: its label and value, put together
+    /// as `.combine` puts them.
+    static func spokenRows(_ action: ProposedAction) -> [String] {
+        rows(action).map { "\($0.label), \($0.value)" }
+    }
+
     /// At accessibility text sizes a label column would squeeze the value,
     /// the part being said yes to, so the label sits over it instead.
     static func stacksLabels(at size: DynamicTypeSize) -> Bool {
@@ -306,7 +317,7 @@ public struct ConfirmationSheet: View {
     }
 
     private func row(_ label: String, _ value: String) -> some View {
-        LabeledRow(stacked: Self.stacksLabels(at: typeSize), labelWidth: labelWidth, spacing: 12) {
+        LabeledRow(stacked: Self.stacksLabels(at: typeSize), labelWidth: labelWidth, spacing: Self.labelSpacing) {
             Text(label)
                 .font(.subheadline)
                 .foregroundStyle(Theme.secondaryText)

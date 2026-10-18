@@ -16,9 +16,9 @@ final class NeedsYouFlowUITests: XCTestCase {
     /// was closed. `hold` makes the held visit take that long after a yes.
     private func launch(keep: Bool = false, hold: Int? = nil) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-pebbleScreen", "askLive"]
-        if keep { app.launchArguments += ["-pebbleKeepAsks", "YES"] }
-        if let hold { app.launchArguments += ["-pebbleHoldSeconds", String(hold)] }
+        app.launchArguments = ["-showcaseScreen", "askLive"]
+        if keep { app.launchArguments += ["-showcaseKeepAsks", "YES"] }
+        if let hold { app.launchArguments += ["-showcaseHoldSeconds", String(hold)] }
         app.launch()
         return app
     }
@@ -35,6 +35,12 @@ final class NeedsYouFlowUITests: XCTestCase {
     private func composerTop(in app: XCUIApplication) -> CGFloat {
         let field = element("todayComposer", in: app)
         return field.exists ? field.frame.minY - 12 : app.frame.maxY
+    }
+
+    /// Every receipt on Today. Each is one element, its label the summary
+    /// VoiceOver reads.
+    private func receipts(in app: XCUIApplication) -> XCUIElementQuery {
+        app.descendants(matching: .any).matching(identifier: "receipt")
     }
 
     private func text(containing words: String, in app: XCUIApplication) -> XCUIElement {
@@ -63,12 +69,13 @@ final class NeedsYouFlowUITests: XCTestCase {
         yes.tap()
 
         // The card leaves Needs you, and the receipt arrives once the visit is held.
-        let receipt = element("receipt", in: app)
+        let receipt = receipts(in: app).firstMatch
         XCTAssertTrue(receipt.waitForExistence(timeout: 20))
         XCTAssertFalse(app.staticTexts["Needs you"].exists)
         XCTAssertFalse(approve(in: app).exists)
-        XCTAssertTrue(text(containing: "Done, once, just as you said yes to it.", in: app).exists)
-        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "receipt").count, 1)
+        XCTAssertEqual(receipts(in: app).count, 1)
+        XCTAssertTrue(receipt.label.contains("You said yes"), receipt.label)
+        XCTAssertTrue(receipt.label.contains("Done, once, just as you said yes to it."), receipt.label)
 
         element("clearReceipt", in: app).tap()
         XCTAssertTrue(receipt.waitForNonExistence(timeout: 5))
@@ -85,7 +92,7 @@ final class NeedsYouFlowUITests: XCTestCase {
         XCTAssertTrue(text(containing: "You closed the question, so I didn't hold a Saturday visit.", in: app)
             .waitForExistence(timeout: 5))
         XCTAssertFalse(approve(in: app).exists)
-        XCTAssertFalse(element("receipt", in: app).exists, "nothing was approved, so there is no receipt")
+        XCTAssertFalse(receipts(in: app).firstMatch.exists, "nothing was approved, so there is no receipt")
     }
 
     /// Closing the app keeps the question. A yes under way when it closed
@@ -107,9 +114,16 @@ final class NeedsYouFlowUITests: XCTestCase {
         app = launch(keep: true, hold: 120)
         XCTAssertTrue(text(containing: "I was closed before I could finish", in: app).waitForExistence(timeout: 15))
         XCTAssertTrue(text(containing: "It may be done.", in: app).exists)
-        XCTAssertTrue(text(containing: "so it may be done.", in: app).exists, "the receipt says so too")
+        // The receipt says so too: exactly one, in its own words, not the
+        // task card's.
+        let receipt = receipts(in: app).firstMatch
+        for _ in 0..<3 where !receipt.exists { app.scrollViews.firstMatch.swipeUp() }
+        XCTAssertTrue(receipt.waitForExistence(timeout: 5), "the restored receipt is on Today")
+        XCTAssertEqual(receipts(in: app).count, 1)
+        XCTAssertTrue(receipt.label.contains("You said yes"), receipt.label)
+        XCTAssertTrue(receipt.label.contains("I'd started this when I stopped, so it may be done."), receipt.label)
+        XCTAssertFalse(receipt.label.contains("Done, once"), receipt.label)
         XCTAssertFalse(approve(in: app).exists, "the yes is never asked for or used again")
-        XCTAssertFalse(text(containing: "Done, once", in: app).exists)
     }
 
     /// The nudge is offered in the moment, the system asks only after a
@@ -117,17 +131,16 @@ final class NeedsYouFlowUITests: XCTestCase {
     /// straight to the pinned card.
     func testANudgeIsAskedForInContextAndOpensThePinnedCard() throws {
         let app = launch()
-        // The system asks only once per install, so this test needs one
-        // where it hasn't yet.
+        // The system asks only once per install. `make ui-test` removes the
+        // app from each simulator first, so it hasn't yet.
         let permission = element("nudgePermission", in: app)
         XCTAssertTrue(permission.waitForExistence(timeout: 15))
         let checked = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label != %@", "checking"), object: permission)
         XCTAssertEqual(XCTWaiter.wait(for: [checked], timeout: 10), .completed)
-        // A simulator that was asked before can't show the system's question
-        // again, so it skips rather than fails, and `make ui-test` stays green.
-        guard permission.label == "notDetermined" else {
-            throw XCTSkip("Notifications were already allowed or refused on this simulator. Remove the app, or erase the simulator, and run again.")
-        }
+        // A simulator asked before can't show the system's question again,
+        // so this fails rather than pass without meeting it.
+        XCTAssertEqual(permission.label, "notDetermined",
+                       "Notifications were already allowed or refused here. Run through `make ui-test`, which removes the app first.")
         XCTAssertTrue(approve(in: app).waitForExistence(timeout: 15))
         XCTAssertFalse(springboard.alerts.firstMatch.exists, "never asked at launch")
         let allow = app.buttons["Yes, nudge me"]

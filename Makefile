@@ -54,8 +54,9 @@ device-screenshots: generate
 ## ui-test: drive the app in the Simulator: the iPad sidebar, Return to send,
 ## the keyboard shortcuts, the cloud screens, and the Needs you flow with its
 ## nudge, on an iPad and an iPhone. The nudge test meets the system's own
-## question, so run it on simulators where the app was removed first.
+## question, so the app is removed from both simulators first.
 ui-test: generate
+	sh scripts/ui-test-reset.sh "$(or $(PEBBLE_IPAD),iPad Pro 13-inch (M5))" "$(or $(PEBBLE_IPHONE),iPhone 17 Pro)"
 	xcodebuild test -quiet -project Pebble.xcodeproj -scheme Pebble -derivedDataPath $(DERIVED) \
 		-destination 'platform=iOS Simulator,name=$(or $(PEBBLE_IPAD),iPad Pro 13-inch (M5))' \
 		-destination 'platform=iOS Simulator,name=$(or $(PEBBLE_IPHONE),iPhone 17 Pro)' \
@@ -63,7 +64,8 @@ ui-test: generate
 		-only-testing:PebbleAppUITests/CloudUITests \
 		-only-testing:PebbleAppUITests/NeedsYouFlowUITests
 
-## brand-check: the product name must live only in Config/Brand.xcconfig
+## brand-check: the product name must live only in Config/Brand.xcconfig, in
+## any case, and no new key or path may spell the codename in lowercase
 brand-check:
 	sh scripts/brand-check.sh
 

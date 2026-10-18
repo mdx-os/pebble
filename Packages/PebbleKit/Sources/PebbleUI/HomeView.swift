@@ -102,7 +102,8 @@ public struct HomeView: View {
     }
 
     /// The app's one Needs you flow, whichever window asks. A nudge says
-    /// the name the person chose, read when it is sent.
+    /// the name the person chose, read each time one is sent, so a rename
+    /// just before the app goes away is the name it says.
     static func flow(store: TaskStore, notifier: (any QuestionNotifying)?, brand: Brand,
                      names: any AgentNameStoring) -> NeedsYouFlow {
         NeedsYouFlow.forApp(store: store, notifier: notifier, agentName: {

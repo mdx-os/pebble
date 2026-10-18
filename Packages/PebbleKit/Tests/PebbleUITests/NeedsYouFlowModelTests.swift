@@ -63,6 +63,67 @@ private final class FakeNotifier: QuestionNotifying, @unchecked Sendable {
     @MainActor func tap(_ taskID: String) { handler?(taskID) }
 }
 
+#if canImport(UserNotifications)
+/// Stands in for the system's notification center: holds what is still to
+/// come and what has shown, as the system would. An add can be held on its
+/// way, to land when the test lets it.
+private final class FakeCenter: NudgeCenter, @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiting: [UNNotificationRequest] = []
+    private var shown: [UNNotificationRequest] = []
+    private var holding = false
+    private var held: [CheckedContinuation<Void, Never>] = []
+
+    init(pending: [UNNotificationRequest] = [], delivered: [UNNotificationRequest] = []) {
+        waiting = pending
+        shown = delivered
+    }
+
+    var pendingIDs: [String] { lock.lock(); defer { lock.unlock() }; return waiting.map(\.identifier) }
+    var deliveredIDs: [String] { lock.lock(); defer { lock.unlock() }; return shown.map(\.identifier) }
+
+    /// Adds wait from here until `release`.
+    func hold() { lock.lock(); holding = true; lock.unlock() }
+    func release() {
+        lock.lock()
+        holding = false
+        let go = held
+        held = []
+        lock.unlock()
+        for one in go { one.resume() }
+    }
+
+    func add(_ request: UNNotificationRequest) async {
+        await withCheckedContinuation { (landed: CheckedContinuation<Void, Never>) in
+            if !wait(landed) { landed.resume() }
+        }
+        land(request)
+    }
+    func pending() async -> [UNNotificationRequest] { pendingNow() }
+    func delivered() async -> [UNNotificationRequest] { deliveredNow() }
+
+    /// Holds `landed` when adds are held. False when it may go at once.
+    private func wait(_ landed: CheckedContinuation<Void, Never>) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if holding { held.append(landed) }
+        return holding
+    }
+    private func land(_ request: UNNotificationRequest) { lock.lock(); waiting.append(request); lock.unlock() }
+    private func pendingNow() -> [UNNotificationRequest] { lock.lock(); defer { lock.unlock() }; return waiting }
+    private func deliveredNow() -> [UNNotificationRequest] { lock.lock(); defer { lock.unlock() }; return shown }
+    func removePending(_ ids: [String]) { lock.lock(); waiting.removeAll { ids.contains($0.identifier) }; lock.unlock() }
+    func removeDelivered(_ ids: [String]) { lock.lock(); shown.removeAll { ids.contains($0.identifier) }; lock.unlock() }
+
+    /// A request in `thread`, as the system holds one.
+    static func request(_ id: String, thread: String) -> UNNotificationRequest {
+        let content = UNMutableNotificationContent()
+        content.title = "A line"
+        content.threadIdentifier = thread
+        return UNNotificationRequest(identifier: id, content: content, trigger: nil)
+    }
+}
+#endif
+
 /// Counts a store's changes, from any thread.
 private final class StoreChanges: @unchecked Sendable {
     private let lock = NSLock()
@@ -279,7 +340,7 @@ struct NeedsYouFlowModelTests {
         again.advance(by: 42)
         next.allowNudges()
         await next.settled()
-        #expect(also == [NudgeWords.off])
+        #expect(also == [NudgeWords.offBySystem], "the system said no, so Settings can turn them on")
     }
 
     /// Yes, nudge me takes the offer away too, so once the system allows
@@ -306,7 +367,7 @@ struct NeedsYouFlowModelTests {
         flow.allowNudges()
         await flow.settled()
         #expect(store.nudges == .denied)
-        #expect(flow.nudgeNote == NudgeWords.off)
+        #expect(flow.nudgeNote == NudgeWords.offBySystem)
         flow.scene(isActive: false)
         #expect(notifier.posted.isEmpty)
         // The next launch with a new question offers nothing.
@@ -334,6 +395,8 @@ struct NeedsYouFlowModelTests {
         #expect(flow.nudgeNote == nil)
     }
 
+    /// PERMANENT GUARD. A question asked through any rule but Today's is
+    /// never pinned, never nudged, and its Approve opens nothing.
     @Test func aQuestionFromAForeignRuleIsNeitherPinnedNorNudgedNorAnswerable() async throws {
         let notifier = FakeNotifier()
         let store = TaskStore.inMemory(.init(nudges: .allowed))
@@ -646,6 +709,113 @@ struct NeedsYouFlowModelTests {
         #expect(second.usedYes.isEmpty, "and the ids of its yeses")
     }
 
+    /// PERMANENT GUARD. A question's sheet open in one window closes when
+    /// Forget everything runs in another, so its details never stay on
+    /// screen after they are deleted, and a yes from it does nothing:
+    /// nothing goes on, no receipt is made, and nothing is written.
+    @Test func forgetEverythingInOneWindowClosesTheSheetOpenInTheOther() async throws {
+        let store = TaskStore.inMemory()
+        let flow = NeedsYouFlow(store: store, notifier: FakeNotifier(), agentName: { "Pip" })
+        let rule = AskFirst.isolated()
+        let engine = LocalFakeEngine(rule: rule, origin: Self.morning)
+        engine.start(SampleTasks.dentist)
+        engine.advance(by: 42)
+        func window() -> FeedModel {
+            FeedModel(sources: [], needsYou: NeedsYou(rule: rule), tasks: engine, place: .onDevice, flow: flow,
+                      now: { Self.morning + engine.now })
+        }
+        let first = window()
+        let second = window()
+        let state = try sheet(second, try #require(pinned(second)))
+        #expect(second.reviewing != nil, "open in the second window")
+        first.forgetTasks()
+        await first.settled()
+        await second.settled()
+        #expect(second.reviewing == nil, "its sheet closed with the forget")
+        let heard = StoreChanges()
+        _ = store.observe { heard.add() }
+        // A tap on Yes in the sheet as it goes. Whatever the sheet makes of
+        // it, nothing may come of it.
+        _ = state.tapPrimary()
+        engine.advance(by: 10)
+        await first.settled()
+        await second.settled()
+        #expect(engine.tasks.isEmpty, "nothing was picked up again")
+        #expect(engine.takeReceipts().isEmpty)
+        #expect(receipts(first).isEmpty)
+        #expect(receipts(second).isEmpty)
+        #expect(store.receipts.isEmpty)
+        #expect(store.tasks.isEmpty)
+        #expect(heard.count == 0, "nothing was written")
+    }
+
+    /// Forget everything in one window shows the same lines in the other:
+    /// that the tasks went, and that a step said yes to may be done. Only
+    /// the window it ran in says it aloud.
+    @Test func forgetEverythingShowsTheSameLinesInEveryWindow() async throws {
+        let store = TaskStore.inMemory()
+        let flow = NeedsYouFlow(store: store, notifier: FakeNotifier(), agentName: { "Pip" })
+        let rule = AskFirst.isolated()
+        let engine = LocalFakeEngine(rule: rule, origin: Self.morning)
+        engine.start(SampleTasks.dentist)
+        engine.advance(by: 42)
+        func window() -> FeedModel {
+            FeedModel(sources: [], needsYou: NeedsYou(rule: rule), tasks: engine, place: .onDevice, flow: flow,
+                      now: { Self.morning + engine.now })
+        }
+        let first = window()
+        let second = window()
+        var heardFirst: [String] = []
+        var heardSecond: [String] = []
+        first.announce = { heardFirst.append($0.text) }
+        second.announce = { heardSecond.append($0.text) }
+        // Said yes to in the second window; the visit is under way.
+        #expect(try sheet(second, try #require(pinned(second))).tapPrimary() == .approved)
+        await first.settled()
+        await second.settled()
+        heardFirst = []
+        heardSecond = []
+        first.forgetTasks()
+        await first.settled()
+        await second.settled()
+        let line = try #require(first.forgotUnderway)
+        #expect(second.forgotUnderway == line, "the other window says it may be done too")
+        #expect(first.tasksForgotten)
+        #expect(second.tasksForgotten, "and that the tasks went")
+        #expect(heardFirst.filter { $0 == line }.count == 1)
+        #expect(!heardSecond.contains(line), "said once, in the window it ran in")
+    }
+
+    /// Two windows opening on what the last launch kept pick it up once:
+    /// a step said yes to and under way ends with one receipt, in both.
+    @Test func twoWindowsRestoreExactlyOneReceipt() async throws {
+        let store = TaskStore.inMemory()
+        do {
+            let (first, engine, _) = today(store: store)
+            engine.advance(by: 42)
+            #expect(try sheet(first, try #require(pinned(first))).tapPrimary() == .approved)
+        }
+        #expect(store.tasks.first?.phase == .approved)
+        // The app opens again, with two windows on one engine.
+        let rule = AskFirst.isolated()
+        let origin = Self.morning + 43
+        let engine = LocalFakeEngine(rule: rule, origin: origin)
+        let flow = NeedsYouFlow(store: store, notifier: FakeNotifier(), agentName: { "Pip" })
+        func window() -> FeedModel {
+            FeedModel(sources: [], needsYou: NeedsYou(rule: rule), tasks: engine, place: .onDevice, flow: flow,
+                      now: { origin + engine.now })
+        }
+        let one = window()
+        let two = window()
+        engine.advance(by: 60)
+        await one.settled()
+        await two.settled()
+        #expect(store.receipts.map(\.outcome) == [.mayBeDone])
+        #expect(receipts(one).count == 1)
+        #expect(receipts(two).count == 1)
+        #expect(engine.tasks.count == 1, "picked up once, not once per window")
+    }
+
     /// Forget everything lets go of a nudge being brought into view, and of
     /// which questions were nudged, since both name forgotten tasks.
     @Test func forgetEverythingLetsGoOfTheNudgeInView() async throws {
@@ -831,10 +1001,11 @@ struct NeedsYouFlowModelTests {
         #expect(notifier.delays == [NeedsYouFlow.nudgeDelay])
     }
 
-    /// The offer sits closer under Needs you than sections do, but never so
-    /// close it overlaps: the room between them is fixed, not scaled, so
-    /// this holds at AX5 as at any size.
-    @Test func theNudgeOfferNeverOverlapsNeedsYou() {
+    /// A tripwire on the constants only, not a layout check: the offer sits
+    /// closer under Needs you than sections do, by a fixed amount smaller
+    /// than the fixed room between sections, so it never overlaps at any
+    /// size. Neither scales with the text.
+    @Test func theOffersTuckIsFixedAndSmallerThanTheRoomBetweenSections() {
         #expect(FeedView.offerTuck > 0)
         #expect(FeedView.sectionSpacing - FeedView.offerTuck >= 8)
     }
@@ -916,8 +1087,11 @@ struct NeedsYouFlowModelTests {
         engine.advance(by: 42)
         let model = FeedModel(sources: [], needsYou: NeedsYou(rule: rule), tasks: engine, place: .onDevice,
                               flow: one, now: { Self.morning + engine.now })
+        // Renamed after the question was pinned, just before the app goes
+        // away: the nudge says the new name.
+        names.saveDisplayName("Juniper")
         model.scene(isActive: false)
-        #expect(notifier.posted.map(\.title) == ["Pip has a question for you"])
+        #expect(notifier.posted.map(\.title) == ["Juniper has a question for you"])
     }
 
     /// PERMANENT GUARD. The app's flow is one per store, held only while a
@@ -992,6 +1166,39 @@ struct NeedsYouFlowModelTests {
         #expect(!flow.takesOpened(in: second.window, canShow: true), "nothing left to take")
     }
 
+    /// PERMANENT GUARD. A nudge the home screen let go, as during the first
+    /// run or under a cloud preview, is never brought into view a beat
+    /// later: Today doesn't scroll and VoiceOver doesn't move to a card
+    /// behind it. One that was taken is, once, and then let go.
+    @Test func aNudgeLetGoIsNeverBroughtIntoViewLater() async throws {
+        let notifier = FakeNotifier()
+        let (model, engine, flow) = today(notifier: notifier)
+        engine.advance(by: 42)
+        let task = try #require(pinned(model))
+        model.scene(isActive: true)
+        var scrolled: [String] = []
+        var focused: [String] = []
+        // Opened while it can't be shown: the home screen lets it go first,
+        // then the scroller's beat comes.
+        notifier.tap(task.id)
+        #expect(!flow.takesOpened(in: model.window, canShow: false))
+        flow.bringIntoView(task.id, in: model.window, scroll: { scrolled.append($0) }, focusCard: { focused.append($0) })
+        #expect(scrolled.isEmpty)
+        #expect(focused.isEmpty)
+        #expect(model.cardState(task.id).pendingFocus == nil)
+        // Opened again, now it can be: brought in once, VoiceOver with it.
+        notifier.tap(task.id)
+        #expect(flow.takesOpened(in: model.window, canShow: true))
+        flow.bringIntoView(task.id, in: model.window, scroll: { scrolled.append($0) },
+                           focusCard: { model.focusCard($0); focused.append($0) })
+        #expect(scrolled == [task.id])
+        #expect(focused == [task.id])
+        #expect(model.cardState(task.id).pendingFocus == .summary)
+        #expect(flow.focus == nil, "and let go")
+        flow.bringIntoView(task.id, in: model.window, scroll: { scrolled.append($0) }, focusCard: { focused.append($0) })
+        #expect(scrolled == [task.id], "once")
+    }
+
     #if canImport(UserNotifications)
     /// PERMANENT GUARD. A nudge carries only that the agent has a question
     /// and which card to open. Nothing for a lock screen to show.
@@ -1008,6 +1215,16 @@ struct NeedsYouFlowModelTests {
         #expect(content.attachments.isEmpty)
         #expect(content.userInfo.count == 1)
         #expect(LocalQuestionNotifier.taskID(in: content.userInfo) == task.id)
+        // Nothing else it carries holds a word of the task, so a category
+        // with actions added later can't show the title either.
+        #expect(content.categoryIdentifier.isEmpty)
+        #expect(content.targetContentIdentifier == task.id)
+        #expect(content.threadIdentifier == LocalQuestionNotifier.thread)
+        for carried in [content.categoryIdentifier, content.targetContentIdentifier ?? "", content.threadIdentifier] {
+            for held in [task.title, "Maple", "mapledental", "Saturday", "dentist", "visit"] {
+                #expect(!carried.localizedCaseInsensitiveContains(held), "\(carried) holds \(held)")
+            }
+        }
         #expect(LocalQuestionNotifier.taskID(in: ["other": "x"]) == nil)
     }
 
@@ -1076,25 +1293,45 @@ struct NeedsYouFlowModelTests {
     /// PERMANENT GUARD. Taking every nudge away takes both kinds, those
     /// still to come and those shown, and only from the questions' thread.
     /// Otherwise a nudge set to show 30 seconds on would still show after
-    /// Forget everything.
-    @Test func removingEveryNudgeTakesThePendingAndTheShown() throws {
-        let root = SwiftSource.repositoryRoot(from: #filePath)
-        let text = try String(contentsOf: root.appendingPathComponent("Packages/PebbleKit/Sources/PebbleUI/NeedsYouFlow.swift"),
-                              encoding: .utf8)
-        let source = SwiftSource(text)
-        let code = String(source.code)
-        let start = try #require(code.range(of: "public func removeAll()"))
-        let body = String(code[start.upperBound...].prefix(1200))
-        for call in ["getPendingNotificationRequests", "removePendingNotificationRequests",
-                     "getDeliveredNotifications", "removeDeliveredNotifications"] {
-            #expect(body.contains(call), "\(call)")
-        }
-        #expect(body.components(separatedBy: "threadIdentifier == Self.thread").count == 3,
-                "both kinds are taken only from the questions' thread")
-        let forget = try #require(code.range(of: "public func forget()"))
-        let forgetBody = String(code[forget.upperBound...].prefix(200))
-        #expect(forgetBody.contains("waitingOpen = nil"))
-        #expect(forgetBody.contains("removeAll()"))
+    /// Forget everything. Anything else the app shows stays.
+    @Test(arguments: [false, true])
+    func removingEveryNudgeTakesThePendingAndTheShown(byForgetting: Bool) async throws {
+        let thread = LocalQuestionNotifier.thread
+        let center = FakeCenter(
+            pending: [FakeCenter.request("question:soon", thread: thread), FakeCenter.request("other:soon", thread: "other")],
+            delivered: [FakeCenter.request("question:shown", thread: thread), FakeCenter.request("other:shown", thread: "other")])
+        let notifier = LocalQuestionNotifier(center: center)
+        notifier.open("task:7")
+        if byForgetting { notifier.forget() } else { notifier.removeAll() }
+        await notifier.clearing?.value
+        #expect(center.pendingIDs == ["other:soon"])
+        #expect(center.deliveredIDs == ["other:shown"])
+        // Forget everything also drops a tap held for a listener; taking
+        // every nudge away at launch keeps it, for a cold start.
+        var heard: [String] = []
+        notifier.onOpen { heard.append($0) }
+        await notifier.handOver?.value
+        #expect(heard == (byForgetting ? [] : ["task:7"]))
+    }
+
+    /// A question that closes while its nudge is still on its way to the
+    /// system takes it away once it lands, so it never shows 30 seconds on
+    /// for a question that is gone. A nudge posted again after that stays.
+    @Test func aNudgeTakenAwayOnItsWayIsTakenAwayOnceItLands() async throws {
+        let center = FakeCenter()
+        let notifier = LocalQuestionNotifier(center: center)
+        let question = try #require(AskFirst.isolated().ask(SampleTasks.holdVisit))
+        let nudge = QuestionNudge(question: question, taskID: "task:1", agentName: "Pip")
+        center.hold()
+        notifier.post(nudge, after: 30)
+        let first = try #require(notifier.posting)
+        notifier.remove([nudge.id])
+        center.release()
+        await first.value
+        #expect(center.pendingIDs.isEmpty, "it landed after it was taken away, so it went then")
+        notifier.post(nudge, after: 30)
+        await notifier.posting?.value
+        #expect(center.pendingIDs == [nudge.id], "posted again afterwards, it stays")
     }
     #endif
 
@@ -1132,14 +1369,19 @@ struct NeedsYouFlowModelTests {
     /// the part being said yes to, a sliver. Over it, the value has the
     /// whole width, so it takes far fewer lines.
     @Test func atTheLargestTextTheValueGetsTheWholeWidth() throws {
-        let value = SampleTasks.holdVisit.details
+        // The row the sheet shows for what a yes will do, with the sheet's
+        // own label column, grown about as far as it grows at AX5.
+        let value = try #require(SampleTasks.holdVisit.outcome)
+        #expect(ConfirmationSheet.rows(SampleTasks.holdVisit).contains { $0.label == ConfirmationWords.happensLabel && $0.value == value })
         func row(stacked: Bool) -> some View {
-            LabeledRow(stacked: stacked, labelWidth: 92 * 3.5, spacing: 10) {
+            LabeledRow(stacked: stacked, labelWidth: ConfirmationSheet.labelColumn * 3.5,
+                       spacing: ConfirmationSheet.labelSpacing) {
                 Text(ConfirmationWords.happensLabel)
+                    .font(.subheadline)
             } value: {
                 Text(value)
+                    .font(.body.weight(.medium))
             }
-            .font(.footnote)
         }
         let side = try measured(row(stacked: false), width: 361, text: .accessibility5)
         let over = try measured(row(stacked: true), width: 361, text: .accessibility5)
@@ -1172,22 +1414,35 @@ struct NeedsYouFlowModelTests {
             .frame(width: 393, height: 852))
     }
 
-    /// PERMANENT GUARD. The receipt's rows follow the sheet's rule: at
-    /// accessibility sizes each label goes over its value, so the receipt
-    /// grows rather than squeeze what was said yes to. Fonts don't grow
-    /// where these tests run, so the stacking is what makes it taller.
-    @Test func theReceiptStacksItsLabelsAtAccessibilitySizes() throws {
+    /// PERMANENT GUARD. The receipt's rows follow the sheet's rule, and its
+    /// header stacks too: at accessibility sizes each label goes over its
+    /// value, and the label, the example marker and the time each get a
+    /// line, so nothing said yes to is squeezed and the marker is never cut.
+    ///
+    /// Each size is checked against the same card at the same size with
+    /// the layout set by hand, so it holds wherever fonts grow or don't:
+    /// the card lays out as the size's own layout does, and not as the
+    /// other one would.
+    @Test func theReceiptStacksAtAccessibilitySizes() throws {
         let receipt = Receipt(action: SampleTasks.holdVisit, taskTitle: SampleTasks.dentistTitle,
                               approvedAt: Self.morning, endedAt: Self.morning, outcome: .done, isSample: true)
-        let card = ReceiptCard(receipt: receipt, time: "9:41 AM", onClear: {})
-        let usual = try measured(card, width: 361, text: .large)
+        func card(rows: Bool? = nil, header: Bool? = nil) -> ReceiptCard {
+            var card = ReceiptCard(receipt: receipt, time: "9:41 AM", onClear: {})
+            card.rowsStack = rows
+            card.headerStacks = header
+            return card
+        }
         for size in DynamicTypeSize.allCases {
-            let height = try measured(card, width: 361, text: size).height
-            if ConfirmationSheet.stacksLabels(at: size) {
-                #expect(height > usual.height + 3 * 10, "\(size): \(height), usually \(usual.height)")
-            } else {
-                #expect(abs(height - usual.height) < 1, "\(size): \(height), usually \(usual.height)")
-            }
+            let stacks = size.isAccessibilitySize
+            #expect(ConfirmationSheet.stacksLabels(at: size) == stacks)
+            #expect(ReceiptCard.stacksHeader(at: size) == stacks)
+            let shown = try measured(card(), width: 361, text: size).height
+            let same = try measured(card(rows: stacks, header: stacks), width: 361, text: size).height
+            let otherRows = try measured(card(rows: !stacks, header: stacks), width: 361, text: size).height
+            let otherHeader = try measured(card(rows: stacks, header: !stacks), width: 361, text: size).height
+            #expect(abs(shown - same) < 1, "\(size): \(shown), its own layout \(same)")
+            #expect(abs(shown - otherRows) > 5, "\(size): the rows lay out as \(stacks ? "stacked" : "side by side")")
+            #expect(abs(shown - otherHeader) > 5, "\(size): the header lays out as \(stacks ? "stacked" : "one line")")
         }
     }
 
@@ -1214,6 +1469,7 @@ struct NeedsYouFlowModelTests {
         engine.advance(by: 32)
         tasks += engine.tasks
         let asked = ids.compactMap { id in engine.task(id)?.question.map { (id, $0) } }
+        try #require(asked.count >= 3, "three questions open, to close, approve, and stop after a yes")
         rule.withdraw(asked[0].1)
         engine.questionClosed(asked[0].1)
         _ = engine.resume(asked[1].0, with: try #require({
@@ -1234,10 +1490,107 @@ struct NeedsYouFlowModelTests {
                 spoken += [card.closingLine, task.wrapUp?.notDoneLine, task.wrapUp?.underwayLine].compactMap { $0 }
             }
         }
+        // What the sheet reads for each row, put together as VoiceOver puts
+        // it, for every action a task here can ask about.
+        let actions = [SampleTasks.holdVisit] + SampleTasks.all.flatMap { script in
+            script.steps.compactMap { step -> ProposedAction? in
+                if case .ask(let action, _) = step.kind { return action } else { return nil }
+            }
+        }
+        #expect(actions.count >= 2)
+        for action in actions {
+            spoken += ConfirmationSheet.spokenRows(action) + [action.question]
+        }
+        spoken += [ConfirmationWords.heading, ConfirmationSheet.footnote(expired: false),
+                   ConfirmationSheet.footnote(expired: true)]
         #expect(spoken.count > 20)
         for line in spoken {
             #expect(!line.contains(where: dashes.contains), "dash in: \(line)")
         }
+    }
+
+    /// docs/VOICE.md: no dash in what is said aloud or put on a card along
+    /// the way: every line announced as tasks go, the notes a card gets
+    /// when a question timed out or a yes came too late, the lines the
+    /// flow says about nudges, and the line kept after Forget everything.
+    @Test func everythingSaidAloudUsesNoDash() async throws {
+        let dashes: [Character] = ["\u{2014}", "\u{2013}"]
+        var heard: [String] = []
+        var notes: [String] = []
+        let clock = FlowClock()
+        let rule = AskFirst.isolated(now: clock.now)
+        let (model, engine, flow) = today(rule: rule, notifier: FakeNotifier(grants: false))
+        model.announce = { heard.append($0.text) }
+        flow.announce = { heard.append($0) }
+        engine.start(SampleTasks.plan)
+        engine.start(SampleTasks.lunch)
+        for _ in 0..<8 {
+            engine.advance(by: 6)
+            await model.settled()
+        }
+        // A yes that came after its task moved on: the card says so.
+        let late = try #require(pinned(model))
+        model.review(late)
+        let request = try #require(model.reviewing)
+        guard case .approved(let approval) = model.rule.sayYes(to: request) else { throw CancellationError() }
+        model.redirect(late, with: "Try Sunday instead")
+        model.approved(approval)
+        notes += model.cardState(late.id).note.map { [$0] } ?? []
+        // A question that timed out under its card: the card says so.
+        engine.advance(by: 30)
+        await model.settled()
+        if let waiting = pinned(model) {
+            clock.advance(AskFirst.defaultWindow + 1)
+            model.review(waiting)
+            notes += model.cardState(waiting.id).note.map { [$0] } ?? []
+        }
+        // The flow's lines, the offer refused by the system.
+        engine.start(SampleTasks.dentist)
+        engine.advance(by: 42)
+        await model.settled()
+        flow.allowNudges()
+        await flow.settled()
+        flow.declineNudges()
+        // A yes under way, then Forget everything.
+        if let asking = pinned(model) {
+            _ = try sheet(model, asking).tapPrimary()
+        }
+        model.forgetTasks()
+        await model.settled()
+        notes += model.forgotUnderway.map { [$0] } ?? []
+        #expect(notes.contains(TaskWords.yesNotUsed))
+        #expect(heard.contains(NudgeWords.offBySystem))
+        #expect(heard.contains(NudgeWords.off))
+        #expect(heard.count > 8, "\(heard)")
+        for line in heard + notes {
+            #expect(!line.contains(where: dashes.contains), "dash in: \(line)")
+        }
+    }
+
+    /// The memory screens offer Forget everything whenever Today holds
+    /// anything to forget, receipts alone included, and the model reads
+    /// that without sorting receipts on every pass.
+    @Test func theMemoryScreensAskTodayWhetherThereIsMoreToForget() throws {
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        let sources = root.appendingPathComponent("Packages/PebbleKit/Sources/PebbleUI")
+        let home = SwiftSource(try String(contentsOf: sources.appendingPathComponent("HomeView.swift"), encoding: .utf8))
+        let screens = home.calls(named: ["MemoryView"]).filter { $0.arguments.hasPrefix("model:") }
+        #expect(!screens.isEmpty)
+        for call in screens {
+            #expect(call.arguments.contains("holdsMore: feed.hasSomethingToForget"), "\(call.arguments)")
+        }
+        let fallback = try #require(home.calls(named: ["MemoryUnavailableView"]).first)
+        #expect(fallback.arguments.contains("hasTasks: feed.hasSomethingToForget"))
+        let memory = SwiftSource(try String(contentsOf: sources.appendingPathComponent("MemoryView.swift"), encoding: .utf8))
+        let shows = memory.calls(named: ["showsForgetEverything"]).filter { !$0.arguments.contains("Bool") }
+        #expect(shows.count >= 2)
+        for call in shows { #expect(call.arguments.contains("holdsMore: holdsMore"), "\(call.arguments)") }
+        let feed = SwiftSource(try String(contentsOf: sources.appendingPathComponent("FeedView.swift"), encoding: .utf8))
+        let code = String(feed.code)
+        let start = try #require(code.range(of: "var hasSomethingToForget: Bool {"))
+        let body = String(code[start.upperBound...].prefix { $0 != "}" })
+        #expect(body.contains("holdsSomething"), "\(body)")
+        #expect(!body.contains(".receipts"), "never sorts receipts to ask")
     }
 
     @Test("Smoke: the ask scenes draw", arguments: [ShowcaseScene.askWaiting, .askSheet, .askAnswered, .askClosed],

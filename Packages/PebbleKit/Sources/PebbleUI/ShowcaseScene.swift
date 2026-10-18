@@ -30,16 +30,20 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// keeps it while the app is closed, for the UI tests.
     case askWaiting, askSheet, askAnswered, askClosed, askLive
 
-    public static let launchKey = "pebbleScreen"
+    /// The launch argument that picks a scene. No name in it, product or
+    /// codename, as `make brand-check` asks of new code.
+    public static let launchKey = "showcaseScreen"
     /// Launch with this set to keep what `askLive` kept last time, as the
     /// app does after it is closed. Without it, `askLive` starts fresh.
-    public static let keepAsksKey = "pebbleKeepAsks"
+    public static let keepAsksKey = "showcaseKeepAsks"
+    /// The throwaway suite the showcase keeps its looks in.
+    static let looksSuite = "showcase.looks"
 
     @MainActor
     public func view(brand: Brand) -> some View {
         // A throwaway suite so the showcase never touches real choices.
-        let looks = UserDefaults(suiteName: "pebble.showcase")!
-        looks.removePersistentDomain(forName: "pebble.showcase")
+        let looks = UserDefaults(suiteName: Self.looksSuite)!
+        looks.removePersistentDomain(forName: Self.looksSuite)
         // Read the clock once, so the cards and the question agree.
         let morning = Self.morning
         return Group {
@@ -219,7 +223,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
 
     /// Launch with this many seconds to make the held visit take that long
     /// after a yes, so a UI test can close the app while it is under way.
-    public static let holdSecondsKey = "pebbleHoldSeconds"
+    public static let holdSecondsKey = "showcaseHoldSeconds"
 
     /// The dentist search for `askLive`, its held visit as long as asked.
     static var liveDentist: TaskScript {

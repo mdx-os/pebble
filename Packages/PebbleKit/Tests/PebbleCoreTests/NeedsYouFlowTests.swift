@@ -188,6 +188,33 @@ struct NeedsYouFlowTests {
         #expect(store.tasks.isEmpty, "saved again at once, so it never comes back twice")
     }
 
+    /// A question saved as asked in the future, as after the clock was
+    /// moved back or the file was changed by hand, can't be given a true
+    /// deadline. It ends as timed out and is never asked, then or later.
+    @Test func aQuestionAskedInTheFutureTimesOutAndIsNeverAsked() throws {
+        let store = TaskStore.inMemory()
+        let (before, task) = Self.atQuestion(rule: .isolated())
+        store.keep(before)
+        let kept = try #require(store.tasks.first)
+        #expect(kept.phase == .waiting)
+        // An hour from now, as the file would hold it.
+        var fields = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(kept)) as? [String: Any])
+        fields["askedAt"] = (Self.base + 3600).timeIntervalSinceReferenceDate
+        let saved = try JSONDecoder().decode(SavedTask.self, from: JSONSerialization.data(withJSONObject: fields))
+        #expect(saved.askedAt == Self.base + 3600)
+        let rule = AskFirst.isolated()
+        let after = LocalFakeEngine(rule: rule, origin: Self.base + 60)
+        after.restore([saved], now: Self.base + 60)
+        let back = try #require(after.task(task.id))
+        #expect(back.question == nil)
+        #expect(!back.waitsForApproval)
+        #expect(back.history.last?.text == "That question timed out, so I didn't hold a Saturday visit.")
+        after.advance(by: 600)
+        after.refresh()
+        #expect(after.tasks.allSatisfy { $0.question == nil }, "never asked later either")
+        #expect(after.takeReceipts().isEmpty)
+    }
+
     @Test func aClockMovedBackNeverReopensAQuestion() throws {
         let store = TaskStore.inMemory()
         let (before, task) = Self.atQuestion(rule: .isolated())
@@ -513,8 +540,8 @@ struct NeedsYouFlowTests {
 
     /// PERMANENT GUARD. Forget everything removes the file even when it
     /// couldn't be read, as before the device is first unlocked, and
-    /// nothing it held comes back once it could have been. The nudge choice
-    /// it held goes with it.
+    /// nothing it held comes back once it could have been. The nudge
+    /// choice, kept apart from it, stays.
     @Test(.enabled(if: canLockFiles, "file permissions don't stop root"))
     func forgetRemovesAFileThatCouldNotBeRead() throws {
         let (folder, url, marker, _) = try Self.earlierFile()
@@ -528,10 +555,44 @@ struct NeedsYouFlowTests {
         #expect(!FileManager.default.fileExists(atPath: marker.path), "nothing is owed")
         #expect(store.receipts.isEmpty)
         #expect(store.tasks.isEmpty)
-        #expect(store.nudges == .notAsked, "never read, so its choice went with it")
+        #expect(store.nudges == .declined, "kept apart, so it stays though the file was never read")
         let next = TaskStore(fileURL: url, forgetMarker: marker)
         #expect(next.receipts.isEmpty, "nothing comes back on the next launch")
-        #expect(next.nudges == .notAsked)
+        #expect(next.nudges == .declined)
+    }
+
+    /// PERMANENT GUARD. The same button gives the same result: Forget
+    /// everything keeps the nudge choice whether the file could be read or
+    /// not, as when the device hasn't been unlocked since it started.
+    @Test(.enabled(if: canLockFiles, "file permissions don't stop root"))
+    func forgetKeepsTheNudgeChoiceWhetherOrNotTheFileWasRead() throws {
+        var kept: [NudgeChoice] = []
+        for readable in [true, false] {
+            let (folder, url, marker, _) = try Self.earlierFile()
+            defer { Self.cleanUp(folder, marker.deletingLastPathComponent()) }
+            if !readable { try Self.setReadable(url, false) }
+            let store = TaskStore(fileURL: url, forgetMarker: marker)
+            store.forget()
+            #expect(store.receipts.isEmpty)
+            #expect(!FileManager.default.fileExists(atPath: url.path))
+            kept.append(store.nudges)
+            kept.append(TaskStore(fileURL: url, forgetMarker: marker).nudges)
+        }
+        #expect(kept == [.declined, .declined, .declined, .declined])
+    }
+
+    /// The choice kept apart holds nothing else: one word, and no file at
+    /// all once it is back to not asked.
+    @Test func theNudgeChoiceKeptApartHoldsOnlyTheChoice() throws {
+        let folder = try Self.folder()
+        let marker = try Self.marker()
+        defer { Self.cleanUp(folder, marker.deletingLastPathComponent()) }
+        let store = TaskStore(fileURL: folder.appendingPathComponent("tasks.json"), forgetMarker: marker)
+        store.setNudges(.allowed)
+        let choice = marker.deletingLastPathComponent().appendingPathComponent("nudge-choice")
+        #expect(try String(contentsOf: choice, encoding: .utf8) == "allowed")
+        store.setNudges(.notAsked)
+        #expect(!FileManager.default.fileExists(atPath: choice.path))
     }
 
     @Test func forgetRemovesAFileThatCouldNotBeDecoded() throws {
@@ -550,8 +611,8 @@ struct NeedsYouFlowTests {
 
     /// PERMANENT GUARD. When the file can't even be removed, it is still
     /// forgotten, even by a store opened after the app was killed: none
-    /// reads it, and the first that can deletes it. The nudge choice goes
-    /// with it, the same as when it could be removed.
+    /// reads it, and the first that can deletes it. The nudge choice stays,
+    /// the same as when it could be removed.
     @Test(.enabled(if: canLockFiles, "file permissions don't stop root"))
     func aFileForgottenWhileItCouldNotBeRemovedNeverComesBack() throws {
         let (folder, url, marker, _) = try Self.earlierFile()
@@ -575,10 +636,10 @@ struct NeedsYouFlowTests {
         #expect(relaunched.receipts.isEmpty)
         #expect(!FileManager.default.fileExists(atPath: url.path))
         #expect(!FileManager.default.fileExists(atPath: marker.path))
-        #expect(relaunched.nudges == .notAsked, "never read, so its choice went with it")
+        #expect(relaunched.nudges == .declined, "kept apart, so it stays")
         let third = TaskStore(fileURL: url, forgetMarker: marker)
         #expect(third.receipts.isEmpty)
-        #expect(third.nudges == .notAsked)
+        #expect(third.nudges == .declined)
     }
 
     /// PERMANENT GUARD. Forget everything deletes the file first, even when
@@ -595,9 +656,13 @@ struct NeedsYouFlowTests {
         #expect(store.receipts.isEmpty)
         #expect(TaskStore(fileURL: url, forgetMarker: marker).receipts.isEmpty, "a new launch never reads it")
         // A later change, once the folder lets go, deletes it and writes
-        // only what is in memory now.
+        // only what is in memory now: a new task, and not the old receipt.
         try Self.setWritable(folder: folder, true)
         store.setNudges(.allowed)
+        #expect(!FileManager.default.fileExists(atPath: url.path), "only the choice is left, and it is kept apart")
+        let engine = LocalFakeEngine(rule: .isolated(), origin: Self.base)
+        engine.start(SampleTasks.plan)
+        store.keep(engine)
         let data = try Data(contentsOf: url)
         #expect(!String(decoding: data, as: UTF8.self).contains("Maple Dental"))
         let next = TaskStore(fileURL: url, forgetMarker: marker)
@@ -633,28 +698,19 @@ struct NeedsYouFlowTests {
         #expect(!FileManager.default.fileExists(atPath: marker.path))
     }
 
-    /// The file lives in the app's own folder, named by whoever opens the
-    /// store, never by a name written in the code. The marker has a folder
-    /// of its own beside the file's.
+    /// The file lives in the app's own folder. The marker has a folder of
+    /// its own beside the file's. `DiskNameTests` checks the folder's name.
     @Test func theStoreLivesInTheAppsFolderAndTheMarkerInOneOfItsOwn() {
         let base = URL(fileURLWithPath: "/tmp/support")
-        let (file, marker) = TaskStore.location(base: base, app: "com.example.app")
-        let root = base.appendingPathComponent("com.example.app")
+        let (file, marker) = TaskStore.location(base: base, app: TaskStore.appFolder)
+        let root = base.appendingPathComponent(TaskStore.appFolder)
         #expect(file.deletingLastPathComponent().deletingLastPathComponent().path == root.path)
         #expect(marker.deletingLastPathComponent().deletingLastPathComponent().path == root.path)
         #expect(marker.deletingLastPathComponent() != file.deletingLastPathComponent())
         #expect(!marker.path.hasPrefix(file.deletingLastPathComponent().path))
         #expect(file.lastPathComponent == "tasks.json")
-        let other = TaskStore.location(base: base, app: "org.example.other")
-        #expect(other.file != file, "another app's folder is another place")
-    }
-
-    /// PERMANENT GUARD. The folder is named by the app's bundle, so no name
-    /// the code spells, the product's or the codename, is written on disk.
-    @Test func theAppsFolderIsItsBundleIdentifier() {
-        #expect(TaskStore.appFolder(.main) == Bundle.main.bundleIdentifier ?? "kept-tasks")
-        let empty = Bundle(path: FileManager.default.temporaryDirectory.path)
-        #expect(empty.map { TaskStore.appFolder($0) } == "kept-tasks")
+        let other = TaskStore.location(base: base, app: "other-folder")
+        #expect(other.file != file, "another folder is another place")
     }
 
     /// A file read late never takes back what changed since launch.
@@ -810,6 +866,8 @@ struct NeedsYouFlowTests {
 
     // MARK: Only the app's own rule
 
+    /// PERMANENT GUARD. Only the rule Today asks through can pin a
+    /// question, so no other can be answered from its card.
     @Test func aQuestionFromAForeignRuleIsNeverPinned() throws {
         let (engine, task) = Self.atQuestion(rule: .isolated())
         let feed = Feed.build(from: [], needsYou: NeedsYou(rule: .isolated()), tasks: engine, now: Self.base + 60)
@@ -841,6 +899,15 @@ struct NeedsYouFlowTests {
             }
         }
     }
+
+    /// After the system said no, the line says where nudges can be turned
+    /// on. After No thanks it doesn't: the system was never asked, so
+    /// Settings has nothing to turn on.
+    @Test func onlyTheSystemsNoPointsToSettings() {
+        #expect(NudgeWords.offBySystem.contains(NudgeWords.settingsName))
+        #expect(NudgeWords.offBySystem.hasPrefix(NudgeWords.off.dropLast()))
+        #expect(!NudgeWords.off.contains("Settings"))
+    }
 }
 
 /// Counts calls from any thread.
@@ -861,6 +928,6 @@ extension ReceiptWords {
 extension NudgeWords {
     /// Every nudge line a person can see or hear, the lock screen's included.
     static var all: [String] {
-        [question("Pip"), on, offerTitle, offerDetail, allowTitle, declineTitle, off]
+        [question("Pip"), on, offerTitle, offerDetail, allowTitle, declineTitle, off, offBySystem]
     }
 }

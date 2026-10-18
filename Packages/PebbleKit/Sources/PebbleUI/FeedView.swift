@@ -143,7 +143,7 @@ final class FeedModel: ObservableObject {
             hops.add { self?.storeChanged() }
         }
         // Forget everything in another window forgets here too.
-        flow?.onForget(in: window) { [weak self] in self?.forgotten() }
+        flow?.onForget(in: window) { [weak self] in self?.forgotten($0) }
     }
 
     /// Returns once every hop queued so far has run, without holding this
@@ -247,7 +247,7 @@ final class FeedModel: ObservableObject {
     /// True while Forget everything has anything here to take: a task, a
     /// receipt, or a task kept from before with no engine to pick it up.
     var hasSomethingToForget: Bool {
-        hasTasks || store.map { !$0.receipts.isEmpty || !$0.tasks.isEmpty } ?? false
+        hasTasks || store?.holdsSomething == true
     }
 
     /// True only while this task's question is pinned in Needs you, the one
@@ -447,17 +447,18 @@ final class FeedModel: ObservableObject {
     ///
     /// Receipts, saved tasks and nudges go too, with or without an engine
     /// and with or without a task, and every other window forgets with
-    /// this one.
+    /// this one and shows the same lines. Only this one says them aloud,
+    /// so VoiceOver hears them once.
     @discardableResult
     func forgetTasks() -> ClearedTasks {
-        let hadReceipts = store.map { !$0.receipts.isEmpty || !$0.tasks.isEmpty } ?? false
-        forgotten()
+        let hadReceipts = store?.holdsSomething == true
+        forgotten(.init())
         let cleared = tasks?.clear() ?? .none
-        flow?.forget()
+        let what = NeedsYouFlow.Forgotten(something: cleared.forgotten > 0 || hadReceipts,
+                                          underway: cleared.underwayLine)
+        if let flow { flow.forget(what) } else { forgotten(what) }
         refresh()
-        if cleared.forgotten > 0 || hadReceipts { tasksForgotten = true }
         if let line = cleared.underwayLine {
-            forgotUnderway = line
             announce(TaskAnnouncer.Line(text: line, urgent: true))
         }
         return cleared
@@ -467,7 +468,8 @@ final class FeedModel: ObservableObject {
     /// another window: a task's question or result open here closes, and
     /// the ids of yeses go. A late yes for a forgotten task is still
     /// refused through `taskAsked`, so these ids have nothing left to guard.
-    private func forgotten() {
+    /// The lines about what went show here as in the window it ran in.
+    private func forgotten(_ what: NeedsYouFlow.Forgotten) {
         if let reviewing, askedBy[reviewing.id] != nil || taskAsked[reviewing.id] != nil
             || tasks?.tasks.contains(where: { $0.question?.id == reviewing.id }) == true {
             self.reviewing = nil
@@ -476,6 +478,8 @@ final class FeedModel: ObservableObject {
         askedBy.removeAll()
         usedYes.removeAll()
         rebuild()
+        if what.something { tasksForgotten = true }
+        if let line = what.underway { forgotUnderway = line }
     }
 
     /// The person has read the line kept after forgetting.
@@ -937,12 +941,14 @@ struct FocusScroller: View {
             .onChange(of: flow.focus, initial: true) { _, id in
                 guard let id, flow.opens(in: window) else { return }
                 // A beat later, once Today is in front and the card in place.
+                // The flow looks again then, since the home screen may have
+                // let the nudge go in between.
                 Task { @MainActor in
-                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.35)) {
-                        scroller.scrollTo(id, anchor: .top)
-                    }
-                    focusCard(id)
-                    flow.focus = nil
+                    flow.bringIntoView(id, in: window, scroll: { id in
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.35)) {
+                            scroller.scrollTo(id, anchor: .top)
+                        }
+                    }, focusCard: focusCard)
                 }
             }
             .accessibilityHidden(true)

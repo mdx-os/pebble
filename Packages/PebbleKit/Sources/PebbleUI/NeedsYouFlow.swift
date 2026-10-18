@@ -81,12 +81,14 @@ final class NeedsYouFlow: ObservableObject {
     /// Says a line to VoiceOver. Tests replace it to hear what would be said.
     var announce: @MainActor (String) -> Void = NeedsYouFlow.post
 
-    /// A question pinned now, the nudge it would get, and the rule it was
-    /// asked through, for its time left.
+    /// A question pinned now, the task that asked it, and the rule it was
+    /// asked through, for its time left. Its nudge is made only as it is
+    /// sent, so it says the name the person has chosen by then.
     private struct Waiting {
-        let nudge: QuestionNudge
+        let taskID: String
         let question: ConfirmationRequest
         let rule: AskFirst
+        var id: String { QuestionNudge.nudgeID(for: question) }
     }
 
     /// What one window's Today has told the flow.
@@ -102,7 +104,7 @@ final class NeedsYouFlow: ObservableObject {
     /// The window that came to the front last. Only it acts on a nudge.
     private var front: UUID?
     /// What each window does when Forget everything runs in any of them.
-    private var forgetHooks: [UUID: @MainActor () -> Void] = [:]
+    private var forgetHooks: [UUID: @MainActor (Forgotten) -> Void] = [:]
     /// Some window is in front, so a waiting question is already on screen.
     var isActive: Bool { windows.isEmpty ? soloActive : windows.values.contains(where: \.active) }
     /// In front or not, before any window has said.
@@ -110,7 +112,7 @@ final class NeedsYouFlow: ObservableObject {
     /// The questions pinned now, in every window, each once.
     private var waiting: [Waiting] {
         var seen: Set<String> = []
-        return windows.values.flatMap(\.waiting).filter { seen.insert($0.nudge.id).inserted }
+        return windows.values.flatMap(\.waiting).filter { seen.insert($0.id).inserted }
     }
     /// A cloud preview waits for its answer in some window.
     private var previewWaiting: Bool { windows.values.contains(where: \.previewWaiting) }
@@ -143,8 +145,7 @@ final class NeedsYouFlow: ObservableObject {
     /// is never pinned, so never nudged.
     func pinned(_ tasks: [AgentTask], rule: AskFirst, from window: UUID) {
         windows[window, default: Window(active: soloActive)].waiting = tasks.compactMap { task in
-            task.question.map { Waiting(nudge: QuestionNudge(question: $0, taskID: task.id, agentName: agentName()),
-                                        question: $0, rule: rule) }
+            task.question.map { Waiting(taskID: task.id, question: $0, rule: rule) }
         }
         update()
     }
@@ -158,8 +159,9 @@ final class NeedsYouFlow: ObservableObject {
     }
 
     /// Runs `hook` in `window` whenever Forget everything runs, from any
-    /// window, so none keeps what another forgot.
-    func onForget(in window: UUID, _ hook: @escaping @MainActor () -> Void) {
+    /// window, so none keeps what another forgot, and each says the same
+    /// about what went.
+    func onForget(in window: UUID, _ hook: @escaping @MainActor (Forgotten) -> Void) {
         forgetHooks[window] = hook
     }
 
@@ -182,6 +184,17 @@ final class NeedsYouFlow: ObservableObject {
         return true
     }
 
+    /// Brings the card for `id` into view in `window`, a beat after its
+    /// nudge was opened, then lets go. Only if it is still the one to bring
+    /// in, so a nudge `takesOpened` let go in the meantime never scrolls
+    /// Today or moves VoiceOver to a card behind the first run or a cover.
+    func bringIntoView(_ id: String, in window: UUID, scroll: (String) -> Void, focusCard: (String) -> Void) {
+        guard focus == id, opens(in: window) else { return }
+        scroll(id)
+        focusCard(id)
+        focus = nil
+    }
+
     /// A cloud preview in `window` started or stopped waiting for its
     /// answer. Once none waits, a question may nudge again.
     func preview(waiting: Bool, from window: UUID) {
@@ -192,8 +205,8 @@ final class NeedsYouFlow: ObservableObject {
 
     private func update() {
         let waiting = waiting
-        knownTasks.formUnion(waiting.map(\.nudge.taskID))
-        let open = Set(waiting.map(\.nudge.id))
+        knownTasks.formUnion(waiting.map(\.taskID))
+        let open = Set(waiting.map(\.id))
         let closed = Set(posted.keys).subtracting(open)
         if !closed.isEmpty {
             notifier?.remove(Array(closed))
@@ -216,7 +229,7 @@ final class NeedsYouFlow: ObservableObject {
             self.store.setNudges(granted ? .allowed : .denied)
             // The offer has gone from under VoiceOver either way, so a line
             // is said either way.
-            if granted { self.announce(NudgeWords.on) } else { self.sayNudgesAreOff() }
+            if granted { self.announce(NudgeWords.on) } else { self.sayNudgesAreOff(NudgeWords.offBySystem) }
             self.asking = nil
             self.postIfAway()
         }
@@ -226,14 +239,14 @@ final class NeedsYouFlow: ObservableObject {
     func declineNudges() {
         offersNudges = false
         store.setNudges(.declined)
-        sayNudgesAreOff()
+        sayNudgesAreOff(NudgeWords.off)
     }
 
     /// The offer goes from under VoiceOver, so the line that takes its
     /// place is said as well as shown.
-    private func sayNudgesAreOff() {
-        nudgeNote = NudgeWords.off
-        announce(NudgeWords.off)
+    private func sayNudgesAreOff(_ line: String) {
+        nudgeNote = line
+        announce(line)
     }
 
     /// Waits for the system's answers, for tests.
@@ -298,26 +311,34 @@ final class NeedsYouFlow: ObservableObject {
         focus = taskID
     }
 
+    /// What Forget everything took, as every window is told.
+    struct Forgotten: Equatable {
+        /// Something was there to forget: a task, a receipt or a saved task.
+        var something = false
+        /// The line kept on Today while a step said yes to may be done.
+        var underway: String?
+    }
+
     /// Forget everything: receipts and saved tasks go, and so does every
     /// nudge about a question, from this launch or before, and a nudge
-    /// opened and not yet handed over. Every window is told, so none keeps
-    /// what another forgot.
-    func forget() {
+    /// opened and not yet handed over. Every window is told what went, so
+    /// none keeps what another forgot and all say the same.
+    func forget(_ forgotten: Forgotten = Forgotten()) {
         notifier?.forget()
         posted = [:]
         told = []
         knownTasks = []
         focus = nil
         store.forget()
-        for hook in forgetHooks.values { hook() }
+        for hook in forgetHooks.values { hook(forgotten) }
     }
 
     private func postIfAway() {
         guard !isActive, !previewWaiting, store.nudges == .allowed, let notifier else { return }
-        for item in waiting where !told.contains(item.nudge.id) {
-            let nudge = item.nudge
+        for item in waiting where !told.contains(item.id) {
             // Left for next time, when it will have less time still.
             guard let left = item.rule.timeLeft(item.question), left >= Self.leastTimeLeft else { continue }
+            let nudge = QuestionNudge(question: item.question, taskID: item.taskID, agentName: agentName())
             told.insert(nudge.id)
             posted[nudge.id] = now()
             notifier.post(nudge, after: Self.nudgeDelay)
@@ -330,6 +351,28 @@ final class NeedsYouFlow: ObservableObject {
 }
 
 #if canImport(UserNotifications)
+/// The few things a nudge needs from the system's notification center, so
+/// tests can stand in for it. Shown notifications are given as their
+/// requests, which is all that is read of them.
+protocol NudgeCenter: AnyObject, Sendable {
+    func add(_ request: UNNotificationRequest) async
+    func pending() async -> [UNNotificationRequest]
+    func delivered() async -> [UNNotificationRequest]
+    func removePending(_ ids: [String])
+    func removeDelivered(_ ids: [String])
+}
+
+/// The system's own notification center.
+final class SystemNudgeCenter: NudgeCenter, @unchecked Sendable {
+    private var center: UNUserNotificationCenter { .current() }
+
+    func add(_ request: UNNotificationRequest) async { try? await center.add(request) }
+    func pending() async -> [UNNotificationRequest] { await center.pendingNotificationRequests() }
+    func delivered() async -> [UNNotificationRequest] { await center.deliveredNotifications().map(\.request) }
+    func removePending(_ ids: [String]) { center.removePendingNotificationRequests(withIdentifiers: ids) }
+    func removeDelivered(_ ids: [String]) { center.removeDeliveredNotifications(withIdentifiers: ids) }
+}
+
 /// Nudges through the system's local notifications. Nothing leaves the
 /// device: a nudge is made and shown here.
 ///
@@ -342,13 +385,25 @@ public final class LocalQuestionNotifier: NSObject, QuestionNotifying, UNUserNot
     private var handler: (@MainActor @Sendable (String) -> Void)?
     /// A nudge opened before anything listened.
     private var waitingOpen: String?
-    private var isInstalled = false
+    /// The center nudges go to. Only the app's own notifier, made the
+    /// delegate at launch, has the system's; anywhere else, as in a test,
+    /// there is none unless one is given.
+    private var center: (any NudgeCenter)?
 
-    /// True once `install` ran, so there is a notification center to use.
-    var installed: Bool {
+    override init() {}
+
+    /// A notifier that uses `center`, for tests.
+    init(center: any NudgeCenter) {
+        self.center = center
+    }
+
+    /// True once there is a notification center to use.
+    var installed: Bool { currentCenter != nil }
+
+    private var currentCenter: (any NudgeCenter)? {
         lock.lock()
         defer { lock.unlock() }
-        return isInstalled
+        return center
     }
 
     /// Where a nudge's task id is kept. The only thing it carries.
@@ -361,7 +416,7 @@ public final class LocalQuestionNotifier: NSObject, QuestionNotifying, UNUserNot
     public func install() {
         UNUserNotificationCenter.current().delegate = self
         lock.lock()
-        isInstalled = true
+        if center == nil { center = SystemNudgeCenter() }
         lock.unlock()
     }
 
@@ -391,67 +446,92 @@ public final class LocalQuestionNotifier: NSObject, QuestionNotifying, UNUserNot
     }
 
     public func post(_ nudge: QuestionNudge, after delay: TimeInterval) {
-        guard installed else { return }
-        let trigger = delay > 0 ? UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false) : nil
-        let request = UNNotificationRequest(identifier: nudge.id, content: Self.content(for: nudge), trigger: trigger)
-        let round = currentRound
-        #if os(iOS)
-        // Posted as the app goes to the background, so it asks for a moment
-        // more, or it could be suspended before the system has the nudge.
-        // If the moment runs out first, it is given back all the same.
-        Task { @MainActor in
+        guard let center = currentCenter else { return }
+        let stamp = stamp(for: nudge.id)
+        let adding = Task { @MainActor in
+            let trigger = delay > 0 ? UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false) : nil
+            let request = UNNotificationRequest(identifier: nudge.id, content: Self.content(for: nudge), trigger: trigger)
+            #if os(iOS)
+            // Posted as the app goes to the background, so it asks for a
+            // moment more, or it could be suspended before the system has
+            // the nudge. If the moment runs out first, it is given back all
+            // the same.
             let moment = BackgroundMoment()
             moment.begin()
-            try? await UNUserNotificationCenter.current().add(request)
-            self.takeBackIfCleared(nudge.id, postedIn: round)
+            #endif
+            await center.add(request)
+            self.takeBackIfCleared(nudge.id, postedAt: stamp)
+            #if os(iOS)
             moment.end()
+            #endif
         }
-        #else
-        UNUserNotificationCenter.current().add(request) { [weak self] _ in self?.takeBackIfCleared(nudge.id, postedIn: round) }
-        #endif
+        lock.lock()
+        lastPost = adding
+        lock.unlock()
     }
 
-    /// Goes up each time every nudge is taken away, so a nudge still on its
-    /// way to the system then is taken away once it lands.
-    private var round = 0
-    private var currentRound: Int {
+    /// The last nudge on its way to the system, until it lands and has been
+    /// taken back if it had to be. Tests wait on it.
+    var posting: Task<Void, Never>? {
         lock.lock()
         defer { lock.unlock() }
-        return round
+        return lastPost
+    }
+    private var lastPost: Task<Void, Never>?
+
+    /// Goes up each time every nudge is taken away, and `generations` each
+    /// time one is, so a nudge still on its way to the system then is taken
+    /// away once it lands.
+    private var round = 0
+    private var generations: [String: Int] = [:]
+
+    private func stamp(for id: String) -> (round: Int, generation: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (round, generations[id, default: 0])
     }
 
-    private func takeBackIfCleared(_ id: String, postedIn posted: Int) {
-        guard currentRound != posted else { return }
+    private func takeBackIfCleared(_ id: String, postedAt posted: (round: Int, generation: Int)) {
+        guard stamp(for: id) != posted else { return }
         remove([id])
     }
 
     public func remove(_ ids: [String]) {
-        guard installed else { return }
-        let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(withIdentifiers: ids)
-        center.removeDeliveredNotifications(withIdentifiers: ids)
+        guard let center = currentCenter else { return }
+        lock.lock()
+        for id in ids { generations[id, default: 0] += 1 }
+        lock.unlock()
+        center.removePending(ids)
+        center.removeDelivered(ids)
     }
 
     /// Takes away both kinds, the ones still to come and the ones shown,
     /// and only in the questions' thread: anything else the app may show
     /// stays.
     public func removeAll() {
-        // Only the app's own notifier, made the delegate at launch, has a
-        // notification center; anywhere else, as in a test, there is none.
-        // The same goes for `post` and `remove`.
-        guard installed else { return }
+        guard let center = currentCenter else { return }
         lock.lock()
         round += 1
         lock.unlock()
-        UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
-            let ids = requests.filter { $0.content.threadIdentifier == Self.thread }.map(\.identifier)
-            if !ids.isEmpty { UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ids) }
+        let clearing = Task {
+            let pending = await center.pending().filter { $0.content.threadIdentifier == Self.thread }.map(\.identifier)
+            if !pending.isEmpty { center.removePending(pending) }
+            let shown = await center.delivered().filter { $0.content.threadIdentifier == Self.thread }.map(\.identifier)
+            if !shown.isEmpty { center.removeDelivered(shown) }
         }
-        UNUserNotificationCenter.current().getDeliveredNotifications { shown in
-            let ids = shown.map(\.request).filter { $0.content.threadIdentifier == Self.thread }.map(\.identifier)
-            if !ids.isEmpty { UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ids) }
-        }
+        lock.lock()
+        lastClear = clearing
+        lock.unlock()
     }
+
+    /// The last `removeAll` under way, until both kinds are gone. Tests
+    /// wait on it.
+    var clearing: Task<Void, Never>? {
+        lock.lock()
+        defer { lock.unlock() }
+        return lastClear
+    }
+    private var lastClear: Task<Void, Never>?
 
     public func forget() {
         lock.lock()
@@ -598,9 +678,57 @@ struct ReceiptCard: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dynamicTypeSize) private var typeSize
     @ScaledMetric(relativeTo: .footnote) private var labelWidth: CGFloat = 92
+    /// For tests: the rows' and the header's layout set by hand, so the
+    /// layout a text size picks can be told from the others at that size.
+    var rowsStack: Bool?
+    var headerStacks: Bool?
 
     private var shape: RoundedRectangle {
         RoundedRectangle(cornerRadius: Theme.corner, style: .continuous)
+    }
+
+    /// At accessibility sizes the label, the example marker and the time
+    /// each get a line, so none is squeezed. The marker is what says that
+    /// nothing really happened, so it must always be read whole.
+    static func stacksHeader(at size: DynamicTypeSize) -> Bool {
+        size.isAccessibilitySize
+    }
+
+    @ViewBuilder
+    private var header: some View {
+        let label = Label {
+            Text(ReceiptWords.label)
+        } icon: {
+            Image(systemName: FeedCard.symbol(.receipt))
+                .foregroundStyle(Theme.accentSymbol)
+        }
+        .font(.footnote.weight(.semibold))
+        .foregroundStyle(Theme.secondaryText)
+        let marker = Text(FeedWords.exampleMarker)
+            .font(.caption.weight(.medium))
+            .foregroundStyle(Theme.secondaryText)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Color.primary.opacity(Theme.fieldTint), in: Capsule())
+        let when = Text(time)
+            .font(.footnote)
+            .foregroundStyle(Theme.secondaryText)
+        if headerStacks ?? Self.stacksHeader(at: typeSize) {
+            VStack(alignment: .leading, spacing: 6) {
+                label
+                    .fixedSize(horizontal: false, vertical: true)
+                if receipt.isSample { marker.fixedSize(horizontal: false, vertical: true) }
+                when
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                label
+                if receipt.isSample { marker }
+                Spacer(minLength: 8)
+                when
+            }
+        }
     }
 
     /// The summary for VoiceOver. An example says so first.
@@ -621,28 +749,7 @@ struct ReceiptCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Label {
-                        Text(ReceiptWords.label)
-                    } icon: {
-                        Image(systemName: FeedCard.symbol(.receipt))
-                            .foregroundStyle(Theme.accentSymbol)
-                    }
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(Theme.secondaryText)
-                    if receipt.isSample {
-                        Text(FeedWords.exampleMarker)
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(Theme.secondaryText)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Color.primary.opacity(Theme.fieldTint), in: Capsule())
-                    }
-                    Spacer(minLength: 8)
-                    Text(time)
-                        .font(.footnote)
-                        .foregroundStyle(Theme.secondaryText)
-                }
+                header
                 Text(receipt.title)
                     .font(.system(.headline, design: .rounded))
                     .foregroundStyle(.primary)
@@ -654,9 +761,12 @@ struct ReceiptCard: View {
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(spoken)
+            // The receipt as the UI tests find it: one element, its words
+            // the summary VoiceOver reads.
+            .accessibilityIdentifier("receipt")
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(rows, id: \.label) { row in
-                    LabeledRow(stacked: ConfirmationSheet.stacksLabels(at: typeSize), labelWidth: labelWidth,
+                    LabeledRow(stacked: rowsStack ?? ConfirmationSheet.stacksLabels(at: typeSize), labelWidth: labelWidth,
                                spacing: 10) {
                         Text(row.label)
                             .foregroundStyle(Theme.secondaryText)
@@ -678,7 +788,7 @@ struct ReceiptCard: View {
         .background(Theme.card(scheme), in: shape)
         .overlay(shape.stroke(Theme.hairline(scheme), lineWidth: 1))
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("receipt")
+        .accessibilityIdentifier("receiptCard")
     }
 }
 

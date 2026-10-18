@@ -189,9 +189,14 @@ public struct QuestionNudge: Sendable, Equatable {
     public let title: String
 
     public init(question: ConfirmationRequest, taskID: String, agentName: String) {
-        self.id = "question:\(question.id.uuidString)"
+        self.id = Self.nudgeID(for: question)
         self.taskID = taskID
         self.title = NudgeWords.question(agentName)
+    }
+
+    /// The id the nudge for `question` has, whatever name it says.
+    public static func nudgeID(for question: ConfirmationRequest) -> String {
+        "question:\(question.id.uuidString)"
     }
 }
 
@@ -229,10 +234,12 @@ public protocol QuestionNotifying: AnyObject, Sendable {
 /// Forget everything deletes the file first, read or not. If it can't be
 /// deleted, a small marker in a folder of its own says a forget is still
 /// owed, so even a store opened after the app was killed never reads the
-/// file again and deletes it as soon as it can. A file that couldn't be
-/// read when it was forgotten takes its nudge choice with it, so the offer
-/// may come once more, still only when a question waits. Clearing the last
-/// thing it holds is the same: a file that won't go is owed a forget.
+/// file again and deletes it as soon as it can. Clearing the last thing it
+/// holds is the same: a file that won't go is owed a forget.
+///
+/// The nudge choice is also kept beside the marker, outside the file and
+/// readable while the device is locked, so Forget everything keeps it the
+/// same way whether or not the file could be read.
 ///
 /// A write that fails leaves the store dirty, and each read and change
 /// tries it again, so a receipt cleared here never comes back from the
@@ -248,6 +255,8 @@ public final class TaskStore: @unchecked Sendable {
             self.receipts = receipts
             self.nudges = nudges
         }
+
+        var holdsSomething: Bool { !tasks.isEmpty || !receipts.isEmpty }
     }
 
     /// Receipts kept at most. Past this the oldest go.
@@ -261,6 +270,12 @@ public final class TaskStore: @unchecked Sendable {
     /// Says a forget is owed. In a folder apart from the file, so a folder
     /// that won't let the file go can't keep this from being written.
     private let markerURL: URL?
+    /// The nudge choice, in the marker's folder, apart from what Forget
+    /// everything deletes. It holds nothing the person said or did.
+    private let choiceURL: URL?
+    /// The choice was read from `choiceURL` or written there, so it, not
+    /// the file's copy, is the one that stands.
+    private var choiceKnown = false
     private let lock = NSLock()
     private var state = State()
     /// False while a file is there but can't be read yet, or must still be
@@ -292,8 +307,10 @@ public final class TaskStore: @unchecked Sendable {
         self.fileURL = fileURL
         knownURL = fileURL
         markerURL = forgetMarker
+        choiceURL = Self.choice(beside: forgetMarker)
         loaded = fileURL == nil
         lock.lock()
+        readChoice()
         if let forgetMarker, FileManager.default.fileExists(atPath: forgetMarker.path) { mustDelete = true }
         loadIfNeeded()
         // Whatever was read now is picked up by `restore`, so none of it
@@ -310,8 +327,10 @@ public final class TaskStore: @unchecked Sendable {
         fileURL = nil
         knownURL = forgets
         markerURL = forgetMarker
+        choiceURL = Self.choice(beside: forgetMarker)
         loaded = true
         lock.lock()
+        readChoice()
         if let forgetMarker, FileManager.default.fileExists(atPath: forgetMarker.path) {
             mustDelete = true
             deleteIfOwed()
@@ -340,10 +359,14 @@ public final class TaskStore: @unchecked Sendable {
                 root.appendingPathComponent("pending", isDirectory: true).appendingPathComponent("tasks-forgotten"))
     }
 
-    /// The app's folder in Application Support: its bundle identifier, as
-    /// the system names its other folders, so no name is written here.
-    package static func appFolder(_ bundle: Bundle = .main) -> String {
-        bundle.bundleIdentifier ?? "kept-tasks"
+    /// The app's folder in Application Support. A plain name of its own,
+    /// not the bundle identifier, which spells the codename: a name written
+    /// on disk would outlive any rename.
+    package static let appFolder = "kept-tasks"
+
+    /// The nudge choice's file, in the marker's folder.
+    private static func choice(beside marker: URL?) -> URL? {
+        marker?.deletingLastPathComponent().appendingPathComponent("nudge-choice")
     }
 
     /// The one store on this device.
@@ -351,15 +374,21 @@ public final class TaskStore: @unchecked Sendable {
         sharedLock.lock()
         defer { sharedLock.unlock() }
         if let shared { return shared }
+        let store = try opened(fileManager: fileManager)
+        shared = store
+        return store
+    }
+
+    /// A store on this device, in the app's folder, opened afresh. Only
+    /// `onDevice` keeps one; tests open their own.
+    package static func opened(fileManager: FileManager) throws -> TaskStore {
         let base = try fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask,
                                        appropriateFor: nil, create: true)
-        let (file, marker) = location(base: base, app: appFolder())
+        let (file, marker) = location(base: base, app: appFolder)
         var folder = file.deletingLastPathComponent()
         try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
         try MemoryStore.excludeFromBackup(&folder)
-        let store = TaskStore(fileURL: file, forgetMarker: marker)
-        shared = store
-        return store
+        return TaskStore(fileURL: file, forgetMarker: marker)
     }
 
     /// For when `onDevice` couldn't open its folder: keeps everything in
@@ -368,14 +397,20 @@ public final class TaskStore: @unchecked Sendable {
     public static func forgetOnly(fileManager: FileManager = .default) -> TaskStore {
         guard let base = try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask,
                                               appropriateFor: nil, create: false) else { return inMemory() }
-        let (file, marker) = location(base: base, app: appFolder())
+        let (file, marker) = location(base: base, app: appFolder)
         return TaskStore(forgetOnly: file, forgetMarker: marker)
     }
+
+    /// The file Forget everything deletes, read or not.
+    package var forgets: URL? { knownURL }
 
     public var tasks: [SavedTask] { read(\.tasks) }
     /// Newest first.
     public var receipts: [Receipt] { read(\.receipts).sorted { ($0.endedAt, $0.id.uuidString) > ($1.endedAt, $1.id.uuidString) } }
     public var nudges: NudgeChoice { read(\.nudges) }
+    /// True while there is a receipt or a saved task, for Forget everything.
+    /// Read as kept, without the sorting `receipts` does.
+    public var holdsSomething: Bool { read(\.holdsSomething) }
 
     // MARK: Changes
 
@@ -521,6 +556,7 @@ public final class TaskStore: @unchecked Sendable {
         body(&next)
         let changed = next != state
         if changed {
+            if next.nudges != state.nudges { writeChoice(next.nudges) }
             if !loaded {
                 if next.tasks != state.tasks { changedTasks = true }
                 if next.nudges != state.nudges { changedNudges = true }
@@ -577,7 +613,9 @@ public final class TaskStore: @unchecked Sendable {
         let late = saved.tasks.filter { task in !here.contains { $0.id == task.id } }
         var merged = saved
         merged.tasks = here + late
-        if changedNudges { merged.nudges = state.nudges }
+        if changedNudges || choiceKnown { merged.nudges = state.nudges }
+        // A file from before the choice was kept apart hands it over once.
+        if !choiceKnown && merged.nudges != .notAsked { writeChoice(merged.nudges) }
         for receipt in state.receipts where !merged.receipts.contains(where: { $0.id == receipt.id }) {
             merged.receipts.append(receipt)
         }
@@ -627,6 +665,35 @@ public final class TaskStore: @unchecked Sendable {
         try? Data().write(to: markerURL, options: options)
     }
 
+    /// Reads the nudge choice kept apart, when there is one. Called with
+    /// the lock held.
+    private func readChoice() {
+        guard let choiceURL, let data = try? Data(contentsOf: choiceURL),
+              let choice = NudgeChoice(rawValue: String(decoding: data, as: UTF8.self)) else { return }
+        state.nudges = choice
+        choiceKnown = true
+    }
+
+    /// Keeps the nudge choice apart from the file, the way the marker is
+    /// kept: no file protection, so it can be read while the device is
+    /// locked. Not asked is kept as no file at all. Called with the lock held.
+    private func writeChoice(_ choice: NudgeChoice) {
+        guard let choiceURL else { return }
+        let manager = FileManager.default
+        if choice == .notAsked {
+            try? manager.removeItem(at: choiceURL)
+            choiceKnown = !manager.fileExists(atPath: choiceURL.path)
+            return
+        }
+        try? manager.createDirectory(at: choiceURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        #if os(macOS)
+        let options: Data.WritingOptions = [.atomic]
+        #else
+        let options: Data.WritingOptions = [.atomic, .noFileProtection]
+        #endif
+        choiceKnown = (try? Data(choice.rawValue.utf8).write(to: choiceURL, options: options)) != nil
+    }
+
     /// Every file a store at `url` may leave.
     private static func leftovers(of url: URL) -> [URL] {
         [url, sibling(of: url, ".next")]
@@ -652,10 +719,11 @@ public final class TaskStore: @unchecked Sendable {
         guard let fileURL, let stagingURL else { return }
         let manager = FileManager.default
         dirty = false
-        // Nothing left to keep, so no file at all. One that won't go is owed
-        // a forget, written down, so what was cleared never comes back from
-        // it, on this launch or the next.
-        if next == State() {
+        // Nothing left to keep, so no file at all: a nudge choice kept apart
+        // needs none. One that won't go is owed a forget, written down, so
+        // what was cleared never comes back from it, on this launch or the
+        // next.
+        if next == State() || (choiceKnown && !next.holdsSomething) {
             try? manager.removeItem(at: fileURL)
             try? manager.removeItem(at: stagingURL)
             if Self.leftovers(of: fileURL).contains(where: { manager.fileExists(atPath: $0.path) }) {
@@ -730,6 +798,15 @@ public enum NudgeWords {
     public static let offerDetail = "I'll nudge you only when I need your yes. Your lock screen will just say I have a question, never what it is."
     public static let allowTitle = "Yes, nudge me"
     public static let declineTitle = "No thanks"
-    /// After No thanks, or when the system said no.
+    /// After No thanks.
     public static let off = "Okay, no nudges. Your questions will wait for you here."
+    /// When the system said no. Only then can Settings turn them on: after
+    /// No thanks the system was never asked, so it has nothing to show.
+    public static let offBySystem = "Okay, no nudges. Your questions will wait for you here, and you can turn nudges on in \(settingsName)."
+
+    #if os(macOS)
+    static let settingsName = "System Settings"
+    #else
+    static let settingsName = "Settings"
+    #endif
 }
