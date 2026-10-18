@@ -34,15 +34,18 @@ public struct MemoryNote: Identifiable, Codable, Sendable, Equatable {
 
 /// Where a memory came from.
 ///
-/// On disk this is `{"kind":"toldMe"}`, `{"kind":"fromApp","app":"Calendar"}`
-/// or `{"kind":"inferred"}`. `MemorySourceTests` pins that format. An unknown
-/// kind reads as `inferred`, the least trusted label, rather than breaking
-/// the file.
+/// On disk this is `{"kind":"toldMe"}`, `{"kind":"fromApp","app":"Calendar"}`,
+/// `{"kind":"lookedUp","app":"Riverside Gazette"}` or `{"kind":"inferred"}`.
+/// `MemorySourceTests` pins that format. An unknown kind reads as
+/// `inferred`, the least trusted label, rather than breaking the file.
 public enum MemorySource: Codable, Sendable, Equatable, Hashable {
     /// The person said or typed it.
     case toldMe
     /// Read from a connected app, such as Calendar.
     case fromApp(String)
+    /// A point from something the agent looked into, kept because the
+    /// person tapped Remember. Names the source, such as "Riverside Gazette".
+    case lookedUp(String)
     /// The agent worked it out. It may be wrong.
     case inferred
 
@@ -55,6 +58,7 @@ public enum MemorySource: Codable, Sendable, Equatable, Hashable {
         switch try c.decodeIfPresent(String.self, forKey: .kind) {
         case "toldMe": self = .toldMe
         case "fromApp": self = .fromApp(try c.decodeIfPresent(String.self, forKey: .app) ?? "")
+        case "lookedUp": self = .lookedUp(try c.decodeIfPresent(String.self, forKey: .app) ?? "")
         default: self = .inferred
         }
     }
@@ -66,6 +70,9 @@ public enum MemorySource: Codable, Sendable, Equatable, Hashable {
         case .fromApp(let app):
             try c.encode("fromApp", forKey: .kind)
             try c.encode(app, forKey: .app)
+        case .lookedUp(let source):
+            try c.encode("lookedUp", forKey: .kind)
+            try c.encode(source, forKey: .app)
         case .inferred: try c.encode("inferred", forKey: .kind)
         }
     }
@@ -75,11 +82,19 @@ public enum MemorySource: Codable, Sendable, Equatable, Hashable {
         switch self {
         case .toldMe: return "You told me"
         case .fromApp(let name):
-            let tidy = name.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
-            guard !tidy.isEmpty else { return "From an app" }
-            return "From \(tidy.count > Self.maxAppNameLength ? String(tidy.prefix(Self.maxAppNameLength)) + "..." : tidy)"
+            guard let tidy = Self.tidy(name) else { return "From an app" }
+            return "From \(tidy)"
+        case .lookedUp(let source):
+            guard let tidy = Self.tidy(source) else { return "From something I looked into" }
+            return "From \(tidy)"
         case .inferred: return "My guess"
         }
+    }
+
+    private static func tidy(_ name: String) -> String? {
+        let tidy = name.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
+        guard !tidy.isEmpty else { return nil }
+        return tidy.count > Self.maxAppNameLength ? String(tidy.prefix(Self.maxAppNameLength)) + "..." : tidy
     }
 
     /// SF Symbol for the label.
@@ -87,6 +102,7 @@ public enum MemorySource: Codable, Sendable, Equatable, Hashable {
         switch self {
         case .toldMe: return "person.wave.2"
         case .fromApp: return "app.connected.to.app.below.fill"
+        case .lookedUp: return "doc.text.magnifyingglass"
         case .inferred: return "sparkles"
         }
     }
@@ -190,6 +206,13 @@ public enum MemoryWords {
     public static let summariesGone = "Your morning summaries are gone, and work while you're away is off."
     /// The same, when the summaries' file couldn't be erased either.
     public static let summariesStayed = "Work while you're away is off, but I couldn't erase your morning summaries either."
+    /// Where the notes couldn't be opened, the morning summaries can still
+    /// be forgotten on their own, and the words say the rest stays.
+    public static let forgetSummariesTitle = "Forget morning summaries"
+    public static let forgetSummariesQuestion = "Forget morning summaries?"
+    public static let forgetSummariesDetail = "This erases every morning summary and turns off work while you're away. It can't be undone. Your notes and tasks aren't touched."
+    /// When their file couldn't be erased there.
+    public static let couldNotForgetSummariesAlone = "I turned off work while you're away, but I couldn't erase your morning summaries just now. Please try again in a moment."
     /// The advice that ends a Forget everything line when something stayed.
     /// Whatever is said after such a line goes before it, so it comes last.
     public static let retryAdvice = ["Please try Forget everything again in a moment.", "Please try again in a moment."]
@@ -249,6 +272,9 @@ public final class MemoryStore: @unchecked Sendable {
         case needsWords
         case tooLong
         case notFound
+        /// A point from something looked into that may not be kept: one
+        /// from an example, or one that didn't come with its summary.
+        case notKept
     }
 
     public static let maxLength = 500
@@ -360,11 +386,30 @@ public final class MemoryStore: @unchecked Sendable {
             || FileManager.default.fileExists(atPath: stagingURL.path)
     }
 
-    /// Adds a note. Every writer comes through here, so notes that can't be
-    /// read or opened are refused first, before the words are even looked
-    /// at, and the file is never touched.
+    /// Adds a note. Every writer comes through here or through
+    /// `remember(_:from:at:)`, so notes that can't be read or opened are
+    /// refused first, before the words are even looked at, and the file is
+    /// never touched.
+    ///
+    /// A `.lookedUp` note is refused here, in every build: it may only come
+    /// with the summary it is from, so an example's made up point can't be
+    /// saved as a sourced note by a caller that forgot to ask.
     @discardableResult
     public func remember(_ proposed: String, at date: Date = Date(), source: MemorySource) throws -> Decision {
+        if case .lookedUp = source { return .notKept }
+        return try keep(proposed, at: date, source: source)
+    }
+
+    /// Keeps one point of a summary, in the words and with the source the
+    /// summary gives it. Never one from an example, which has neither.
+    @discardableResult
+    public func remember(_ point: ReconPoint, from summary: ReconSummary, at date: Date = Date()) throws -> Decision {
+        guard !summary.isSample, summary.points.contains(point),
+              let note = summary.note(for: point), let source = summary.memorySource(for: point) else { return .notKept }
+        return try keep(note, at: date, source: source)
+    }
+
+    private func keep(_ proposed: String, at date: Date, source: MemorySource) throws -> Decision {
         lock.lock()
         defer { lock.unlock() }
         var all = try load()

@@ -542,7 +542,8 @@ struct CloudHelpTests {
         _ = await review.shown()
         cloud.setOn(false)
         await controller.settled()
-        #expect(controller.failure == CloudWords.notSent)
+        // Taken away unanswered, so the line never says the person chose.
+        #expect(controller.failure == CloudWords.withdrawn)
         #expect(personTurns(controller).isEmpty)
         #expect(maker.wire.sent.isEmpty)
         // A later line in the same chat is not sent either, and is taken back too.
@@ -554,6 +555,73 @@ struct CloudHelpTests {
         #expect(controller.draft == "Plan my week")
         #expect(review.pending == nil)
         #expect(maker.wire.sent.isEmpty)
+    }
+
+    /// Two lines taken back one after the other, the first still in the
+    /// composer when the second goes, as when a starter is tapped. The line
+    /// says what you wrote is still here, so both are.
+    @Test func twoWithdrawnLinesAreBothStillHere() async throws {
+        let maker = TransportMaker()
+        let cloud = help(CloudHelpSettings(isOn: true), endpoint: endpoint, maker: maker)
+        let controller = chat(cloud)
+        let review = try #require(controller.review)
+        controller.draft = "Plan my week"
+        controller.submit("Plan my week")
+        _ = await review.shown()
+        controller.screenWentAway()
+        await controller.settled()
+        #expect(controller.failure == CloudWords.withdrawn)
+        #expect(controller.draft == "Plan my week")
+        // A second line that isn't the draft, so the draft stays as it is.
+        controller.submit("Write a note to the school")
+        _ = await review.shown()
+        review.cancelPending()
+        await controller.settled()
+        #expect(controller.failure == CloudWords.withdrawn)
+        // The second line first, then the draft that was already there,
+        // each once.
+        #expect(controller.draft == "Write a note to the school\nPlan my week")
+        #expect(personTurns(controller).isEmpty)
+        #expect(maker.wire.sent.isEmpty)
+    }
+
+    /// Send was tapped, and the cloud was off by the time the request would
+    /// go. A yes was given, so the chat never says it was taken away
+    /// unanswered, nor that anyone chose or declined.
+    @Test func aYesThenTheCloudOffInAChatNeverSaysWithdrawn() async throws {
+        let maker = TransportMaker()
+        let cloud = help(CloudHelpSettings(isOn: true), endpoint: endpoint, maker: maker)
+        let controller = chat(cloud)
+        let review = try #require(controller.review)
+        controller.submit("Plan my week")
+        let preview = await review.shown()
+        // In one turn of the main actor, before the reply goes on.
+        review.answer(.send, for: preview.id)
+        cloud.setOn(false)
+        await controller.settled()
+        #expect(maker.wire.sent.isEmpty)
+        let failure = try #require(controller.failure)
+        #expect(failure == CloudWords.turnedOff)
+        #expect(failure != CloudWords.withdrawn)
+        for word in ["chose", "declined"] { #expect(!failure.contains(word), "says: \(word)") }
+    }
+
+    /// Send was tapped, then the reply was stopped before it came. Nothing
+    /// says it was withdrawn or declined, and nothing is sent after Stop.
+    @Test func aYesThenAStopInAChatNeverSaysWithdrawn() async throws {
+        let maker = TransportMaker()
+        let cloud = help(CloudHelpSettings(isOn: true), endpoint: endpoint, maker: maker)
+        let controller = chat(cloud)
+        let review = try #require(controller.review)
+        controller.submit("Plan my week")
+        let preview = await review.shown()
+        review.answer(.send, for: preview.id)
+        controller.stopReplying()
+        await controller.settled()
+        #expect(maker.wire.sent.isEmpty)
+        #expect(controller.failure != CloudWords.withdrawn)
+        #expect(controller.failure != CloudWords.notSent)
+        #expect(!controller.conversation.turns.contains { $0.text == CloudWords.withdrawn })
     }
 
     /// The turned-off line says what you wrote is still here. It is: the
@@ -655,7 +723,7 @@ struct CloudHelpTests {
     /// back that the draft starts with, whatever the error and whatever was
     /// typed while the reply came. A kept newer draft gets the line that
     /// points at the bubble instead.
-    @Test(arguments: [CloudModelError.off, .notSent, .staysHere, .notesUnreadable, .unreadableReply, nil])
+    @Test(arguments: [CloudModelError.off, .notSent, .withdrawn, .staysHere, .notesUnreadable, .unreadableReply, nil])
     func aStillHereLineAlwaysComesWithTheWordsGivenBack(error: CloudModelError?) async throws {
         for typed in ["", "and the weekend"] {
             let latch = Latch()
@@ -700,7 +768,7 @@ struct CloudHelpTests {
         #expect(await review.shown() == first)
         let secondAnswer = Task { await review.review(second) }
         // Asking the second question withdraws the first.
-        #expect(await firstAnswer.value == .cancel)
+        #expect(await firstAnswer.value == .withdrawn)
         #expect(review.pending == second)
         // A late tap on the first sheet does nothing to the second.
         review.answer(.send, for: first.id)
@@ -732,7 +800,7 @@ struct CloudHelpTests {
         await controller.settled()
         #expect(!controller.isReplying)
         #expect(review.pending == nil)
-        #expect(controller.failure == CloudWords.notSent)
+        #expect(controller.failure == CloudWords.withdrawn)
         #expect(controller.draft == "Plan my week")
         #expect(personTurns(controller).isEmpty)
         #expect(maker.wire.sent.isEmpty)
@@ -756,7 +824,7 @@ struct CloudHelpTests {
         await one.settled()
         await two.settled()
         #expect(oneReview.pending == nil && twoReview.pending == nil)
-        #expect(one.failure == CloudWords.notSent && two.failure == CloudWords.notSent)
+        #expect(one.failure == CloudWords.withdrawn && two.failure == CloudWords.withdrawn)
         #expect(maker.wire.sent.isEmpty)
     }
 
@@ -988,6 +1056,20 @@ struct CloudHelpTests {
             }
         }
         #expect(allWent == 4, "both tasks cases, with and without the private words")
+        // With nothing to say of the summaries, the underway line follows
+        // the whole line, its advice to try again included, as it did
+        // before there was background work.
+        let underway = TaskWords.forgotUnderway(1)
+        for notes in [false, true] {
+            for rest in everyRest {
+                #expect(MemoryModel.forgotLine(notesGone: notes, rest: rest, tasksGone: true, underway: underway)
+                        == line(notes, rest, true) + " " + underway)
+            }
+        }
+        #expect(MemoryModel.forgotLine(notesGone: false, rest: nil, tasksGone: true, underway: underway)
+                == MemoryWords.couldNotForgetNotes + " " + underway)
+        #expect(MemoryWords.retryAdvice.contains { MemoryWords.couldNotForgetNotes.hasSuffix(" " + $0) },
+                "a line with advice, so the order shows")
         // Where every part went, nothing says to try again, and the
         // underway line simply follows.
         #expect(MemoryModel.forgotLine(notesGone: true, rest: nil, tasksGone: true, summaries: .erased,
@@ -1108,7 +1190,7 @@ struct CloudHelpTests {
         #expect(try help.forgetPrivateWords() == .privateWordsAndCloud)
         await controller.settled()
         #expect(review.pending == nil)
-        #expect(controller.failure == CloudWords.notSent)
+        #expect(controller.failure == CloudWords.withdrawn)
         #expect(maker.wire.sent.isEmpty)
     }
 

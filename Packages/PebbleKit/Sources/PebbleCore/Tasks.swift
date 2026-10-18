@@ -325,10 +325,15 @@ public protocol TaskEngine: AnyObject, Sendable {
     /// True when the tasks are scripted examples and nothing is really
     /// done, so the feed labels them like every other example.
     var isSample: Bool { get }
+
+    /// True when this one task is an example. The feed asks per card, so
+    /// an example never makes real work look like one.
+    func isSample(_ id: String) -> Bool
 }
 
 extension TaskEngine {
     public var isSample: Bool { false }
+    public func isSample(_ id: String) -> Bool { isSample }
 }
 
 /// An engine whose tasks outlive the app being closed, through `TaskStore`.
