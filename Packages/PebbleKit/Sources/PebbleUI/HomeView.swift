@@ -272,8 +272,6 @@ struct HomeScreen: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
     @Environment(\.scenePhase) private var scenePhase
-    /// True after this scene has come to the front, until it goes to the background.
-    @State private var sceneWasInFront = false
 
     init(
         brand: Brand,
@@ -397,8 +395,6 @@ struct HomeScreen: View {
         .onChange(of: scenePhase, initial: true) { _, phase in
             feed.inFront = phase == .active
             if phase == .active { feed.refresh() }
-            // iPhone and iPad: GPU work has to finish before the app is in the background.
-            sceneWasInFront = OnDeviceScenes.note(counted: sceneWasInFront, phase: phase, model: model)
         }
         .onChange(of: scenePhase) { _, phase in
             // Away, a waiting question may nudge; back in front, its nudge

@@ -14,6 +14,11 @@ struct PebbleApp: App {
     /// Getting the on-device model, from the memory screen. Nil if its
     /// folder can't be found.
     private let modelSetup: OnDeviceModelSetup?
+    /// Stops on-device replies when the app goes to the background on
+    /// iPhone and iPad. Follows every window together, so one window going
+    /// back doesn't stop a reply in another still in front.
+    private let foreground = OnDeviceForeground()
+    @Environment(\.scenePhase) private var scenePhase
     /// The one notes store, shared by the memory screen and the cloud
     /// redactor, so both always see the same notes.
     private let memory: MemoryStore?
@@ -107,6 +112,7 @@ struct PebbleApp: App {
             #endif
         }
         .commands { HomeCommands() }
+        .onChange(of: scenePhase, initial: true) { _, phase in foreground.follow(phase) }
     }
 
     private var home: some View {

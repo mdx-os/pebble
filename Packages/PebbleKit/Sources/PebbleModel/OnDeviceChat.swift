@@ -49,19 +49,6 @@ public final class OnDeviceChat: ModelClient, @unchecked Sendable {
         lock.unlock()
     }
 
-    public func stopForBackground() async {
-        let model = active
-        await model.stopForBackground()
-        // A reply started on the previous model is still on the shared gate.
-        if !(model is MLXChatModel) {
-            await MLXChatModel.drainShared()
-        }
-    }
-
-    public func resumeAfterBackground() async {
-        await active.resumeAfterBackground()
-    }
-
     public func reply(to transcript: [ChatTurn]) async throws -> String {
         let model = active
         do {

@@ -14,13 +14,18 @@ public struct URLSessionModelFetcher: ModelFetching {
     /// Handlers that answer before the network. Empty in the app; tests
     /// put their own here so nothing they fetch leaves the machine.
     let handlers: [URLProtocol.Type]
+    /// Runs just before the fetch starts listening for its end. Empty in
+    /// the app; tests wait here so a cancel is reported first.
+    let beforeListening: @Sendable () -> Void
 
     public init() {
         handlers = []
+        beforeListening = {}
     }
 
-    init(handlers: [URLProtocol.Type]) {
+    init(handlers: [URLProtocol.Type], beforeListening: @escaping @Sendable () -> Void = {}) {
         self.handlers = handlers
+        self.beforeListening = beforeListening
     }
 
     /// Ephemeral, with nothing kept and nothing added.
@@ -49,8 +54,10 @@ public struct URLSessionModelFetcher: ModelFetching {
         let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
         defer { session.finishTasksAndInvalidate() }
         let task = session.dataTask(with: request)
+        let beforeListening = beforeListening
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                beforeListening()
                 delegate.start(continuation)
                 task.resume()
             }
@@ -76,8 +83,9 @@ private final class FetchDelegate: NSObject, URLSessionDataDelegate, @unchecked 
     private let limit: Int64
     private let progress: @Sendable (Int64) -> Void
     private let lock = NSLock()
-    /// The continuation and a result that arrived before it, under one lock.
-    private let finish = FetchFinish()
+    private var continuation: CheckedContinuation<Void, Error>?
+    /// How the task ended, kept for a fetch that wasn't listening yet.
+    private var ending: Result<Void, Error>?
     private var file: FileHandle?
     private var received: Int64 = 0
     private var failure: Error?
@@ -88,8 +96,17 @@ private final class FetchDelegate: NSObject, URLSessionDataDelegate, @unchecked 
         self.progress = progress
     }
 
+    /// Listens for the end. A task cancelled before this can end first,
+    /// and then `continuation` is resumed at once.
     func start(_ continuation: CheckedContinuation<Void, Error>) {
-        finish.start(continuation)
+        lock.lock()
+        if let ending {
+            lock.unlock()
+            continuation.resume(with: ending)
+            return
+        }
+        self.continuation = continuation
+        lock.unlock()
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask,
@@ -174,9 +191,14 @@ private final class FetchDelegate: NSObject, URLSessionDataDelegate, @unchecked 
             result = .success(())
         }
         lock.unlock()
+        // Removed before anyone hears the end, so a failed fetch never leaves a file.
         if case .failure = result { try? FileManager.default.removeItem(at: destination) }
-        // Kept when this runs before `start`, so the continuation is resumed then.
-        finish.finish(result)
+        lock.lock()
+        ending = result
+        let waiting = continuation
+        continuation = nil
+        lock.unlock()
+        waiting?.resume(with: result)
     }
 
     private func fail(_ error: Error) {
@@ -186,45 +208,5 @@ private final class FetchDelegate: NSObject, URLSessionDataDelegate, @unchecked 
         file = nil
         lock.unlock()
         try? FileManager.default.removeItem(at: destination)
-    }
-}
-
-/// One download's result and the continuation waiting for it.
-///
-/// Both live under the same lock. Stopping the task can finish it before
-/// `start` runs, and that result is kept and resumed immediately instead of
-/// being dropped, which would leave the download waiting forever.
-final class FetchFinish: @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<Void, Error>?
-    private var outcome: Result<Void, Error>?
-    private var finished = false
-
-    func start(_ continuation: CheckedContinuation<Void, Error>) {
-        lock.lock()
-        if let outcome {
-            self.outcome = nil
-            lock.unlock()
-            continuation.resume(with: outcome)
-            return
-        }
-        self.continuation = continuation
-        lock.unlock()
-    }
-
-    func finish(_ result: Result<Void, Error>) {
-        lock.lock()
-        if finished {
-            lock.unlock()
-            return
-        }
-        finished = true
-        let waiting = continuation
-        continuation = nil
-        if waiting == nil {
-            outcome = result
-        }
-        lock.unlock()
-        waiting?.resume(with: result)
     }
 }

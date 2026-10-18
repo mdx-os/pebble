@@ -34,24 +34,11 @@ public protocol ModelClient: Sendable {
     /// the device, in the chat and in memory, follows this through
     /// `privacyPlace`. A cloud model must say false.
     var runsOnDevice: Bool { get }
-
-    /// The app is about to run in the background. On-device work stops and
-    /// its GPU work finishes before this returns. The unanswered message stays.
-    func stopForBackground() async
-
-    /// The app is in front again, so on-device replies may run.
-    func resumeAfterBackground() async
 }
 
 extension ModelClient {
     /// Off by default, so a new adapter never makes a promise it can't keep.
     public var runsOnDevice: Bool { false }
-
-    /// Models that do no GPU work have nothing to stop.
-    public func stopForBackground() async {}
-
-    /// Models that do no GPU work have nothing to resume.
-    public func resumeAfterBackground() async {}
 
     /// The one source for every "on this device" line. The app passes this
     /// down from the active model; nothing keeps a second copy.

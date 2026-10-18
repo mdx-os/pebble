@@ -650,8 +650,7 @@ final class ChatController: ObservableObject {
     /// What to say when no reply came. Choosing not to send is not a failure.
     nonisolated static func failureLine(for error: Error?) -> String {
         if error as? MLXChatModelError == .tooLong { return OnDeviceModelWords.tooLong }
-        // Left the foreground. The words stay, as with any reply that did not finish.
-        if error as? MLXChatModelError == .stopped { return FirstConversation.couldNotAnswer }
+        if error as? MLXChatModelError == .interrupted { return OnDeviceModelWords.interrupted }
         return switch error as? CloudModelError {
         case .notSent: CloudWords.notSent
         case .off: CloudWords.turnedOff
@@ -665,7 +664,7 @@ final class ChatController: ObservableObject {
     /// goes once the person clears them.
     nonisolated static func pointsAtTheDraft(_ failure: String) -> Bool {
         [FirstConversation.couldNotAnswer, CloudWords.notSent, CloudWords.turnedOff, CloudWords.notesUnreadable,
-         OnDeviceModelWords.tooLong]
+         OnDeviceModelWords.tooLong, OnDeviceModelWords.interrupted]
             .contains(failure)
     }
 

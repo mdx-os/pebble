@@ -120,6 +120,24 @@ private final class Heard: @unchecked Sendable {
     }
 }
 
+/// What a task ended with, once it has.
+private final class Ended<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Result<T, Error>?
+
+    func set(_ result: Result<T, Error>) {
+        lock.lock()
+        value = result
+        lock.unlock()
+    }
+
+    var result: Result<T, Error>? {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
 /// The real fetcher, through its own session and delegate, answered by
 /// `PlannedServer` so nothing reaches the network.
 struct ModelFetchTests {
@@ -188,56 +206,78 @@ struct ModelFetchTests {
         #expect(await record.stoppedSoon())
     }
 
-    /// A result that arrives before `start` is resumed then, not dropped.
-    /// That is the race when a fetch is cancelled before its continuation
-    /// is registered. Many times, because the old handshake hung for good.
-    @Test func aCompletionBeforeStartStillFinishes() async {
-        for _ in 0..<10_000 {
-            let finish = FetchFinish()
-            finish.finish(.failure(URLError(.cancelled)))
-            await #expect(throws: URLError(.cancelled)) {
-                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                    finish.start(continuation)
-                }
-            }
-        }
-    }
-
-    /// Start and completion on two threads, the same race a cancelled task hits.
-    @Test func aCompletionRacingStartStillFinishes() async {
-        await withTaskGroup(of: Void.self) { group in
-            for _ in 0..<1_000 {
-                group.addTask {
-                    let finish = FetchFinish()
-                    await withTaskGroup(of: Void.self) { race in
-                        race.addTask { finish.finish(.failure(URLError(.cancelled))) }
-                        race.addTask {
-                            try? await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                                finish.start(continuation)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// The real fetcher, cancelled before it can register. Each one has to
-    /// finish. Nothing here leaves the machine: `PlannedServer` answers.
-    @Test func aPreCancelledFetchAlwaysFinishes() async throws {
+    /// A fetch cancelled before it starts ends cancelled, never waits for
+    /// ever, and keeps no file. The session can report the cancel before
+    /// the fetch is listening for it, so this runs many times to meet that.
+    @Test func aFetchCancelledBeforeItStartsEndsCancelled() async throws {
         let folder = try scratch()
         defer { try? FileManager.default.removeItem(at: folder) }
-        let body = Data(repeating: 4, count: 64)
-        for index in 0..<200 {
-            let url = address()
-            _ = PlannedServer.serve(.init(stated: body.count, body: body, piece: body.count), at: url)
-            let destination = folder.appendingPathComponent("part-\(index)")
-            let task = Task {
-                try await fetcher.fetch(ModelDownloadRequest.make(url), to: destination, bytes: Int64(body.count)) { _ in }
+        let body = Data(repeating: 3, count: 1024)
+        for round in 0..<200 {
+            // Every other round waits before listening, so the cancel is
+            // surely reported first; the rest leave it to timing.
+            let waits = round.isMultiple(of: 2)
+            let fetcher = URLSessionModelFetcher(handlers: [PlannedServer.self]) {
+                if waits { Thread.sleep(forTimeInterval: 0.02) }
             }
-            task.cancel()
-            _ = await task.result
+            let url = address()
+            _ = PlannedServer.serve(.init(stated: body.count, body: body), at: url)
+            let destination = folder.appendingPathComponent("model-\(round).safetensors.download")
+            let fetch = Task {
+                withUnsafeCurrentTask { $0?.cancel() }
+                try await fetcher.fetch(ModelDownloadRequest.make(url), to: destination,
+                                        bytes: Int64(body.count)) { _ in }
+            }
+            guard let ended = await Self.within(.seconds(20), fetch) else {
+                Issue.record("round \(round): the cancelled fetch never ended")
+                return
+            }
+            if case .success = ended { Issue.record("round \(round): a cancelled fetch succeeded") }
+            #expect(!FileManager.default.fileExists(atPath: destination.path))
         }
+    }
+
+    /// Through the installer: a download stopped before its first file
+    /// starts ends not downloaded, and leaves nothing in the folder.
+    @Test func anInstallCancelledBeforeItsFirstFetchKeepsNothing() async throws {
+        let fetcher = URLSessionModelFetcher(handlers: [PlannedServer.self]) { Thread.sleep(forTimeInterval: 0.02) }
+        for round in 0..<20 {
+            // Nothing is served: the pin's addresses are shared with other
+            // tests, and a stopped fetch never reaches the server anyway.
+            let place = try TestPin.place()
+            defer { place.remove() }
+            let installer = ModelInstaller(pin: place.pin, folders: place.folders, fetcher: fetcher,
+                                           freeSpace: { _ in nil })
+            let install = Task {
+                withUnsafeCurrentTask { $0?.cancel() }
+                return await installer.install(report: { _ in })
+            }
+            guard let ended = await Self.within(.seconds(20), install) else {
+                Issue.record("round \(round): the stopped install never ended")
+                return
+            }
+            #expect(try ended.get() == .notDownloaded)
+            #expect(installer.readyFolder() == nil)
+            #expect(place.names().isEmpty, "round \(round): \(place.names())")
+        }
+    }
+
+    /// The task's result, or nil when it hasn't ended within `limit`.
+    private static func within<T: Sendable, E: Error>(_ limit: Duration,
+                                                      _ task: Task<T, E>) async -> Result<T, Error>? {
+        let deadline = ContinuousClock.now + limit
+        let ended = Ended<T>()
+        let waiter = Task {
+            let result: Result<T, Error>
+            do { result = .success(try await task.value) } catch { result = .failure(error) }
+            ended.set(result)
+        }
+        while ContinuousClock.now < deadline {
+            if let result = ended.result { return result }
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+        waiter.cancel()
+        return ended.result
     }
 
     /// Through the installer: an oversized file ends failed with Try again,

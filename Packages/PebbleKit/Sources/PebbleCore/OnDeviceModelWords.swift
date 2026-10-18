@@ -57,6 +57,11 @@ public enum OnDeviceModelWords {
     /// read at once. The words go back to the composer.
     public static let tooLong = "That's too long for me to read at once. What you wrote is still here, so you can send a shorter part of it."
 
+    /// The chat's line when the app left the screen before the reply was
+    /// done, on iPhone and iPad. The message stays in the chat and its words
+    /// go back to the composer, so sending them again asks again.
+    public static let interrupted = "Sorry, I stopped that reply when you left the app. What you wrote is still here, so you can send it again."
+
     /// What the chat says instead of pretending to answer. Each names the
     /// memory screen as `MemoryWords.title` says it; the tests hold them
     /// to that.
@@ -78,7 +83,7 @@ public enum OnDeviceModelWords {
         [title, downloadTitle(bytes: 2_274_455_727), notDownloadedDetail,
          downloading(received: 1_200_000_000, total: 2_274_455_727), stopTitle, verifying, ready, tryAgainTitle,
          couldNotFetch, didNotMatch, noRoom(bytes: 2_274_455_727), couldNotSave, incomplete, needsMoreMemory,
-         couldNotLoad, downloadAgainTitle, tooLong]
+         couldNotLoad, downloadAgainTitle, tooLong, interrupted]
             + OnDeviceModelNotReady.allCases.map(notReadyReply)
     }
 
