@@ -5,7 +5,7 @@ import Testing
 struct AskFirstTests {
     let sam = Recipient(id: "contact:1/sms:+14165550101", displayName: "Sam", handle: "416 555 0101")
     var note: ProposedAction { ProposedAction(kind: .send, recipient: sam, details: "Running ten minutes late") }
-    let bakery = Recipient(id: "merchant:bakery-42", displayName: "the bakery", handle: "risebakery.ca")
+    let bakery = Recipient(id: "merchant:bakery-42", displayName: "the bakery", handle: "risebakery.example")
     let cad850 = Price(minorUnits: 850, currency: "CAD")!
     let en = Locale(identifier: "en_CA")
 
@@ -134,7 +134,7 @@ struct AskFirstTests {
     }
 
     @Test func longHandlesAreNeverShortened() {
-        let tail = "accounts.risebakery.ca.billing-secure-example.net"
+        let tail = "accounts.risebakery.example.billing-secure-example.net"
         let r = Recipient(id: "x", displayName: "Rise", handle: tail)
         #expect(r.handle == tail)
         #expect(Recipient(id: "y", displayName: "x", handle: String(repeating: "a", count: Recipient.maxHandleLength + 1)).handle == nil)
@@ -170,7 +170,7 @@ struct AskFirstTests {
     @Test func theQuestionNamesWhoAndHowMuch() {
         #expect(note.question == "Send this to 416 555 0101?")
         let buy = ProposedAction(kind: .purchase, recipient: bakery, details: "", price: cad850)
-        #expect(buy.question(locale: en) == "Pay $8.50 to risebakery.ca?")
+        #expect(buy.question(locale: en) == "Pay $8.50 to risebakery.example?")
         let buyer = Recipient(id: "x", displayName: "a buyer", handle: "buyer@example.com")
         #expect(ProposedAction(kind: .sharePersonalInfo, recipient: buyer, details: "").question == "Share this with buyer@example.com?")
     }

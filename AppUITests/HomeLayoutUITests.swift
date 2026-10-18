@@ -68,7 +68,8 @@ final class HomeLayoutUITests: XCTestCase {
     /// first; on iPhone the chat is one tap away at the bottom.
     func testTodayIsHomeAndTheChatIsOneTapAway() throws {
         let app = launch("today")
-        let card = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Done. Your morning plan is set")).firstMatch
+        // Examples say so first, to VoiceOver too.
+        let card = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Example. Done. Your morning plan is set")).firstMatch
         XCTAssertTrue(card.waitForExistence(timeout: 10))
         XCTAssertFalse(app.staticTexts["Needs you"].exists)
         if isPad {
@@ -97,7 +98,7 @@ final class HomeLayoutUITests: XCTestCase {
         app.buttons["Done"].firstMatch.tap()
 
         // Something spotted opens the chat with a line ready, not sent.
-        let spotted = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Noticed. Sam's birthday")).firstMatch
+        let spotted = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Example. Noticed. Sam's birthday")).firstMatch
         XCTAssertTrue(spotted.waitForExistence(timeout: 5))
         spotted.tap()
         let field = composer(in: app)
@@ -111,23 +112,63 @@ final class HomeLayoutUITests: XCTestCase {
     func testNeedsYouOpensTheQuestionSheet() throws {
         let app = launch("todayNeedsYou")
         XCTAssertTrue(app.staticTexts["Needs you"].waitForExistence(timeout: 10))
-        let question = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Needs you. Pay")).firstMatch
+        let question = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Example. Needs you. Pay")).firstMatch
         XCTAssertTrue(question.exists)
         question.tap()
         XCTAssertTrue(app.buttons["Yes, go ahead"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Checking with you first"].exists)
+        // The sample payment says it is an example.
+        XCTAssertTrue(app.staticTexts["sampleLabel"].exists)
         app.buttons["Not now"].tap()
         XCTAssertTrue(app.staticTexts["Needs you"].waitForNonExistence(timeout: 5))
         XCTAssertFalse(question.exists)
     }
 
-    /// A brand new person sees a kind empty state and no Needs you section.
-    func testABrandNewPersonSeesAKindEmptyToday() throws {
+    /// A brand new person sees a kind empty state, no Needs you section,
+    /// and the composer right there: type, Return, and the chat opens with
+    /// the line sent.
+    func testABrandNewPersonCanTypeAndGoFromToday() throws {
         let app = launch("todayEmpty")
         XCTAssertTrue(app.staticTexts["A quiet start"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.staticTexts["Needs you"].exists)
-        app.buttons["Say hello"].tap()
-        XCTAssertTrue(composer(in: app).waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Say hello"].exists)
+        let today = app.descendants(matching: .any).matching(identifier: "todayComposer").firstMatch
+        XCTAssertTrue(today.exists)
+        today.tap()
+        today.typeText("Pack lunches")
+        today.typeText("\n")
+        let field = composer(in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Pack lunches"].waitForExistence(timeout: 5))
+        XCTAssertFalse((field.value as? String ?? "").contains("Pack lunches"))
+    }
+
+    /// Typing on Today and pressing Command 2 still goes to the chat, and
+    /// the words come along.
+    func testCommandTwoGoesToTheChatFromTodaysComposer() throws {
+        try XCTSkipUnless(isPad, "hardware keyboard shortcuts are an iPad feature")
+        let app = launch("todayEmpty")
+        let today = app.descendants(matching: .any).matching(identifier: "todayComposer").firstMatch
+        XCTAssertTrue(today.waitForExistence(timeout: 10))
+        // Menu commands can take a moment to attach after launch, and a
+        // press that early reaches a focused field as a typed "2". Wait for
+        // them with nothing focused: Command 3 opens the memory once they
+        // are there, and Command 1 comes back.
+        let note = app.staticTexts["Prefers tea in the afternoon"]
+        for _ in 0..<3 where !note.exists {
+            app.typeKey("3", modifierFlags: .command)
+            _ = note.waitForExistence(timeout: 3)
+        }
+        XCTAssertTrue(note.exists)
+        app.typeKey("1", modifierFlags: .command)
+        XCTAssertTrue(today.waitForExistence(timeout: 5))
+        today.tap()
+        today.typeText("Half typed")
+        app.typeKey("2", modifierFlags: .command)
+        let field = composer(in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertEqual(field.value as? String, "Half typed")
+        XCTAssertFalse(app.staticTexts["Half typed"].exists)
     }
 
     /// Command N starts a new chat; Command 1, 2 and 3 move between places

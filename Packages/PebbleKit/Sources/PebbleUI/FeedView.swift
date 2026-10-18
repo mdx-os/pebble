@@ -17,24 +17,48 @@ final class FeedModel: ObservableObject {
     @Published var reading: FeedItem?
 
     let needsYou: NeedsYou
+    /// Where the person's words go, passed down from the model so copy that
+    /// mentions the device never drifts from it.
+    let place: PrivacyPlace
     private let sources: [any FeedSource]
+    /// This model's watch on `needsYou`, ended when the model goes, so a
+    /// closed window leaves nothing behind.
+    private var observation: NeedsYou.Observation?
     private let calendar: Calendar
     let now: () -> Date
 
-    init(sources: [any FeedSource], needsYou: NeedsYou, calendar: Calendar = .current,
+    init(sources: [any FeedSource], needsYou: NeedsYou, place: PrivacyPlace, calendar: Calendar = .current,
          now: @escaping () -> Date = { Date() }) {
         self.sources = sources
         self.needsYou = needsYou
+        self.place = place
         self.calendar = calendar
         self.now = now
         feed = Feed.build(from: sources, needsYou: needsYou, now: now(), calendar: calendar)
+        // A question asked, answered or withdrawn shows at once, wherever
+        // the person is. A question that times out is caught by `keepFresh`.
+        // Each model watches for itself, so every window's Today updates.
+        observation = needsYou.observe { [weak self] in
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { self?.refresh() }
+            } else {
+                Task { @MainActor in self?.refresh() }
+            }
+        }
     }
 
-    var isSample: Bool { sources.contains { $0.isSample } }
+    /// Plain, not isolated: the observation and `needsYou` are Sendable and
+    /// `stopObserving` takes its own lock, so this runs safely anywhere.
+    deinit {
+        if let observation { needsYou.stopObserving(observation) }
+    }
+
+    var isSample: Bool { needsYou.isSample || sources.contains { $0.isSample } }
 
     /// True when this card came from an example source.
     func isSample(_ item: FeedItem) -> Bool {
-        sources.contains { $0.isSample && $0.items(now: now()).contains { $0.id == item.id } }
+        if item.kind == .needsYou { return needsYou.isSample }
+        return sources.contains { $0.isSample && $0.items(now: now()).contains { $0.id == item.id } }
     }
     var rule: AskFirst { needsYou.rule }
 
@@ -42,6 +66,22 @@ final class FeedModel: ObservableObject {
     func refresh() {
         let next = Feed.build(from: sources, needsYou: needsYou, now: now(), calendar: calendar)
         if next != feed { feed = next }
+    }
+
+    /// How often `keepFresh` looks again. Questions time out after
+    /// `AskFirst.defaultWindow`, so a card is gone within this of its end.
+    static let refreshInterval: Duration = .seconds(10)
+
+    /// Keeps the feed current for as long as the caller runs it: the home
+    /// screen runs it from its root, so the Needs you count beside Today
+    /// drops when a question times out even while the chat or the memory is
+    /// showing. `sleep` is passed in so tests can move a clock instead of
+    /// waiting. Ends when the task is cancelled or `sleep` throws.
+    func keepFresh(sleep: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) async {
+        while !Task.isCancelled {
+            refresh()
+            do { try await sleep(Self.refreshInterval) } catch { return }
+        }
     }
 
     /// What a card's button does. Talking is handed to the screen around
@@ -101,10 +141,8 @@ struct FeedView: View {
     @ObservedObject var model: FeedModel
     let look: AgentLook
     let onTalk: (String) -> Void
-    let onChat: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var typeSize
     /// Two cards side by side once each can be at least this wide. Grows
     /// with the text size, so large text gets one roomy column.
@@ -120,12 +158,12 @@ struct FeedView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(model.dateLine)
                             .font(.subheadline.weight(.medium))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.secondaryText)
                         // Said first, so no example is ever taken for real work.
                         if model.isSample && !model.feed.isEmpty {
-                            Text(FeedWords.sampleNote)
+                            Text(FeedWords.sampleNote(model.place))
                                 .font(.footnote)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Theme.secondaryText)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .accessibilityIdentifier("sampleNote")
                         }
@@ -158,17 +196,8 @@ struct FeedView: View {
         }
         .background(Backdrop())
         .navigationTitle(FeedWords.title)
-        .task {
-            // Questions time out on their own, so look again now and then.
-            // Stops when the screen goes away.
-            while !Task.isCancelled {
-                model.refresh()
-                do { try await Task.sleep(for: .seconds(10)) } catch { return }
-            }
-        }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { model.refresh() }
-        }
+        // Kept fresh by `FeedModel.keepFresh`, which the home screen runs
+        // whether Today is showing or not, so the sidebar's count is true too.
     }
 
     /// The room the cards have: the window's width, held to the reading
@@ -202,12 +231,12 @@ struct FeedView: View {
                 if let detail {
                     Text(detail)
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.secondaryText)
                 }
             }
             LazyVGrid(columns: columns, alignment: .leading, spacing: Self.cardSpacing) {
                 ForEach(items) { item in
-                    FeedCard(item: item, time: model.timeLabel(for: item.time)) {
+                    FeedCard(item: item, time: model.timeLabel(for: item.time), isSample: model.isSample(item)) {
                         model.perform(item, talk: onTalk)
                     }
                     .transition(Motion.arrival(reduceMotion: reduceMotion))
@@ -223,17 +252,14 @@ struct FeedView: View {
                 .font(.system(.title3, design: .rounded).weight(.semibold))
                 .multilineTextAlignment(.center)
                 .accessibilityAddTraits(.isHeader)
+            // The composer below is the one thing to do, so there is no
+            // button here.
             Text(FeedWords.empty)
                 .font(.body)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: Theme.readableWidth)
-            Button(FeedWords.emptyActionTitle, action: onChat)
-                .buttonStyle(.bordered)
-                .tint(Theme.accent)
-                .padding(.top, 4)
-                .pointerHover(in: Capsule())
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 48)
@@ -247,6 +273,8 @@ struct FeedView: View {
 struct FeedCard: View {
     let item: FeedItem
     let time: String
+    /// True for an example card, so VoiceOver says so before anything else.
+    var isSample = false
     let perform: () -> Void
     @Environment(\.colorScheme) private var scheme
 
@@ -277,7 +305,8 @@ struct FeedCard: View {
     private var asks: Bool { item.kind == .needsYou }
 
     var spoken: String {
-        [item.spokenKind, item.title, item.body, time].filter { !$0.isEmpty }.joined(separator: ". ")
+        [isSample ? FeedWords.exampleMarker : "", item.spokenKind, item.title, item.body, time]
+            .filter { !$0.isEmpty }.joined(separator: ". ")
     }
 
     private func content(actionTitle: String?) -> some View {
@@ -287,14 +316,14 @@ struct FeedCard: View {
                     Text(item.spokenKind)
                 } icon: {
                     Image(systemName: Self.symbol(item.kind))
-                        .foregroundStyle(Theme.accent)
+                        .foregroundStyle(Theme.accentSymbol)
                 }
                 .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 Spacer(minLength: 8)
                 Text(time)
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.secondaryText)
             }
             Text(item.title)
                 .font(.system(.headline, design: .rounded))
@@ -304,17 +333,17 @@ struct FeedCard: View {
             if !item.body.isEmpty {
                 Text(item.body)
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.secondaryText)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let actionTitle {
                 Text(actionTitle)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(asks ? Theme.onAccent : Theme.accent)
+                    .foregroundStyle(asks ? AnyShapeStyle(Theme.onAccent) : AnyShapeStyle(Theme.accentText))
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
-                    .background(asks ? Theme.accent : Theme.accent.opacity(0.14), in: Capsule())
+                    .background(asks ? Theme.accent : Theme.accent.opacity(Theme.accentWash), in: Capsule())
                     .padding(.top, 2)
             }
         }
@@ -332,6 +361,21 @@ struct FeedCard: View {
         case .noticed: "lightbulb.fill"
         case .needsYou: "hand.raised.fill"
         }
+    }
+}
+
+/// Over an example opened to read or answer, so it is never taken for
+/// real work.
+struct ExampleLabel: View {
+    var body: some View {
+        Text(FeedWords.sampleLabel)
+            .font(.footnote.weight(.medium))
+            .foregroundStyle(Theme.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.primary.opacity(Theme.fieldTint), in: Capsule())
+            .accessibilityIdentifier("sampleLabel")
     }
 }
 
@@ -353,23 +397,17 @@ struct FeedReader: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     if isSample {
-                        Text(FeedWords.sampleLabel)
-                            .font(.footnote.weight(.medium))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(Color.primary.opacity(0.06), in: Capsule())
-                            .accessibilityIdentifier("sampleLabel")
+                        ExampleLabel()
                     }
                     Label(item.spokenKind, systemImage: FeedCard.symbol(item.kind))
                         .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.secondaryText)
                     Text(item.title)
                         .font(.system(.title2, design: .rounded).weight(.bold))
                         .accessibilityAddTraits(.isHeader)
                     Text(time)
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.secondaryText)
                     Text(text)
                         .font(.body)
                         .textSelection(.enabled)

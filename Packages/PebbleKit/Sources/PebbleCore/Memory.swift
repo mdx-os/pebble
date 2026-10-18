@@ -96,16 +96,23 @@ public enum MemorySource: Codable, Sendable, Equatable, Hashable {
 public enum MemoryWords {
     public static let title = "What I remember"
     public static let emptyTitle = "Nothing here yet"
-    // "It stays on this device" in `empty` and `saved` is true in code: notes
-    // live only in `MemoryStore`'s file, which is left out of backups, and
-    // nothing passes them to a `ModelClient` or any network call. The model
-    // only ever sees chat turns. Keep it that way, or gate these lines.
-    public static let empty = "Tell me something worth keeping, like a birthday or how you take your tea. It stays on this device, and you can change or remove it anytime."
+    // The device promise in `empty`, `saved` and `privacyNote` is made only
+    // when `place` says every word stays here. Notes live only in
+    // `MemoryStore`'s file, left out of backups, and nothing passes them to a
+    // `ModelClient`, but a cloud model would still hear the chat, so the
+    // promise follows the model, not the notes.
+    public static func empty(_ place: PrivacyPlace) -> String {
+        place.staysOnDevice
+            ? "Tell me something worth keeping, like a birthday or how you take your tea. It stays on this device, and you can change or remove it anytime."
+            : "Tell me something worth keeping, like a birthday or how you take your tea. You can change or remove it anytime."
+    }
     public static let emptyActionTitle = "Add your first note"
     public static let forgetTitle = "Forget this"
     public static let forgetEverythingTitle = "Forget everything"
-    /// See the note above `empty`: notes never leave this device.
-    public static let saved = "Saved. It stays on this device."
+    /// See the note above `empty`.
+    public static func saved(_ place: PrivacyPlace) -> String {
+        place.staysOnDevice ? "Saved. It stays on this device." : "Saved."
+    }
     public static let forgotten = "Gone. I no longer have it."
     public static let needsWords = "Type a few words first, and I'll keep them."
     public static let tooLong = "That's a lot for one note. Try splitting it into shorter ones."
@@ -116,8 +123,15 @@ public enum MemoryWords {
     public static let addPlaceholder = "Something for me to remember"
     public static let addTitle = "Remember"
     public static let forgetEverythingQuestion = "Forget everything I remember?"
+    // Says "this device" without asking `place`, and that is on purpose.
+    // It is about where the notes are, not where the chat goes: notes live
+    // only in `MemoryStore`'s local file whatever the model is, so this is
+    // true even with a cloud model. Don't gate it like the lines above.
     public static let forgetEverythingDetail = "This removes every note from this device. It can't be undone."
-    public static let privacyNote = "Kept only on this device. Removing a note erases it."
+    /// See the note above `empty`.
+    public static func privacyNote(_ place: PrivacyPlace) -> String {
+        place.staysOnDevice ? "Kept only on this device. Removing a note erases it." : "Removing a note erases it."
+    }
     /// Shown while adding is turned off, so the saved notes stay as they are.
     public static let unreadable = "Sorry, I can't read the notes I saved. I've left them untouched, so I won't add new ones for now. If this keeps happening, Forget everything clears them so we can start fresh."
     public static let unavailable = "I can't open my notes just now, usually because the device is locked. Unlock it, and I'll look again."
@@ -238,16 +252,19 @@ public final class MemoryStore: @unchecked Sendable {
             || FileManager.default.fileExists(atPath: stagingURL.path)
     }
 
+    /// Adds a note. Every writer comes through here, so notes that can't be
+    /// read or opened are refused first, before the words are even looked
+    /// at, and the file is never touched.
     @discardableResult
     public func remember(_ proposed: String, at date: Date = Date(), source: MemorySource) throws -> Decision {
+        lock.lock()
+        defer { lock.unlock() }
+        var all = try load()
         let text: String
         switch Self.clean(proposed) {
         case .success(let t): text = t
         case .failure(let refusal): return refusal.decision
         }
-        lock.lock()
-        defer { lock.unlock() }
-        var all = try load()
         let note = MemoryNote(text: text, savedAt: date, source: source)
         all.append(note)
         try save(all)
@@ -257,14 +274,14 @@ public final class MemoryStore: @unchecked Sendable {
     /// Replace a note's words. The old words do not stay in storage.
     @discardableResult
     public func edit(_ id: UUID, to proposed: String) throws -> Decision {
+        lock.lock()
+        defer { lock.unlock() }
+        var all = try load()
         let text: String
         switch Self.clean(proposed) {
         case .success(let t): text = t
         case .failure(let refusal): return refusal.decision
         }
-        lock.lock()
-        defer { lock.unlock() }
-        var all = try load()
         guard let index = all.firstIndex(where: { $0.id == id }) else { return .notFound }
         // Editing keeps where the note came from.
         let old = all[index]

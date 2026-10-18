@@ -26,14 +26,17 @@ struct HomeLayoutTests {
     ], HomeSection.allCases)
     func theSidebarLayoutRendersAtEachSize(size: CGSize, section: HomeSection) throws {
         let controller = chat()
-        let feed = FeedModel(sources: [SampleFeedSource()], needsYou: ShowcaseScene.sampleQuestion())
+        let feed = FeedModel(sources: [SampleFeedSource()], needsYou: ShowcaseScene.sampleQuestion(), place: .onDevice)
         let view = HomeSplit(
             chat: controller,
             section: .constant(section),
             needsYouCount: feed.feed.needsYou.count,
-            todayScreen: FeedView(model: feed, look: .startingPoint, onTalk: { _ in }, onChat: {}),
+            todayScreen: FeedView(model: feed, look: .startingPoint, onTalk: { _ in })
+                .safeAreaInset(edge: .bottom) {
+                    TodayComposer(chat: controller, inFront: true, send: { _ in })
+                },
             chatScreen: ChatView(controller: controller, look: .startingPoint, firstMessage: nil),
-            memoryScreen: MemoryView(store: ShowcaseScene.sampleMemory()),
+            memoryScreen: MemoryView(store: ShowcaseScene.sampleMemory(), place: .onDevice),
             newChat: {}
         )
         let renderer = ImageRenderer(content: view.frame(width: size.width, height: size.height))
