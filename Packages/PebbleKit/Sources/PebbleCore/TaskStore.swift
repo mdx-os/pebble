@@ -34,12 +34,18 @@ public struct SavedTask: Codable, Sendable, Equatable {
     public let phase: Phase
     public let askedAt: Date?
     public let approvedAt: Date?
+    /// What the person said yes to, as the question showed it, kept only
+    /// while the phase is `.approved`. Its receipt is made from this and
+    /// nothing else, so a script changed by an update never puts words in
+    /// a receipt that the person never saw.
+    public let approvedAction: SavedAction?
     public let kept: [String]
     public let notDone: [String]
     public let history: [Step]
     public let startedAt: Date
 
     public init(id: String, title: String, step: Int, phase: Phase, askedAt: Date? = nil, approvedAt: Date? = nil,
+                approvedAction: SavedAction? = nil,
                 kept: [String] = [], notDone: [String] = [], history: [Step] = [], startedAt: Date) {
         self.id = id
         self.title = title
@@ -47,10 +53,48 @@ public struct SavedTask: Codable, Sendable, Equatable {
         self.phase = phase
         self.askedAt = askedAt
         self.approvedAt = approvedAt
+        self.approvedAction = approvedAction
         self.kept = kept
         self.notDone = notDone
         self.history = history
         self.startedAt = startedAt
+    }
+}
+
+/// A `ProposedAction` as it is kept on disk.
+public struct SavedAction: Codable, Sendable, Equatable {
+    public let kind: ConsequentialAction
+    public let recipientID: String
+    public let recipientName: String
+    public let handle: String?
+    public let details: String
+    public let priceMinorUnits: Int?
+    public let priceCurrency: String?
+    public let outcome: String?
+
+    public init(_ action: ProposedAction) {
+        kind = action.kind
+        recipientID = action.recipient.id
+        recipientName = action.recipient.displayName
+        handle = action.recipient.handle
+        details = action.details
+        priceMinorUnits = action.price?.minorUnits
+        priceCurrency = action.price?.currency
+        outcome = action.outcome
+    }
+
+    /// The action, or nil when the file was changed into something no
+    /// question could have shown: no exact handle, hidden characters, or a
+    /// purchase with no price.
+    public var action: ProposedAction? {
+        let price = priceMinorUnits.flatMap { minor in priceCurrency.flatMap { Price(minorUnits: minor, currency: $0) } }
+        let action = ProposedAction(kind: kind, recipient: Recipient(id: recipientID, displayName: recipientName, handle: handle),
+                                    details: details, price: price, outcome: outcome)
+        guard action.recipient.handle != nil, action.recipient.handle == handle,
+              !AskFirst.hasHiddenScalars(details), !(outcome.map(AskFirst.hasHiddenScalars) ?? false),
+              (priceMinorUnits == nil) == (price == nil),
+              action.kind != .purchase || price != nil else { return nil }
+        return action
     }
 }
 
@@ -172,6 +216,13 @@ public protocol QuestionNotifying: AnyObject, Sendable {
 /// Kept in one file inside Application Support, left out of backups, and
 /// written whole each time. Forget everything removes the tasks and the
 /// receipts and keeps only the nudge choice, which holds nothing of theirs.
+///
+/// Forget everything deletes the file first, read or not. If it can't be
+/// deleted, a small marker in a folder of its own says a forget is still
+/// owed, so even a store opened after the app was killed never reads the
+/// file again and deletes it as soon as it can. A file that couldn't be
+/// read when it was forgotten takes its nudge choice with it, so the offer
+/// may come once more, still only when a question waits.
 public final class TaskStore: @unchecked Sendable {
     public struct State: Codable, Equatable, Sendable {
         public var tasks: [SavedTask] = []
@@ -190,26 +241,47 @@ public final class TaskStore: @unchecked Sendable {
 
     /// Nil keeps everything in memory only, for tests and screenshots.
     public let fileURL: URL?
+    /// The file Forget everything deletes: `fileURL`, or for a store that
+    /// couldn't open its folder, where the file would be.
+    private let knownURL: URL?
+    /// Says a forget is owed. In a folder apart from the file, so a folder
+    /// that won't let the file go can't keep this from being written.
+    private let markerURL: URL?
     private let lock = NSLock()
     private var state = State()
-    /// False while a file is there but can't be read, so nothing is written
-    /// over it. Each change tries again.
+    /// False while a file is there but can't be read yet, or must still be
+    /// deleted, so nothing is written over it. Each read and change tries
+    /// again.
     private var loaded: Bool
     /// What changed in memory while the file couldn't be read. A late read
     /// never takes these back.
     private var changedTasks = false
     private var changedNudges = false
-    /// Forget everything ran while a file that couldn't be read also
-    /// couldn't be removed. Whatever it held is dropped once it is read.
-    private var forgotUnread = false
+    /// Forget everything ran and the file couldn't be deleted. It is never
+    /// read; each read and change tries to delete it again.
+    private var mustDelete = false
     private var observers: [UUID: @Sendable () -> Void] = [:]
 
-    package init(fileURL: URL?) {
+    /// `forgetMarker` is where a forget still owed is written down. Nil
+    /// keeps it in memory only.
+    package init(fileURL: URL?, forgetMarker: URL? = nil) {
         self.fileURL = fileURL
+        knownURL = fileURL
+        markerURL = forgetMarker
         loaded = fileURL == nil
         lock.lock()
+        if let forgetMarker, FileManager.default.fileExists(atPath: forgetMarker.path) { mustDelete = true }
         loadIfNeeded()
         lock.unlock()
+    }
+
+    /// Kept in memory only, but Forget everything still deletes the file
+    /// at `forgets`, left by an earlier launch.
+    package init(forgetOnly forgets: URL, forgetMarker: URL?) {
+        fileURL = nil
+        knownURL = forgets
+        markerURL = forgetMarker
+        loaded = true
     }
 
     /// Kept in memory only.
@@ -224,6 +296,14 @@ public final class TaskStore: @unchecked Sendable {
     private static let sharedLock = NSLock()
     nonisolated(unsafe) private static var shared: TaskStore?
 
+    /// Where the store on this device keeps its file, and where a forget
+    /// still owed is written down. The marker has a folder of its own.
+    package static func location(base: URL) -> (file: URL, marker: URL) {
+        let pebble = base.appendingPathComponent("pebble", isDirectory: true)
+        return (pebble.appendingPathComponent("tasks", isDirectory: true).appendingPathComponent("tasks.json"),
+                pebble.appendingPathComponent("pending", isDirectory: true).appendingPathComponent("tasks-forgotten"))
+    }
+
     /// The one store on this device, beside the notes.
     public static func onDevice(fileManager: FileManager = .default) throws -> TaskStore {
         sharedLock.lock()
@@ -231,13 +311,23 @@ public final class TaskStore: @unchecked Sendable {
         if let shared { return shared }
         let base = try fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask,
                                        appropriateFor: nil, create: true)
-        var folder = base.appendingPathComponent("pebble", isDirectory: true)
-            .appendingPathComponent("tasks", isDirectory: true)
+        let (file, marker) = location(base: base)
+        var folder = file.deletingLastPathComponent()
         try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
         try MemoryStore.excludeFromBackup(&folder)
-        let store = TaskStore(fileURL: folder.appendingPathComponent("tasks.json"))
+        let store = TaskStore(fileURL: file, forgetMarker: marker)
         shared = store
         return store
+    }
+
+    /// For when `onDevice` couldn't open its folder: keeps everything in
+    /// memory, and Forget everything still deletes a file an earlier launch
+    /// left there.
+    public static func forgetOnly(fileManager: FileManager = .default) -> TaskStore {
+        guard let base = try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                              appropriateFor: nil, create: false) else { return inMemory() }
+        let (file, marker) = location(base: base)
+        return TaskStore(forgetOnly: file, forgetMarker: marker)
     }
 
     public var tasks: [SavedTask] { read(\.tasks) }
@@ -288,22 +378,22 @@ public final class TaskStore: @unchecked Sendable {
     /// Forget everything: every saved task and every receipt. Only the nudge
     /// choice stays, since it holds nothing the person said or did.
     ///
-    /// The file goes too, read or not: one that couldn't be read, or not
-    /// yet, is never left behind to bring anything back later.
+    /// The file goes first, read or not, and only then is the nudge choice
+    /// written again. A file that won't go is never read again, by this
+    /// store or one opened on a later launch, and is deleted as soon as it
+    /// can be.
     public func forget() {
         lock.lock()
-        if !loaded, let fileURL, let stagingURL {
-            try? FileManager.default.removeItem(at: fileURL)
-            try? FileManager.default.removeItem(at: stagingURL)
-            // Gone, so there is nothing left to read, and what is in memory
-            // is written from here on.
-            if !FileManager.default.fileExists(atPath: fileURL.path) { loaded = true } else { forgotUnread = true }
+        state.tasks = []
+        state.receipts = []
+        if knownURL != nil {
+            mustDelete = true
+            writeMarker()
+            deleteIfOwed()
         }
+        let hooks = Array(observers.values)
         lock.unlock()
-        change { state in
-            state.tasks = []
-            state.receipts = []
-        }
+        for hook in hooks { hook() }
     }
 
     /// Everything, the nudge choice too. For screenshots and tests.
@@ -360,26 +450,36 @@ public final class TaskStore: @unchecked Sendable {
         for hook in hooks { hook() }
     }
 
-    /// Reads the file once it can. A file that can't be read is left alone.
+    /// Reads the file once it can. A file that can't be read yet is left
+    /// alone and tried again. One that is read but can't be understood, as
+    /// from a later version or a broken write, is moved aside, so it is
+    /// never written over and never stops anything new being kept. A file
+    /// owed a forget is never read, only deleted.
     ///
     /// A file read late, as when it was locked until the device was first
     /// unlocked, never takes back what changed in memory since launch: the
     /// tasks and the nudge choice made here stand, and the receipts from
     /// both are kept. Then the whole is written back.
     private func loadIfNeeded() {
-        guard !loaded, let fileURL else { return }
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+        if mustDelete { deleteIfOwed() }
+        guard !loaded, !mustDelete, let fileURL, let asideURL else { return }
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: fileURL.path) else {
             loaded = true
             return
         }
-        guard let data = try? Data(contentsOf: fileURL),
-              let saved = try? JSONDecoder().decode(State.self, from: data) else { return }
+        guard let data = try? Data(contentsOf: fileURL) else { return }
+        guard let saved = try? JSONDecoder().decode(State.self, from: data) else {
+            try? manager.removeItem(at: asideURL)
+            if (try? manager.moveItem(at: fileURL, to: asideURL)) == nil { try? manager.removeItem(at: fileURL) }
+            loaded = true
+            changedTasks = false
+            changedNudges = false
+            if state != State() { save(state) }
+            return
+        }
         loaded = true
         var merged = saved
-        if forgotUnread {
-            merged.tasks = []
-            merged.receipts = []
-        }
         if changedTasks { merged.tasks = state.tasks }
         if changedNudges { merged.nudges = state.nudges }
         for receipt in state.receipts where !merged.receipts.contains(where: { $0.id == receipt.id }) {
@@ -389,8 +489,57 @@ public final class TaskStore: @unchecked Sendable {
         state = merged
         changedTasks = false
         changedNudges = false
-        forgotUnread = false
         if merged != saved { save(merged) }
+    }
+
+    /// Deletes the file, its half written next one and any moved aside.
+    /// Once all are gone, so is the marker, and what is in memory is
+    /// written from here on. Until then nothing is read or written.
+    private func deleteIfOwed() {
+        guard mustDelete, let knownURL else { return }
+        let manager = FileManager.default
+        let leftovers = Self.leftovers(of: knownURL)
+        for url in leftovers { try? manager.removeItem(at: url) }
+        guard !leftovers.contains(where: { manager.fileExists(atPath: $0.path) }) else {
+            if fileURL != nil { loaded = false }
+            return
+        }
+        mustDelete = false
+        if let markerURL { try? manager.removeItem(at: markerURL) }
+        changedTasks = false
+        changedNudges = false
+        if fileURL != nil {
+            loaded = true
+            if state != State() { save(state) }
+        }
+    }
+
+    /// Written before anything is deleted, so a forget cut short by the app
+    /// being killed is still owed on the next launch. It holds nothing, and
+    /// has no file protection so it can be written while the device is
+    /// locked.
+    private func writeMarker() {
+        guard let markerURL else { return }
+        try? FileManager.default.createDirectory(at: markerURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        #if os(macOS)
+        let options: Data.WritingOptions = []
+        #else
+        let options: Data.WritingOptions = [.noFileProtection]
+        #endif
+        try? Data().write(to: markerURL, options: options)
+    }
+
+    /// Every file a store at `url` may leave.
+    private static func leftovers(of url: URL) -> [URL] {
+        [url, sibling(of: url, ".next"), sibling(of: url, ".unreadable")]
+    }
+
+    private static func sibling(of url: URL, _ suffix: String) -> URL {
+        url.deletingLastPathComponent().appendingPathComponent("." + url.lastPathComponent + suffix)
+    }
+
+    private var asideURL: URL? {
+        fileURL.map { Self.sibling(of: $0, ".unreadable") }
     }
 
     /// At most `receiptLimit`, the oldest going first.
@@ -400,7 +549,7 @@ public final class TaskStore: @unchecked Sendable {
     }
 
     private var stagingURL: URL? {
-        fileURL.map { $0.deletingLastPathComponent().appendingPathComponent("." + $0.lastPathComponent + ".next") }
+        fileURL.map { Self.sibling(of: $0, ".next") }
     }
 
     private func save(_ next: State) {

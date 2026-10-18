@@ -255,6 +255,11 @@ public final class AskFirst: @unchecked Sendable {
     /// the app again never buys it more time. Nil, as for `ask`, when it
     /// can't be asked, and nil when its time is already up or `age` is
     /// below zero, as when the date was moved back.
+    ///
+    /// `age` comes from the device's wall clock, since nothing else lasts
+    /// while the app is closed. Setting that clock back while the app is
+    /// closed can give a question more time, so the deadline holds only
+    /// within one launch. The question still needs a fresh yes.
     public func askAgain(_ action: ProposedAction, askedAgo age: TimeInterval) -> ConfirmationRequest? {
         guard age.isFinite, age >= 0, age <= questionWindow else { return nil }
         return ask(action, askedAgo: .milliseconds(Int64((age * 1000).rounded(.up))))

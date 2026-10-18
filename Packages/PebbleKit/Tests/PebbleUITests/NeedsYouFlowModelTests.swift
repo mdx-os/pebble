@@ -31,7 +31,11 @@ private final class FakeNotifier: QuestionNotifying, @unchecked Sendable {
     private(set) var removed: [String] = []
     /// Times every question's nudge was taken away, this launch's and older.
     private(set) var clears = 0
+    /// Nudges posted and not taken away since, as the system would hold them.
+    private(set) var live: [String] = []
     private var handler: (@MainActor @Sendable (String) -> Void)?
+    /// Times a listener for taps was set.
+    private(set) var listeners = 0
 
     init(grants: Bool = true) { self.grants = grants }
 
@@ -44,11 +48,15 @@ private final class FakeNotifier: QuestionNotifying, @unchecked Sendable {
         return grants
     }
     func post(_ nudge: QuestionNudge, after delay: TimeInterval) {
-        lock.lock(); posted.append(nudge); delays.append(delay); lock.unlock()
+        lock.lock(); posted.append(nudge); delays.append(delay); live.append(nudge.id); lock.unlock()
     }
-    func remove(_ ids: [String]) { lock.lock(); removed += ids; lock.unlock() }
-    func removeAll() { lock.lock(); clears += 1; lock.unlock() }
-    func onOpen(_ handler: @escaping @MainActor @Sendable (String) -> Void) { self.handler = handler }
+    func remove(_ ids: [String]) {
+        lock.lock(); removed += ids; live.removeAll { ids.contains($0) }; lock.unlock()
+    }
+    func removeAll() { lock.lock(); clears += 1; live = []; lock.unlock() }
+    func onOpen(_ handler: @escaping @MainActor @Sendable (String) -> Void) {
+        lock.lock(); self.handler = handler; listeners += 1; lock.unlock()
+    }
     @MainActor func tap(_ taskID: String) { handler?(taskID) }
 }
 
@@ -344,26 +352,35 @@ struct NeedsYouFlowModelTests {
     /// and never runs the step twice.
     @Test func aYesIsKeptBeforeAnythingElseRuns() async throws {
         let store = TaskStore.inMemory()
-        let rule = AskFirst.isolated()
-        let engine = LocalFakeEngine(rule: rule, origin: Self.morning)
-        engine.start(SampleTasks.dentist)
-        let flow = NeedsYouFlow(store: store, notifier: nil, agentName: { "Pip" })
-        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: rule), tasks: OffMainEngine(engine),
-                              place: .onDevice, flow: flow, now: { Self.morning + engine.now })
-        engine.advance(by: 42)
-        for _ in 0..<50 where pinned(model) == nil {
-            try await Task.sleep(for: .milliseconds(20))
-            await model.settled()
+        do {
+            let rule = AskFirst.isolated()
+            let engine = LocalFakeEngine(rule: rule, origin: Self.morning)
+            engine.start(SampleTasks.dentist)
+            let flow = NeedsYouFlow(store: store, notifier: nil, agentName: { "Pip" })
+            let model = FeedModel(sources: [], needsYou: NeedsYou(rule: rule), tasks: OffMainEngine(engine),
+                                  place: .onDevice, flow: flow, now: { Self.morning + engine.now })
+            engine.advance(by: 42)
+            for _ in 0..<50 where pinned(model) == nil {
+                try await Task.sleep(for: .milliseconds(20))
+                await model.settled()
+            }
+            #expect(store.tasks.first?.phase == .waiting)
+            #expect(try sheet(model, try #require(pinned(model))).tapPrimary() == .approved)
+            // No await: the engine's own word of the yes hasn't reached Today yet.
+            #expect(store.tasks.first?.phase == .approved)
         }
-        #expect(store.tasks.first?.phase == .waiting)
-        #expect(try sheet(model, try #require(pinned(model))).tapPrimary() == .approved)
-        // No await: the engine's own word of the yes hasn't reached Today yet.
+        // The app closes here, and nothing from before is left to write to
+        // the store once the snapshots still on their way have landed.
+        try await Task.sleep(for: .milliseconds(100))
         #expect(store.tasks.first?.phase == .approved)
-        // The app closes here. Opening again never asks or runs it again.
+        // Opening again never asks or runs it again.
         let (reopened, again, _) = today(store: store, origin: Self.morning + 43, start: false)
         again.advance(by: 60)
+        await reopened.settled()
         #expect(pinned(reopened) == nil)
         #expect(again.tasks.first?.step == TaskWords.interrupted)
+        #expect(store.tasks.isEmpty, "ended, so nothing is kept to pick up again")
+        #expect(store.receipts.map(\.outcome) == [.mayBeDone])
     }
 
     @Test func notNowEndsTheQuestionHonestlyOnTheCard() async throws {
@@ -430,6 +447,31 @@ struct NeedsYouFlowModelTests {
         let task = try #require(reopened.tasks.first)
         #expect(task.step == TaskWords.interrupted)
         #expect(receipts(model).map(\.outcome) == [.mayBeDone])
+        // The card agrees with the receipt: it may be done, so its label
+        // never says it couldn't finish.
+        let card = TaskCard(task: try #require(model.feed.groups.flatMap(\.items).compactMap(\.task).first),
+                            time: "9:42 AM")
+        #expect(card.spoken.hasPrefix(TaskWords.stoppedLabel))
+        #expect(!card.spoken.contains(TaskWords.failedLabel))
+        #expect(task.wrapUp?.underwayLine == "You said yes, so I'd already started to hold a Saturday visit. It may be done.")
+    }
+
+    /// The "I didn't" line is left off only when the closing line already
+    /// names that same step.
+    @Test func theNotDoneLineIsLeftOffOnlyForTheStepTheClosingLineNames() {
+        func ended(closing: String, notDone: [String]) -> TaskCard {
+            var task = AgentTask(id: "task:1", title: "A task", step: "Done.", state: .done,
+                                 history: [TaskStep(closing, mark: .skipped, at: Self.morning)],
+                                 wrapUp: TaskWrapUp(kept: [], notDone: notDone), startedAt: Self.morning)
+            task.updatedAt = Self.morning
+            return TaskCard(task: task, time: "")
+        }
+        let same = ended(closing: "You closed the question, so I didn't hold a Saturday visit.",
+                         notDone: ["hold a Saturday visit"])
+        #expect(!same.showsNotDone(TaskWrapUp(kept: [], notDone: ["hold a Saturday visit"])))
+        let other = ended(closing: "You closed the question, so I didn't hold a Saturday visit.",
+                          notDone: ["read their reviews"])
+        #expect(other.showsNotDone(TaskWrapUp(kept: [], notDone: ["read their reviews"])))
     }
 
     // MARK: Forget everything
@@ -447,14 +489,18 @@ struct NeedsYouFlowModelTests {
         let nudge = try #require(notifier.posted.first)
         await model.settled()
         #expect(receipts(model).count == 1)
+        #expect(notifier.live == [nudge.id])
+        #expect(!model.usedYes.isEmpty)
         model.forgetTasks()
         await model.settled()
         #expect(receipts(model).isEmpty)
         #expect(store.receipts.isEmpty)
         #expect(store.tasks.isEmpty)
         #expect(store.nudges == .allowed, "only the nudge choice stays")
-        #expect(notifier.posted.contains(nudge))
+        #expect(notifier.posted.contains(nudge), "it was posted")
+        #expect(notifier.live.isEmpty, "and it is gone")
         #expect(notifier.clears == 2, "once at launch, and again for every nudge, old ones too")
+        #expect(model.usedYes.isEmpty, "not even the ids of yeses stay")
     }
 
     @Test func forgetEverythingFromTheMemoryScreenClearsReceipts() throws {
@@ -488,6 +534,131 @@ struct NeedsYouFlowModelTests {
         let task = try #require(pinned(model))
         notifier.tap(task.id)
         #expect(flow.focus == task.id)
+        #expect(model.reviewing == nil, "opening a nudge brings the card, never the sheet")
+    }
+
+    /// VoiceOver goes to the card a nudge brought into view.
+    @Test func openingANudgeTakesVoiceOverToItsCard() async throws {
+        let (model, engine, _) = today()
+        engine.advance(by: 42)
+        let task = try #require(pinned(model))
+        model.focusCard(task.id)
+        #expect(model.cardState(task.id).pendingFocus == .summary)
+        model.focusCard("task:404")
+        #expect(model.feed.needsYou.allSatisfy { $0.id != "task:404" })
+    }
+
+    /// A nudge tapped after its question timed out, or for a task this
+    /// launch never knew, opens no sheet and makes nothing answerable.
+    @Test func aStaleOrUnknownNudgeOpensNothing() async throws {
+        let clock = FlowClock()
+        let notifier = FakeNotifier()
+        let rule = AskFirst.isolated(now: clock.now)
+        let (model, engine, flow) = today(rule: rule, store: .inMemory(.init(nudges: .allowed)), notifier: notifier)
+        engine.advance(by: 42)
+        let task = try #require(pinned(model))
+        flow.scene(isActive: false)
+        clock.advance(AskFirst.defaultWindow + 1)
+        model.refresh()
+        #expect(pinned(model) == nil)
+        notifier.tap(task.id)
+        #expect(model.reviewing == nil)
+        let ended = try #require(engine.task(task.id))
+        #expect(!model.canApprove(ended))
+        model.review(ended)
+        #expect(model.reviewing == nil, "its card opens nothing either")
+        flow.focus = nil
+        notifier.tap("task:404")
+        #expect(flow.focus == nil, "a task never pinned is never brought into view")
+        #expect(model.reviewing == nil)
+        #expect(engine.tasks.allSatisfy { !model.canApprove($0) })
+    }
+
+    /// PERMANENT GUARD. While a cloud preview waits for its answer, going
+    /// away nudges nothing. Once it is answered, the question may nudge.
+    @Test func aWaitingCloudPreviewHoldsTheNudge() async throws {
+        let notifier = FakeNotifier()
+        let (model, engine, _) = today(store: .inMemory(.init(nudges: .allowed)), notifier: notifier)
+        engine.advance(by: 42)
+        #expect(pinned(model) != nil)
+        model.preview(waiting: true)
+        model.scene(isActive: false)
+        #expect(notifier.posted.isEmpty, "the preview covers the screen, so the question couldn't be answered")
+        model.preview(waiting: false)
+        #expect(notifier.posted.map(\.taskID) == [pinned(model)?.id], "answered, so the question nudges")
+        #expect(notifier.delays == [NeedsYouFlow.nudgeDelay])
+    }
+
+    @Test func theNudgeWaitAndTheLeastTimeLeftArePinned() {
+        #expect(NeedsYouFlow.nudgeDelay == 30)
+        #expect(NeedsYouFlow.leastTimeLeft == 90)
+    }
+
+    /// A question with exactly `leastTimeLeft` to go still nudges; one
+    /// with a second less doesn't.
+    @Test(arguments: [(0.0, true), (1.0, false)])
+    func aQuestionAtTheEdgeOfTimeLeft(short: Double, nudges: Bool) async throws {
+        let clock = FlowClock()
+        let notifier = FakeNotifier()
+        let rule = AskFirst.isolated(now: clock.now)
+        let (model, engine, flow) = today(rule: rule, store: .inMemory(.init(nudges: .allowed)), notifier: notifier)
+        engine.advance(by: 42)
+        clock.advance(AskFirst.defaultWindow - NeedsYouFlow.leastTimeLeft + short)
+        model.refresh()
+        let task = try #require(pinned(model))
+        #expect(rule.timeLeft(try #require(task.question)) == NeedsYouFlow.leastTimeLeft - short)
+        flow.scene(isActive: false)
+        #expect(notifier.posted.isEmpty == !nudges)
+    }
+
+    // MARK: One per app
+
+    /// PERMANENT GUARD. Every window shares the app's one flow: a second
+    /// window never takes away the first one's nudge or its taps, and
+    /// nothing nudges while any window is in front.
+    @Test func aSecondWindowSharesTheFlow() async throws {
+        let notifier = FakeNotifier()
+        let store = TaskStore.inMemory(.init(nudges: .allowed))
+        let flow = NeedsYouFlow.forApp(store: store, notifier: notifier, agentName: { "Pip" })
+        #expect(NeedsYouFlow.forApp(store: store, notifier: notifier, agentName: { "Pip" }) === flow)
+        let rule = AskFirst.isolated()
+        let engine = LocalFakeEngine(rule: rule, origin: Self.morning)
+        engine.start(SampleTasks.dentist)
+        engine.advance(by: 42)
+        let first = FeedModel(sources: [], needsYou: NeedsYou(rule: rule), tasks: engine, place: .onDevice,
+                              flow: flow, now: { Self.morning + engine.now })
+        first.scene(isActive: false)
+        let nudge = try #require(notifier.posted.first)
+        // A second window opens, in front.
+        let second = FeedModel(sources: [], needsYou: NeedsYou(rule: rule), tasks: engine, place: .onDevice,
+                               flow: NeedsYouFlow.forApp(store: store, notifier: notifier, agentName: { "Pip" }),
+                               now: { Self.morning + engine.now })
+        second.scene(isActive: true)
+        #expect(notifier.clears == 1, "nudges from before go once, as the app starts")
+        #expect(notifier.listeners == 1, "taps have one listener")
+        #expect(notifier.removed == [nudge.id], "one window in front, so the nudge goes")
+        // The first window coming back and going again nudges nothing
+        // while the second is still in front.
+        first.scene(isActive: true)
+        first.scene(isActive: false)
+        #expect(notifier.posted.count == 1)
+        // A tap reaches the flow both windows read.
+        let task = try #require(FeedModel.pinnedTasks(in: second.feed).first)
+        notifier.tap(task.id)
+        #expect(flow.focus == task.id)
+        #expect(first.flow === second.flow)
+    }
+
+    /// Each window's home screen gets its flow from here, so all share one.
+    @Test func everyHomeScreenGetsTheAppsFlow() {
+        let notifier = FakeNotifier()
+        let store = TaskStore.inMemory()
+        let names = InMemoryAgentNameStore(stored: "Pip")
+        let one = HomeView.flow(store: store, notifier: notifier, brand: Brand(name: "Nova"), names: names)
+        let two = HomeView.flow(store: store, notifier: notifier, brand: Brand(name: "Nova"), names: names)
+        #expect(one === two)
+        #expect(notifier.clears == 1)
+        #expect(notifier.listeners == 1)
     }
 
     #if canImport(UserNotifications)
@@ -530,17 +701,20 @@ struct NeedsYouFlowModelTests {
         #expect(content.threadIdentifier == LocalQuestionNotifier.thread)
     }
 
-    @Test func aNudgeOpenedBeforeAnythingListensIsHandedOverOnce() async {
+    @Test func aNudgeOpenedBeforeAnythingListensIsHandedOverOnce() async throws {
         let notifier = LocalQuestionNotifier()
         notifier.open("task:7")
         var heard: [String] = []
-        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-            notifier.onOpen { id in
-                heard.append(id)
-                done.resume()
-            }
-        }
+        notifier.onOpen { heard.append($0) }
+        // Handed over a turn later. Waits a while, never forever.
+        for _ in 0..<100 where heard.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         #expect(heard == ["task:7"])
+        // A listener set after it has been handed over gets nothing.
+        var later: [String] = []
+        notifier.onOpen { later.append($0) }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(later.isEmpty)
+        #expect(heard == ["task:7"], "once, not twice")
     }
     #endif
 
@@ -601,6 +775,18 @@ struct NeedsYouFlowModelTests {
         #expect(card.width <= 361.5, "the receipt is \(card.width) wide at \(text)")
         let rule = AskFirst.isolated()
         let request = try #require(rule.ask(SampleTasks.holdVisit))
+        let sheet = ConfirmationSheet(request: request, rule: rule, isExample: true, onApprove: { _ in }, onDecline: {})
+            .unscrolled()
+        let size = try measured(sheet, width: 393, text: text)
+        #expect(size.width <= 393.5, "the sheet is \(size.width) wide at \(text)")
+        // Its labels go over their values and the sheet grows to hold
+        // them, rather than squeeze them in beside. Fonts don't grow with
+        // the text size where these tests run on a Mac, so only the
+        // stacking shows here.
+        let usual = try measured(sheet, width: 393, text: .large)
+        if text.isAccessibilitySize {
+            #expect(size.height > usual.height, "\(size.height) at \(text), \(usual.height) usually")
+        }
         try smokeRender(ConfirmationSheet(request: request, rule: rule, isExample: true, onApprove: { _ in }, onDecline: {})
             .environment(\.dynamicTypeSize, text)
             .frame(width: 393, height: 852))

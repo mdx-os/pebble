@@ -173,11 +173,28 @@ public struct ConfirmationSheet: View {
         }
     }
 
+    /// False lays the words out at their full height, so a test can
+    /// measure what a scroll view would hide.
+    private var scrolls = true
+
+    /// The same sheet, its words laid out without a scroll view.
+    func unscrolled() -> ConfirmationSheet {
+        var sheet = self
+        sheet.scrolls = false
+        return sheet
+    }
+
     public var body: some View {
-        ScrollView {
-            content
+        Group {
+            if scrolls {
+                ScrollView {
+                    content
+                }
+                .scrollBounceBehavior(.basedOnSize)
+            } else {
+                content
+            }
         }
-        .scrollBounceBehavior(.basedOnSize)
         // Opens tall, so what happens, to whom and what is shared are all
         // seen with the buttons before anything is decided.
         .presentationDetents([.medium, .large], selection: $detent)

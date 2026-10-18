@@ -101,6 +101,15 @@ public struct HomeView: View {
                   flow: flow, place: model.privacyPlace, now: now)
     }
 
+    /// The app's one Needs you flow, whichever window asks. A nudge says
+    /// the name the person chose, read when it is sent.
+    static func flow(store: TaskStore, notifier: (any QuestionNotifying)?, brand: Brand,
+                     names: any AgentNameStoring) -> NeedsYouFlow {
+        NeedsYouFlow.forApp(store: store, notifier: notifier, agentName: {
+            AgentProfile(brand: brand, stored: names.loadDisplayName()).displayName.text
+        })
+    }
+
     /// The same, from a place already worked out, as the home screen does
     /// with the cloud setting in it.
     static func feedModel(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)? = nil,
@@ -253,11 +262,7 @@ struct HomeScreen: View {
         _feed = StateObject(wrappedValue: HomeView.feedModel(
             sources: feed, needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
             // A nudge says the name the person chose, read when it is sent.
-            flow: kept.map { kept in
-                NeedsYouFlow(store: kept, notifier: notifier, agentName: {
-                    AgentProfile(brand: brand, stored: names.loadDisplayName()).displayName.text
-                })
-            },
+            flow: kept.map { HomeView.flow(store: $0, notifier: notifier, brand: brand, names: names) },
             place: newChatPlace, now: now))
         _section = State(initialValue: section)
         _cloudSettings = State(initialValue: cloud?.$settings.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher())
@@ -326,11 +331,14 @@ struct HomeScreen: View {
             // Away, a waiting question may nudge; back in front, its nudge
             // goes. A glance at Control Center is neither.
             switch phase {
-            case .active: feed.flow?.scene(isActive: true)
-            case .background: feed.flow?.scene(isActive: false)
+            case .active: feed.scene(isActive: true)
+            case .background: feed.scene(isActive: false)
             default: break
             }
         }
+        // A waiting cloud preview covers the screen, so no question is
+        // nudged until it has its answer.
+        .onChange(of: previewWaiting, initial: true) { _, waiting in feed.preview(waiting: waiting) }
         // A nudge opened: Today, with its card in view. A question or a
         // cloud preview already up stays up; any other sheet makes way.
         .background {

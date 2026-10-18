@@ -63,8 +63,9 @@ final class FeedModel: ObservableObject {
     /// falls through to `NeedsYou`. Holds only ids, nothing a task said.
     private var taskAsked: [UUID: String] = [:]
     /// Yeses a task has gone on with, by question id, so the same yes
-    /// handed over again is known and quietly ignored. Ids only.
-    private var usedYes: Set<UUID> = []
+    /// handed over again is known and quietly ignored. Ids only, and gone
+    /// with Forget everything.
+    private(set) var usedYes: Set<UUID> = []
     /// Kept on Today after Forget everything, while a step the person said
     /// yes to may have happened. Names nothing the task held.
     @Published private(set) var forgotUnderway: String?
@@ -104,7 +105,7 @@ final class FeedModel: ObservableObject {
             flow.store.restore(into: keeper, now: now())
         }
         feed = Feed.build(from: self.sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
-        flow?.pinned(Self.pinnedTasks(in: feed), rule: needsYou.rule)
+        flow?.pinned(Self.pinnedTasks(in: feed), rule: needsYou.rule, from: ObjectIdentifier(self))
         let list = tasks?.tasks ?? []
         track(list)
         sections = Self.sections(of: feed)
@@ -159,6 +160,21 @@ final class FeedModel: ObservableObject {
     deinit {
         if let observation { needsYou.stopObserving(observation) }
         if let storeObservation, let store { store.stopObserving(storeObservation) }
+        // The flow is the app's, so it is told this window has gone.
+        if let flow {
+            let window = ObjectIdentifier(self)
+            Task { @MainActor in flow.closed(window) }
+        }
+    }
+
+    /// This window came to the front or went away.
+    func scene(isActive: Bool) {
+        flow?.scene(isActive: isActive, from: ObjectIdentifier(self))
+    }
+
+    /// A cloud preview in this window started or stopped waiting.
+    func preview(waiting: Bool) {
+        flow?.preview(waiting: waiting, from: ObjectIdentifier(self))
     }
 
     var isSample: Bool { needsYou.isSample || sources.contains { $0.isSample } || tasks?.isSample == true }
@@ -196,6 +212,13 @@ final class FeedModel: ObservableObject {
         return state
     }
 
+    /// VoiceOver goes to a task card's summary, as when its nudge was
+    /// opened. Nothing for a task that isn't here.
+    func focusCard(_ id: String) {
+        guard taskIDs.contains(id) else { return }
+        cardState(id).pendingFocus = .summary
+    }
+
     /// True while there is any task to forget.
     var hasTasks: Bool { !taskIDs.isEmpty }
 
@@ -221,7 +244,7 @@ final class FeedModel: ObservableObject {
         let next = Feed.build(from: sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
         if next != feed { feed = next }
         followCards()
-        flow?.pinned(Self.pinnedTasks(in: feed), rule: rule)
+        flow?.pinned(Self.pinnedTasks(in: feed), rule: rule, from: ObjectIdentifier(self))
     }
 
     /// Each task card's section: Needs you, Working on it, or a time group.
@@ -406,6 +429,9 @@ final class FeedModel: ObservableObject {
         }
         if let reading, taskIDs.contains(reading.id) { self.reading = nil }
         askedBy.removeAll()
+        // A late yes for a forgotten task is still refused through
+        // `taskAsked`, so these ids have nothing left to guard.
+        usedYes.removeAll()
         let cleared = tasks.clear()
         refresh()
         if cleared.forgotten > 0 { tasksForgotten = true }
@@ -627,7 +653,9 @@ struct FeedView: View {
             }
             .background {
                 if let flow = model.flow {
-                    FocusScroller(flow: flow, scroller: scroller, reduceMotion: reduceMotion)
+                    FocusScroller(flow: flow, scroller: scroller, reduceMotion: reduceMotion) { id in
+                        model.focusCard(id)
+                    }
                 }
             }
             }
@@ -849,11 +877,14 @@ struct FeedCard: View {
     }
 }
 
-/// Brings a task's card into view when its nudge is opened, then lets go.
+/// Brings a task's card into view when its nudge is opened, and VoiceOver
+/// with it, then lets go.
 struct FocusScroller: View {
     @ObservedObject var flow: NeedsYouFlow
     let scroller: ScrollViewProxy
     let reduceMotion: Bool
+    /// Hands VoiceOver to the card's summary.
+    let focusCard: (String) -> Void
 
     var body: some View {
         Color.clear
@@ -864,6 +895,7 @@ struct FocusScroller: View {
                     withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.35)) {
                         scroller.scrollTo(id, anchor: .top)
                     }
+                    focusCard(id)
                     flow.focus = nil
                 }
             }

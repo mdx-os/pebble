@@ -398,12 +398,14 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
             // Being asked again after the app closed: still the question it
             // was, so it keeps the time it was first asked.
             case .toAsk where run.askedAt != nil, .asking where run.askedAt != nil: phase = .waiting
-            case .stuck: phase = .stuck
-            default: phase = run.approved ? .approved : .working
+            // A yes is kept whatever the step is doing, so Try again after
+            // a restart can never run it twice.
+            default: phase = run.approved ? .approved : run.phase == .stuck ? .stuck : .working
             }
             return SavedTask(id: run.task.id, title: run.script.title, step: run.index, phase: phase,
                              askedAt: phase == .waiting ? run.askedAt : nil,
                              approvedAt: phase == .approved ? run.approvedAt : nil,
+                             approvedAction: phase == .approved ? run.approvedAction.map(SavedAction.init) : nil,
                              kept: run.kept, notDone: run.notDone,
                              history: run.task.history.map { .init(text: $0.text, mark: $0.mark, at: $0.at) },
                              startedAt: run.task.startedAt)
@@ -449,14 +451,20 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
                     }
                 case .approved:
                     // The yes was for that moment. The step may have
-                    // happened, so it is never run again, and never called undone.
-                    if case .ask(let action, _) = step.kind {
+                    // happened, so it is never run again, and never called
+                    // undone. Its receipt says only what the person saw when
+                    // they said yes, as it was kept then; today's script
+                    // may say something else. Without it, or with one
+                    // changed into something no question could show, there
+                    // is no receipt, and the card still says it may be done.
+                    // Ended as stopped, not failed: it may have happened.
+                    if let action = entry.approvedAction?.action {
                         run.approvedAction = action
                         run.approvedAt = entry.approvedAt ?? date
                         run.approved = true
                         makeReceipt(run, outcome: .mayBeDone)
                     }
-                    end(&run, as: .failed, line: TaskWords.interrupted,
+                    end(&run, as: .stopped, line: TaskWords.interrupted,
                         wrapUp: TaskWrapUp(kept: run.kept,
                                            notDone: run.notDone + script.steps[(entry.step + 1)...].map(\.todo),
                                            underway: step.todo))

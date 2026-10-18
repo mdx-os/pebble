@@ -17,6 +17,10 @@ struct PebbleApp: App {
     /// the setting must not re-run the body and rebuild the home screen.
     /// The screens that show it observe it themselves.
     @State private var cloud: CloudHelp
+    /// Tasks and receipts kept while the app is closed. If the folder
+    /// can't be opened they are kept in memory, and Forget everything still
+    /// deletes a file an earlier launch left.
+    private let kept: TaskStore
 
     init() {
         guard let brand = Brand(infoDictionary: Bundle.main.infoDictionary) else {
@@ -28,6 +32,7 @@ struct PebbleApp: App {
         LocalQuestionNotifier.shared.install()
         let memory = try? MemoryStore.onDevice()
         self.memory = memory
+        kept = (try? TaskStore.onDevice()) ?? TaskStore.forgetOnly()
         let endpoint = CloudEndpoint.url(infoDictionary: Bundle.main.infoDictionary)
         // The setting is kept next to the notes. If either can't be opened,
         // nothing typed into the setting could be kept, so it reads as off,
@@ -68,7 +73,7 @@ struct PebbleApp: App {
             names: UserDefaultsAgentNameStore(),
             onboarding: UserDefaultsOnboardingStore(),
             memory: memory,
-            kept: try? TaskStore.onDevice(),
+            kept: kept,
             notifier: LocalQuestionNotifier.shared,
             cloud: cloud
         )

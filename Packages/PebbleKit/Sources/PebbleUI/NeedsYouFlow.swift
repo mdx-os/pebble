@@ -22,12 +22,36 @@ import SwiftUI
 /// at all. Each question is nudged at most once while the app runs, and
 /// the nudge goes as soon as the question closes. A question asked again
 /// after the app opens is a new question, so it may be nudged once more.
+/// While a cloud preview waits for its answer, nothing is nudged: it
+/// covers the screen, so the question couldn't be answered until it is.
+///
+/// The limit: while the app is suspended in the background nothing here
+/// runs, so a nudge already shown stays in Notification Center after its
+/// question times out. It goes at the next refresh after that, as the app
+/// comes back, and every nudge from before goes as the app starts. Its
+/// words name nothing, and opening it never makes anything answerable.
+///
+/// One per app, from `forApp`, shared by every window's Today: each window
+/// says what it has pinned and whether it is in front, and a nudge is
+/// posted only while no window is.
 @MainActor
 final class NeedsYouFlow: ObservableObject {
     let store: TaskStore
     let notifier: (any QuestionNotifying)?
     private let agentName: () -> String
     private let now: () -> Date
+
+    private static var made: [ObjectIdentifier: NeedsYouFlow] = [:]
+
+    /// The app's one flow for `store`. A second window gets the same one,
+    /// so it never takes away the first one's nudges or its taps.
+    static func forApp(store: TaskStore, notifier: (any QuestionNotifying)?,
+                       agentName: @escaping () -> String) -> NeedsYouFlow {
+        if let flow = made[ObjectIdentifier(store)] { return flow }
+        let flow = NeedsYouFlow(store: store, notifier: notifier, agentName: agentName)
+        made[ObjectIdentifier(store)] = flow
+        return flow
+    }
 
     /// How long the app is away before a waiting question nudges.
     static let nudgeDelay: TimeInterval = 30
@@ -46,14 +70,39 @@ final class NeedsYouFlow: ObservableObject {
     /// Says a line to VoiceOver. Tests replace it to hear what would be said.
     var announce: @MainActor (String) -> Void = NeedsYouFlow.post
 
-    /// The app is in front, so a waiting question is already on screen.
-    private(set) var isActive = true
-    /// The questions pinned now, each with the nudge it would get.
-    private var waiting: [(nudge: QuestionNudge, question: ConfirmationRequest)] = []
-    /// The rule the pinned questions were asked through, for their time left.
-    private var rule: AskFirst?
+    /// A question pinned now, the nudge it would get, and the rule it was
+    /// asked through, for its time left.
+    private struct Waiting {
+        let nudge: QuestionNudge
+        let question: ConfirmationRequest
+        let rule: AskFirst
+    }
+
+    /// What one window's Today has told the flow.
+    private struct Window {
+        var active = true
+        var waiting: [Waiting] = []
+        var previewWaiting = false
+    }
+
+    /// Every window, by its Today's model.
+    private var windows: [ObjectIdentifier: Window] = [:]
+    /// Some window is in front, so a waiting question is already on screen.
+    var isActive: Bool { windows.isEmpty ? soloActive : windows.values.contains(where: \.active) }
+    /// In front or not, before any window has said.
+    private var soloActive = true
+    /// The questions pinned now, in every window, each once.
+    private var waiting: [Waiting] {
+        var seen: Set<String> = []
+        return windows.values.flatMap(\.waiting).filter { seen.insert($0.nudge.id).inserted }
+    }
+    /// A cloud preview waits for its answer in some window.
+    private var previewWaiting: Bool { windows.values.contains(where: \.previewWaiting) }
     /// Every question nudged already, so none is nudged twice.
     private var told: Set<String> = []
+    /// Tasks whose question was pinned this launch, so a nudge for one can
+    /// bring its card into view. A tap for any other task does nothing.
+    private var knownTasks: Set<String> = []
     /// Nudges posted and not yet taken away, with when each was posted.
     private var posted: [String: Date] = [:]
     /// The system's answer, while it is being asked.
@@ -73,14 +122,34 @@ final class NeedsYouFlow: ObservableObject {
         notifier?.onOpen { [weak self] id in self?.opened(id) }
     }
 
-    /// The tasks whose questions are pinned in Needs you, asked through
-    /// `rule`. Only these are nudged: a question from another rule is never
-    /// pinned, so never nudged.
-    func pinned(_ tasks: [AgentTask], rule: AskFirst) {
-        self.rule = rule
-        waiting = tasks.compactMap { task in
-            task.question.map { (QuestionNudge(question: $0, taskID: task.id, agentName: agentName()), $0) }
+    /// The tasks whose questions are pinned in `window`'s Needs you, asked
+    /// through `rule`. Only these are nudged: a question from another rule
+    /// is never pinned, so never nudged.
+    func pinned(_ tasks: [AgentTask], rule: AskFirst, from window: ObjectIdentifier) {
+        windows[window, default: Window(active: soloActive)].waiting = tasks.compactMap { task in
+            task.question.map { Waiting(nudge: QuestionNudge(question: $0, taskID: task.id, agentName: agentName()),
+                                        question: $0, rule: rule) }
         }
+        update()
+    }
+
+    /// A window closed. What it had pinned is no longer on any screen.
+    func closed(_ window: ObjectIdentifier) {
+        guard windows.removeValue(forKey: window) != nil else { return }
+        update()
+    }
+
+    /// A cloud preview in `window` started or stopped waiting for its
+    /// answer. Once none waits, a question may nudge again.
+    func preview(waiting: Bool, from window: ObjectIdentifier) {
+        guard windows[window]?.previewWaiting != waiting else { return }
+        windows[window, default: Window(active: soloActive)].previewWaiting = waiting
+        postIfAway()
+    }
+
+    private func update() {
+        let waiting = waiting
+        knownTasks.formUnion(waiting.map(\.nudge.taskID))
         let open = Set(waiting.map(\.nudge.id))
         let closed = Set(posted.keys).subtracting(open)
         if !closed.isEmpty {
@@ -128,12 +197,18 @@ final class NeedsYouFlow: ObservableObject {
         await checking?.value
     }
 
-    /// The app came to the front or went away. In front, the questions are
-    /// on screen, so their nudges go, and one taken away before it showed
-    /// may nudge the next time. Away, each waiting question gets one, after
-    /// a short wait.
-    func scene(isActive active: Bool) {
-        isActive = active
+    /// A window came to the front or went away; with no window given,
+    /// every one. In front, the questions are on screen, so their nudges
+    /// go, and one taken away before it showed may nudge the next time.
+    /// Once every window is away, each waiting question gets one, after a
+    /// short wait.
+    func scene(isActive active: Bool, from window: ObjectIdentifier? = nil) {
+        if let window {
+            windows[window, default: Window()].active = active
+        } else {
+            soloActive = active
+            for id in windows.keys { windows[id]?.active = active }
+        }
         if active {
             if !posted.isEmpty {
                 notifier?.remove(Array(posted.keys))
@@ -168,8 +243,12 @@ final class NeedsYouFlow: ObservableObject {
         }
     }
 
-    /// The person opened a nudge: bring its task into view.
+    /// The person opened a nudge: bring its task into view. Only a task
+    /// whose question was pinned this launch; a tap for any other does
+    /// nothing. Either way nothing becomes answerable: a question opens
+    /// only from its card, while it is still pinned.
     func opened(_ taskID: String) {
+        guard knownTasks.contains(taskID) else { return }
         focus = taskID
     }
 
@@ -178,14 +257,16 @@ final class NeedsYouFlow: ObservableObject {
     func forget() {
         notifier?.removeAll()
         posted = [:]
+        knownTasks = []
         store.forget()
     }
 
     private func postIfAway() {
-        guard !isActive, store.nudges == .allowed, let notifier else { return }
-        for (nudge, question) in waiting where !told.contains(nudge.id) {
+        guard !isActive, !previewWaiting, store.nudges == .allowed, let notifier else { return }
+        for item in waiting where !told.contains(item.nudge.id) {
+            let nudge = item.nudge
             // Left for next time, when it will have less time still.
-            guard let left = rule?.timeLeft(question), left >= Self.leastTimeLeft else { continue }
+            guard let left = item.rule.timeLeft(item.question), left >= Self.leastTimeLeft else { continue }
             told.insert(nudge.id)
             posted[nudge.id] = now()
             notifier.post(nudge, after: Self.nudgeDelay)
@@ -261,17 +342,35 @@ public final class LocalQuestionNotifier: NSObject, QuestionNotifying, UNUserNot
     public func post(_ nudge: QuestionNudge, after delay: TimeInterval) {
         let trigger = delay > 0 ? UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false) : nil
         let request = UNNotificationRequest(identifier: nudge.id, content: Self.content(for: nudge), trigger: trigger)
+        let round = currentRound
         #if os(iOS)
         // Posted as the app goes to the background, so it asks for a moment
         // more, or it could be suspended before the system has the nudge.
+        // If the moment runs out first, it is given back all the same.
         Task { @MainActor in
-            let moment = UIApplication.shared.beginBackgroundTask(withName: "nudge")
+            let moment = BackgroundMoment()
+            moment.begin()
             try? await UNUserNotificationCenter.current().add(request)
-            UIApplication.shared.endBackgroundTask(moment)
+            self.takeBackIfCleared(nudge.id, postedIn: round)
+            moment.end()
         }
         #else
-        UNUserNotificationCenter.current().add(request) { _ in }
+        UNUserNotificationCenter.current().add(request) { [weak self] _ in self?.takeBackIfCleared(nudge.id, postedIn: round) }
         #endif
+    }
+
+    /// Goes up each time every nudge is taken away, so a nudge still on its
+    /// way to the system then is taken away once it lands.
+    private var round = 0
+    private var currentRound: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return round
+    }
+
+    private func takeBackIfCleared(_ id: String, postedIn posted: Int) {
+        guard currentRound != posted else { return }
+        remove([id])
     }
 
     public func remove(_ ids: [String]) {
@@ -284,6 +383,9 @@ public final class LocalQuestionNotifier: NSObject, QuestionNotifying, UNUserNot
         // Only the app's own notifier, made the delegate at launch, has a
         // notification center; anywhere else, as in a test, there is none.
         guard installed else { return }
+        lock.lock()
+        round += 1
+        lock.unlock()
         UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
             let ids = requests.filter { $0.content.threadIdentifier == Self.thread }.map(\.identifier)
             if !ids.isEmpty { UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ids) }
@@ -340,6 +442,27 @@ public final class LocalQuestionNotifier: NSObject, QuestionNotifying, UNUserNot
         completionHandler()
     }
 }
+
+#if os(iOS)
+/// A moment more of running in the background, ended once, by its owner
+/// or by the system when the moment runs out.
+@MainActor
+private final class BackgroundMoment {
+    private var id = UIBackgroundTaskIdentifier.invalid
+
+    func begin() {
+        id = UIApplication.shared.beginBackgroundTask(withName: "nudge") { [weak self] in
+            MainActor.assumeIsolated { self?.end() }
+        }
+    }
+
+    func end() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+        id = .invalid
+    }
+}
+#endif
 #endif
 
 /// The one time offer, shown in Needs you while a question waits.

@@ -216,7 +216,8 @@ struct NeedsYouFlowTests {
         after.advance(by: 60)
         store.keep(after)
         let back = try #require(after.task(task.id))
-        #expect(back.state == .failed)
+        #expect(back.state == .stopped, "it may have happened, so it never says it failed")
+        #expect(back.state.label == TaskWords.stoppedLabel)
         #expect(back.step == TaskWords.interrupted)
         #expect(back.question == nil)
         #expect(back.wrapUp?.underwayLine == "You said yes, so I'd already started to hold a Saturday visit. It may be done.")
@@ -228,6 +229,138 @@ struct NeedsYouFlowTests {
         store.restore(into: third, now: Self.base + 200)
         #expect(third.tasks.isEmpty)
         #expect(store.receipts.count == 1)
+    }
+
+    /// The dentist search with a different question at its last step, as an
+    /// update to the script might make it.
+    private static func dentist(asking action: ProposedAction) -> TaskScript {
+        var steps = SampleTasks.dentist.steps
+        let last = steps.removeLast()
+        steps.append(.init(last.text, kind: .ask(action, askLine: "May I?"), duration: last.duration,
+                           kept: last.kept, todo: last.todo))
+        return TaskScript(title: SampleTasks.dentistTitle, steps: steps, doneLine: SampleTasks.dentist.doneLine)
+    }
+
+    /// A yes under way, saved as the app closed.
+    private static func savedYes() throws -> SavedTask {
+        let store = TaskStore.inMemory()
+        let rule = AskFirst.isolated()
+        let (before, task) = atQuestion(rule: rule)
+        _ = before.resume(task.id, with: try yes(try #require(task.question), rule: rule))
+        store.keep(before)
+        return try #require(store.tasks.first)
+    }
+
+    /// The same saved task with its kept yes swapped.
+    private static func replacing(_ saved: SavedTask, action: SavedAction?) -> SavedTask {
+        SavedTask(id: saved.id, title: saved.title, step: saved.step, phase: saved.phase, askedAt: saved.askedAt,
+                  approvedAt: saved.approvedAt, approvedAction: action, kept: saved.kept, notDone: saved.notDone,
+                  history: saved.history, startedAt: saved.startedAt)
+    }
+
+    /// PERMANENT GUARD. A receipt after a restart says what the person said
+    /// yes to, as it was kept then, never what today's script says.
+    @Test func aReceiptAfterARestartIsMadeFromWhatWasApproved() throws {
+        let saved = try Self.savedYes()
+        #expect(saved.approvedAction == SavedAction(SampleTasks.holdVisit))
+        let changed = ProposedAction(kind: .sharePersonalInfo,
+                                     recipient: Recipient(id: "clinic:other", displayName: "Other Dental", handle: "other.example"),
+                                     details: "Your name, phone number and birthday", outcome: "I'll book Sunday.")
+        let after = LocalFakeEngine(rule: .isolated(), scripts: [Self.dentist(asking: changed)], origin: Self.base + 43)
+        after.restore([saved], now: Self.base + 43)
+        let receipt = try #require(after.takeReceipts().first)
+        #expect(receipt.recipientName == "Maple Dental")
+        #expect(receipt.handle == "mapledental.example")
+        #expect(receipt.details == SampleTasks.holdVisit.details)
+        #expect(receipt.outcomeLine == SampleTasks.holdVisit.outcome)
+        #expect(receipt.outcome == .mayBeDone)
+    }
+
+    @Test func aYesKeptWithoutItsActionLeavesNoReceiptAndNeverRunsAgain() throws {
+        let saved = Self.replacing(try Self.savedYes(), action: nil)
+        let after = LocalFakeEngine(rule: .isolated(), origin: Self.base + 43)
+        after.restore([saved], now: Self.base + 43)
+        after.advance(by: 60)
+        #expect(after.takeReceipts().isEmpty, "nothing to say what was approved, so no receipt")
+        let back = try #require(after.task(saved.id))
+        #expect(back.step == TaskWords.interrupted)
+        #expect(back.wrapUp?.underway == "hold a Saturday visit", "the card still says it may be done")
+    }
+
+    /// A file changed by hand never puts hidden words in a receipt.
+    @Test func aTamperedYesLeavesNoReceipt() throws {
+        let saved = try Self.savedYes()
+        let honest = try #require(saved.approvedAction)
+        let json = String(decoding: try JSONEncoder().encode(honest), as: UTF8.self)
+        for tampered in [json.replacingOccurrences(of: "Saturday at 10:30", with: "Saturday at 10:30\\u202E"),
+                         json.replacingOccurrences(of: "mapledental.example", with: "mapledental.example\\u200B"),
+                         json.replacingOccurrences(of: #""kind":"sharePersonalInfo""#, with: #""kind":"purchase""#)] {
+            #expect(tampered != json)
+            let action = try JSONDecoder().decode(SavedAction.self, from: Data(tampered.utf8))
+            #expect(action.action == nil, "\(tampered)")
+            let after = LocalFakeEngine(rule: .isolated(), origin: Self.base + 43)
+            after.restore([Self.replacing(saved, action: action)], now: Self.base + 43)
+            #expect(after.takeReceipts().isEmpty)
+            #expect(after.task(saved.id)?.step == TaskWords.interrupted)
+        }
+    }
+
+    /// A waiting question whose words carry hidden characters is never
+    /// asked again, whatever the file says.
+    @Test func aTamperedWaitingQuestionIsNeverAskedAgain() throws {
+        let store = TaskStore.inMemory()
+        let (before, task) = Self.atQuestion(rule: .isolated())
+        store.keep(before)
+        let saved = try #require(store.tasks.first)
+        #expect(saved.phase == .waiting)
+        let hidden = [
+            ProposedAction(kind: .sharePersonalInfo, recipient: SampleTasks.holdVisit.recipient,
+                           details: SampleTasks.holdVisit.details, outcome: "I'll hold Saturday\u{202E} at 10:30."),
+            ProposedAction(kind: .sharePersonalInfo, recipient: SampleTasks.holdVisit.recipient,
+                           details: "Your name\u{202E} and phone number", outcome: SampleTasks.holdVisit.outcome),
+        ]
+        for action in hidden {
+            let rule = AskFirst.isolated()
+            let after = LocalFakeEngine(rule: rule, scripts: [Self.dentist(asking: action)], origin: Self.base + 60)
+            after.restore([saved], now: Self.base + 60)
+            let back = try #require(after.task(task.id))
+            #expect(back.question == nil)
+            #expect(!back.waitsForApproval)
+            let feed = Feed.build(from: [], needsYou: NeedsYou(rule: rule), tasks: after, now: Self.base + 60)
+            #expect(!feed.needsYou.contains { $0.task?.id == task.id })
+        }
+        // A step that doesn't ask, or isn't there, is never asked either.
+        for step in [0, -1, 99] {
+            let odd = SavedTask(id: saved.id, title: saved.title, step: step, phase: .waiting, askedAt: saved.askedAt,
+                                startedAt: saved.startedAt)
+            let after = LocalFakeEngine(rule: .isolated(), origin: Self.base + 60)
+            after.restore([odd], now: Self.base + 60)
+            #expect(after.task(saved.id)?.question == nil, "step \(step)")
+        }
+    }
+
+    /// PERMANENT GUARD. A step said yes to never stalls into stuck, however
+    /// long it takes, so Try again can never run it a second time. Kept as
+    /// approved all the while.
+    @Test func aStepSaidYesToNeverStalls() throws {
+        var steps = SampleTasks.dentist.steps
+        let last = steps.removeLast()
+        steps.append(.init(last.text, kind: last.kind, duration: 10_000, kept: last.kept, todo: last.todo))
+        let slow = TaskScript(title: "Slow", steps: steps, doneLine: "Done.")
+        let rule = AskFirst.isolated()
+        let engine = LocalFakeEngine(rule: rule, origin: Self.base)
+        let id = engine.start(slow)
+        engine.advance(by: 42)
+        let question = try #require(engine.task(id)?.question)
+        #expect(engine.resume(id, with: try Self.yes(question, rule: rule)) == .proceeding)
+        for _ in 0..<20 {
+            engine.advance(by: RetryPolicy.standard.timeout * 5)
+            let task = try #require(engine.task(id))
+            #expect(task.state == .running, "never stalled, stuck or retried")
+            #expect(!task.isStuck)
+            #expect(!engine.retry(id))
+            #expect(engine.saved().first?.phase == .approved)
+        }
     }
 
     @Test func workStillGoingPicksUpAtItsStep() throws {
@@ -280,55 +413,99 @@ struct NeedsYouFlowTests {
         #expect(!FileManager.default.fileExists(atPath: url.path), "nothing to keep, so no file")
     }
 
-    @Test func anUnreadableFileIsNeverWrittenOver() throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tasks-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: url) }
+    /// A file that is read but can't be understood is moved aside, never
+    /// written over, and never stops what happens now from being kept: a
+    /// yes saved after it is on disk.
+    @Test func aFileThatCannotBeDecodedIsMovedAsideAndTheStoreGoesOn() throws {
+        let folder = try Self.folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("tasks.json")
         try Data("not json".utf8).write(to: url)
         let store = TaskStore(fileURL: url)
+        #expect(try Data(contentsOf: folder.appendingPathComponent(".tasks.json.unreadable")) == Data("not json".utf8))
+        let rule = AskFirst.isolated()
+        let (engine, task) = Self.atQuestion(rule: rule)
+        _ = engine.resume(task.id, with: try Self.yes(try #require(task.question), rule: rule))
+        store.keep(engine)
         store.setNudges(.allowed)
-        #expect(try Data(contentsOf: url) == Data("not json".utf8))
+        let next = TaskStore(fileURL: url)
+        #expect(next.tasks.map(\.phase) == [.approved], "the yes is on disk")
+        #expect(next.nudges == .allowed)
+        // Forget everything takes the one moved aside too, and keeps only
+        // the nudge choice.
+        next.forget()
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["tasks.json"])
+        let after = TaskStore(fileURL: url)
+        #expect(after.tasks.isEmpty)
+        #expect(after.nudges == .allowed)
     }
 
     /// A store file in a folder of its own, holding one receipt and a
-    /// declined nudge, as an earlier launch left it.
-    private static func earlierFile() throws -> (folder: URL, url: URL, receipt: Receipt) {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("tasks-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    /// declined nudge, as an earlier launch left it, and where a forget
+    /// still owed is written down, in another folder.
+    private static func earlierFile() throws -> (folder: URL, url: URL, marker: URL, receipt: Receipt) {
+        let folder = try folder()
         let url = folder.appendingPathComponent("tasks.json")
+        let marker = try Self.folder().appendingPathComponent("tasks-forgotten")
         let rule = AskFirst.isolated()
         let (engine, task) = atQuestion(rule: rule)
         _ = engine.resume(task.id, with: try yes(try #require(task.question), rule: rule))
         engine.advance(by: 4)
-        let earlier = TaskStore(fileURL: url)
+        let earlier = TaskStore(fileURL: url, forgetMarker: marker)
         earlier.keep(engine)
         earlier.setNudges(.declined)
-        return (folder, url, try #require(earlier.receipts.first))
+        return (folder, url, marker, try #require(earlier.receipts.first))
+    }
+
+    private static func folder() throws -> URL {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("tasks-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
     }
 
     private static func setReadable(_ url: URL, _ readable: Bool) throws {
         try FileManager.default.setAttributes([.posixPermissions: readable ? 0o644 : 0o000], ofItemAtPath: url.path)
     }
 
+    private static func setWritable(folder: URL, _ writable: Bool) throws {
+        try FileManager.default.setAttributes([.posixPermissions: writable ? 0o755 : 0o555], ofItemAtPath: folder.path)
+    }
+
+    private static func cleanUp(_ folders: URL...) {
+        for folder in folders {
+            try? setWritable(folder: folder, true)
+            try? FileManager.default.removeItem(at: folder)
+        }
+    }
+
+    /// Permissions don't stop root, so these can't make a file unreadable there.
+    static let canLockFiles = geteuid() != 0
+
     /// PERMANENT GUARD. Forget everything removes the file even when it
     /// couldn't be read, as before the device is first unlocked, and
-    /// nothing it held comes back once it could have been.
-    @Test func forgetRemovesAFileThatCouldNotBeRead() throws {
-        let (folder, url, _) = try Self.earlierFile()
-        defer { try? FileManager.default.removeItem(at: folder) }
+    /// nothing it held comes back once it could have been. The nudge choice
+    /// it held goes with it.
+    @Test(.enabled(if: canLockFiles, "file permissions don't stop root"))
+    func forgetRemovesAFileThatCouldNotBeRead() throws {
+        let (folder, url, marker, _) = try Self.earlierFile()
+        defer { Self.cleanUp(folder, marker.deletingLastPathComponent()) }
         try Self.setReadable(url, false)
-        let store = TaskStore(fileURL: url)
+        let store = TaskStore(fileURL: url, forgetMarker: marker)
         #expect(store.receipts.isEmpty, "not read yet")
         store.forget()
         #expect(!FileManager.default.fileExists(atPath: url.path))
         #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty, "no staging file either")
+        #expect(!FileManager.default.fileExists(atPath: marker.path), "nothing is owed")
         #expect(store.receipts.isEmpty)
         #expect(store.tasks.isEmpty)
-        #expect(TaskStore(fileURL: url).receipts.isEmpty, "nothing comes back on the next launch")
+        #expect(store.nudges == .notAsked, "never read, so its choice went with it")
+        let next = TaskStore(fileURL: url, forgetMarker: marker)
+        #expect(next.receipts.isEmpty, "nothing comes back on the next launch")
+        #expect(next.nudges == .notAsked)
     }
 
     @Test func forgetRemovesAFileThatCouldNotBeDecoded() throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("tasks-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let folder = try Self.folder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let url = folder.appendingPathComponent("tasks.json")
         // As a later version might write it: a receipt this one can't read.
@@ -340,30 +517,92 @@ struct NeedsYouFlowTests {
         #expect(TaskStore(fileURL: url).receipts.isEmpty)
     }
 
-    /// When the file can't even be removed, it is still forgotten: once it
-    /// can be read, nothing it held comes back.
-    @Test func aFileForgottenWhileItCouldNotBeRemovedNeverComesBack() throws {
-        let (folder, url, _) = try Self.earlierFile()
-        defer {
-            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
-            try? FileManager.default.removeItem(at: folder)
-        }
+    /// PERMANENT GUARD. When the file can't even be removed, it is still
+    /// forgotten, even by a store opened after the app was killed: none
+    /// reads it, and the first that can deletes it. The nudge choice goes
+    /// with it, the same as when it could be removed.
+    @Test(.enabled(if: canLockFiles, "file permissions don't stop root"))
+    func aFileForgottenWhileItCouldNotBeRemovedNeverComesBack() throws {
+        let (folder, url, marker, _) = try Self.earlierFile()
+        defer { Self.cleanUp(folder, marker.deletingLastPathComponent()) }
         try Self.setReadable(url, false)
-        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
-        let store = TaskStore(fileURL: url)
+        try Self.setWritable(folder: folder, false)
+        let store = TaskStore(fileURL: url, forgetMarker: marker)
         store.forget()
         #expect(FileManager.default.fileExists(atPath: url.path), "the folder won't let it go")
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+        #expect(FileManager.default.fileExists(atPath: marker.path), "the forget is written down")
+        // The app is killed. The next launch opens a new store before the
+        // file can be read, and then it can be.
+        let relaunched = TaskStore(fileURL: url, forgetMarker: marker)
+        #expect(relaunched.receipts.isEmpty)
         try Self.setReadable(url, true)
+        #expect(relaunched.receipts.isEmpty, "readable now, and still never read")
+        #expect(relaunched.tasks.isEmpty)
         #expect(store.receipts.isEmpty)
-        #expect(store.tasks.isEmpty)
-        #expect(store.nudges == .declined, "the nudge choice is all it keeps")
-        #expect(TaskStore(fileURL: url).receipts.isEmpty, "and the file says so now")
+        // The folder lets go: the first look deletes it.
+        try Self.setWritable(folder: folder, true)
+        #expect(relaunched.receipts.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+        #expect(relaunched.nudges == .notAsked, "never read, so its choice went with it")
+        let third = TaskStore(fileURL: url, forgetMarker: marker)
+        #expect(third.receipts.isEmpty)
+        #expect(third.nudges == .notAsked)
+    }
+
+    /// PERMANENT GUARD. Forget everything deletes the file first, even when
+    /// it was read and the store is in use. A file that won't go is owed a
+    /// forget, written down, and tried again at every later change.
+    @Test(.enabled(if: canLockFiles, "file permissions don't stop root"))
+    func forgetDeletesTheFileFirstEvenWhenItWasRead() throws {
+        let (folder, url, marker, receipt) = try Self.earlierFile()
+        defer { Self.cleanUp(folder, marker.deletingLastPathComponent()) }
+        let store = TaskStore(fileURL: url, forgetMarker: marker)
+        #expect(store.receipts.map(\.id) == [receipt.id], "read and in use")
+        try Self.setWritable(folder: folder, false)
+        store.forget()
+        #expect(store.receipts.isEmpty)
+        #expect(TaskStore(fileURL: url, forgetMarker: marker).receipts.isEmpty, "a new launch never reads it")
+        // A later change, once the folder lets go, deletes it and writes
+        // only what is in memory now.
+        try Self.setWritable(folder: folder, true)
+        store.setNudges(.allowed)
+        let data = try Data(contentsOf: url)
+        #expect(!String(decoding: data, as: UTF8.self).contains("Maple Dental"))
+        let next = TaskStore(fileURL: url, forgetMarker: marker)
+        #expect(next.receipts.isEmpty)
+        #expect(next.nudges == .allowed)
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+    }
+
+    /// A store whose folder couldn't be opened keeps everything in memory,
+    /// and Forget everything still deletes what an earlier launch left.
+    @Test func aStoreThatCouldNotOpenItsFolderStillForgetsTheFileThere() throws {
+        let (folder, url, marker, _) = try Self.earlierFile()
+        defer { Self.cleanUp(folder, marker.deletingLastPathComponent()) }
+        try Data("half a write".utf8).write(to: folder.appendingPathComponent(".tasks.json.next"))
+        let store = TaskStore(forgetOnly: url, forgetMarker: marker)
+        #expect(store.receipts.isEmpty, "it never reads the file")
+        store.setNudges(.allowed)
+        #expect(FileManager.default.fileExists(atPath: url.path), "nor writes it")
+        store.forget()
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+        #expect(store.nudges == .allowed)
+    }
+
+    @Test func theForgetMarkerHasAFolderOfItsOwn() {
+        let base = URL(fileURLWithPath: "/tmp/support")
+        let (file, marker) = TaskStore.location(base: base)
+        #expect(file.path == "/tmp/support/pebble/tasks/tasks.json")
+        #expect(marker.deletingLastPathComponent() != file.deletingLastPathComponent())
+        #expect(!marker.path.hasPrefix(file.deletingLastPathComponent().path))
     }
 
     /// A file read late never takes back what changed since launch.
-    @Test func aLateReadKeepsWhatChangedSinceLaunch() throws {
-        let (folder, url, earlier) = try Self.earlierFile()
+    @Test(.enabled(if: canLockFiles, "file permissions don't stop root"))
+    func aLateReadKeepsWhatChangedSinceLaunch() throws {
+        let (folder, url, _, earlier) = try Self.earlierFile()
         defer { try? FileManager.default.removeItem(at: folder) }
         try Self.setReadable(url, false)
         let store = TaskStore(fileURL: url)
@@ -418,7 +657,8 @@ struct NeedsYouFlowTests {
         let (engine, task) = Self.atQuestion(rule: .isolated())
         let feed = Feed.build(from: [], needsYou: NeedsYou(rule: .isolated()), tasks: engine, now: Self.base + 60)
         #expect(task.waitsForApproval)
-        #expect(!feed.needsYou.contains { $0.task?.question != nil })
+        #expect(!feed.needsYou.contains { $0.id == task.id || $0.task?.id == task.id },
+                "not pinned at all, with its question or without")
     }
 
     // MARK: What a nudge says

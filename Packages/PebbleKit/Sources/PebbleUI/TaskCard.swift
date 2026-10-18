@@ -202,9 +202,10 @@ struct TaskCard: View {
     }
 
     /// The wrap up's "I didn't ..." line, unless the closing line already
-    /// says the one thing that was not done.
+    /// says the one thing that was not done, and that it is that thing.
     func showsNotDone(_ wrapUp: TaskWrapUp) -> Bool {
-        !(closingLine != nil && wrapUp.notDone.count == 1)
+        guard let closingLine, wrapUp.notDone.count == 1 else { return true }
+        return !closingLine.hasSuffix("didn't \(wrapUp.notDone[0]).")
     }
 
     // MARK: What it says
