@@ -423,7 +423,7 @@ public final class CloudReview: ObservableObject, CloudReviewing {
     public init() {}
 
     public func review(_ preview: CloudPreview) async -> CloudConsent {
-        if Task.isCancelled { return .cancel }
+        if Task.isCancelled { return .withdrawn }
         // Only one question at a time; an older one is not sent.
         cancelPending()
         let id = preview.id
@@ -436,7 +436,7 @@ public final class CloudReview: ObservableObject, CloudReviewing {
                 for watcher in watchers { watcher.resume(returning: preview) }
             }
         } onCancel: {
-            Task { @MainActor in self.answer(.cancel, for: id) }
+            Task { @MainActor in self.answer(.withdrawn, for: id) }
         }
     }
 
@@ -451,9 +451,10 @@ public final class CloudReview: ObservableObject, CloudReviewing {
         waiting?.resume(returning: consent)
     }
 
-    /// Sends nothing for whatever is waiting.
+    /// Sends nothing for whatever is waiting. The person didn't answer it,
+    /// so it is withdrawn, not declined.
     public func cancelPending() {
-        if let id = pending?.id { answer(.cancel, for: id) }
+        if let id = pending?.id { answer(.withdrawn, for: id) }
     }
 
     /// Waits until a preview is on screen, with no timing involved. For tests.

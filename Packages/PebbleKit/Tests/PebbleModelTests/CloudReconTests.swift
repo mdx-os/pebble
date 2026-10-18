@@ -72,6 +72,67 @@ struct CloudReconTests {
         #expect(note.contains("They give different reopening dates"))
     }
 
+    func parsed(_ reply: String, sources: [ReconSource]? = nil) -> ReconSummary? {
+        CloudReconSummarizer.parse(reply, task: task, id: "task:1", sources: sources ?? self.sources,
+                                   gatheredAt: readOn, fallbackOverview: "Plain words.")
+    }
+
+    /// The model cites both sides on one side's words. The card never shows
+    /// both beside it, and remembering it never says both said it.
+    @Test func aPointCitingEverySideOfADisputeNeverCarriesIt() throws {
+        let summary = try #require(parsed("""
+            POINT: The pool reopens on November 10. [1][2]
+            POINT: Family swim is on Saturdays. [2]
+            DISAGREE: The Gazette says November 3 and the city says November 10. [1][2]
+            """))
+        #expect(!summary.points.contains { $0.text == "The pool reopens on November 10." })
+        let dispute = try #require(summary.points.first { $0.disagreement != nil })
+        #expect(dispute.text == "The Gazette says November 3 and the city says November 10.")
+        #expect(dispute.sourceIDs == ["a", "b"])
+        let swim = try #require(summary.points.first { $0.text.hasPrefix("Family swim") })
+        #expect(swim.sourceIDs == ["b"])
+        #expect(swim.disagreement == nil)
+        // No undisputed point names both sides of the dispute.
+        #expect(!summary.points.contains { $0.disagreement == nil && Set($0.sourceIDs).isSuperset(of: ["a", "b"]) })
+    }
+
+    /// A point with a source beside the dispute keeps only that one; a
+    /// point whose only source is one side keeps it, as that is its side.
+    @Test func aPointLetsGoOfTheSourcesInADispute() throws {
+        let third = ReconSource(id: "c", title: "Swim notes", publisher: "Riverside Swim Club",
+                                url: URL(string: "https://swim.example.org/pool")!, published: readOn,
+                                text: "The pool reopens on November 10.")
+        let summary = try #require(parsed("""
+            POINT: The pool reopens on November 10. [2][3]
+            DISAGREE: The Gazette says November 3 and the city says November 10. [1][2]
+            """, sources: sources + [third]))
+        let point = try #require(summary.points.first)
+        #expect(point.sourceIDs == ["c"])
+        #expect(point.disagreement?.sourceIDs == ["a", "b"])
+        let only = try #require(parsed("""
+            POINT: The city says it reopens on November 10. [2]
+            DISAGREE: The Gazette says November 3 and the city says November 10. [1][2]
+            """))
+        #expect(only.points.map(\.sourceIDs) == [["b"]])
+        #expect(only.points.first?.disagreement != nil)
+    }
+
+    @Test func noSourcesMeansNothingToRead() {
+        #expect(parsed("POINT: The pool reopens on November 10. [1]", sources: []) == nil)
+    }
+
+    /// A preview taken away before the person answered, as when the cloud
+    /// was turned off or the screen went, never says they chose it.
+    @Test func aWithdrawnPreviewGetsANeutralNote() async {
+        let transport = RecordingTransport(reply: Self.goodReply)
+        let summary = await CloudReconSummarizer(model: cloud(transport, RecordingReviewer(answer: .withdrawn)))
+            .summarize(task, id: "task:1", sources: sources, gatheredAt: readOn)
+        #expect(transport.sent.isEmpty)
+        #expect(summary.madeOnDevice)
+        #expect(summary.note == ReconWords.cloudWithdrawn)
+        #expect(summary.note != ReconWords.declinedCloud)
+    }
+
     @Test func aChatModelOnTheDeviceNeverMayLeaveIt() {
         #expect(!CloudReconSummarizer(model: LocalStubModel()).mayLeaveDevice)
         #expect(CloudReconSummarizer(model: cloud(RecordingTransport(), RecordingReviewer(answer: .send))).mayLeaveDevice)

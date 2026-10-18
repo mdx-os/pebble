@@ -213,24 +213,41 @@ struct ReconPointRow: View {
         summary.restsOnOldPages(point) ? ReconWords.olderLabel : nil
     }
 
+    /// A disagreement no point could carry is a point of its own, with the
+    /// same words. Those words then show once, in the disagreement's box.
+    var standsAlone: Bool {
+        point.disagreement?.text == point.text
+    }
+
+    /// The point's own line, above any disagreement. None when it stands alone.
+    var pointLine: String? {
+        standsAlone ? nil : point.text
+    }
+
     var spoken: String {
         let from = ReconWords.from(point.sourceIDs.compactMap(summary.source).map(\.publisher))
-        return [point.text, point.disagreement?.text, from, oldLabel.map { "\($0)." }]
+        return [pointLine, point.disagreement?.text, from, oldLabel.map { "\($0)." }]
             .compactMap { $0 }.joined(separator: " ")
+    }
+
+    /// The source numbers, after the words on the same line.
+    private func withRefs(_ words: String) -> Text {
+        Text("\(words) \(Text(refs).font(.caption.weight(.bold)).foregroundStyle(Theme.accentText))")
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Circle()
-                    .fill(Theme.accent)
-                    .frame(width: 6, height: 6)
-                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-                // The source numbers follow the words on the same line.
-                Text("\(point.text) \(Text(refs).font(.caption.weight(.bold)).foregroundStyle(Theme.accentText))")
-                    .font(.subheadline)
-                    .foregroundStyle(.primary)
-                    .fixedSize(horizontal: false, vertical: true)
+            if let pointLine {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Circle()
+                        .fill(Theme.accent)
+                        .frame(width: 6, height: 6)
+                        .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+                    withRefs(pointLine)
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             if let oldLabel {
                 Label(oldLabel, systemImage: "clock.arrow.circlepath")
@@ -240,7 +257,7 @@ struct ReconPointRow: View {
             }
             if let disagreement = point.disagreement {
                 Label {
-                    Text(disagreement.text)
+                    (standsAlone ? withRefs(disagreement.text) : Text(disagreement.text))
                         .fixedSize(horizontal: false, vertical: true)
                 } icon: {
                     Image(systemName: "arrow.left.arrow.right")
@@ -424,8 +441,9 @@ struct ReconRememberSheet: View {
         }
         .presentationDragIndicator(.visible)
         .onDisappear { model.clearRememberStatus() }
-        .onChange(of: model.rememberStatus) { _, status in
-            if let status { AccessibilityNotification.Announcement(status).post() }
+        // On each tap's answer, so a second "Saved" in a row is said too.
+        .onChange(of: model.rememberTold) {
+            if let status = model.rememberStatus { AccessibilityNotification.Announcement(status).post() }
         }
     }
 }

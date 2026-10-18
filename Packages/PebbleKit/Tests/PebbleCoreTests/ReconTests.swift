@@ -158,7 +158,9 @@ struct ReconTests {
         #expect(summary.overview.contains("They don't agree on one thing, so I marked it."))
     }
 
-    /// No point, anywhere, cites a source that doesn't say its words.
+    /// A disputed point cites only sources that say its very words. Points
+    /// with no dispute are held to their own rule, a second source repeating
+    /// the dates, prices and numbers, in `aSourceIsListedOnlyBesideWhatItSays`.
     @Test(arguments: [SampleSources.poolTopic, SampleSources.libraryTopic])
     func everySourceBesideAPointSaysIt(topic: String) throws {
         let summary = try Self.summary(topic)

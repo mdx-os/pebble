@@ -38,7 +38,7 @@ struct ReconUITests {
     }
 
     func scratchMemory() -> MemoryStore {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("pebble-recon-\(UUID().uuidString).json")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("recon-memory-\(UUID().uuidString).json")
         return MemoryStore(fileURL: url)
     }
 
@@ -135,9 +135,10 @@ struct ReconUITests {
 
     // MARK: The feed
 
-    func feed(memory: MemoryStore?) -> (FeedModel, LocalFakeEngine, ReconRunner) {
+    func feed(memory: MemoryStore?, provider: any SourceProvider = ReconTestData.sources)
+        -> (FeedModel, LocalFakeEngine, ReconRunner) {
         let engine = LocalFakeEngine(rule: .isolated(), origin: ShowcaseScene.morning)
-        let runner = ReconRunner(engine: engine, provider: ReconTestData.sources)
+        let runner = ReconRunner(engine: engine, provider: provider)
         let model = FeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()), tasks: runner,
                               place: .onDevice, memory: memory, now: { ShowcaseScene.morning })
         return (model, engine, runner)
@@ -299,7 +300,7 @@ struct ReconUITests {
         _ = try notes.remember("Coach Priya teaches the Saturday lessons.", source: .toldMe)
         let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
-        let (model, engine, runner) = feed(memory: nil)
+        let (model, engine, runner) = feed(memory: nil, provider: PagesNamingSomeone())
         // Today's own gate, as the home screen wires it.
         let review = model.cloudReview
         model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel(), review: review)) }
@@ -317,6 +318,10 @@ struct ReconUITests {
         }
         let preview = try #require(pending)
         #expect(preview.request.text.contains("Riverside Pool reopens on November 10"))
+        // A page names someone in the person's notes. The name is masked on
+        // its way through Today too.
+        #expect(!preview.request.text.contains("Priya"))
+        #expect(preview.request.text.contains("[name]"))
         #expect(maker.wire.sent.isEmpty)
         review.answer(.cancel, for: preview.id)
         await runner.settle(id)
@@ -376,6 +381,8 @@ struct ReconUITests {
         #expect(maker.wire.sent.isEmpty)
         let summary = try #require(runner.summary(for: id))
         #expect(summary.madeOnDevice)
+        // The person didn't decline it, so the card doesn't say they did.
+        #expect(summary.note == ReconWords.cloudWithdrawn)
     }
 
     // MARK: Rendering
@@ -416,6 +423,18 @@ struct ReconUITests {
         let task = try #require(runner.tasks.first)
         let card = TaskCard(task: task, time: "", canRedirect: model.canRedirect(task))
         #expect(card.actions == [.stop])
+    }
+}
+
+/// The sample pages, with one more that names someone from the person's notes.
+struct PagesNamingSomeone: SourceProvider {
+    var runsOnDevice: Bool { true }
+    func sources(for task: ReconTask) throws -> [ReconSource] {
+        try ReconTestData.sources.sources(for: task) + [
+            ReconSource(id: "test:club", title: "Swim club news", publisher: "Riverside Swim Club",
+                        url: URL(string: "https://swim.example.org/news")!, published: ShowcaseScene.morning - 86_400,
+                        text: "Coach Priya runs the Saturday lessons when the pool reopens."),
+        ]
     }
 }
 

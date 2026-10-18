@@ -63,15 +63,27 @@ public struct HomeView: View {
         drivesTasks: Bool = false,
         sources: any SourceProvider = SampleSources(),
         now: @escaping () -> Date = { Date() },
-        cloud: CloudHelp? = nil,
-        // Said in the chat as it opens, for screenshots of what follows.
-        chatLine: String? = nil
+        cloud: CloudHelp? = nil
     ) {
         screen = HomeScreen(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                             looks: looks, conversation: conversation, section: section, feed: feed,
                             needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, sources: sources,
-                            now: now, cloud: cloud, chatLine: chatLine)
+                            now: now, cloud: cloud, chatLine: nil)
     }
+
+    #if DEBUG
+    /// The same, with `chatLine` said in the chat as it opens, for the
+    /// showcase's screenshots of what follows. Only the showcase can say a
+    /// line the person didn't type, and only in a debug build.
+    init(brand: Brand, model: any ModelClient, names: any AgentNameStoring, onboarding: any OnboardingStoring,
+         memory: MemoryStore?, looks: UserDefaults, conversation: Conversation?, section: HomeSection,
+         feed: [any FeedSource], needsYou: NeedsYou, now: @escaping () -> Date, chatLine: String) {
+        screen = HomeScreen(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
+                            looks: looks, conversation: conversation, section: section, feed: feed,
+                            needsYou: needsYou, tasks: nil, drivesTasks: false, sources: SampleSources(),
+                            now: now, cloud: nil, chatLine: chatLine)
+    }
+    #endif
 
     /// Which model the screen was made for: its kind and where its words
     /// go. Either changing makes a new screen.
@@ -151,6 +163,13 @@ public struct HomeView: View {
         chat.lookInto = { [weak feed] topic, onDevice in feed?.lookInto(topic, onDevice: onDevice) ?? false }
         chat.reconReadsExamples = feed.readsExamples
         return chat
+    }
+
+    /// What Today's `onTalk` does to the chat, apart from moving, so tests
+    /// can drive it: the line goes in the composer, ready, and nothing is
+    /// sent. Words the person already typed are never replaced.
+    static func draft(_ line: String, in chat: ChatController) {
+        if chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { chat.draft = line }
     }
 
     /// The send itself, apart from moving, so tests can drive it.
@@ -395,10 +414,14 @@ struct HomeScreen: View {
         .cloudPreview(feed.cloudReview, blocked: cover.anySheetOpen || cover.questionOpen || previewTurn.todayWaits,
                       waiting: $todayPreviewWaiting)
         .onChange(of: todayPreviewWaiting) { _, waiting in
-            if waiting { todayPreviewFirst = !previewWaiting }
+            var turn = previewTurn
+            turn.todayChanged(to: waiting)
+            todayPreviewFirst = turn.todayFirst
         }
         .onChange(of: previewWaiting) { _, waiting in
-            if waiting, !todayPreviewWaiting { todayPreviewFirst = false }
+            var turn = previewTurn
+            turn.chatChanged(to: waiting)
+            todayPreviewFirst = turn.todayFirst
         }
         // A preview can't wait on a window that is gone, so it is not sent.
         .onDisappear {
@@ -467,7 +490,7 @@ struct HomeScreen: View {
     /// typed are never replaced.
     private func talk(about line: String) {
         guard let chat else { return }
-        if chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { chat.draft = line }
+        HomeView.draft(line, in: chat)
         go(.chat)
     }
 
@@ -683,6 +706,23 @@ struct PreviewTurn: Equatable {
 
     var chatWaits: Bool { todayPending && todayFirst }
     var todayWaits: Bool { chatPending && !todayFirst }
+
+    /// Today's preview started or stopped waiting. It is first when no
+    /// chat preview was there before it.
+    mutating func todayChanged(to pending: Bool) {
+        todayPending = pending
+        if pending { todayFirst = !chatPending }
+    }
+
+    /// The chat's preview started or stopped waiting. When it closes with
+    /// Today's still waiting, Today's shows now, so it counts as first: a
+    /// new chat preview then waits for it, and never takes a sheet already
+    /// on screen away from the person.
+    mutating func chatChanged(to pending: Bool) {
+        chatPending = pending
+        if pending, !todayPending { todayFirst = false }
+        if !pending, todayPending { todayFirst = true }
+    }
 }
 
 /// Makes Today's model once, on first ask, so the feed and the first chat

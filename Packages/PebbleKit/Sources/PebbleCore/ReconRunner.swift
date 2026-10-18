@@ -1,8 +1,10 @@
 import Foundation
 
 /// An engine that can play a given script, as `LocalFakeEngine` does. A
-/// recon shows its own steps on such an engine; on any other it is started
-/// by its title and the engine picks the steps.
+/// recon runs only on such an engine, which plays the recon's own steps
+/// and does nothing else with its topic. An engine that picks its own steps
+/// would take "look into" a topic as work of its own, and there is no
+/// contract yet for what that work may do, so a recon is never started there.
 public protocol ScriptedTaskEngine: TaskEngine {
     @discardableResult
     func start(_ script: TaskScript) -> String
@@ -21,8 +23,9 @@ extension LocalFakeEngine: ScriptedTaskEngine {}
 /// redaction and preview.
 ///
 /// The summary is begun only once the card says "Putting it together" (or,
-/// on an engine that picks its own steps, once the engine is done), so a
-/// cloud preview never shows while the card still says it is planning. The
+/// on a scripted engine that doesn't show that step, once the engine is
+/// done), so a cloud preview never shows while the card still says it is
+/// planning. The
 /// card stays live until the summary is in hand, so it never says it is
 /// done before it is.
 ///
@@ -48,6 +51,11 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         let summarizer: any ReconSummarizer
         /// What was read. Let go once the summary holds it, or the card stops.
         var sources: [ReconSource]
+        /// How many sources this round read, and how many the engine's
+        /// script was made for. A retry may read a different number than
+        /// the script it plays again says.
+        var read: Int
+        let scripted: Int
         var gatheredAt: Date
         /// The provider couldn't be read at all: a failure, not an empty result.
         var readFailed: Bool
@@ -58,6 +66,9 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         /// Stopped by the person. The card says stopped, never done, and
         /// nothing it read is kept.
         var stopped = false
+        /// Stop was tapped and is under way. A summary that lands before
+        /// it is done is dropped, so Stop always wins.
+        var stopping = false
         /// Seen in the engine's list. Leaving it after that means the engine
         /// let it go, so the run goes too.
         var seen = false
@@ -80,23 +91,21 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
     // MARK: Looking into something
 
     /// Starts looking into `topic`. Returns the task's id, or nil when
-    /// nothing was started: an empty topic, words of crisis, or a provider
-    /// that doesn't run on this device.
+    /// nothing was started: an empty topic, words of crisis, a provider
+    /// that doesn't run on this device, or an engine that doesn't play a
+    /// given script (see `ScriptedTaskEngine`).
     @discardableResult
     public func lookInto(_ topic: String, with summarizer: any ReconSummarizer = LocalReconSummarizer()) -> String? {
-        guard let task = ReconTask(topic: topic), provider.runsOnDevice else { return nil }
+        guard let task = ReconTask(topic: topic), provider.runsOnDevice,
+              let scripted = engine as? ScriptedTaskEngine else { return nil }
         let (sources, failed) = read(task)
         let gatheredAt = now()
         // Not under the lock: the engine tells its observers, this one
         // included, before `start` returns.
-        let id: String
-        if let scripted = engine as? ScriptedTaskEngine {
-            id = scripted.start(task.script(sources: sources.count))
-        } else {
-            id = engine.start(TaskRequest(title: task.title, instructions: task.topic))
-        }
+        let id = scripted.start(task.script(sources: sources.count))
         lock.lock()
-        runs[id] = Run(task: task, summarizer: summarizer, sources: sources, gatheredAt: gatheredAt, readFailed: failed)
+        runs[id] = Run(task: task, summarizer: summarizer, sources: sources, read: sources.count,
+                       scripted: sources.count, gatheredAt: gatheredAt, readFailed: failed)
         lock.unlock()
         changed()
         return id
@@ -181,13 +190,15 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         if !keep { work.cancel() }
     }
 
-    private func finish(_ id: String, round: Int, with summary: ReconSummary) {
+    /// Keeps a summary that came in. Not private, so a test can land one in
+    /// the middle of a stop.
+    func finish(_ id: String, round: Int, with summary: ReconSummary) {
         // Asked before the lock is taken, so the engine is never called under it.
         let task = engine.tasks.first { $0.id == id }
         // A recon that was stopped, dismissed or forgotten keeps no summary.
         guard let task, task.state != .stopped, task.state != .failed else { return }
         lock.lock()
-        guard let run = runs[id], run.round == round, !run.stopped else { lock.unlock(); return }
+        guard let run = runs[id], run.round == round, !run.stopped, !run.stopping else { lock.unlock(); return }
         runs[id]?.summary = summary
         runs[id]?.work = nil
         // The summary holds what was read now.
@@ -216,8 +227,9 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         let known = runs
         lock.unlock()
         return list.map { task in
-            guard let run = known[task.id], task.state == .done else { return task }
-            var shown = task
+            guard let run = known[task.id] else { return task }
+            guard task.state == .done else { return Self.counted(task, run) }
+            var shown = Self.counted(task, run)
             if run.stopped {
                 // Nothing was summed up, so nothing was kept.
                 shown.state = .stopped
@@ -241,6 +253,19 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
             }
             return shown
         }
+    }
+
+    /// The card's step and what it kept, with the number of sources this
+    /// round read rather than the number its script was made for.
+    private static func counted(_ task: AgentTask, _ run: Run) -> AgentTask {
+        guard run.read != run.scripted else { return task }
+        var shown = task
+        if shown.step == ReconWords.reading(run.scripted) { shown.step = ReconWords.reading(run.read) }
+        if let wrapUp = shown.wrapUp {
+            let kept = wrapUp.kept.map { $0 == ReconWords.keptSources(run.scripted) ? ReconWords.keptSources(run.read) : $0 }
+            shown.wrapUp = TaskWrapUp(kept: kept, notDone: wrapUp.notDone, underway: wrapUp.underway)
+        }
+        return shown
     }
 
     @discardableResult
@@ -275,6 +300,9 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         let recon = runs[id] != nil
         let work = runs[id]?.work
         runs[id]?.work = nil
+        // From here a summary that lands is dropped, even one that beats
+        // the engine's answer below.
+        runs[id]?.stopping = true
         lock.unlock()
         // Stopping also stops a cloud preview still waiting for an answer.
         work?.cancel()
@@ -292,9 +320,10 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
                 run.summary = nil
                 run.sources = []
                 run.work = nil
-                runs[id] = run
                 halted = true
             }
+            run.stopping = false
+            runs[id] = run
         }
         lock.unlock()
         if halted { changed() }
@@ -352,7 +381,9 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
             run.work = nil
             run.begun = false
             run.stopped = false
+            run.stopping = false
             run.sources = sources
+            run.read = sources.count
             run.readFailed = failed
             run.gatheredAt = gatheredAt
             runs[id] = run

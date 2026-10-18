@@ -90,10 +90,15 @@ public struct CloudPreview: Sendable, Equatable, Identifiable {
     }
 }
 
-/// The person's answer to a preview.
+/// The answer to a preview.
 public enum CloudConsent: Sendable, Equatable {
+    /// The person said send.
     case send
+    /// The person said not to send.
     case cancel
+    /// Taken away before the person answered, as when the cloud was turned
+    /// off or the screen went away. Nothing is sent, and no one chose that.
+    case withdrawn
 }
 
 /// Shows the person a preview and waits for their answer. Nothing is sent
@@ -161,6 +166,9 @@ public enum CloudModelError: Error, Equatable, Sendable {
     case off
     /// The person chose not to send. Nothing was sent.
     case notSent
+    /// The preview was taken away before the person answered it. Nothing
+    /// was sent.
+    case withdrawn
     /// Words of crisis are answered on this device and never sent, and a
     /// chat that holds them is never sent again.
     case staysHere
@@ -275,7 +283,11 @@ public struct CloudModel: ModelClient {
             for: transcript, endpoint: endpoint, redactor: redactor,
             headers: auth.headers(for: Self.url(for: endpoint))
         )
-        guard await reviewer.review(preview) == .send else { throw CloudModelError.notSent }
+        switch await reviewer.review(preview) {
+        case .send: break
+        case .cancel: throw CloudModelError.notSent
+        case .withdrawn: throw CloudModelError.withdrawn
+        }
         try Task.checkCancellation()
         try checkOn()
         // The very request the person saw, unchanged.

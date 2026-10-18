@@ -3,7 +3,8 @@ import Foundation
 import Testing
 
 /// The runner's promises about when a summary is begun, kept, let go and
-/// begun again, on the scripted engine and on one that picks its own steps.
+/// begun again, on the scripted engine and on one that shows no steps. An
+/// engine that picks its own steps never gets a recon at all.
 struct ReconRunnerTests {
     static let readOn = ReconTests.readOn
     static let sources = ReconTests.sources
@@ -30,7 +31,7 @@ struct ReconRunnerTests {
         #expect(runner.held(id)?.working == true)
     }
 
-    @Test func onAnEngineThatPicksItsOwnStepsItBeginsWhenTheEngineIsDone() throws {
+    @Test func onAnEngineThatShowsNoStepsItBeginsWhenTheEngineIsDone() throws {
         let engine = ReplayEngine()
         let runner = ReconRunner(engine: engine, provider: Self.sources, now: { Self.readOn })
         let id = try #require(runner.lookInto(SampleSources.libraryTopic))
@@ -40,7 +41,40 @@ struct ReconRunnerTests {
         #expect(runner.summary(for: id) != nil)
     }
 
+    /// An engine that picks its own steps would take the topic as work of
+    /// its own, so no recon is started there and the engine is never asked.
+    @Test func anEngineThatPicksItsOwnStepsGetsNoRecon() {
+        let engine = OwnStepsEngine()
+        let runner = ReconRunner(engine: engine, provider: Self.sources, now: { Self.readOn })
+        #expect(runner.lookInto(SampleSources.poolTopic) == nil)
+        #expect(engine.started.isEmpty)
+        #expect(runner.tasks.isEmpty)
+        // Its own work still passes through.
+        let id = runner.start(TaskRequest(title: "Book the car service"))
+        #expect(engine.started == ["Book the car service"])
+        #expect(!runner.isRecon(id))
+    }
+
     // MARK: Stop keeps nothing
+
+    /// A summary that lands after Stop is tapped, but before the engine has
+    /// answered, is dropped: Stop wins.
+    @Test func stopWinsOverASummaryThatLandsWhileItStops() throws {
+        let engine = ReplayEngine()
+        let runner = ReconRunner(engine: engine, provider: Self.sources, now: { Self.readOn })
+        let id = try #require(runner.lookInto(SampleSources.poolTopic, with: GatedSummarizer(gate: Gate())))
+        engine.finish(id)
+        #expect(runner.held(id)?.working == true)
+        let task = try #require(ReconTask(topic: SampleSources.poolTopic))
+        let late = LocalReconSummarizer().summary(task, id: id, sources: try Self.sources.sources(for: task),
+                                                  gatheredAt: Self.readOn)
+        engine.duringStop = { [runner] stopping in runner.finish(stopping, round: 0, with: late) }
+        #expect(runner.stop(id))
+        #expect(runner.tasks.first { $0.id == id }?.state == .stopped)
+        #expect(runner.summary(for: id) == nil)
+        #expect(runner.held(id)?.hasSummary == false)
+        #expect(runner.held(id)?.sources == 0)
+    }
 
     @Test func stoppingClearsTheSummaryAndWhatWasRead() throws {
         let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
@@ -118,6 +152,25 @@ struct ReconRunnerTests {
         #expect(try #require(runner.summary(for: id)).gatheredAt == clock.now)
     }
 
+    /// The engine plays the same script again, but the card says how many
+    /// sources this try read.
+    @Test func aRetryShowsHowManySourcesItReadThisTime() throws {
+        let engine = ReplayEngine()
+        let provider = ShrinkingProvider()
+        let runner = ReconRunner(engine: engine, provider: provider, now: { Self.readOn })
+        let id = try #require(runner.lookInto(SampleSources.poolTopic))
+        engine.show(id, step: ReconWords.reading(4))
+        #expect(runner.tasks.first { $0.id == id }?.step == ReconWords.reading(4))
+        #expect(runner.stop(id))
+        provider.limit = 2
+        #expect(runner.retry(id))
+        #expect(runner.held(id)?.sources == 2)
+        engine.show(id, step: ReconWords.reading(4))
+        #expect(runner.tasks.first { $0.id == id }?.step == ReconWords.reading(2))
+        engine.finish(id)
+        #expect(runner.summary(for: id) != nil)
+    }
+
     @Test func aTaskTheEngineWontRetryStaysAsItWas() throws {
         let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
         let runner = ReconRunner(engine: engine, provider: Self.sources)
@@ -131,7 +184,8 @@ struct ReconRunnerTests {
 
     // MARK: The engine's cap
 
-    @Test func theCapCancelsASummaryStillWaitingSoNoPreviewOutlivesItsCard() async throws {
+    @Test(.timeLimit(.minutes(1)))
+    func theCapCancelsASummaryStillWaitingSoNoPreviewOutlivesItsCard() async throws {
         let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
         let runner = ReconRunner(engine: engine, provider: Self.sources)
         let gate = Gate()
@@ -230,18 +284,33 @@ struct ReconRunnerTests {
     }
 }
 
-/// An engine that picks its own steps, with a test moving each task on.
-/// Unlike `LocalFakeEngine`, it plays a task again from any end on retry,
-/// as a looser engine might.
-final class ReplayEngine: TaskEngine, @unchecked Sendable {
+/// A scripted engine that shows none of a script's steps, with a test
+/// moving each task on by hand. Unlike `LocalFakeEngine`, it plays a task
+/// again from any end on retry, as a looser engine might.
+final class ReplayEngine: ScriptedTaskEngine, @unchecked Sendable {
     let rule = AskFirst.isolated()
     private let lock = NSLock()
     private var list: [AgentTask] = []
     private var observers: [UUID: @Sendable (TaskSnapshot) -> Void] = [:]
     private var sequence = 0
     private var made = 0
+    /// Called inside `stop`, after the engine has answered and before
+    /// `stop` returns, so a test can land something in the middle.
+    var duringStop: ((String) -> Void)?
 
     var tasks: [AgentTask] { lock.lock(); defer { lock.unlock() }; return list }
+
+    func start(_ script: TaskScript) -> String {
+        start(TaskRequest(title: script.title))
+    }
+
+    /// Shows `step` on the card, as an engine playing its script would.
+    func show(_ id: String, step: String) {
+        change {
+            guard let index = list.firstIndex(where: { $0.id == id }) else { return }
+            list[index].step = step
+        }
+    }
 
     func start(_ request: TaskRequest) -> String {
         change { () -> String in
@@ -271,9 +340,10 @@ final class ReplayEngine: TaskEngine, @unchecked Sendable {
     func redirect(_ id: String, with instructions: String) -> Bool { false }
 
     func stop(_ id: String) -> Bool {
-        guard tasks.first(where: { $0.id == id })?.isActive == true else { return false }
-        set(id, .stopped)
-        return true
+        let active = tasks.first(where: { $0.id == id })?.isActive == true
+        if active { set(id, .stopped) }
+        duringStop?(id)
+        return active
     }
 
     func dismiss(_ id: String) -> Bool {
@@ -356,6 +426,48 @@ struct DeviceProvider: SourceProvider {
     func sources(for task: ReconTask) throws -> [ReconSource] {
         try ReconTests.sources.sources(for: task)
     }
+}
+
+/// The sample pages, on this device, cut to `limit` once a test sets it,
+/// as a page that went away between two reads would be.
+final class ShrinkingProvider: SourceProvider, @unchecked Sendable {
+    private let lock = NSLock()
+    private var cut: Int?
+    var limit: Int? {
+        get { lock.lock(); defer { lock.unlock() }; return cut }
+        set { lock.lock(); cut = newValue; lock.unlock() }
+    }
+    var runsOnDevice: Bool { true }
+    func sources(for task: ReconTask) throws -> [ReconSource] {
+        let all = try ReconTests.sources.sources(for: task)
+        return limit.map { Array(all.prefix($0)) } ?? all
+    }
+}
+
+/// An engine that picks its own steps for whatever it is asked, and
+/// plays no given script. It only notes what it was asked to start.
+final class OwnStepsEngine: TaskEngine, @unchecked Sendable {
+    let rule = AskFirst.isolated()
+    private let lock = NSLock()
+    private var titles: [String] = []
+    var started: [String] { lock.lock(); defer { lock.unlock() }; return titles }
+    var tasks: [AgentTask] { [] }
+    func start(_ request: TaskRequest) -> String {
+        lock.lock(); titles.append(request.title); lock.unlock()
+        return "own:\(request.title)"
+    }
+    func observe(_ onChange: @escaping @Sendable (TaskSnapshot) -> Void) -> TaskObservation {
+        onChange(TaskSnapshot(sequence: 0, tasks: []))
+        return TaskObservation {}
+    }
+    func redirect(_ id: String, with instructions: String) -> Bool { false }
+    func stop(_ id: String) -> Bool { false }
+    func dismiss(_ id: String) -> Bool { false }
+    func clear() -> ClearedTasks { ClearedTasks(forgotten: 0) }
+    func retry(_ id: String) -> Bool { false }
+    func resume(_ id: String, with approval: Approval) -> TaskApproval { .refused }
+    func questionClosed(_ request: ConfirmationRequest) {}
+    func refresh() {}
 }
 
 /// On this device, and can't be read.

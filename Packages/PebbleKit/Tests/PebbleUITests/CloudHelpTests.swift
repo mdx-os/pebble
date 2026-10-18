@@ -580,7 +580,7 @@ struct CloudHelpTests {
         #expect(await review.shown() == first)
         let secondAnswer = Task { await review.review(second) }
         // Asking the second question withdraws the first.
-        #expect(await firstAnswer.value == .cancel)
+        #expect(await firstAnswer.value == .withdrawn)
         #expect(review.pending == second)
         // A late tap on the first sheet does nothing to the second.
         review.answer(.send, for: first.id)

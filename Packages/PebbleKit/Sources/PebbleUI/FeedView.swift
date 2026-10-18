@@ -24,7 +24,12 @@ final class FeedModel: ObservableObject {
     /// The summary, and so the task, each kept point came from.
     private var rememberedFrom: [String: String] = [:]
     /// What happened to the last Remember tap, such as "Saved. It stays on this device."
-    @Published private(set) var rememberStatus: String?
+    @Published private(set) var rememberStatus: String? {
+        didSet { if rememberStatus != nil { rememberTold += 1 } }
+    }
+    /// Goes up each time `rememberStatus` is set, so the same words twice,
+    /// such as a second "Saved", are still said.
+    @Published private(set) var rememberTold = 0
 
     let needsYou: NeedsYou
     /// Runs "look into this" as tasks. The same object as `tasks` when set.
@@ -66,6 +71,9 @@ final class FeedModel: ObservableObject {
     private var cards: [AgentTask] = []
     /// Ids of every task, so `isSample` needn't ask the engine.
     private var taskIDs: Set<String> = []
+    /// Each card's summary, or none, as of the last snapshot taken in, so
+    /// drawing the feed never walks the engine's tasks once per card.
+    private var summaries: [String: ReconSummary?] = [:]
     /// What each task's card is in the middle of, by id: its Change course
     /// field, the words in it, and where focus goes. Kept here, not in the
     /// card, so a card moving to another section keeps it.
@@ -219,6 +227,7 @@ final class FeedModel: ObservableObject {
     }
 
     private func rebuild() {
+        summaries = [:]
         let next = Feed.build(from: sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
         if next != feed { feed = next }
         followCards()
@@ -267,6 +276,7 @@ final class FeedModel: ObservableObject {
     func tasksChanged(_ snapshot: TaskSnapshot) {
         guard snapshot.sequence > seen else { return }
         seen = snapshot.sequence
+        summaries = [:]
         if track(snapshot.tasks) { rebuild() }
         for line in announcer.lines(for: snapshot.tasks, at: clock()) { announce(line) }
     }
@@ -328,6 +338,9 @@ final class FeedModel: ObservableObject {
         case .task(let task):
             if task.question != nil { review(task) } else { open(task) }
         case .lookInto(let topic):
+            // A second tap while the first is under way, or once it is
+            // ready, starts nothing more: the card for it is already here.
+            if isLookingInto(topic) { return }
             // Without a runner, the chat offers it instead, still one tap away.
             if recon == nil || !lookInto(topic) { talk(ReconWords.askLine(topic)) }
         case nil: break
@@ -353,9 +366,20 @@ final class FeedModel: ObservableObject {
     /// True while the only pages to read are examples, so the chat's offer says so.
     var readsExamples: Bool { recon?.provider.isSample == true }
 
-    /// The summary a finished recon card shows.
+    /// True when a recon for `topic` is going or done on Today. One that
+    /// stopped or failed can be started again.
+    func isLookingInto(_ topic: String) -> Bool {
+        guard let recon, let title = ReconTask(topic: topic)?.title else { return false }
+        return recon.tasks.contains { $0.title == title && ($0.isActive || $0.state == .done) && recon.isRecon($0.id) }
+    }
+
+    /// The summary a finished recon card shows. Asked of the runner once
+    /// per card for each snapshot.
     func summary(for task: AgentTask) -> ReconSummary? {
-        recon?.summary(for: task.id)
+        if let known = summaries[task.id] { return known }
+        let summary = recon?.summary(for: task.id)
+        summaries[task.id] = summary
+        return summary
     }
 
     /// A recon reads for one topic, so its card offers Stop but not Change course.

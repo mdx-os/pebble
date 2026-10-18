@@ -667,7 +667,7 @@ final class ChatController: ObservableObject {
     /// What to say when no reply came. Choosing not to send is not a failure.
     nonisolated static func failureLine(for error: Error?) -> String {
         switch error as? CloudModelError {
-        case .notSent: CloudWords.notSent
+        case .notSent, .withdrawn: CloudWords.notSent
         case .off: CloudWords.turnedOff
         case .staysHere: CloudWords.staysHere
         case .notesUnreadable: CloudWords.notesUnreadable
@@ -701,7 +701,7 @@ final class ChatController: ObservableObject {
         if error is CancellationError { return true }
         if error as? CloudTransportError == .headersNotShown { return true }
         return switch error as? CloudModelError {
-        case .notSent, .off, .staysHere, .notesUnreadable: true
+        case .notSent, .withdrawn, .off, .staysHere, .notesUnreadable: true
         case .unreadableReply, nil: false
         }
     }

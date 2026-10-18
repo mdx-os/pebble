@@ -479,6 +479,9 @@ public enum ReconWords {
     public static let declinedCloud = "You chose not to send it, so I put this together without the cloud."
     public static let cloudUnreadable = "I couldn't use the answer from the cloud, so I put this together without it."
     public static let cloudUnavailable = "I couldn't reach the cloud just now, so I put this together without it."
+    /// The preview was taken away before anyone answered it, as when the
+    /// cloud was turned off or the screen went away. No one chose anything.
+    public static let cloudWithdrawn = "Nothing went to the cloud, so I put this together without it."
     /// Under a summary put into words in the cloud: its points are a
     /// retelling, not the sources' own words.
     public static let wordedInCloud = "Put into words in the cloud, from these sources. Open sources to read what each one says."
@@ -533,7 +536,7 @@ public enum ReconWords {
          disagreement([("Riverside Gazette", "November 3"), ("City of Riverside Parks", "November 10")],
                       newest: "City of Riverside Parks"),
          sourcesHeading, pointsHeading, morePoints(1), morePoints(2), olderLabel, gathered(Date(), now: Date()), from(["A", "B"]), sourceNumber(1),
-         declinedCloud, cloudUnreadable, cloudUnavailable, openSourcesTitle, followUpTitle, rememberTitle,
+         declinedCloud, cloudUnreadable, cloudUnavailable, cloudWithdrawn, openSourcesTitle, followUpTitle, rememberTitle,
          openSourcesHint, followUpHint, rememberHint, followUpDraft("the pool"), rememberQuestion,
          rememberDetail(.onDevice), rememberDetail(.mayLeaveDevice),
          rememberThis, remembered, pageLinkTitle, lookIntoTitle, lookIntoHint, askLine("the pool")]

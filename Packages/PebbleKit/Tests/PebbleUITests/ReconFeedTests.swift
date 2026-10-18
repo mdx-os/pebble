@@ -124,9 +124,12 @@ struct ReconFeedTests {
         for _ in 0..<500 where model.cloudReview.pending == nil { try await Task.sleep(for: .milliseconds(10)) }
         #expect(model.cloudReview.pending != nil)
         #expect(chat.review?.pending == nil)
+        // The screen going away withdraws it, as the home screen does.
         model.cloudReview.cancelPending()
         await runner.settle(id)
+        runner.advance(by: 30)
         #expect(maker.wire.sent.isEmpty)
+        #expect(runner.summary(for: id)?.note == ReconWords.cloudWithdrawn)
     }
 
     /// Two previews waiting at once: the first to come shows, the other
@@ -140,6 +143,194 @@ struct ReconFeedTests {
             #expect(both.chatWaits != both.todayWaits)
             #expect(both.todayWaits == !todayFirst)
         }
+    }
+
+    /// The chat's preview shows, Today's waits; the chat's closes, so
+    /// Today's shows; then a new chat preview comes. Today's stays on
+    /// screen and the new one waits for it.
+    @Test func aPreviewOnScreenIsNeverSwappedOut() {
+        var turn = PreviewTurn(chatPending: false, todayPending: false, todayFirst: false)
+        turn.chatChanged(to: true)
+        turn.todayChanged(to: true)
+        #expect(turn.todayWaits)
+        #expect(!turn.chatWaits)
+        turn.chatChanged(to: false)
+        #expect(!turn.todayWaits)
+        turn.chatChanged(to: true)
+        #expect(!turn.todayWaits)
+        #expect(turn.chatWaits)
+        // Once Today's closes, the chat's shows.
+        turn.todayChanged(to: false)
+        #expect(!turn.chatWaits)
+        #expect(!turn.todayWaits)
+    }
+
+    /// A chat's preview and Today's both waiting at once: nothing goes
+    /// while they wait, and turning the cloud off withdraws both.
+    @Test func turningTheCloudOffWithdrawsBothPreviewsWaitingAtOnce() async throws {
+        let maker = TransportMaker()
+        let notes = ShowcaseScene.emptyMemory()
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+                              memory: notes, transport: { maker.make() })
+        let (model, engine, runner) = feed()
+        let today = model.cloudReview
+        model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel(), review: today)) }
+        let chat = HomeView.newChat(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
+                                    cloud: cloud, conversation: nil)
+        let chatReview = try #require(chat.review)
+        chat.send("Help me plan Saturday.")
+        #expect(model.lookInto(SampleSources.poolTopic))
+        let id = try #require(runner.tasks.first?.id)
+        engine.advance(by: 30)
+        for _ in 0..<500 where chatReview.pending == nil || today.pending == nil {
+            #expect(maker.wire.sent.isEmpty)
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(chatReview.pending != nil)
+        #expect(today.pending != nil)
+        #expect(maker.wire.sent.isEmpty)
+        _ = cloud.setOn(false)
+        for _ in 0..<500 where chatReview.pending != nil || today.pending != nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(chatReview.pending == nil)
+        #expect(today.pending == nil)
+        await runner.settle(id)
+        for _ in 0..<500 where chat.isReplying { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(maker.wire.sent.isEmpty)
+        #expect(runner.summary(for: id)?.note == ReconWords.cloudWithdrawn)
+    }
+
+    /// A recon tried again with the cloud on asks again, with a fresh
+    /// preview. A Send given to an earlier preview is never used for it.
+    @Test func aRetryWithTheCloudOnAsksAgain() async throws {
+        let maker = TransportMaker()
+        let notes = ShowcaseScene.emptyMemory()
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+                              memory: notes, transport: { maker.make() })
+        let engine = HandEngine()
+        let runner = ReconRunner(engine: engine, provider: ReconTestData.sources, now: { [morning] in morning })
+        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: runner, place: .mayLeaveDevice,
+                              now: { [morning] in morning })
+        let review = model.cloudReview
+        model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel(), review: review)) }
+        #expect(model.lookInto(SampleSources.poolTopic))
+        let id = try #require(runner.tasks.first?.id)
+        engine.finish(id)
+        let first = await review.shown()
+        review.answer(.send, for: first.id)
+        await runner.settle(id)
+        #expect(maker.wire.sent.count == 1)
+        #expect(runner.summary(for: id) != nil)
+
+        #expect(runner.retry(id))
+        engine.finish(id)
+        for _ in 0..<500 where review.pending == nil { try await Task.sleep(for: .milliseconds(10)) }
+        let second = try #require(review.pending)
+        #expect(second.id != first.id)
+        // The earlier Send, given again, does nothing.
+        review.answer(.send, for: first.id)
+        #expect(review.pending?.id == second.id)
+        #expect(maker.wire.sent.count == 1)
+        review.answer(.cancel, for: second.id)
+        await runner.settle(id)
+        #expect(maker.wire.sent.count == 1)
+        #expect(runner.summary(for: id)?.note == ReconWords.declinedCloud)
+    }
+
+    // MARK: Today's follow-up only drafts
+
+    /// What `onTalk` does with a follow-up: the question waits in the
+    /// composer, so the hint "Nothing is sent." is true.
+    @Test func aFollowUpIsDraftedAndNeverSent() throws {
+        let (model, engine, runner) = feed()
+        #expect(model.lookInto(SampleSources.libraryTopic))
+        engine.advance(by: 30)
+        let summary = try #require(runner.tasks.first.flatMap { runner.summary(for: $0.id) })
+        let chat = ChatController.make(brand: brand, model: LocalStubModel(),
+                                       names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil)
+        let before = chat.conversation.turns
+        model.followUp(summary) { HomeView.draft($0, in: chat) }
+        #expect(chat.draft == ReconWords.followUpDraft(summary.topic))
+        #expect(chat.conversation.turns == before)
+        #expect(!chat.isReplying)
+        #expect(chat.sentCount == 0)
+        #expect(ReconWords.followUpHint.contains("Nothing is sent."))
+        // Words the person had typed are kept.
+        chat.draft = "My own words"
+        model.followUp(summary) { HomeView.draft($0, in: chat) }
+        #expect(chat.draft == "My own words")
+    }
+
+    // MARK: Taps and repeats
+
+    @Test func tappingThePoolCardAgainStartsNoSecondRecon() throws {
+        let (model, engine, runner) = feed()
+        let card = try #require(model.feed.groups.flatMap(\.items).first { $0.id == "sample:pool" })
+        var talked: [String] = []
+        for _ in 0..<3 { model.perform(card) { talked.append($0) } }
+        #expect(runner.tasks.count == 1)
+        engine.advance(by: 30)
+        model.perform(card) { talked.append($0) }
+        #expect(runner.tasks.count == 1)
+        #expect(talked.isEmpty)
+        // Once stopped, it can be asked for again.
+        let (again, _, other) = feed()
+        again.perform(card) { _ in }
+        again.stop(try #require(other.tasks.first))
+        again.perform(card) { _ in }
+        #expect(other.tasks.count == 2)
+    }
+
+    @Test func aSecondSavedInARowIsSaidToo() throws {
+        let memory = ShowcaseScene.emptyMemory()
+        defer { try? memory.forgetEverything() }
+        let engine = LocalFakeEngine(rule: .isolated(), origin: morning)
+        let runner = ReconRunner(engine: engine, provider: ReconTestData.sources)
+        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: runner, place: .onDevice,
+                              memory: memory, now: { [morning] in morning })
+        #expect(model.lookInto(SampleSources.poolTopic))
+        engine.advance(by: 30)
+        let summary = try #require(runner.tasks.first.flatMap { runner.summary(for: $0.id) })
+        let told = model.rememberTold
+        #expect(model.remember(summary.points[0], in: summary))
+        let first = model.rememberStatus
+        #expect(model.remember(summary.points[1], in: summary))
+        #expect(model.rememberStatus == first)
+        #expect(model.rememberTold == told + 2)
+    }
+
+    /// Drawing the feed asks the runner for a card's summary once per
+    /// snapshot, however many times the card is drawn.
+    @Test func aCardsSummaryIsAskedForOncePerSnapshot() throws {
+        let inner = LocalFakeEngine(rule: .isolated(), origin: morning)
+        let engine = PlainEngine(inner)
+        let runner = ReconRunner(engine: engine, provider: ReconTestData.sources)
+        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: runner, place: .onDevice,
+                              now: { [morning] in morning })
+        #expect(model.lookInto(SampleSources.libraryTopic))
+        inner.advance(by: 30)
+        let task = try #require(runner.tasks.first)
+        let before = engine.reads
+        for _ in 0..<10 { #expect(model.summary(for: task) != nil) }
+        #expect(engine.reads - before <= 1)
+        // A new snapshot asks again, so a dismissed card has no summary.
+        model.dismiss(task)
+        #expect(model.summary(for: task) == nil)
+    }
+
+    @Test func aDisagreementStandingAloneIsSaidOnce() throws {
+        let pool = try ReconTestData.pool()
+        let ids = pool.sources.prefix(2).map(\.id)
+        let words = "The sources give different dates."
+        let alone = ReconPoint(id: "point:9", text: words, sourceIDs: ids,
+                               disagreement: ReconDisagreement(text: words, sourceIDs: ids))
+        let row = ReconPointRow(point: alone, summary: pool)
+        #expect(row.standsAlone)
+        #expect(row.pointLine == nil)
+        #expect(row.spoken.components(separatedBy: words).count == 2)
+        let carried = try #require(pool.points.first { $0.disagreement != nil })
+        #expect(ReconPointRow(point: carried, summary: pool).pointLine == carried.text)
     }
 
     // MARK: Updates land on the main thread
@@ -192,14 +383,25 @@ struct ReconFeedTests {
     @Test func forgettingWhileACloudSummaryIsUnderWaySaysItCantBeCalledBack() async throws {
         let (model, engine, runner) = feed()
         let gate = UIGate()
-        model.summarizer = { HeldSummarizer(gate: gate, mark: ThreadMark(), leaves: true) }
+        let mark = ThreadMark()
+        model.summarizer = { HeldSummarizer(gate: gate, mark: mark, leaves: true) }
         #expect(model.lookInto(SampleSources.poolTopic))
         engine.advance(by: 30)
         #expect(runner.summariesMayLeaveDevice == 1)
+        let id = try #require(runner.tasks.first?.id)
         model.forgetTasks()
         #expect(model.forgotUnderway == ReconWords.forgotWhileInCloud)
         await gate.open()
+        // The summary is still put together, late, and nothing keeps it.
+        for _ in 0..<500 where mark.finishedOnMain == nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(mark.finishedOnMain != nil)
+        try await Task.sleep(for: .milliseconds(50))
+        model.refresh()
         #expect(runner.tasks.isEmpty)
+        #expect(!runner.isRecon(id))
+        #expect(runner.summary(for: id) == nil)
+        #expect(runner.summariesMayLeaveDevice == 0)
+        #expect(!model.feed.groups.flatMap(\.items).contains { $0.id == id })
     }
 
     @Test func forgettingAnOnDeviceSummarySaysNothingAboutTheCloud() throws {
@@ -247,13 +449,21 @@ struct ReconFeedTests {
 }
 
 /// A real engine's stand-in: the scripted engine underneath, but not an
-/// example, and not one that plays a recon's own steps.
-final class PlainEngine: TaskEngine, @unchecked Sendable {
+/// example.
+final class PlainEngine: ScriptedTaskEngine, @unchecked Sendable {
     let inner: LocalFakeEngine
+    private let lock = NSLock()
+    private var count = 0
     init(_ inner: LocalFakeEngine) { self.inner = inner }
+    /// How many times its tasks were asked for.
+    var reads: Int { lock.lock(); defer { lock.unlock() }; return count }
     var rule: AskFirst { inner.rule }
-    var tasks: [AgentTask] { inner.tasks }
+    var tasks: [AgentTask] {
+        lock.lock(); count += 1; lock.unlock()
+        return inner.tasks
+    }
     func start(_ request: TaskRequest) -> String { inner.start(request) }
+    func start(_ script: TaskScript) -> String { inner.start(script) }
     func observe(_ onChange: @escaping @Sendable (TaskSnapshot) -> Void) -> TaskObservation { inner.observe(onChange) }
     func redirect(_ id: String, with instructions: String) -> Bool { inner.redirect(id, with: instructions) }
     func stop(_ id: String) -> Bool { inner.stop(id) }
@@ -263,6 +473,97 @@ final class PlainEngine: TaskEngine, @unchecked Sendable {
     func resume(_ id: String, with approval: Approval) -> TaskApproval { inner.resume(id, with: approval) }
     func questionClosed(_ request: ConfirmationRequest) { inner.questionClosed(request) }
     func refresh() { inner.refresh() }
+}
+
+/// A scripted engine that shows none of a script's steps, moved on by the
+/// test, and that plays a task again from any end on retry.
+final class HandEngine: ScriptedTaskEngine, @unchecked Sendable {
+    let rule = AskFirst.isolated()
+    private let lock = NSLock()
+    private var list: [AgentTask] = []
+    private var observers: [UUID: @Sendable (TaskSnapshot) -> Void] = [:]
+    private var sequence = 0
+
+    var tasks: [AgentTask] { lock.lock(); defer { lock.unlock() }; return list }
+
+    func start(_ script: TaskScript) -> String { start(TaskRequest(title: script.title)) }
+
+    func start(_ request: TaskRequest) -> String {
+        change { () -> String in
+            let id = "hand:\(list.count + 1)"
+            list.insert(AgentTask(id: id, title: request.title, step: "Working", startedAt: Date(timeIntervalSince1970: 0)), at: 0)
+            return id
+        }
+    }
+
+    func finish(_ id: String) { set(id, .done) }
+
+    func observe(_ onChange: @escaping @Sendable (TaskSnapshot) -> Void) -> TaskObservation {
+        let key = UUID()
+        lock.lock()
+        observers[key] = onChange
+        let snapshot = TaskSnapshot(sequence: sequence, tasks: list)
+        lock.unlock()
+        onChange(snapshot)
+        return TaskObservation { [weak self] in
+            self?.lock.lock()
+            self?.observers[key] = nil
+            self?.lock.unlock()
+        }
+    }
+
+    func redirect(_ id: String, with instructions: String) -> Bool { false }
+
+    func stop(_ id: String) -> Bool {
+        guard tasks.first(where: { $0.id == id })?.isActive == true else { return false }
+        set(id, .stopped)
+        return true
+    }
+
+    func dismiss(_ id: String) -> Bool {
+        change {
+            guard let index = list.firstIndex(where: { $0.id == id }), !list[index].isActive else { return false }
+            list.remove(at: index)
+            return true
+        }
+    }
+
+    func clear() -> ClearedTasks {
+        change {
+            let count = list.count
+            list.removeAll()
+            return ClearedTasks(forgotten: count)
+        }
+    }
+
+    func retry(_ id: String) -> Bool {
+        guard tasks.contains(where: { $0.id == id }) else { return false }
+        set(id, .running)
+        return true
+    }
+
+    func resume(_ id: String, with approval: Approval) -> TaskApproval { .refused }
+    func questionClosed(_ request: ConfirmationRequest) {}
+    func refresh() {}
+
+    private func set(_ id: String, _ state: TaskState) {
+        change {
+            guard let index = list.firstIndex(where: { $0.id == id }) else { return }
+            list[index].state = state
+            list[index].step = state == .done ? "Done" : "Working"
+        }
+    }
+
+    private func change<T>(_ body: () -> T) -> T {
+        lock.lock()
+        let value = body()
+        sequence += 1
+        let snapshot = TaskSnapshot(sequence: sequence, tasks: list)
+        let listeners = Array(observers.values)
+        lock.unlock()
+        for listener in listeners { listener(snapshot) }
+        return value
+    }
 }
 
 /// Pages on this device that aren't examples.
