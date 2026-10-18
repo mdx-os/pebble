@@ -140,6 +140,13 @@ struct TaskCard: View {
             if task.isActive, !task.history.isEmpty {
                 history
             }
+            if let closing = closingLine {
+                Text(closing)
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("taskClosing")
+            }
             if let wrapUp = task.wrapUp {
                 wrapUpLines(wrapUp)
             }
@@ -188,6 +195,23 @@ struct TaskCard: View {
     }
 
     private var asks: Bool { task.state == .waitingOnYou }
+
+    /// Why an ended task left its last step undone, such as "You closed the
+    /// question, so I didn't hold a Saturday visit." Its history is gone
+    /// from the card once it ends, so this line stays to say so.
+    var closingLine: String? {
+        guard !task.isActive, let last = task.history.last, last.mark == .skipped else { return nil }
+        return last.text
+    }
+
+    /// The wrap up's "I didn't ..." line, unless the closing line already
+    /// says the one thing that was not done, and that it is that thing.
+    /// Told by the step's own mark, never by its words, so a change to how
+    /// a closing line reads can't bring the line back twice.
+    func showsNotDone(_ wrapUp: TaskWrapUp) -> Bool {
+        guard closingLine != nil, let undone = task.history.last?.undone else { return true }
+        return wrapUp.notDone != [undone]
+    }
 
     // MARK: What it says
 
@@ -284,7 +308,7 @@ struct TaskCard: View {
             if task.state != .done {
                 Text(wrapUp.keptLine)
             }
-            if let notDone = wrapUp.notDoneLine {
+            if let notDone = wrapUp.notDoneLine, showsNotDone(wrapUp) {
                 Text(notDone)
             }
             if let underway = wrapUp.underwayLine {

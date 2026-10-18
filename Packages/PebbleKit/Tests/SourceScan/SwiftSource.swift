@@ -17,6 +17,8 @@ public struct SwiftSource: Sendable {
         public let line: Int
         /// Where the opening quote is in `code`.
         public let offset: Int
+        /// Just past the closing quote in `code`.
+        public let end: Int
     }
 
     /// One call, such as `.foregroundStyle(...)`, with its arguments.
@@ -45,6 +47,35 @@ public struct SwiftSource: Sendable {
         var open = call.end
         while open < code.count, code[open].isWhitespace { open += 1 }
         guard open < code.count, code[open] == "{" else { return nil }
+        return braces(openingAt: open)
+    }
+
+    /// The first `{` at or after `offset` and its matching `}`, as
+    /// `open..<close`, or nil when no `{` follows. So the body of a
+    /// `struct` or `func` found by name is its own, however many braces it
+    /// holds.
+    public func braces(after offset: Int) -> Range<Int>? {
+        guard let open = code[min(offset, code.count)...].firstIndex(of: "{") else { return nil }
+        return braces(openingAt: open)
+    }
+
+    /// The innermost `{` before `offset` that is still open there, and its
+    /// matching `}`, as `open..<close`, or nil at the top level.
+    public func enclosingBraces(of offset: Int) -> Range<Int>? {
+        var open: [Int] = []
+        for index in 0..<min(offset, code.count) {
+            if code[index] == "{" { open.append(index) }
+            if code[index] == "}" { _ = open.popLast() }
+        }
+        return open.last.map { braces(openingAt: $0) }
+    }
+
+    /// The code between the braces of `range`, as `braces` gives it.
+    public func contents(of range: Range<Int>) -> String {
+        String(code[(range.lowerBound + 1)..<min(range.upperBound, code.count)])
+    }
+
+    private func braces(openingAt open: Int) -> Range<Int> {
         var depth = 0
         var close = open
         while close < code.count {
@@ -147,7 +178,8 @@ public struct SwiftSource: Sendable {
                     j += 1
                 }
                 let contents = String(chars[opened..<min(end, chars.count)])
-                literals.append(Literal(text: contents, line: startLine, offset: start))
+                literals.append(Literal(text: contents, line: startLine, offset: start,
+                                        end: min(end + closer.count, chars.count)))
                 for k in opened..<min(end, chars.count) { blank(k) }
                 i = min(end + closer.count, chars.count)
             } else {
@@ -179,8 +211,12 @@ public struct SwiftSource: Sendable {
     }
 
     /// Every call to one of `names`, written `name(` with nothing but white
-    /// space between, and not part of a longer name. Arguments run to the
-    /// balanced closing paren, across lines.
+    /// space between, new lines included, and not part of a longer name.
+    /// Arguments run to the balanced closing paren, across lines.
+    ///
+    /// It over-matches on purpose. Swift never reads `foo\n(x)` as a call,
+    /// but this does, so a guard built on it flags a little more than the
+    /// compiler would accept, never less.
     public func calls(named names: Set<String>) -> [Call] {
         var found: [Call] = []
         var i = 0
@@ -194,7 +230,7 @@ public struct SwiftSource: Sendable {
             while j < code.count, code[j].isLetter || code[j].isNumber || code[j] == "_" { j += 1 }
             let name = String(code[i..<j])
             var open = j
-            while open < code.count, code[open] == " " || code[open] == "\t" { open += 1 }
+            while open < code.count, code[open].isWhitespace { open += 1 }
             guard names.contains(name), open < code.count, code[open] == "(" else {
                 i = j
                 continue

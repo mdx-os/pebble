@@ -27,7 +27,9 @@ public struct HomeView: View {
     /// `needsYou` and `tasks`, which both ask through `AskFirst`. `tasks`
     /// shows long work on live cards. Without one, looking into something
     /// plays on the scripted engine with the sample sources, labelled as
-    /// examples.
+    /// examples. `background` is work done while the app was closed: its
+    /// cards join Today, its switch sits on the memory screen, and Forget
+    /// everything turns it off and clears it.
     public init(
         brand: Brand,
         model: any ModelClient,
@@ -38,11 +40,14 @@ public struct HomeView: View {
         feed: [any FeedSource] = [EmptyFeedSource()],
         needsYou: NeedsYou = NeedsYou(),
         tasks: (any TaskEngine)? = nil,
-        cloud: CloudHelp? = nil
+        kept: TaskStore? = nil,
+        notifier: (any QuestionNotifying)? = nil,
+        cloud: CloudHelp? = nil,
+        background: BackgroundRunner? = nil
     ) {
         self.init(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                   looks: looks, conversation: nil, section: .today, feed: feed, needsYou: needsYou, tasks: tasks,
-                  cloud: cloud)
+                  kept: kept, notifier: notifier, background: background, cloud: cloud)
     }
 
     /// Opens on a given conversation, section and feed, for screenshots and tests.
@@ -62,13 +67,49 @@ public struct HomeView: View {
         tasks: (any TaskEngine)? = nil,
         drivesTasks: Bool = false,
         sources: (any SourceProvider)? = nil,
+        kept: TaskStore? = nil,
+        notifier: (any QuestionNotifying)? = nil,
+        opensQuestion: Bool = false,
+        background: BackgroundRunner? = nil,
         now: @escaping @Sendable () -> Date = HomeView.wallClock,
         cloud: CloudHelp? = nil
+    ) {
+        self.init(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
+                  looks: looks, conversation: conversation, section: section, feed: feed,
+                  needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, sources: sources, kept: kept,
+                  notifier: notifier, opensQuestion: opensQuestion, background: background, now: now,
+                  cloud: cloud, log: nil)
+    }
+
+    /// The same, writing down what the screen makes in `log`, for tests.
+    init(
+        brand: Brand,
+        model: any ModelClient,
+        names: any AgentNameStoring,
+        onboarding: any OnboardingStoring,
+        memory: MemoryStore?,
+        looks: UserDefaults,
+        conversation: Conversation?,
+        section: HomeSection,
+        feed: [any FeedSource] = [EmptyFeedSource()],
+        needsYou: NeedsYou,
+        tasks: (any TaskEngine)? = nil,
+        drivesTasks: Bool = false,
+        sources: (any SourceProvider)? = nil,
+        kept: TaskStore? = nil,
+        notifier: (any QuestionNotifying)? = nil,
+        opensQuestion: Bool = false,
+        background: BackgroundRunner? = nil,
+        now: @escaping @Sendable () -> Date = HomeView.wallClock,
+        cloud: CloudHelp? = nil,
+        log: HomeScreenLog?
     ) {
         screen = HomeScreen(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                             looks: looks, conversation: conversation, section: section, feed: feed,
                             needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
-                            sources: Self.reconSources(sources, now: now), now: now, cloud: cloud, chatLine: nil)
+                            sources: Self.reconSources(sources, now: now), kept: kept, notifier: notifier,
+                            opensQuestion: opensQuestion, background: background, now: now, cloud: cloud,
+                            chatLine: nil, log: log)
     }
 
     /// The screen's clock when none is given, as in the app: the wall clock,
@@ -98,7 +139,9 @@ public struct HomeView: View {
         screen = HomeScreen(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                             looks: looks, conversation: conversation, section: section, feed: feed,
                             needsYou: needsYou, tasks: nil, drivesTasks: false,
-                            sources: Self.reconSources(nil, now: now), now: now, cloud: nil, chatLine: chatLine)
+                            sources: Self.reconSources(nil, now: now), kept: nil, notifier: nil,
+                            opensQuestion: false, background: nil, now: now, cloud: nil, chatLine: chatLine,
+                            log: nil)
     }
     #endif
 
@@ -106,11 +149,11 @@ public struct HomeView: View {
     /// go. Either changing makes a new screen.
     struct ModelIdentity: Hashable {
         let kind: ObjectIdentifier
-        let staysOnDevice: Bool
+        let place: PrivacyPlace
     }
 
     static func identity(of model: any ModelClient) -> ModelIdentity {
-        ModelIdentity(kind: ObjectIdentifier(type(of: model)), staysOnDevice: model.privacyPlace.staysOnDevice)
+        ModelIdentity(kind: ObjectIdentifier(type(of: model)), place: model.privacyPlace)
     }
 
     public var body: some View {
@@ -124,41 +167,63 @@ public struct HomeView: View {
     /// Today's model, which takes its privacy place from the active model,
     /// so the example note never promises the device when words may leave.
     static func feedModel(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)? = nil,
-                          drivesTasks: Bool = false, model: any ModelClient,
+                          drivesTasks: Bool = false, flow: NeedsYouFlow? = nil,
+                          background: BackgroundRunner? = nil, model: any ModelClient,
                           now: @escaping () -> Date) -> FeedModel {
         feedModel(sources: sources, needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
-                  place: model.privacyPlace, now: now)
+                  flow: flow, background: background, place: model.privacyPlace, now: now)
+    }
+
+    /// The app's one Needs you flow, whichever window asks. A nudge says
+    /// the name the person chose, read each time one is sent, so a rename
+    /// just before the app goes away is the name it says.
+    static func flow(store: TaskStore, notifier: (any QuestionNotifying)?, brand: Brand,
+                     names: any AgentNameStoring) -> NeedsYouFlow {
+        NeedsYouFlow.forApp(store: store, notifier: notifier, agentName: {
+            AgentProfile(brand: brand, stored: names.loadDisplayName()).displayName.text
+        })
     }
 
     /// The same, from a place already worked out, as the home screen does
     /// with the cloud setting in it. `memory` is where Remember this saves.
     static func feedModel(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)? = nil,
-                          drivesTasks: Bool = false, place: PrivacyPlace, memory: MemoryStore? = nil,
+                          drivesTasks: Bool = false, flow: NeedsYouFlow? = nil,
+                          background: BackgroundRunner? = nil, place: PrivacyPlace, memory: MemoryStore? = nil,
                           now: @escaping () -> Date) -> FeedModel {
         FeedModel(sources: sources, needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
-                  place: place, memory: memory, now: now)
+                  place: place, memory: memory, flow: flow, background: background, now: now)
     }
 
     /// The memory screen's model, with its privacy place from the active
-    /// model, the same way. Forget everything forgets the tasks too.
-    static func memoryModel(store: MemoryStore, model: any ModelClient,
+    /// model, the same way. Forget everything forgets the tasks and the
+    /// background work too, and the switch for background work sits here.
+    static func memoryModel(store: MemoryStore, model: any ModelClient, background: BackgroundRunner? = nil,
+                            log: HomeScreenLog? = nil,
                             onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) -> MemoryModel {
-        memoryModel(store: store, place: model.privacyPlace, onForgetEverything: onForgetEverything)
+        memoryModel(store: store, place: model.privacyPlace, background: background, log: log,
+                    onForgetEverything: onForgetEverything)
     }
 
     /// The same, from a place already worked out. With `cloud`, Forget
     /// everything erases the words always hidden too.
     static func memoryModel(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp? = nil,
+                            background: BackgroundRunner? = nil, log: HomeScreenLog? = nil,
                             onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) -> MemoryModel {
-        MemoryModel(store: store, place: place, alsoForget: MemoryView.alsoForget(cloud),
-                    onForgetEverything: onForgetEverything)
+        let memory = MemoryModel(store: store, place: place, alsoForget: MemoryView.alsoForget(cloud),
+                                 background: background, onForgetEverything: onForgetEverything)
+        log?.memories.append(memory)
+        return memory
     }
 
     /// The memory screen's model as the home screen makes it: Forget
-    /// everything erases the notes, kept points included, and forgets
-    /// every task on `feed`, a recon still going included.
-    static func memoryModel(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp?, feed: FeedModel) -> MemoryModel {
-        memoryModel(store: store, place: place, cloud: cloud, onForgetEverything: { [weak feed] in feed?.forgetTasks() ?? .none })
+    /// everything erases the notes, kept points included, and the
+    /// background work, then forgets every task on `feed`, a recon still
+    /// going included, and closes an open summary.
+    static func memoryModel(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp?,
+                            background: BackgroundRunner? = nil, log: HomeScreenLog? = nil,
+                            feed: FeedModel) -> MemoryModel {
+        memoryModel(store: store, place: place, cloud: cloud, background: background, log: log,
+                    onForgetEverything: { [weak feed] in feed?.forgetEverything() ?? .none })
     }
 
     /// Today's model as the home screen makes it, with looking into things
@@ -173,6 +238,7 @@ public struct HomeView: View {
     static func reconFeedModel(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)?,
                                drivesTasks: Bool, reading: any SourceProvider, place: PrivacyPlace,
                                memory: MemoryStore?, model: any ModelClient, cloud: CloudHelp?,
+                               flow: NeedsYouFlow? = nil, background: BackgroundRunner? = nil,
                                now: @escaping @Sendable () -> Date) -> FeedModel {
         let runner: ReconRunner
         if let tasks {
@@ -181,7 +247,8 @@ public struct HomeView: View {
             runner = ReconRunner(engine: LocalFakeEngine(rule: needsYou.rule, wallClock: now), provider: reading, now: now)
         }
         let feed = feedModel(sources: sources, needsYou: needsYou, tasks: runner,
-                             drivesTasks: drivesTasks || tasks == nil, place: place, memory: memory, now: now)
+                             drivesTasks: drivesTasks || tasks == nil, flow: flow, background: background,
+                             place: place, memory: memory, now: now)
         // Asked at each start, so turning the cloud on or off counts from
         // the next one, as it does for chats. A summary put together in the
         // cloud asks through Today's own preview gate.
@@ -200,7 +267,7 @@ public struct HomeView: View {
     /// rather than an offer whose tap could only fail.
     static func wired(_ chat: ChatController, to feed: FeedModel) -> ChatController {
         chat.lookInto = feed.canLookInto
-            ? { [weak feed] topic, onDevice in feed?.start(lookingInto: topic, onDevice: onDevice) ?? .couldNotStart }
+            ? { [weak feed] topic, place in feed?.start(lookingInto: topic, place: place) ?? .couldNotStart }
             : nil
         chat.reconReadsExamples = feed.readsExamples
         return chat
@@ -249,6 +316,21 @@ public struct HomeView: View {
     }
 }
 
+/// What a home screen made for itself, newest last: the chat it showed and
+/// each memory model. Only tests pass one, to see that another model makes
+/// all of it again.
+@MainActor
+final class HomeScreenLog {
+    var chats: [ChatController] = []
+    var memories: [MemoryModel] = []
+
+    /// The home screen showed `chat`. A chat that appears again, as after a
+    /// sheet or a size change, is written down once.
+    func showed(_ chat: ChatController) {
+        if !chats.contains(where: { $0 === chat }) { chats.append(chat) }
+    }
+}
+
 /// The home screen itself, for one model. See `HomeView`.
 struct HomeScreen: View {
     let brand: Brand
@@ -259,6 +341,8 @@ struct HomeScreen: View {
     let looks: UserDefaults
     /// The cloud setting. Nil, or off, means every chat stays on this device.
     let cloud: CloudHelp?
+    let log: HomeScreenLog?
+    let background: BackgroundRunner?
 
     @State private var finished: Bool
     @State private var firstMessage: String?
@@ -291,6 +375,8 @@ struct HomeScreen: View {
     /// once, so a redraw never subscribes again.
     @State private var cloudSettings: AnyPublisher<CloudHelpSettings, Never>
     @StateObject private var feed: FeedModel
+    /// Opens the first waiting question once, for the showcase.
+    private let opensQuestion: Bool
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -310,9 +396,14 @@ struct HomeScreen: View {
         tasks: (any TaskEngine)?,
         drivesTasks: Bool,
         sources: any SourceProvider,
+        kept: TaskStore?,
+        notifier: (any QuestionNotifying)?,
+        opensQuestion: Bool,
+        background: BackgroundRunner?,
         now: @escaping @Sendable () -> Date,
         cloud: CloudHelp?,
-        chatLine: String?
+        chatLine: String?,
+        log: HomeScreenLog?
     ) {
         self.brand = brand
         self.model = model
@@ -320,7 +411,10 @@ struct HomeScreen: View {
         self.onboarding = onboarding
         self.memory = memory
         self.looks = looks
+        self.opensQuestion = opensQuestion
         self.cloud = cloud
+        self.log = log
+        self.background = background
         // One store for the notes: the redactor must read the same notes
         // the memory screen writes.
         assert(cloud.map { $0.memory === memory } ?? true, "Pass the same MemoryStore to CloudHelp and HomeView")
@@ -339,7 +433,11 @@ struct HomeScreen: View {
         let today = TodayMaker {
             HomeView.reconFeedModel(sources: feed, needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
                                     reading: sources, place: newChatPlace, memory: memory, model: model,
-                                    cloud: cloud, now: now)
+                                    cloud: cloud,
+                                    // A nudge says the name the person chose, read when it is sent.
+                                    flow: kept.map { HomeView.flow(store: $0, notifier: notifier, brand: brand,
+                                                                   names: names) },
+                                    background: background, now: now)
         }
         // `StateObject` makes it only once, so a rebuild of this struct makes
         // no chat, no preview gate and no cloud transport.
@@ -394,10 +492,11 @@ struct HomeScreen: View {
                 // Today has moved to the chat.
                 .modifier(SendTap(chat: chat))
                 .transition(.opacity)
+                .onAppear { log?.showed(chat) }
             } else {
                 // No chat yet, so the hello speaks for the one about to start.
                 OnboardingView(brand: brand, names: names, store: onboarding, looks: looks,
-                               onDevice: surfacePlace.staysOnDevice) { line in
+                               place: surfacePlace) { line in
                     firstMessage = line
                     chats.chat = newChat()
                     withAnimation(.easeInOut(duration: 0.4)) { finished = true }
@@ -415,8 +514,41 @@ struct HomeScreen: View {
         // Questions time out on their own. Looked after here, above Today,
         // so the count beside Today stays true from any place.
         .task { await feed.keepFresh() }
-        .onChange(of: scenePhase) { _, phase in
+        // From the first phase too, so a scene built during a launch in the
+        // background never counts as the person being here.
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            feed.inFront = phase == .active
             if phase == .active { feed.refresh() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // Away, a waiting question may nudge; back in front, its nudge
+            // goes. A glance at Control Center is neither.
+            switch phase {
+            case .active: feed.scene(isActive: true)
+            case .background: feed.scene(isActive: false)
+            default: break
+            }
+        }
+        // A waiting cloud preview covers the screen, so no question is
+        // nudged until it has its answer.
+        .onChange(of: previewWaiting, initial: true) { _, waiting in feed.preview(waiting: waiting) }
+        // A nudge opened: Today, with its card in view, in the window in
+        // front. A question or a cloud preview already up stays up, and the
+        // nudge is let go; any other sheet makes way.
+        .background {
+            if let flow = feed.flow {
+                NudgeOpened(flow: flow) {
+                    guard flow.takesOpened(in: feed.window, canShow: finished && !cover.waitsForAnAnswer) else { return }
+                    if showsShortcuts { showsShortcuts = false }
+                    if feed.reading != nil { feed.reading = nil }
+                    if section != .today { go(.today) }
+                }
+            }
+        }
+        .task {
+            // The showcase's open question, as a tap on Approve would open it.
+            guard opensQuestion, let task = FeedModel.pinnedTasks(in: feed.feed).first else { return }
+            feed.review(task)
         }
         // A question or any sheet, the memory on a narrow window included,
         // sits in front; Command Return can't send a chat line from behind it.
@@ -657,6 +789,7 @@ struct HomeScreen: View {
                         ToolbarItem(placement: .confirmationAction) {
                             DoneButton { section = memoryOverChat ? .chat : .today }
                         }
+                        .sharedBackgroundVisibility(.hidden)
                     }
             }
         }
@@ -701,9 +834,13 @@ struct HomeScreen: View {
         if let memory {
             // Built inside MemoryView's StateObject, once per screen, never
             // on each pass through here. `place` then keeps its words in
-            // step with the cloud setting and the open chat.
-            MemoryView(model: HomeView.memoryModel(store: memory, place: surfacePlace, cloud: cloud, feed: feed),
-                       place: surfacePlace, cloud: cloud)
+            // step with the cloud setting and the open chat. The memory
+            // model forgets the background work itself; Today's part of
+            // Forget everything then forgets the tasks, recons included,
+            // and closes an open summary.
+            MemoryView(model: HomeView.memoryModel(store: memory, place: surfacePlace, cloud: cloud,
+                                                   background: background, log: log, feed: feed),
+                       place: surfacePlace, cloud: cloud, holdsMore: feed.hasSomethingToForget)
         } else {
             // The store couldn't be opened. Say so rather than hide memory.
             // Tasks can still be forgotten here, since Forget everything isn't.
@@ -721,7 +858,7 @@ struct HomeScreen: View {
             // Private words kept from an earlier launch go with the tasks,
             // through `CloudHelp.eraseWordsWithoutNotes`, and the line says
             // whether they could.
-            MemoryUnavailableView(hasTasks: feed.hasTasks, forgotten: feed.tasksForgotten,
+            MemoryUnavailableView(hasTasks: feed.hasSomethingToForget, forgotten: feed.tasksForgotten,
                                   underway: feed.forgotUnderway, wordsErased: wordsErased,
                                   erasesWords: cloud != nil, onForgetTasks: forgetTasksWithoutNotes)
         }
@@ -843,6 +980,21 @@ struct TodayComposer: View {
                 .ignoresSafeArea(edges: .bottom)
                 .overlay(alignment: .top) { Rectangle().fill(Theme.hairline(scheme)).frame(height: 1) }
         }
+    }
+}
+
+/// Hears a nudge being opened, once each time, so the home screen can
+/// bring Today to the front.
+struct NudgeOpened: View {
+    @ObservedObject var flow: NeedsYouFlow
+    let action: () -> Void
+
+    var body: some View {
+        Color.clear
+            .onChange(of: flow.focus, initial: true) { _, id in
+                if id != nil { action() }
+            }
+            .accessibilityHidden(true)
     }
 }
 
@@ -984,15 +1136,38 @@ struct HomeSplit<TodayScreen: View, ChatScreen: View, MemoryScreen: View>: View 
         NavigationSplitView {
             List(selection: $section) {
                 ForEach(HomeSection.allCases, id: \.self) { place in
+                    let chosen = Self.isChosen(place, section: section, regular: isRegular) && Self.drawsOwnFill
+                    let count = place == .today ? needsYouCount : 0
                     NavigationLink(value: place) {
-                        Label(place.title, systemImage: place.symbol)
+                        Self.ink(chosen: chosen) {
+                            HStack {
+                                Label(place.title, systemImage: place.symbol)
+                                // The system's badge is in its secondary ink,
+                                // faint on the fill, so the chosen row draws its own.
+                                if chosen, count > 0 {
+                                    Spacer()
+                                    Text(count, format: .number)
+                                        .monospacedDigit()
+                                        // Heard as what it counts, not a bare number.
+                                        .accessibilityLabel(Self.spokenCount(count))
+                                }
+                            }
+                        }
                     }
-                    .badge(place == .today ? needsYouCount : 0)
+                    // Heard the same way as the count the chosen row draws.
+                    .badge(chosen || count == 0 ? nil
+                           : Text(count, format: .number).accessibilityLabel(Self.spokenCount(count)))
+                    // iOS 26 draws a chosen sidebar row in gray glass, whatever
+                    // the tint, so the row draws its own fill, with white words.
+                    .listRowBackground(chosen ? Capsule().fill(Theme.tintFill).padding(.horizontal, 10) : nil)
+                    // Today is drawn chosen beside its own screen before the
+                    // list has a selection, so VoiceOver hears it chosen too.
+                    .accessibilityAddTraits(Self.traits(place, section: section, regular: isRegular, ownFill: Self.drawsOwnFill))
                 }
             }
-            // The selected row is filled with the tint and its words turn
-            // white, so the sidebar takes the deep fill tint, not the root's
-            // `accentText`, which is too light under white in dark mode.
+            // The deep fill tint, not the root's `accentText`, which is too
+            // light under white in dark mode, for anything the system still
+            // fills with the tint.
             .tint(Theme.tintFill)
             .navigationTitle(chat.displayName.text)
         } detail: {
@@ -1010,6 +1185,63 @@ struct HomeSplit<TodayScreen: View, ChatScreen: View, MemoryScreen: View>: View 
                 }
             }
         }
+    }
+
+    /// Whether the chosen row draws its own fill, with white words on it.
+    /// Only iOS, which draws the chosen row in gray glass. The Mac draws its
+    /// own selection, and turns it gray when the list loses focus, which
+    /// would leave white words on gray, so there the system's stands.
+    static var drawsOwnFill: Bool {
+        #if os(iOS)
+        true
+        #else
+        false
+        #endif
+    }
+
+    /// Whether the sidebar sits beside its detail. Collapsed, as on iPhone
+    /// or a narrow iPad window, going back to the list clears the selection
+    /// and no detail shows, so nothing is chosen.
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var isRegular: Bool { sizeClass == .regular }
+    #else
+    private var isRegular: Bool { true }
+    #endif
+
+    /// The row drawn chosen: the selection, or Today with no selection yet
+    /// while Today's screen shows beside the list. A collapsed list with no
+    /// selection has no row chosen.
+    static func isChosen(_ place: HomeSection, section: HomeSection?, regular: Bool) -> Bool {
+        if let section { return place == section }
+        return regular && place == .today
+    }
+
+    /// What VoiceOver hears for a row's count, drawn or the system's badge.
+    static func spokenCount(_ count: Int) -> String {
+        HomeWords.waiting(count)
+    }
+
+    /// White words on the chosen row's own fill. Every other row, and the
+    /// system's selection where it draws one, keeps the sidebar's own
+    /// colors, its tinted icons included.
+    @ViewBuilder
+    static func ink(chosen: Bool, @ViewBuilder row: () -> some View) -> some View {
+        if chosen {
+            row().foregroundStyle(Theme.onTintFill)
+        } else {
+            row()
+        }
+    }
+
+    /// What VoiceOver adds to a row: the selected trait on the row this code
+    /// draws chosen, and on no other. With a selection, iOS gives that same
+    /// row the trait itself as well, which is heard once; with none yet,
+    /// Today is drawn chosen and only this gives it. Where the system draws
+    /// the selection (`ownFill` false, as on the Mac) it gives the trait
+    /// itself, for the row it really selected, so nothing is added.
+    static func traits(_ place: HomeSection, section: HomeSection?, regular: Bool, ownFill: Bool) -> AccessibilityTraits {
+        ownFill && isChosen(place, section: section, regular: regular) ? .isSelected : []
     }
 
     private var newChatButton: some View {
@@ -1098,6 +1330,7 @@ struct KeyboardShortcutsView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     DoneButton { dismiss() }
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
         }
         .presentationDragIndicator(.visible)

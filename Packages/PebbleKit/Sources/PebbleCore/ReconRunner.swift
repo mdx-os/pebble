@@ -19,7 +19,7 @@ public enum ReconStart: Equatable, Sendable {
     /// One on the same topic is already going or ready, so nothing more
     /// was started. Its id, or nil while it is still being started, and
     /// whether its summary may be put into words off this device.
-    case already(id: String?, mayLeaveDevice: Bool)
+    case already(id: String?, mayUseCloud: Bool)
     /// Nothing could start: see `ReconRunner.start(lookingInto:with:)`.
     case notStarted
 
@@ -99,9 +99,10 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         var work: Task<Void, Never>?
         /// The summary has been begun this round, so it is never begun twice.
         var begun = false
-        /// This round's summary is past the person's yes to send what was
-        /// read, as `CloudYes` says. Only then may it have left the device.
-        var pastYes = false
+        /// A summary of this recon got past the person's yes to send what
+        /// was read, as `CloudYes` says, so it may have left the device.
+        /// Never set back: not by a stop, a retry or the summary landing.
+        var sentToCloud = false
         /// Stopped by the person. The card says stopped, never done, and
         /// nothing it read is kept.
         var stopped = false
@@ -167,21 +168,21 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
               let scripted = engine as? ScriptedTaskEngine else { return .notStarted }
         let key = Self.topicKey(task.topic)
         lock.lock()
-        if let leaves = starting[key] {
+        if let mayUseCloud = starting[key] {
             lock.unlock()
-            return .already(id: nil, mayLeaveDevice: leaves)
+            return .already(id: nil, mayUseCloud: mayUseCloud)
         }
         // Claimed before the engine is asked, so no other ask for this
         // topic gets past here until this one is noted or let go.
-        starting[key] = summarizer.mayLeaveDevice
+        starting[key] = summarizer.mayUseCloud
         let begun = generation
         let candidates = runs.filter { Self.topicKey($0.value.task.topic) == key }
-            .mapValues(\.summarizer.mayLeaveDevice)
+            .mapValues(\.summarizer.mayUseCloud)
         lock.unlock()
         // Asked with the lock let go: the list comes from the engine.
         if let found = tasks.first(where: { candidates[$0.id] != nil && ($0.isActive || $0.state == .done) }) {
             letGo(key, begun)
-            return .already(id: found.id, mayLeaveDevice: candidates[found.id] ?? false)
+            return .already(id: found.id, mayUseCloud: candidates[found.id] ?? false)
         }
         let (sources, failed) = read(task, isSample: provider.isSample)
         let gatheredAt = now()
@@ -307,23 +308,34 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
     /// read off this device, as when the cloud is on.
     public var summariesMayLeaveDevice: Int {
         lock.lock(); defer { lock.unlock() }
-        return runs.values.filter { $0.work != nil && $0.summarizer.mayLeaveDevice }.count
+        return runs.values.filter { $0.work != nil && $0.summarizer.mayUseCloud }.count
     }
 
-    /// Summaries still being put together whose sources may already have
-    /// left the device: the person said yes to sending them. One still
-    /// reading, taking details out or waiting on its preview counts as none.
+    /// Recons whose sources may already have left the device: the person
+    /// said yes to sending them and the request went on. Once marked, one
+    /// stays counted, still going, stopped or done. One still reading,
+    /// taking details out or waiting on its preview counts as none.
     public var summariesPastAYes: Int {
         lock.lock(); defer { lock.unlock() }
-        return runs.values.filter { $0.work != nil && $0.pastYes }.count
+        return runs.values.filter(\.sentToCloud).count
     }
 
-    /// The yes for this round's summary is in. Not for one begun before a
-    /// retry or Forget everything.
-    private func heardYes(_ id: String, round: Int, generation begun: Int) {
+    /// True when a summary of this recon got past a yes, so what it read
+    /// may have left the device.
+    public func sentToCloud(_ id: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard generation == begun, runs[id]?.round == round else { return }
-        runs[id]?.pastYes = true
+        return runs[id]?.sentToCloud == true
+    }
+
+    /// The yes for this round's summary is in, and the request is about to
+    /// go. Refused, so nothing goes, for one begun before a retry or Forget
+    /// everything, or one stopped or being stopped since its preview showed.
+    private func heardYes(_ id: String, round: Int, generation begun: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard generation == begun, let run = runs[id], run.round == round, !run.stopped, !run.stopping
+        else { return false }
+        runs[id]?.sentToCloud = true
+        return true
     }
 
     /// The card has reached the step where the summary is put together.
@@ -341,11 +353,13 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         }
         let (summarizer, task, sources, gatheredAt) = (run.summarizer, run.task, run.sources, run.gatheredAt)
         let key = UUID()
-        let yes: @Sendable () -> Void = { [weak self] in self?.heardYes(id, round: round, generation: begun) }
+        let yes: @Sendable () -> Bool = { [weak self] in self?.heardYes(id, round: round, generation: begun) ?? false }
         let work = Task { [weak self] in
             defer { self?.ended(key) }
-            let summary = await CloudYes.$heard.withValue(yes) {
-                await summarizer.summarize(task, id: id, sources: sources, gatheredAt: gatheredAt)
+            let summary = await CloudYes.$run.withValue(id) {
+                await CloudYes.$heard.withValue(yes) {
+                    await summarizer.summarize(task, id: id, sources: sources, gatheredAt: gatheredAt)
+                }
             }
             guard !Task.isCancelled else { return }
             self?.finish(id, round: round, generation: begun, with: summary)
@@ -354,8 +368,10 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         // Work that already ended before it could be noted needs no wait.
         if endedEarly.remove(key) == nil { underway[key] = work }
         let current = runs[id]
+        // Not while a stop is under way either: it has already taken the
+        // work it found, so work noted now would never be cancelled.
         let keep = generation == begun && current?.round == round && current?.stopped == false
-            && current?.summary == nil
+            && current?.stopping == false && current?.summary == nil
         if keep { runs[id]?.work = work }
         lock.unlock()
         // Stopped, retried, let go or forgotten while it was being begun.
@@ -422,9 +438,9 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
 
     /// True when the recon's summary is put together by a summarizer that
     /// may send what was read off this device, after a yes.
-    public func mayLeaveDevice(_ id: String) -> Bool {
+    public func mayUseCloud(_ id: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        return runs[id]?.summarizer.mayLeaveDevice == true
+        return runs[id]?.summarizer.mayUseCloud == true
     }
 
     /// True when a point from this recon may be kept in the person's notes.
@@ -443,33 +459,44 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         lock.unlock()
         return list.map { task in
             guard let run = known[task.id] else { return task }
-            guard task.state == .done else { return Self.counted(task, run) }
-            var shown = Self.counted(task, run)
-            if run.stopped {
-                // Nothing was summed up, so nothing was kept.
-                shown.state = .stopped
-                shown.step = TaskWords.stopped
-                shown.result = nil
-                shown.wrapUp = TaskWrapUp(kept: [], notDone: [])
-            } else if run.readFailed {
-                // The sources couldn't be read: that is a failure, not "nothing found".
-                shown.state = .failed
-                shown.step = ReconWords.couldNotRead
-                shown.result = nil
-                shown.wrapUp = TaskWrapUp(kept: [], notDone: [ReconWords.readTodo])
-            } else if let summary = run.summary {
-                shown.result = summary.plainText
-                // From the summary, not the script: a retry may find what
-                // the script it plays again had nothing of, or the other way.
-                shown.step = summary.points.isEmpty ? ReconWords.nothingFoundLine : ReconWords.doneLine
-            } else {
-                shown.state = .running
-                shown.step = ReconWords.puttingTogether
-                shown.progress = .indeterminate
-                shown.wrapUp = nil
-            }
-            return shown
+            let shown = Self.shown(task, run)
+            // Stopped after a Send: what was read may already have gone, and
+            // the card says so plainly rather than only that it stopped.
+            guard shown.state == .stopped, run.sentToCloud else { return shown }
+            var told = shown
+            told.step = ReconWords.stoppedAfterSend
+            return told
         }
+    }
+
+    /// The card for one recon, before what a Send may have let go is added.
+    private static func shown(_ task: AgentTask, _ run: Run) -> AgentTask {
+        guard task.state == .done else { return Self.counted(task, run) }
+        var shown = Self.counted(task, run)
+        if run.stopped {
+            // Nothing was summed up, so nothing was kept.
+            shown.state = .stopped
+            shown.step = TaskWords.stopped
+            shown.result = nil
+            shown.wrapUp = TaskWrapUp(kept: [], notDone: [])
+        } else if run.readFailed {
+            // The sources couldn't be read: that is a failure, not "nothing found".
+            shown.state = .failed
+            shown.step = ReconWords.couldNotRead
+            shown.result = nil
+            shown.wrapUp = TaskWrapUp(kept: [], notDone: [ReconWords.readTodo])
+        } else if let summary = run.summary {
+            shown.result = summary.plainText
+            // From the summary, not the script: a retry may find what
+            // the script it plays again had nothing of, or the other way.
+            shown.step = summary.points.isEmpty ? ReconWords.nothingFoundLine : ReconWords.doneLine
+        } else {
+            shown.state = .running
+            shown.step = ReconWords.puttingTogether
+            shown.progress = .indeterminate
+            shown.wrapUp = nil
+        }
+        return shown
     }
 
     /// The card's step and what it kept, with the number of sources this
@@ -535,9 +562,13 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         let engineDone = !stopped && engine.tasks.first { $0.id == id }?.state == .done
         lock.lock()
         var halted = stopped
+        // Work noted after the first look, so it is cancelled too, never left
+        // running with a preview Send could still answer.
+        var late: Task<Void, Never>?
         if var run = runs[id] {
             let waiting = engineDone && run.summary == nil && !run.stopped && !run.readFailed
             if stopped || waiting {
+                late = run.work
                 run.stopped = true
                 run.summary = nil
                 run.sources = []
@@ -548,6 +579,7 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
             runs[id] = run
         }
         lock.unlock()
+        late?.cancel()
         if halted { changed() }
         return halted
     }
@@ -607,7 +639,6 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
             run.summary = nil
             run.work = nil
             run.begun = false
-            run.pastYes = false
             run.stopped = false
             run.stopping = false
             run.sources = sources
@@ -670,5 +701,24 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         guard !listeners.isEmpty else { return }
         let snapshot = snapshot(advancing: true)
         for listener in listeners { listener(snapshot) }
+    }
+}
+
+/// Tasks kept while the app is closed pass through to the engine, when it
+/// keeps them. A recon is never kept: what it read and its summary live
+/// only in memory, so a card picked up again would have nothing behind it,
+/// and its topic is never written down.
+extension ReconRunner: KeepsTasks {
+    public func saved() -> [SavedTask] {
+        guard let keeper = engine as? any KeepsTasks else { return [] }
+        return keeper.saved().filter { !isRecon($0.id) }
+    }
+
+    public func restore(_ saved: [SavedTask], now: Date) {
+        (engine as? any KeepsTasks)?.restore(saved, now: now)
+    }
+
+    public func takeReceipts() -> [Receipt] {
+        (engine as? any KeepsTasks)?.takeReceipts() ?? []
     }
 }

@@ -100,19 +100,29 @@ engine): plan a few questions, read the sources, check their dates, put a
 summary together. It lands in Today as a card with a short summary, a few
 key points, every point marked with its sources, a plain line wherever the
 sources disagree, and when it was gathered. From the card you can open the
-sources, ask a follow-up in the chat, or pick a point to remember.
+sources and ask a follow-up in the chat. A card that wasn't read from
+examples also offers to remember a point.
 
 Sources come through `SourceProvider`. The only one so far is
 `SampleSources`, a set of made up documents kept on the device, so results
-are labelled as examples. With the cloud off, the summary is put together on
-the device. With it on, the request goes through the same redaction and
-preview as a chat, and choosing not to send keeps it on the device.
+are labelled as examples, and no point from them can be remembered: the
+card doesn't offer it, and the notes store refuses one (`ReconRunner.keepsPoints`,
+`MemoryStore.remember(_:from:at:)`). With the cloud off, the summary is put
+together on the device. With it on, the request goes through the same
+redaction and preview as a chat, and choosing not to send keeps it on the
+device. A recon asked for from a chat that stays on the device is put
+together on the device too, whatever the cloud setting.
 
-A point you keep is saved with the source `lookedUp` and labelled with
-where it came from. Builds from before looking into things can't read that
-kind, so if you go back to one, those notes show as "My guess" (`inferred`),
-the least trusted label. Their words are kept, but once that older build
-saves the notes again, where they came from is lost and they stay "My guess".
+Once real sources are plugged in, a point you keep is saved with the source
+`lookedUp`. One put together on the device is labelled with its first
+source's publisher and lists each source in the note. One put into words in
+the cloud names no publisher, since no one here checked which page said it:
+it is labelled "From something I looked into" and the note says it was put
+into words in the cloud. Builds from before looking into things can't read
+that kind, so if you go back to one, those notes show as "My guess"
+(`inferred`), the least trusted label. Their words are kept, but once that
+older build saves the notes again, where they came from is lost and they
+stay "My guess".
 
 ## The agent's name
 

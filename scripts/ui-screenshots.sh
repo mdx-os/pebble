@@ -10,6 +10,9 @@ out="${1:-build/screenshots/ui}"
 derived="build/DerivedData"
 bundle_id="com.mdxos.pebble"
 mkdir -p "$out"
+# The tree these screenshots show, written to $out/STAMP once they are made.
+rm -f "$out/STAMP"
+tree="$(sh scripts/screenshot-stamp.sh tree)"
 
 # The app itself, picked by bundle id: Products also holds the UI test
 # runner once `make ui-test` has run.
@@ -38,7 +41,7 @@ xcrun simctl install "$udid" "$app"
 for mode in light dark; do
   xcrun simctl ui "$udid" appearance "$mode"
   for screen in ${PEBBLE_SCREENS:-today todayNeedsYou todayEmpty hello name look ideas memory confirm confirmTimedOut firstChat}; do
-    xcrun simctl launch --terminate-running-process "$udid" "$bundle_id" -pebbleScreen "$screen" >/dev/null
+    xcrun simctl launch --terminate-running-process "$udid" "$bundle_id" -showcaseScreen "$screen" >/dev/null
     sleep 3
     xcrun simctl io "$udid" screenshot "$out/$screen-$mode.png" >/dev/null
     echo "ui-screenshots: $out/$screen-$mode.png"
@@ -46,3 +49,4 @@ for mode in light dark; do
 done
 xcrun simctl terminate "$udid" "$bundle_id" || true
 xcrun simctl ui "$udid" appearance light
+sh scripts/screenshot-stamp.sh write "$out" "$tree"

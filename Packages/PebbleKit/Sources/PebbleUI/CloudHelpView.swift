@@ -423,53 +423,93 @@ final class SwitchedOff: @unchecked Sendable {
     }
 }
 
-/// Holds a chat's preview on screen until the person sends it or not.
+/// Holds a preview on screen until the person sends it or not.
 ///
 /// `CloudModel` waits here before every request. The sheet reads `pending`,
 /// shows its exact bytes, and answers for that preview by its id. Going
 /// away without an answer, the chat screen leaving, or the reply being
 /// stopped all count as not sending.
+///
+/// Each summary's preview is its own, kept by its run (`CloudPreview.run`).
+/// Two summaries at once wait one behind the other, and each answer goes
+/// to the preview that was on screen, never to another run's. A chat's
+/// previews have no run: a newer one takes the older one's place, unsent.
 @MainActor
 public final class CloudReview: ObservableObject, CloudReviewing {
+    /// The preview on screen: the first one waiting.
     @Published public private(set) var pending: CloudPreview?
-    private var waiting: CheckedContinuation<CloudConsent, Never>?
+    private struct Waiting {
+        let preview: CloudPreview
+        let answer: CheckedContinuation<CloudConsent, Never>
+    }
+    /// Every preview waiting for an answer, oldest first.
+    private var queue: [Waiting] = []
     private var watchers: [CheckedContinuation<CloudPreview, Never>] = []
 
     public init() {}
 
     public func review(_ preview: CloudPreview) async -> CloudConsent {
         if Task.isCancelled { return .withdrawn }
-        // Only one question at a time; an older one is not sent.
-        cancelPending()
+        // An older question from the same asker is not sent: a chat's, or
+        // the same summary's. Another summary's waits its own turn.
+        for older in queue where older.preview.run == preview.run { answer(.withdrawn, for: older.preview.id) }
         let id = preview.id
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
-                waiting = continuation
-                pending = preview
-                let watchers = self.watchers
-                self.watchers = []
-                for watcher in watchers { watcher.resume(returning: preview) }
+                queue.append(Waiting(preview: preview, answer: continuation))
+                showFirst()
             }
         } onCancel: {
             Task { @MainActor in self.answer(.withdrawn, for: id) }
         }
     }
 
-    /// The person's answer to the preview with `id`, the one they saw. An
-    /// answer meant for any other preview is ignored, so a tap can never
-    /// send something that wasn't on screen.
+    /// The person's answer to the preview with `id`. Send and Don't send
+    /// count only for the one on screen, so a tap can never send something
+    /// that wasn't, or something already taken away. Withdrawing reaches
+    /// any preview still waiting.
     public func answer(_ consent: CloudConsent, for id: UUID) {
-        guard let pending, pending.id == id else { return }
-        self.pending = nil
-        let waiting = self.waiting
-        self.waiting = nil
-        waiting?.resume(returning: consent)
+        guard let index = queue.firstIndex(where: { $0.preview.id == id }) else {
+            // One put on screen for a screenshot, with nothing waiting on it.
+            if pending?.id == id { pending = queue.first?.preview }
+            return
+        }
+        if consent != .withdrawn, pending?.id != id { return }
+        let waiting = queue.remove(at: index)
+        showFirst()
+        waiting.answer.resume(returning: consent)
     }
 
     /// Sends nothing for whatever is waiting. The person didn't answer it,
     /// so it is withdrawn, not declined.
     public func cancelPending() {
-        if let id = pending?.id { answer(.withdrawn, for: id) }
+        for waiting in queue { answer(.withdrawn, for: waiting.preview.id) }
+        if let shown = pending { answer(.withdrawn, for: shown.id) }
+    }
+
+    /// Sends nothing for `run`'s preview, at once, as when that summary is
+    /// stopped. Every other run's stays as it is.
+    public func withdraw(run: String) {
+        for waiting in queue where waiting.preview.run == run { answer(.withdrawn, for: waiting.preview.id) }
+    }
+
+    /// The person closed the sheet without Send, as by swiping it down:
+    /// they chose not to send what it showed.
+    public func dismissed(_ id: UUID) {
+        answer(.cancel, for: id)
+    }
+
+    /// The previews still waiting, the one on screen first. For tests.
+    package var waiting: [CloudPreview] { queue.map(\.preview) }
+
+    private func showFirst() {
+        let first = queue.first?.preview
+        guard pending?.id != first?.id else { return }
+        pending = first
+        guard let first else { return }
+        let watchers = self.watchers
+        self.watchers = []
+        for watcher in watchers { watcher.resume(returning: first) }
     }
 
     /// Waits until a preview is on screen, with no timing involved. For tests.
@@ -980,13 +1020,21 @@ struct CloudPreviewPresenter: ViewModifier {
         blocked ? nil : pending
     }
 
+    /// The sheet was closed without Send, as by swiping it down. The person
+    /// saw the preview and chose not to send it, so it is answered Don't
+    /// send, the same as the button, for that preview only. A preview held
+    /// back by another sheet was never on screen, so it is left waiting.
+    static func closed(_ review: CloudReview, blocked: Bool) {
+        guard !blocked, let shown = shown(review.pending, blocked: blocked) else { return }
+        review.dismissed(shown.id)
+    }
+
     func body(content: Content) -> some View {
-        // Swiping the sheet away only ever cancels, which is always safe.
-        // Send is tied to the preview that sheet showed. A preview held back
-        // by another sheet is never cancelled for it.
+        // Swiping the sheet away only ever declines, which is always safe.
+        // Send is tied to the preview that sheet showed.
         content.sheet(
             item: Binding(get: { Self.shown(review.pending, blocked: blocked) },
-                          set: { if $0 == nil, !blocked { review.cancelPending() } })
+                          set: { if $0 == nil { Self.closed(review, blocked: blocked) } })
         ) { preview in
             CloudPreviewSheet(preview: preview, purpose: purpose?(preview),
                               onSend: { review.answer(.send, for: preview.id) },

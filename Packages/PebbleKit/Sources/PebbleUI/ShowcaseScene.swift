@@ -27,14 +27,43 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// Looking into something: the offer in the chat, the live card while it
     /// reads, and the summary with its sources. On the sample sources.
     case reconOffer, reconRunning, reconReady
+    /// Today after background work: this morning's summary, made late
+    /// because the device was locked, and yesterday's, which never ran.
+    /// `memoryBackground` is the memory screen with background work on and
+    /// the cloud setting's row, and `memoryBackgroundEnd` the same screen
+    /// scrolled to its end, so a phone shows the switch and the cloud row
+    /// together. `memoryForgetAsk` asks Forget everything with the summaries
+    /// and the private words named, and `memorySummariesStayed` is the
+    /// screen after Forget everything couldn't erase the summaries' file.
+    case todaySummary, memoryBackground, memoryBackgroundEnd, memoryForgetAsk, memorySummariesStayed
+    /// The dentist search reaching its one question: waiting in Needs you
+    /// with the offer of a nudge, open in its sheet, its receipt after a
+    /// yes, and its card after Not now. `askLive` plays it in real time and
+    /// keeps it while the app is closed, for the UI tests.
+    case askWaiting, askSheet, askAnswered, askClosed, askLive
 
-    public static let launchKey = "pebbleScreen"
+    /// The launch argument that picks a scene. No name in it, product or
+    /// codename, as `make brand-check` asks of new code.
+    public static let launchKey = "showcaseScreen"
+    /// `-showcaseStill YES` holds every gentle motion still, so the screen
+    /// settles and two screenshots of it match.
+    public static let stillKey = "showcaseStill"
+    /// `-snapshotSheet YES` has the Mac's snapshot draw the sheet the scene
+    /// presents, in a real window.
+    public static let sheetKey = "snapshotSheet"
+    /// `-snapshotDark YES` has the Mac's snapshot draw in dark mode.
+    public static let darkKey = "snapshotDark"
+    /// Launch with this set to keep what `askLive` kept last time, as the
+    /// app does after it is closed. Without it, `askLive` starts fresh.
+    public static let keepAsksKey = "showcaseKeepAsks"
+    /// The throwaway suite the showcase keeps its looks in.
+    static let looksSuite = "showcase.looks"
 
     @MainActor
     public func view(brand: Brand) -> some View {
         // A throwaway suite so the showcase never touches real choices.
-        let looks = UserDefaults(suiteName: "pebble.showcase")!
-        looks.removePersistentDomain(forName: "pebble.showcase")
+        let looks = UserDefaults(suiteName: Self.looksSuite)!
+        looks.removePersistentDomain(forName: Self.looksSuite)
         // Read the clock once, so the cards and the question agree.
         let morning = Self.morning
         return Group {
@@ -57,8 +86,14 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     needsYou: needsYou(at: morning) ?? NeedsYou(rule: .isolated()),
                     now: { morning }
                 )
-            case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive:
+            case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive,
+                 .askWaiting, .askSheet, .askAnswered, .askClosed, .askLive:
                 taskHome(brand: brand, looks: looks)
+                    .overlay(alignment: .topLeading) {
+                        if self == .askLive { NudgePermissionProbe() }
+                    }
+            case .todaySummary:
+                summaryHome(brand: brand, looks: looks, at: morning)
             case .reconOffer:
                 HomeView(
                     brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
@@ -78,7 +113,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     store: InMemoryOnboardingStore(),
                     looks: looks,
                     // The showcase plays the on-device model, as the app does.
-                    onDevice: LocalStubModel().privacyPlace.staysOnDevice,
+                    place: LocalStubModel().privacyPlace,
                     startAt: page,
                     draftName: self == .name || self == .look || self == .ideas ? "Pip" : ""
                 ) { _ in }
@@ -98,7 +133,22 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                              look: AgentLook.load(from: looks), firstMessage: nil)
                 }
             case .memory:
-                MemoryView(store: Self.sampleMemory(), place: LocalStubModel().privacyPlace)
+                MemoryView(store: Self.sampleMemory(), place: LocalStubModel().privacyPlace,
+                           background: Self.sampleBackground(on: false, at: morning))
+            case .memoryBackground:
+                // With the cloud setting too, as the app shows it once a
+                // cloud model is set up, so the whole screen is seen.
+                MemoryView(store: Self.sampleMemory(), place: LocalStubModel().privacyPlace, cloud: Self.sampleCloud(),
+                           background: Self.sampleBackground(on: true, at: morning))
+            case .memoryBackgroundEnd:
+                MemoryView(store: Self.sampleMemory(), place: LocalStubModel().privacyPlace, cloud: Self.sampleCloud(),
+                           background: Self.sampleBackground(on: true, at: morning))
+                    .defaultScrollAnchor(.bottom)
+            case .memoryForgetAsk:
+                Self.forgetAskMemory(at: morning)
+            case .memorySummariesStayed:
+                Self.summariesStayedMemory(at: morning)
+                    .defaultScrollAnchor(.bottom)
             case .memoryEmpty:
                 MemoryView(store: Self.emptyMemory(), place: LocalStubModel().privacyPlace)
             case .memorySaved:
@@ -154,11 +204,11 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// The task scenes ask through `rule`, the one their tasks share.
     func needsYou(at now: Date = morning, rule: AskFirst = .isolated()) -> NeedsYou? {
         switch self {
-        case .todayNeedsYou: Self.sampleQuestion(at: now)
+        case .todayNeedsYou, .todaySummary: Self.sampleQuestion(at: now)
         case .today, .todayEmpty, .home, .homeMemory: NeedsYou(rule: .isolated())
         case .reconOffer: NeedsYou(rule: .isolated())
-        case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive, .reconRunning, .reconReady:
-            NeedsYou(rule: rule)
+        case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive, .reconRunning, .reconReady,
+             .askWaiting, .askSheet, .askAnswered, .askClosed, .askLive: NeedsYou(rule: rule)
         default: nil
         }
     }
@@ -171,6 +221,148 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         case .tasksLive: Self.liveTasks(rule: rule)
         case .taskRunning, .taskRetrying, .taskWaiting, .taskDone: Self.sampleTasks(self, rule: rule)
         case .reconRunning, .reconReady: Self.sampleRecon(ready: self == .reconReady, rule: rule)
+        case .askWaiting, .askSheet, .askAnswered, .askClosed: Self.askTasks(self, rule: rule)
+        case .askLive: Self.liveAsks().engine
+        default: nil
+        }
+    }
+
+    /// Where an ask scene keeps its tasks and receipts. In memory, except
+    /// for `askLive`, whose file outlasts the app being closed. Nil for
+    /// scenes that keep nothing.
+    @MainActor
+    func kept() -> TaskStore? {
+        switch self {
+        case .askLive: return Self.liveAsks().store
+        case .askWaiting, .askSheet, .askAnswered, .askClosed:
+            if let store = Self.askStores[self] { return store }
+            let store = TaskStore.inMemory()
+            Self.askStores[self] = store
+            return store
+        default: return nil
+        }
+    }
+
+    @MainActor private static var askStores: [ShowcaseScene: TaskStore] = [:]
+    @MainActor private static var liveAsk: (rule: AskFirst, engine: LocalFakeEngine, store: TaskStore)?
+
+    /// The one live ask scene for this launch: its rule, engine and store,
+    /// made once so the screen and its question always agree.
+    @MainActor
+    static func liveAsks() -> (rule: AskFirst, engine: LocalFakeEngine, store: TaskStore) {
+        if let liveAsk { return liveAsk }
+        let temporary = FileManager.default.temporaryDirectory
+        let store = TaskStore(fileURL: temporary.appendingPathComponent("showcase-asks.json"),
+                              forgetMarker: temporary.appendingPathComponent("showcase-asks-pending", isDirectory: true)
+                                  .appendingPathComponent("tasks-forgotten"))
+        if !UserDefaults.standard.bool(forKey: keepAsksKey) { store.reset() }
+        let rule = AskFirst.isolated()
+        // Played to the moment the dentist search asks, so the question
+        // opens as the app does. Kept tasks come back instead, when there are any.
+        let engine = LocalFakeEngine(rule: rule, scripts: Self.liveScripts(), origin: Date() - 42)
+        if store.tasks.isEmpty && store.receipts.isEmpty {
+            engine.start(liveDentist)
+        }
+        engine.advance(by: 42)
+        let made = (rule: rule, engine: engine, store: store)
+        liveAsk = made
+        return made
+    }
+
+    /// Launch with this many seconds to make the held visit take that long
+    /// after a yes, so a UI test can close the app while it is under way.
+    public static let holdSecondsKey = "showcaseHoldSeconds"
+
+    /// Every sample script for `askLive`, the dentist search swapped for
+    /// `liveDentist` wherever it is in `all`.
+    static func liveScripts(_ all: [TaskScript] = SampleTasks.all) -> [TaskScript] {
+        [liveDentist] + all.filter { $0.title != SampleTasks.dentist.title }
+    }
+
+    /// The dentist search for `askLive`, its held visit as long as asked.
+    static var liveDentist: TaskScript {
+        let hold = UserDefaults.standard.double(forKey: holdSecondsKey)
+        guard hold > 0, let last = SampleTasks.dentist.steps.last else { return SampleTasks.dentist }
+        let held = TaskScript.Step(last.text, kind: last.kind, duration: hold, kept: last.kept, todo: last.todo)
+        return TaskScript(title: SampleTasks.dentist.title, steps: SampleTasks.dentist.steps.dropLast() + [held],
+                          determinate: SampleTasks.dentist.determinate, doneLine: SampleTasks.dentist.doneLine,
+                          result: SampleTasks.dentist.result)
+    }
+
+    /// The dentist search at its question, and after it is answered.
+    /// Nothing here is really done. Each call starts the scene's store over.
+    ///
+    /// The search asks at 42 seconds and holds the visit in 4 more after a
+    /// yes. The plan, started at 20, is done at 42.
+    @MainActor
+    static func askTasks(_ scene: ShowcaseScene, rule: AskFirst) -> LocalFakeEngine {
+        let store = scene.kept()
+        store?.reset()
+        // The waiting scene shows the offer of a nudge; the others have had it.
+        if scene != .askWaiting { store?.setNudges(.declined) }
+        let at: TimeInterval = scene == .askWaiting || scene == .askSheet ? 42 : 50
+        let engine = LocalFakeEngine(rule: rule, origin: morning - at)
+        engine.start(SampleTasks.dentist)
+        engine.advance(by: 20)
+        engine.start(SampleTasks.plan)
+        engine.advance(by: 22)
+        if let task = engine.tasks.first(where: { $0.title == SampleTasks.dentistTitle }), let question = task.question {
+            // Answered through the sheet's own state, as a tap would.
+            let sheet = ConfirmationState(request: question, rule: rule,
+                                          onApprove: { _ = engine.resume(task.id, with: $0) },
+                                          onDecline: { engine.questionClosed(question) })
+            switch scene {
+            case .askAnswered: sheet.tapPrimary()
+            case .askClosed: sheet.cancel()
+            default: break
+            }
+        }
+        engine.advance(by: at - 42)
+        return engine
+    }
+
+    /// Nudges for the still ask scenes: the system has not been asked, and
+    /// nothing is ever posted.
+    final class StillNotifier: QuestionNotifying, @unchecked Sendable {
+        func permission() async -> NudgePermission { .notDetermined }
+        func requestPermission() async -> Bool { false }
+        func post(_ nudge: QuestionNudge, after delay: TimeInterval) {}
+        func remove(_ ids: [String]) {}
+        func removeAll() {}
+        func forget() {}
+        func onOpen(_ handler: @escaping @MainActor @Sendable (String) -> Void) {}
+    }
+
+    /// For the UI tests, in `askLive` only: what the system says about
+    /// nudges as the scene opens, so a test meets a simulator that was
+    /// asked before with a clear failure, not a confusing one later. Too
+    /// small and clear to be seen.
+    struct NudgePermissionProbe: View {
+        @State private var permission = "checking"
+
+        var body: some View {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityElement()
+                .accessibilityLabel(permission)
+                .accessibilityIdentifier("nudgePermission")
+                .task {
+                    #if canImport(UserNotifications)
+                    guard LocalQuestionNotifier.shared.installed else { return }
+                    permission = String(describing: await LocalQuestionNotifier.shared.permission())
+                    #endif
+                }
+        }
+    }
+
+    /// How an ask scene nudges: the real notifications for `askLive`, so
+    /// the UI tests meet the system's own question, and none for the rest.
+    var notifier: (any QuestionNotifying)? {
+        switch self {
+        #if canImport(UserNotifications)
+        case .askLive: LocalQuestionNotifier.shared
+        #endif
+        case .askWaiting, .askSheet, .askAnswered, .askClosed: StillNotifier()
         default: nil
         }
     }
@@ -214,8 +406,10 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// share one rule of their own, so the showcase never touches the app's.
     @MainActor
     private func taskHome(brand: Brand, looks: UserDefaults) -> HomeView {
-        let rule = AskFirst.isolated()
-        let live = self == .tasksLive
+        // The live ask scene keeps one rule for the launch, the one its
+        // kept question is asked again through.
+        let rule = self == .askLive ? Self.liveAsks().rule : AskFirst.isolated()
+        let live = self == .tasksLive || self == .askLive
         let morning = Self.morning
         return HomeView(
             brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
@@ -224,6 +418,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
             feed: [SampleFeedSource()], needsYou: needsYou(at: morning, rule: rule) ?? NeedsYou(rule: rule),
             tasks: tasks(rule: rule),
             drivesTasks: live,
+            kept: kept(), notifier: notifier, opensQuestion: self == .askSheet,
             now: { @Sendable in live ? Date() : morning }
         )
     }
@@ -305,6 +500,47 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         return runner
     }
 
+    /// Today with the cards background work left. The summary counted a
+    /// copy of the sample question Today shows, asked through a rule of
+    /// its own, so the showcase never touches the app's.
+    @MainActor
+    private func summaryHome(brand: Brand, looks: UserDefaults, at morning: Date) -> HomeView {
+        HomeView(
+            brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
+            onboarding: InMemoryOnboardingStore(finished: true), memory: Self.sampleMemory(),
+            looks: looks, conversation: Self.sampleFirstChat(), section: .today,
+            needsYou: needsYou(at: morning) ?? NeedsYou(rule: .isolated()),
+            background: Self.sampleBackground(on: true, needsYou: Self.sampleQuestion(at: morning), played: true,
+                                              at: morning),
+            now: { morning }
+        )
+    }
+
+    /// A runner that keeps nothing on disk, marked as an example, so
+    /// nothing here touches the person's own and no launch leaves a file
+    /// behind. It plays as if the app had been running all along.
+    /// `played` runs it through two mornings: yesterday's held back by Low
+    /// Power Mode until its day ended, and today's held back before the
+    /// first unlock, then made at `morning`. It has no tasks, as the app
+    /// has none yet, so the missed day leaves no card, just as in the app.
+    static func sampleBackground(on: Bool, needsYou: NeedsYou? = nil, played: Bool = false,
+                                 at morning: Date, store: BackgroundStore = .memoryOnly()) -> BackgroundRunner {
+        let runner = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(),
+                                      needsYou: needsYou, watchingSince: .distantPast, sample: true)
+        guard on else { return runner }
+        let calendar = Calendar.current
+        let today = BackgroundPlan.morning(of: morning, calendar: calendar)
+        guard played, let yesterday = calendar.date(byAdding: .day, value: -1, to: today) else {
+            runner.turnOn(now: morning)
+            return runner
+        }
+        runner.turnOn(now: yesterday - 60 * 60)
+        runner.runDue(now: yesterday + 60, conditions: BackgroundConditions(moment: .background, lowPower: true))
+        runner.runDue(now: today + 60, conditions: BackgroundConditions(moment: .background, fileShut: true))
+        runner.runDue(now: morning - 5 * 60, conditions: .foreground)
+        return runner
+    }
+
     /// Every sample task from the start, played in real time.
     static func liveTasks(rule: AskFirst) -> LocalFakeEngine {
         let engine = LocalFakeEngine(rule: rule)
@@ -314,26 +550,26 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
 
     /// The morning starter played through the on-device model.
     static func sampleFirstChat() -> Conversation {
-        var turns = Conversation.firstRun(named: "Pip", onDevice: true).turns
+        var turns = Conversation.firstRun(named: "Pip", place: LocalStubModel().privacyPlace).turns
         let prompt = FirstConversation.jobs.first { $0.id == "morning" }?.prompt ?? ""
         for said in [prompt, "school drop off, gym, answer Priya, groceries"] {
             turns.append(ChatTurn(id: UUID(), speaker: .person, text: said))
             let reply = (try? LocalStubModel.answer(to: turns)) ?? LocalStubModel.fallback
             turns.append(ChatTurn(id: UUID(), speaker: .agent, text: reply))
         }
-        return Conversation(turns: turns, onDevice: true)
+        return Conversation(turns: turns, place: LocalStubModel().privacyPlace)
     }
 
     /// The person has just asked for a morning plan and the dots are showing.
     /// Nothing is sent to the model; the reply never comes.
     @MainActor
     static func thinkingChat(brand: Brand) -> ChatController {
-        var turns = Conversation.firstRun(named: "Pip", onDevice: true).turns
+        var turns = Conversation.firstRun(named: "Pip", place: LocalStubModel().privacyPlace).turns
         let prompt = FirstConversation.jobs.first { $0.id == "morning" }?.prompt ?? ""
         turns.append(ChatTurn(id: UUID(), speaker: .person, text: prompt))
         let controller = ChatController.make(brand: brand, model: LocalStubModel(),
                                              names: InMemoryAgentNameStore(stored: "Pip"),
-                                             conversation: Conversation(turns: turns, onDevice: true))
+                                             conversation: Conversation(turns: turns, place: LocalStubModel().privacyPlace))
         controller.isReplying = true
         return controller
     }
@@ -344,11 +580,54 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
 
     /// The cloud setting, off, with one private word.
     @MainActor
-    static func sampleCloud() -> CloudHelp {
+    static func sampleCloud(privateWords: [String] = ["lemon cake"]) -> CloudHelp {
         CloudHelp(
-            store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: false, privateWords: ["lemon cake"])),
+            store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: false, privateWords: privateWords)),
             endpoint: sampleEndpoint, memory: sampleMemory(), transport: { NoSendTransport() }
         )
+    }
+
+    /// The memory screen with background work on and the cloud setting,
+    /// asking Forget everything, so its words name the summaries and the
+    /// private words.
+    @MainActor
+    static func forgetAskMemory(at morning: Date) -> some View {
+        let cloud = sampleCloud()
+        let model = MemoryModel(store: sampleMemory(), place: LocalStubModel().privacyPlace,
+                                alsoForget: MemoryView.alsoForget(cloud),
+                                background: sampleBackground(on: true, at: morning), now: { morning })
+        return MemoryView(model: model, place: LocalStubModel().privacyPlace, cloud: cloud)
+            .onAppear { model.askForgetEverything = true }
+    }
+
+    /// The memory screen just after Forget everything, when every note and
+    /// private word went but the summaries' file couldn't be erased. It runs
+    /// a real Forget everything against a store that won't erase, so it
+    /// shows what that leaves: work while away is off, its cards are gone,
+    /// Forget everything stays so it can be tried again, and the line is
+    /// the one said for that outcome. Nothing here is kept anywhere: the
+    /// note's scratch file goes with the forget.
+    @MainActor
+    static func summariesStayedMemory(at morning: Date) -> some View {
+        let (model, cloud) = summariesStayedModel(at: morning)
+        return MemoryView(model: model, place: LocalStubModel().privacyPlace, cloud: cloud)
+    }
+
+    /// The memory screen's model for `summariesStayedMemory`, after its
+    /// Forget everything has run.
+    @MainActor
+    static func summariesStayedModel(at morning: Date) -> (MemoryModel, CloudHelp) {
+        let store = BackgroundStore.memoryOnly(faults: BackgroundStoreFaults(eraseFails: true))
+        let runner = sampleBackground(on: true, needsYou: sampleQuestion(at: morning), played: true, at: morning,
+                                      store: store)
+        let notes = MemoryStore(fileURL: FileManager.default.temporaryDirectory
+            .appendingPathComponent("showcase-forgotten-memory-\(UUID().uuidString).json"))
+        _ = try? notes.remember("Sam's birthday is May 14. Loves lemon cake.", source: .toldMe)
+        let cloud = sampleCloud()
+        let model = MemoryModel(store: notes, place: LocalStubModel().privacyPlace,
+                                alsoForget: MemoryView.alsoForget(cloud), background: runner, now: { morning })
+        model.forgetEverything()
+        return (model, cloud)
     }
 
     /// A chat on the cloud model with its preview showing, presented the
@@ -364,9 +643,9 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         )
         let review = CloudReview()
         let model = help.chatModel(local: LocalStubModel(), review: review)
-        var turns = Conversation.firstRun(named: "Pip", onDevice: false).turns
+        var turns = Conversation.firstRun(named: "Pip", place: model.privacyPlace).turns
         turns.append(ChatTurn(id: UUID(), speaker: .person, text: "Help me write a note to Sam about Saturday. The party moved to 42 Maple Street. He can call me at 416 555 0199 or email jo.lee@example.com, and don't mention the lemon cake."))
-        let conversation = Conversation(turns: turns, onDevice: false)
+        let conversation = Conversation(turns: turns, place: model.privacyPlace)
         let redactor = Redactor(memory: memory.notes(), privateWords: help.settings.privateWords)
         if let preview = try? CloudModel.preview(for: turns, endpoint: sampleEndpoint, redactor: redactor,
                                                  headers: auth.headers(for: CloudModel.url(for: sampleEndpoint))) {
@@ -415,7 +694,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     }
 
     static func sampleMemory() -> MemoryStore {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("pebble-showcase-memory.json")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("showcase-memory.json")
         let store = MemoryStore(fileURL: url)
         try? store.forgetEverything()
         let day: TimeInterval = 86_400

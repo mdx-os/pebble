@@ -32,7 +32,7 @@ public struct CloudReconSummarizer: ReconSummarizer {
         self.model = model
     }
 
-    public var mayLeaveDevice: Bool { !model.runsOnDevice }
+    public var mayUseCloud: Bool { !model.runsOnDevice }
 
     public func summarize(_ task: ReconTask, id: String, sources: [ReconSource], gatheredAt: Date) async -> ReconSummary {
         let local = LocalReconSummarizer()
@@ -44,7 +44,7 @@ public struct CloudReconSummarizer: ReconSummarizer {
         // Words of crisis in what would be sent: nothing is sent, and the
         // card says why, never that the person chose it.
         guard !CareCheck.needsCare(prompt) else { return onDevice(ReconWords.keptForCare) }
-        let asked = Conversation(turns: [ChatTurn(id: UUID(), speaker: .person, text: prompt)], onDevice: false)
+        let asked = Conversation(turns: [ChatTurn(id: UUID(), speaker: .person, text: prompt)], place: model.privacyPlace)
         let reply: String
         do {
             // Marked as a summary's where the request is built, so the

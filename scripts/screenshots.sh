@@ -7,7 +7,29 @@ set -eu
 out="${1:-build/screenshots}"
 derived="build/DerivedData"
 bundle_id="com.mdxos.pebble"
-mkdir -p "$out"
+mkdir -p "$out" build
+# The tree these screenshots show, taken before the build. Written to
+# $out/STAMP once they are all made, and checked by `make verify`.
+rm -f "$out/STAMP"
+tree="$(sh scripts/screenshot-stamp.sh tree)"
+
+# Simulators are shared with other worktrees, so whatever happens, one
+# switched to dark goes back to the appearance it had when we found it.
+# Each entry is udid:appearance.
+darkened=""
+restore_appearance() {
+  for entry in $darkened; do
+    xcrun simctl ui "${entry%%:*}" appearance "${entry#*:}" 2>/dev/null || true
+  done
+  darkened=""
+}
+# Not every sh runs the EXIT trap on a signal, so Ctrl-C and a kill restore
+# too, then stop the script.
+trap restore_appearance EXIT
+trap 'restore_appearance; exit 130' INT
+trap 'restore_appearance; exit 143' TERM
+
+swiftc -O scripts/same-shot.swift -o build/same-shot
 
 # First available simulator whose name starts with $1, unless $2 names one.
 pick_sim() {
@@ -21,6 +43,9 @@ if not match:
 print(match[0]["udid"])
 ' "$1" "${2:-}"
 }
+
+# settled_shot and launch_and_shoot, each of which exits 1 when it gives up.
+. scripts/shot-lib.sh
 
 # The app itself, picked by bundle id. Products also holds the UI test
 # runner once `make ui-test` has run, so the first .app is not always it.
@@ -50,13 +75,38 @@ for kind in iPhone iPad; do
   xcrun simctl bootstatus "$udid" -b >/dev/null
   xcrun simctl status_bar "$udid" override --time 9:41 --batteryState charged --batteryLevel 100 || true
   xcrun simctl install "$udid" "$ios_app"
-  xcrun simctl launch "$udid" "$bundle_id" >/dev/null
-  sleep 4
   file="$out/$(echo "$kind" | tr '[:upper:]' '[:lower:]').png"
-  xcrun simctl io "$udid" screenshot "$file" >/dev/null
+  launch_and_shoot "$udid" "$bundle_id" "$file" -showcaseStill YES
+  echo "screenshots: $file"
+  # In dark mode, where white words on the orange fill are hardest to
+  # read: the iPad sidebar with Today selected, then with a question
+  # waiting so its count shows on the chosen row, and the memory sheet with
+  # its Done button on iPhone. scripts/check-screenshots.sh checks each.
+  if [ "$kind" = iPad ]; then
+    shots="today:ipad-sidebar-dark todayNeedsYou:ipad-sidebar-badge-dark"
+  else
+    shots="homeMemory:iphone-sheet-dark"
+  fi
+  xcrun simctl terminate "$udid" "$bundle_id" 2>/dev/null || true
+  # Switching to dark can take an app launched at the same moment down with
+  # it, so let it finish, and launch again if the app isn't up once the
+  # screen settles.
+  # What it was before, light or dark. Anything else, as from a runtime
+  # that can't say, goes back to light.
+  was="$(xcrun simctl ui "$udid" appearance 2>/dev/null || true)"
+  case "$was" in light|dark) ;; *) was=light ;; esac
+  darkened="$darkened $udid:$was"
+  xcrun simctl ui "$udid" appearance dark
+  sleep 3
+  for shot in $shots; do
+    scene="${shot%%:*}"; file="$out/${shot#*:}.png"
+    launch_and_shoot "$udid" "$bundle_id" "$file" -showcaseScreen "$scene" -showcaseStill YES
+    echo "screenshots: $file"
+  done
+  xcrun simctl ui "$udid" appearance "$was"
+  darkened="${darkened% $udid:$was}"
   xcrun simctl terminate "$udid" "$bundle_id" || true
   xcrun simctl shutdown "$udid" || true
-  echo "screenshots: $file"
 done
 
 echo "screenshots: building for macOS"
@@ -66,3 +116,11 @@ mac_app="$(built_app Debug)"
 exe="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$mac_app/Contents/Info.plist")"
 "$mac_app/Contents/MacOS/$exe" -snapshotPath "$PWD/$out/mac.png"
 echo "screenshots: $out/mac.png"
+# The memory sheet with its Done button, presented in a real window off
+# screen, in light and dark.
+"$mac_app/Contents/MacOS/$exe" -snapshotPath "$PWD/$out/mac-sheet.png" -showcaseScreen homeMemory -snapshotSheet YES
+echo "screenshots: $out/mac-sheet.png"
+"$mac_app/Contents/MacOS/$exe" -snapshotPath "$PWD/$out/mac-sheet-dark.png" -showcaseScreen homeMemory \
+  -snapshotSheet YES -snapshotDark YES
+echo "screenshots: $out/mac-sheet-dark.png"
+sh scripts/screenshot-stamp.sh write "$out" "$tree"

@@ -34,8 +34,8 @@ public enum FirstRunWords {
     public static let hello = "Hi there. I'm glad you're here."
     /// Only promise that words stay here when the model really runs here,
     /// the same rule as `FirstConversation.opening`.
-    public static func helloDetail(onDevice: Bool = false) -> String {
-        onDevice
+    public static func helloDetail(_ place: PrivacyPlace = .mayLeaveDevice) -> String {
+        place.staysOnDevice
             ? "I'm here to help with everyday things, big and small. Everything you tell me stays on this device."
             : "I'm here to help with everyday things, big and small."
     }
@@ -58,6 +58,10 @@ public enum ConfirmationWords {
     public static let whatLabel = "What"
     public static let whereLabel = "Where"
     public static let priceLabel = "Price"
+    /// Over the details when what goes out is the person's own details.
+    public static let sharedLabel = "Shared"
+    /// Over what will happen once the person says yes.
+    public static let happensLabel = "What happens"
     public static let expired = "That question timed out, so I didn't do it. Ask me again whenever you're ready."
     public static let closeTitle = "Close"
     public static let promise = "If you say yes, I'll do this once, exactly as shown. If anything is different, I'll ask you again."

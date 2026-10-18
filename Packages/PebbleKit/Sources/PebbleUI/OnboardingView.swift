@@ -11,22 +11,25 @@ public struct OnboardingView: View {
     @StateObject private var model: OnboardingModel
     @FocusState private var nameFocused: Bool
     @Environment(\.colorScheme) private var scheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.holdsStill) private var holdsStill
+    /// Reduce Motion, or a screenshot that needs the screen to settle.
+    private var reduceMotion: Bool { systemReduceMotion || holdsStill }
     /// True only when the model runs on this device, so the hello may
     /// promise that words stay here.
-    private let onDevice: Bool
+    private let place: PrivacyPlace
 
     public init(
         brand: Brand,
         names: any AgentNameStoring,
         store: any OnboardingStoring,
         looks: UserDefaults = .standard,
-        onDevice: Bool = false,
+        place: PrivacyPlace = .mayLeaveDevice,
         startAt page: Page = .hello,
         draftName: String = "",
         onFinish: @escaping @MainActor (_ firstMessage: String?) -> Void
     ) {
-        self.onDevice = onDevice
+        self.place = place
         _model = StateObject(wrappedValue: OnboardingModel(
             brand: brand, names: names, store: store, looks: looks,
             page: page, draftName: draftName, onFinish: onFinish
@@ -102,7 +105,7 @@ public struct OnboardingView: View {
 
     private var hello: some View {
         VStack(spacing: 28) {
-            heading(FirstRunWords.hello, FirstRunWords.helloDetail(onDevice: onDevice))
+            heading(FirstRunWords.hello, FirstRunWords.helloDetail(place))
             Button(FirstRunWords.beginTitle) { model.advance() }
                 .buttonStyle(PrimaryButtonStyle())
                 .padding(.top, 12)
@@ -213,8 +216,11 @@ struct IdeaCardButton: View {
     let index: Int
     let action: () -> Void
     @Environment(\.colorScheme) private var scheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.holdsStill) private var holdsStill
     @State private var shown = false
+    /// Reduce Motion, or a screenshot that needs the screen to settle.
+    private var reduceMotion: Bool { systemReduceMotion || holdsStill }
 
     private var symbol: String {
         switch job.id {

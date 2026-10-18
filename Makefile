@@ -1,9 +1,14 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test repeat-test build build-release screenshots ui-screenshots device-screenshots ui-test brand-check local-config-check secrets-check pulse clean
+.PHONY: verify generate test repeat-test build build-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-config-check secrets-check pulse clean
 
-## verify: everything CI runs. Run this before every PR.
-verify: brand-check local-config-check test build build-release screenshots
+## verify: everything CI runs. Run this before every PR. The screenshots are
+## made after every other step and then checked against the working tree.
+## Both are the recipe, so even with -j nothing runs beside them that could
+## change the tree between the stamp and the check.
+verify: brand-check local-config-check screenshots-check-test test build build-release
+	$(MAKE) screenshots
+	sh scripts/screenshot-stamp.sh check build/screenshots
 
 ## generate: create Pebble.xcodeproj from project.yml (the project file is not committed)
 generate:
@@ -34,9 +39,23 @@ build-release: generate
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath $(DERIVED)
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath $(DERIVED) CODE_SIGNING_ALLOWED=NO
 
-## screenshots: first screen on iPhone, iPad and Mac, written to build/screenshots
+## screenshots: first screen on iPhone, iPad and Mac, written to build/screenshots,
+## plus the dark iPad sidebar and the sheets with Done, with
+## build/screenshots/STAMP naming the commit and working tree they show. Fails
+## unless the dark shots show the orange fill with white words on it
+## (scripts/check-screenshots.sh).
 screenshots: generate
 	sh scripts/screenshots.sh build/screenshots
+	sh scripts/check-screenshots.sh build/screenshots
+
+## screenshots-check: fail if build/screenshots wasn't made from the working
+## tree as it is now ("screenshots are stale, rerun make screenshots")
+screenshots-check:
+	sh scripts/screenshot-stamp.sh check build/screenshots
+
+## screenshots-check-test: self-test for that check, in a scratch repository
+screenshots-check-test:
+	sh scripts/screenshot-stamp-test.sh
 
 ## ui-screenshots: showcase screens in light and dark on one simulator, written to
 ## build/screenshots/ui (or OUT=dir). DEVICE= names the simulator, SCREENS= the screens.
@@ -52,15 +71,20 @@ device-screenshots: generate
 		sh scripts/device-screenshots.sh $(or $(OUT),build/screenshots/devices)
 
 ## ui-test: drive the app in the Simulator: the iPad sidebar, Return to send,
-## the keyboard shortcuts and the cloud screens, on an iPad and an iPhone
+## the keyboard shortcuts, the cloud screens, and the Needs you flow with its
+## nudge, on an iPad and an iPhone. The nudge test meets the system's own
+## question, so the app is removed from both simulators first.
 ui-test: generate
+	sh scripts/ui-test-reset.sh "$(or $(PEBBLE_IPAD),iPad Pro 13-inch (M5))" "$(or $(PEBBLE_IPHONE),iPhone 17 Pro)"
 	xcodebuild test -quiet -project Pebble.xcodeproj -scheme Pebble -derivedDataPath $(DERIVED) \
 		-destination 'platform=iOS Simulator,name=$(or $(PEBBLE_IPAD),iPad Pro 13-inch (M5))' \
 		-destination 'platform=iOS Simulator,name=$(or $(PEBBLE_IPHONE),iPhone 17 Pro)' \
 		-only-testing:PebbleAppUITests/HomeLayoutUITests \
-		-only-testing:PebbleAppUITests/CloudUITests
+		-only-testing:PebbleAppUITests/CloudUITests \
+		-only-testing:PebbleAppUITests/NeedsYouFlowUITests
 
-## brand-check: the product name must live only in Config/Brand.xcconfig
+## brand-check: the product name must live only in Config/Brand.xcconfig, in
+## any case, and no new key or path may spell the codename in lowercase
 brand-check:
 	sh scripts/brand-check.sh
 

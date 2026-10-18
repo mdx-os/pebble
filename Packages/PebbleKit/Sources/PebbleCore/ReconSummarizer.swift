@@ -6,11 +6,11 @@ public protocol ReconSummarizer: Sendable {
     func summarize(_ task: ReconTask, id: String, sources: [ReconSource], gatheredAt: Date) async -> ReconSummary
     /// True when it may send what was read off this device, after the
     /// person's yes in the preview.
-    var mayLeaveDevice: Bool { get }
+    var mayUseCloud: Bool { get }
 }
 
 extension ReconSummarizer {
-    public var mayLeaveDevice: Bool { false }
+    public var mayUseCloud: Bool { false }
 }
 
 /// How a summary's work says the person's yes to sending what it read was
@@ -18,8 +18,16 @@ extension ReconSummarizer {
 /// a model that sends calls it once the preview got Send and the request is
 /// about to go, and never before. Outside a summary's work it is nil, so a
 /// chat's send marks nothing.
+///
+/// `heard` is also the last gate: it answers false when the yes is stale,
+/// for a summary stopped, retried or forgotten since its preview showed,
+/// and then nothing is sent. Once it has answered true the summary stays
+/// marked as sent, whatever happens to it after.
 public enum CloudYes {
-    @TaskLocal public static var heard: (@Sendable () -> Void)?
+    @TaskLocal public static var heard: (@Sendable () -> Bool)?
+    /// The summary's run, so each one's preview is its own and two at once
+    /// never take each other's place. Nil outside a summary's work.
+    @TaskLocal public static var run: String?
 }
 
 /// Puts a summary together on this device, from the sources' own sentences.

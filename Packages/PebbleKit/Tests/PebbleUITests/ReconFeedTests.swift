@@ -79,7 +79,7 @@ struct ReconFeedTests {
         let starts = Starts()
         let controller = ChatController.make(brand: brand, model: LocalStubModel(),
                                              names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil)
-        controller.lookInto = { starts.start($0, onDevice: $1) }
+        controller.lookInto = { starts.start($0, place: $1) }
         controller.submit("research quiet dishwashers")
         controller.acceptReconOffer()
         #expect(starts.onDevice == [true])
@@ -93,7 +93,7 @@ struct ReconFeedTests {
         let review = model.cloudReview
         model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel(), review: review)) }
         // Asked from a chat that said it stays on this device.
-        #expect(model.lookInto(SampleSources.poolTopic, onDevice: true))
+        #expect(model.lookInto(SampleSources.poolTopic, place: .onDevice))
         engine.advance(by: 30)
         let id = try #require(runner.tasks.first?.id)
         let summary = try #require(runner.summary(for: id))
@@ -117,7 +117,7 @@ struct ReconFeedTests {
         let model = HomeView.reconFeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: nil,
                                             drivesTasks: false, reading: ReconTestData.sources, place: .mayLeaveDevice,
                                             memory: notes, model: LocalStubModel(), cloud: cloud, now: { [morning] in morning })
-        #expect(model.summarizer().mayLeaveDevice)
+        #expect(model.summarizer().mayUseCloud)
         let chat = HomeView.wired(HomeView.newChat(brand: brand, model: LocalStubModel(),
                                                    names: InMemoryAgentNameStore(stored: "Pip"), cloud: cloud,
                                                    conversation: nil), to: model)
@@ -266,7 +266,7 @@ struct ReconFeedTests {
         let card = try #require(model.feed.groups.flatMap(\.items).first { $0.id == "sample:pool" })
         model.perform(card) { _ in }
         let id = try #require(runner.tasks.first?.id)
-        #expect(runner.mayLeaveDevice(id))
+        #expect(runner.mayUseCloud(id))
         let chat = HomeView.wired(ChatController.make(brand: brand, model: LocalStubModel(),
                                                       names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil,
                                                       replyBeat: .zero), to: model)
@@ -277,14 +277,14 @@ struct ReconFeedTests {
         #expect(chat.conversation.turns.last?.text == ReconWords.alreadyOnWithCloud)
         #expect(ReconWords.alreadyOnWithCloud.contains("cloud"))
         // A chat that may leave the device anyway gets the plain line.
-        #expect(model.alreadyLine(for: SampleSources.poolTopic, onDevice: false) == ReconWords.alreadyOn)
+        #expect(model.alreadyLine(for: SampleSources.poolTopic, place: .mayLeaveDevice) == ReconWords.alreadyOn)
         // With the cloud off when Today started it, the plain line is true too.
         let local = HomeView.reconFeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()),
                                             tasks: nil, drivesTasks: false, reading: ReconTestData.sources,
                                             place: .onDevice, memory: nil, model: LocalStubModel(), cloud: nil,
                                             now: { [morning] in morning })
         #expect(local.lookInto(SampleSources.poolTopic))
-        #expect(local.alreadyLine(for: SampleSources.poolTopic, onDevice: true) == ReconWords.alreadyOn)
+        #expect(local.alreadyLine(for: SampleSources.poolTopic, place: .onDevice) == ReconWords.alreadyOn)
         #expect(maker.wire.sent.isEmpty)
     }
 
@@ -1445,7 +1445,7 @@ struct ReconFeedTests {
                               memory: notes, transport: { maker.make() })
         let model = cloud.chatModel(local: LocalStubModel(), review: reviewer, madeOnSend: true)
         let text = "Please look into the pool using only the sources below, and answer in plain words."
-        let chat = Conversation(turns: [ChatTurn(id: UUID(), speaker: .person, text: text)], onDevice: false)
+        let chat = Conversation(turns: [ChatTurn(id: UUID(), speaker: .person, text: text)], place: .mayLeaveDevice)
         let asking = Task { try? await chat.appendingReply(from: model) }
         let preview = await reviewer.shown()
         #expect(preview.request.text.contains("Please look into the pool"))
@@ -1598,7 +1598,7 @@ struct FarPages: SourceProvider {
 /// would once the person tapped Send. Sends nothing.
 struct CloudWorded: ReconSummarizer {
     let reply: String
-    var mayLeaveDevice: Bool { true }
+    var mayUseCloud: Bool { true }
     func summarize(_ task: ReconTask, id: String, sources: [ReconSource], gatheredAt: Date) async -> ReconSummary {
         CloudReconSummarizer.parse(reply, task: task, id: id, sources: sources, gatheredAt: gatheredAt)
             ?? LocalReconSummarizer().summary(task, id: id, sources: sources, gatheredAt: gatheredAt)
@@ -1609,7 +1609,7 @@ struct CloudWorded: ReconSummarizer {
 /// then puts the summary together on this device.
 struct BackgroundSummarizer: ReconSummarizer {
     let mark: ThreadMark
-    var mayLeaveDevice: Bool { false }
+    var mayUseCloud: Bool { false }
     func summarize(_ task: ReconTask, id: String, sources: [ReconSource], gatheredAt: Date) async -> ReconSummary {
         await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
             DispatchQueue.global(qos: .utility).async { done.resume() }
@@ -1672,10 +1672,10 @@ struct HeldSummarizer: ReconSummarizer {
     var leaves = false
     var saysYes = false
 
-    var mayLeaveDevice: Bool { leaves }
+    var mayUseCloud: Bool { leaves }
 
     func summarize(_ task: ReconTask, id: String, sources: [ReconSource], gatheredAt: Date) async -> ReconSummary {
-        if saysYes { CloudYes.heard?() }
+        if saysYes { _ = CloudYes.heard?() }
         await gate.wait()
         mark.mark()
         return LocalReconSummarizer().summary(task, id: id, sources: sources, gatheredAt: gatheredAt)

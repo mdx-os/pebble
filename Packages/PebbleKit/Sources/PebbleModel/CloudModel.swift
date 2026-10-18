@@ -86,12 +86,17 @@ public struct CloudPreview: Sendable, Equatable, Identifiable {
     /// the request, never read from its words, so nothing a person types
     /// in a chat can make it look like a summary's.
     public let forSummary: Bool
+    /// The summary's run that asked, so each run's preview is its own on
+    /// Today's gate (`CloudYes.run`). Nil for a chat.
+    public let run: String?
 
-    public init(id: UUID = UUID(), request: CloudRequest, hidden: [Redaction.Kind: Int], forSummary: Bool = false) {
+    public init(id: UUID = UUID(), request: CloudRequest, hidden: [Redaction.Kind: Int], forSummary: Bool = false,
+                run: String? = nil) {
         self.id = id
         self.request = request
         self.hidden = hidden
         self.forSummary = forSummary
+        self.run = run
     }
 }
 
@@ -287,7 +292,8 @@ public struct CloudModel: ModelClient {
         let preview = try Self.preview(
             for: transcript, endpoint: endpoint, redactor: redactor,
             headers: auth.headers(for: Self.url(for: endpoint)),
-            forSummary: CloudAsk.forSummary
+            forSummary: CloudAsk.forSummary,
+            run: CloudAsk.forSummary ? CloudYes.run : nil
         )
         switch await reviewer.review(preview) {
         case .send: break
@@ -296,8 +302,9 @@ public struct CloudModel: ModelClient {
         }
         try Task.checkCancellation()
         try checkOn()
-        // Past the yes: a summary's work notes that what it read may go.
-        CloudYes.heard?()
+        // Past the yes: a summary's work notes that what it read may go, or
+        // refuses a yes that went stale, as for a summary stopped since.
+        if let heard = CloudYes.heard, !heard() { throw CancellationError() }
         // The very request the person saw, unchanged.
         let data = try await transport.send(preview.request)
         guard let reply = try? JSONDecoder().decode(CloudPayload.Reply.self, from: data) else {
@@ -329,7 +336,8 @@ public struct CloudModel: ModelClient {
         endpoint: URL,
         redactor: Redactor,
         headers: [String: String] = [:],
-        forSummary: Bool = false
+        forSummary: Bool = false,
+        run: String? = nil
     ) throws -> CloudPreview {
         // Before redaction: the same decision Conversation makes.
         if CareCheck.answersWithCare(transcript) { throw CloudModelError.staysHere }
@@ -350,7 +358,8 @@ public struct CloudModel: ModelClient {
         return CloudPreview(
             request: CloudRequest(url: url(for: endpoint), headers: CloudHeaders.merged(with: headers), body: body),
             hidden: hidden,
-            forSummary: forSummary
+            forSummary: forSummary,
+            run: run
         )
     }
 }

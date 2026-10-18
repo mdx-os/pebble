@@ -13,6 +13,9 @@ public struct MemoryView: View {
     /// Nil keeps the place the model was made with.
     private let place: PrivacyPlace?
     private let cloud: CloudHelp?
+    /// True while Forget everything has something besides the notes to
+    /// take, such as a receipt, so its button shows with no notes at all.
+    private let holdsMore: Bool
 
     /// `place` comes from the active model (`ModelClient.privacyPlace`), so
     /// the device promise here is the same one the chat makes. It can change
@@ -23,12 +26,16 @@ public struct MemoryView: View {
     /// `onForgetEverything` runs with Forget everything, so whatever else the
     /// agent holds about the person, such as its tasks, goes too. It says
     /// what it forgot, so the status line can be honest about it.
-    public init(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp? = nil,
+    ///
+    /// `background` puts its switch here, off until the person turns it on.
+    public init(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp? = nil, background: BackgroundRunner? = nil,
                 onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) {
         _model = StateObject(wrappedValue: MemoryModel(store: store, place: place, alsoForget: Self.alsoForget(cloud),
+                                                       background: background,
                                                        onForgetEverything: onForgetEverything))
         self.place = place
         self.cloud = cloud
+        holdsMore = false
     }
 
     /// Takes a model built from the active model, as `HomeView` does, or
@@ -41,10 +48,20 @@ public struct MemoryView: View {
     /// autoclosure, so it runs once for the screen, not on every pass of
     /// the view around it. Calling it first would reset "Saved." and a
     /// pending Forget everything on every publish.
-    init(model: @autoclosure @escaping () -> MemoryModel, place: PrivacyPlace? = nil, cloud: CloudHelp? = nil) {
+    init(model: @autoclosure @escaping () -> MemoryModel, place: PrivacyPlace? = nil, cloud: CloudHelp? = nil,
+         holdsMore: Bool = false) {
         _model = StateObject(wrappedValue: model())
         self.place = place
         self.cloud = cloud
+        self.holdsMore = holdsMore
+    }
+
+    /// Forget everything shows while there is anything for it to take:
+    /// notes or morning summaries (`MemoryModel.hasSomethingToForget`),
+    /// private words, or something else the agent holds, such as a receipt
+    /// with no task left.
+    static func showsForgetEverything(hasNotes: Bool, mayHaveWords: Bool, holdsMore: Bool) -> Bool {
+        hasNotes || mayHaveWords || holdsMore
     }
 
     /// What Forget everything erases besides the notes: the words always
@@ -56,10 +73,13 @@ public struct MemoryView: View {
 
     /// The Forget everything question's words: they name the private words
     /// whenever there may be some it would erase, those that couldn't be
-    /// read included.
-    static func forgetEverythingDetail(for cloud: CloudHelp?) -> String {
-        cloud?.mayHavePrivateWords == true ? CloudWords.forgetEverythingDetail
-            : MemoryWords.forgetEverythingDetail
+    /// read included, and with `background` the summaries and the switch.
+    static func forgetEverythingDetail(for cloud: CloudHelp?, background: Bool = false) -> String {
+        switch (cloud?.mayHavePrivateWords == true, background) {
+        case (true, true): CloudWords.forgetEverythingWithSummariesDetail
+        case (true, false): CloudWords.forgetEverythingDetail
+        case (false, let background): MemoryWords.forgetEverythingDetail(background: background)
+        }
     }
 
     public var body: some View {
@@ -98,6 +118,11 @@ public struct MemoryView: View {
                             }
                         }
                     }
+                    if model.background != nil {
+                        BackgroundRow(isOn: Binding(get: { model.backgroundOn }, set: { model.setBackground($0) }),
+                                      detail: model.backgroundDetail, nextDue: model.backgroundNext)
+                            .padding(.top, 8)
+                    }
                     forgetEverythingSection
                     if let cloud {
                         CloudHelpRow(help: cloud, place: model.place)
@@ -119,7 +144,8 @@ public struct MemoryView: View {
         }
         .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(response: 0.4, dampingFraction: 0.85), value: model.notes)
         .animation(.easeInOut(duration: 0.2), value: model.editingID)
-        .modifier(ForgetEverythingDialog(cloud: cloud, isPresented: $model.askForgetEverything) {
+        .modifier(ForgetEverythingDialog(cloud: cloud, background: model.forgetNamesBackground,
+                                         isPresented: $model.askForgetEverything) {
             model.forgetEverything()
         })
         .confirmationDialog(
@@ -143,6 +169,8 @@ public struct MemoryView: View {
             // Back from a locked screen, look again rather than leave the note up.
             if phase == .active, model.isUnavailable { model.refresh() }
             if phase == .active { cloud?.refresh() }
+            // And the next summary's day may have moved on meanwhile.
+            if phase == .active { model.refreshBackground() }
         }
         .haptic(.saved, trigger: model.savedCount)
         .haptic(.forgotten, trigger: model.forgottenCount)
@@ -158,10 +186,12 @@ public struct MemoryView: View {
             // Watches the cloud setting, so the button shows while there
             // may be private words to erase.
             CloudWatcher(help: cloud) { help in
-                forgetEverythingButton(shown: model.hasStoredFile || help.mayHavePrivateWords)
+                forgetEverythingButton(shown: Self.showsForgetEverything(
+                    hasNotes: model.hasSomethingToForget, mayHaveWords: help.mayHavePrivateWords, holdsMore: holdsMore))
             }
         } else {
-            forgetEverythingButton(shown: model.hasStoredFile)
+            forgetEverythingButton(shown: Self.showsForgetEverything(
+                hasNotes: model.hasSomethingToForget, mayHaveWords: false, holdsMore: holdsMore))
         }
     }
 
@@ -243,29 +273,33 @@ private struct CloudWatcher<Content: View>: View {
 
 /// The Forget everything question. With the cloud setting, its words watch
 /// the setting, so they never say "notes and tasks" while private words
-/// are kept too, whatever else redraws the screen.
+/// are kept too, whatever else redraws the screen. With `background`, they
+/// name the summaries and the switch it turns off.
 private struct ForgetEverythingDialog: ViewModifier {
     let cloud: CloudHelp?
+    let background: Bool
     @Binding var isPresented: Bool
     let forget: @MainActor () -> Void
 
     func body(content: Content) -> some View {
         if let cloud {
-            content.modifier(Watching(help: cloud, isPresented: $isPresented, forget: forget))
+            content.modifier(Watching(help: cloud, background: background, isPresented: $isPresented, forget: forget))
         } else {
-            Self.dialog(content, isPresented: $isPresented, detail: MemoryView.forgetEverythingDetail(for: nil),
-                        forget: forget)
+            Self.dialog(content, isPresented: $isPresented,
+                        detail: MemoryView.forgetEverythingDetail(for: nil, background: background), forget: forget)
         }
     }
 
     private struct Watching: ViewModifier {
         @ObservedObject var help: CloudHelp
+        let background: Bool
         @Binding var isPresented: Bool
         let forget: @MainActor () -> Void
 
         func body(content: Content) -> some View {
             ForgetEverythingDialog.dialog(content, isPresented: $isPresented,
-                                          detail: MemoryView.forgetEverythingDetail(for: help), forget: forget)
+                                          detail: MemoryView.forgetEverythingDetail(for: help, background: background),
+                                          forget: forget)
         }
     }
 
@@ -287,6 +321,8 @@ private struct ForgetEverythingDialog: ViewModifier {
 /// on their own, with words that are honest that the notes stay. With the
 /// cloud setting, the words always hidden go with them.
 struct MemoryUnavailableView: View {
+    /// True while there are tasks, or receipts or tasks kept from before,
+    /// to forget. Receipts alone still show the button.
     let hasTasks: Bool
     /// True once every task was forgotten here, until a new one starts.
     var forgotten = false
@@ -364,6 +400,73 @@ struct MemoryUnavailableView: View {
     /// What the dialog's button does.
     func forgetTasks() {
         onForgetTasks()
+    }
+}
+
+/// The switch for background work: what it does in a plain line, and when
+/// the next summary is due while it is on.
+struct BackgroundRow: View {
+    @Binding var isOn: Bool
+    /// What the switch does, from `MemoryModel.backgroundDetail`.
+    let detail: String
+    let nextDue: String?
+    @Environment(\.colorScheme) private var scheme
+
+    /// True where the system may give the app time while it is closed.
+    /// On the Mac it runs while the app is open, so the line says that.
+    static var runsWhileClosed: Bool {
+        #if os(macOS)
+        false
+        #else
+        true
+        #endif
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // One control for the whole row, so the target stays large at
+            // any text size and a tap anywhere, the knob included, turns it
+            // over exactly once. The switch inside only shows the state.
+            Button { isOn.toggle() } label: {
+                HStack(spacing: 12) {
+                    Text(BackgroundWords.settingTitle)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Toggle(BackgroundWords.settingTitle, isOn: .constant(isOn))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        // The brand's warmth, as everywhere else, wherever this screen is shown.
+                        .tint(Theme.accentText)
+                        .allowsHitTesting(false)
+                }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            // Read as the switch it looks like, with its title and state.
+            .accessibilityRepresentation {
+                Toggle(BackgroundWords.settingTitle, isOn: $isOn)
+            }
+            .accessibilityIdentifier("backgroundSwitch")
+            // Its own element, read right after the switch, so VoiceOver
+            // users hear that it asks first even with hints turned off.
+            Text(detail)
+                .font(.footnote)
+                .foregroundStyle(Theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("backgroundDetail")
+            if let nextDue {
+                Text(nextDue)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(Theme.secondaryText)
+                    .accessibilityIdentifier("backgroundNext")
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
     }
 }
 
@@ -508,13 +611,80 @@ final class MemoryModel: ObservableObject {
     /// Forgets what lives outside the memory file, such as tasks.
     private let onForgetEverything: @MainActor () -> ClearedTasks
 
+    /// Background work, whose switch sits on this screen. Nil hides it.
+    let background: BackgroundRunner?
+    @Published private(set) var backgroundOn = false
+    /// "I'll look next at 7:00 AM tomorrow." while it is on.
+    @Published private(set) var backgroundNext: String?
+    /// True while background work has a file or cards, so Forget everything
+    /// shows even with no notes, and the summaries can always be removed.
+    @Published private(set) var hasBackgroundToForget = false
+    private let now: () -> Date
+    /// This model's watch on `background`, so a card made in Today, or the
+    /// switch turned in another window, shows here at once.
+    private var backgroundWatch: BackgroundRunner.Observation?
+    /// Speaks a line to VoiceOver. Tests listen in.
+    var announce: @MainActor (String) -> Void = { AccessibilityNotification.Announcement($0).post() }
+
+    /// Forget everything shows while there is anything for it to remove.
+    var hasSomethingToForget: Bool { hasStoredFile || hasBackgroundToForget }
+
+    /// Whether the question before Forget everything names work while away:
+    /// only while it is on or has summaries to erase, so it promises only
+    /// what this tap will do.
+    var forgetNamesBackground: Bool { backgroundOn || hasBackgroundToForget }
+
+    /// What the switch does, true for where it runs and for what the runner
+    /// counts: what finished is named only when it has tasks to count.
+    var backgroundDetail: String {
+        BackgroundWords.settingDetail(whileClosed: BackgroundRow.runsWhileClosed,
+                                      countsTasks: background?.tasks != nil)
+    }
+
     init(store: MemoryStore, place: PrivacyPlace, alsoForget: (@MainActor () throws -> CloudHelp.Forgot)? = nil,
+         background: BackgroundRunner? = nil, now: @escaping () -> Date = { Date() },
          onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) {
         self.store = store
         self.place = place
         self.alsoForget = alsoForget
+        self.background = background
+        self.now = now
         self.onForgetEverything = onForgetEverything
         refresh()
+        backgroundWatch = background?.observe { [weak self] in
+            Task { @MainActor in self?.refreshBackground() }
+        }
+    }
+
+    deinit {
+        if let backgroundWatch { background?.stopObserving(backgroundWatch) }
+    }
+
+    /// Turns background work on or off. On, the summary is due the next
+    /// morning, and VoiceOver hears when, since the line saying so appears
+    /// away from the switch it just turned.
+    func setBackground(_ on: Bool) {
+        guard let background else { return }
+        if on { background.turnOn(now: now()) } else { background.turnOff() }
+        refreshBackground()
+        if on, let next = backgroundNext { announce(next) }
+    }
+
+    func refreshBackground() {
+        guard let background else { return }
+        let on = background.isOn
+        if backgroundOn != on { backgroundOn = on }
+        let now = now()
+        let next = on ? background.queue.map(\.due).min().map { BackgroundWords.nextDue($0, now: now) } : nil
+        if backgroundNext != next { backgroundNext = next }
+        let stored = backgroundStored
+        if hasBackgroundToForget != stored { hasBackgroundToForget = stored }
+    }
+
+    /// True while background work has a file or cards.
+    private var backgroundStored: Bool {
+        guard let background else { return false }
+        return background.store.hasStoredFile || !background.results.isEmpty
     }
 
     func refresh() {
@@ -527,6 +697,8 @@ final class MemoryModel: ObservableObject {
             notes = []; isUnreadable = false; isUnavailable = true
         }
         hasStoredFile = store.hasStoredFile
+        // Forget everything turns background work off, so the switch follows.
+        refreshBackground()
     }
 
     /// False while the saved notes can't be read or opened, so they stay untouched.
@@ -576,27 +748,89 @@ final class MemoryModel: ObservableObject {
         refresh()
     }
 
+    /// What happened to the morning summaries with Forget everything.
+    /// Work while you're away is off and its cards are gone from the
+    /// screen either way; this is about its file.
+    enum Summaries: Equatable {
+        case erased
+        case stayed
+    }
+
     /// Erases the notes and, whatever happens to them, everything else
     /// Forget everything covers, then says what actually went.
     func forgetEverything() {
         cancelEdit()
-        // First, and even if the file can't be erased: the person asked to
-        // forget, and nothing here depends on the file.
+        // First, and even if a file can't be erased: the person asked to
+        // forget, and nothing here depends on the files. Each step runs
+        // whatever happened to the ones before it.
+        // Background work stops with the tasks it counts, so nothing runs
+        // again while the rest goes, and its summaries go. It turns off and
+        // its cards go from memory even if its file can't be erased. Before
+        // Today's part, so Today redraws with the cards already gone.
+        // Summaries erased are named, and tapped for, only when there were
+        // some: with no file and no cards, nothing of them went.
+        let hadSummaries = backgroundStored
+        let summaries = background.map { background -> Summaries in
+            (try? background.forget()) != nil ? .erased : .stayed
+        }.flatMap { $0 == .erased && !hadSummaries ? nil : $0 }
         let tasks = onForgetEverything()
+        // Notes are named as gone only when there were some. Notes that
+        // can't be read or opened are there, so they count.
+        let hadNotes: Bool
+        if case .notes(let all) = store.contents() { hadNotes = !all.isEmpty } else { hadNotes = store.hasStoredFile }
         let notesGone = (try? store.forgetEverything()) != nil
         // nil when there is nothing else; .some(nil) when it couldn't go.
         let rest = alsoForget.map { forget in try? forget() }
         // A step said yes to may have happened, so the line says so here too.
-        let underway = tasks.underwayLine.map { " " + $0 } ?? ""
-        status = Self.forgotLine(notesGone: notesGone, rest: rest, tasksGone: tasks.forgotten > 0) + underway
+        status = Self.forgotLine(notesGone: notesGone, rest: rest, tasksGone: tasks.forgotten > 0,
+                                 summaries: summaries, underway: tasks.underwayLine, hadNotes: hadNotes)
         let restGone = rest.map { $0 != nil } == true
-        if notesGone || restGone || tasks.forgotten > 0 { forgottenCount += 1 }
+        if notesGone || restGone || tasks.forgotten > 0 || summaries == .erased { forgottenCount += 1 }
         refresh()
     }
 
     /// What Forget everything says went, from what each part did. Tasks
     /// can't fail to go, so they are named only when something else stayed.
-    static func forgotLine(notesGone: Bool, rest: CloudHelp.Forgot??, tasksGone: Bool) -> String {
+    /// The summaries are named the same way, and only with background work:
+    /// when all the rest went, the line says just what stayed, and when
+    /// something else stayed too, a sentence about them follows. Then
+    /// `underway`, if a step said yes to may have happened. Any advice to
+    /// try again always comes last. Where only the summaries stayed, the
+    /// line names only what went: the notes only with `hadNotes`.
+    static func forgotLine(notesGone: Bool, rest: CloudHelp.Forgot??, tasksGone: Bool,
+                           summaries: Summaries? = nil, underway: String? = nil, hadNotes: Bool = true) -> String {
+        let line = notesWordsAndTasksLine(notesGone: notesGone, rest: rest, tasksGone: tasksGone)
+        let restWent = notesGone && (rest.map { $0 != nil } ?? true)
+        let said: String
+        let aboutSummaries: String?
+        switch (summaries, restWent) {
+        case (nil, _), (.erased?, true):
+            said = line; aboutSummaries = nil
+        case (.erased?, false):
+            said = line; aboutSummaries = MemoryWords.summariesGone
+        case (.stayed?, true):
+            said = rest == .some(.some(.privateWordsAndCloud))
+                ? CloudWords.forgotAndCloudOffNotSummaries(notes: hadNotes, tasks: tasksGone)
+                : MemoryWords.couldNotForgetSummaries(notes: hadNotes, tasks: tasksGone,
+                                                      words: rest == .some(.some(.privateWords)))
+            aboutSummaries = nil
+        case (.stayed?, false):
+            said = line; aboutSummaries = MemoryWords.summariesStayed
+        }
+        return beforeRetry(said, [aboutSummaries, underway].compactMap { $0 })
+    }
+
+    /// `line` with `sentences` after it, but before its advice to try
+    /// again, so that advice is the last thing said.
+    private static func beforeRetry(_ line: String, _ sentences: [String]) -> String {
+        guard !sentences.isEmpty else { return line }
+        let retry = MemoryWords.retryAdvice.first { line.hasSuffix(" " + $0) }
+        let body = retry.map { String(line.dropLast($0.count + 1)) } ?? line
+        return ([body] + sentences + [retry].compactMap { $0 }).joined(separator: " ")
+    }
+
+    /// The line for the notes, the private words and the tasks alone.
+    private static func notesWordsAndTasksLine(notesGone: Bool, rest: CloudHelp.Forgot??, tasksGone: Bool) -> String {
         switch (notesGone, rest) {
         case (true, nil), (true, .privateWords?):
             MemoryWords.forgotten

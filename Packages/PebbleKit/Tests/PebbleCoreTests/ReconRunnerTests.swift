@@ -228,13 +228,13 @@ struct ReconRunnerTests {
         }
         let first = runner.start(lookingInto: SampleSources.poolTopic, with: Leaving())
         let id = try #require(first.startedID)
-        #expect(second.list == [.already(id: nil, mayLeaveDevice: true)])
+        #expect(second.list == [.already(id: nil, mayUseCloud: true)])
         #expect(engine.tasks.count == 1)
         #expect(provider.asked == 1)
         // Once noted, an ask names it, whatever its case, and starts nothing.
-        #expect(runner.start(lookingInto: "the riverside pool REOPENING") == .already(id: id, mayLeaveDevice: true))
+        #expect(runner.start(lookingInto: "the riverside pool REOPENING") == .already(id: id, mayUseCloud: true))
         engine.finish(id)
-        #expect(runner.start(lookingInto: SampleSources.poolTopic) == .already(id: id, mayLeaveDevice: true))
+        #expect(runner.start(lookingInto: SampleSources.poolTopic) == .already(id: id, mayUseCloud: true))
         #expect(runner.lookInto(SampleSources.poolTopic) == nil)
         #expect(engine.tasks.count == 1)
         #expect(runner.heldCount == (runs: 1, starting: 0))
@@ -784,7 +784,7 @@ final class Answers: @unchecked Sendable {
 /// Puts the summary together here, but says it may leave the device, as
 /// one through the cloud would.
 struct Leaving: ReconSummarizer {
-    var mayLeaveDevice: Bool { true }
+    var mayUseCloud: Bool { true }
     func summarize(_ task: ReconTask, id: String, sources: [ReconSource], gatheredAt: Date) async -> ReconSummary {
         LocalReconSummarizer().summary(task, id: id, sources: sources, gatheredAt: gatheredAt)
     }

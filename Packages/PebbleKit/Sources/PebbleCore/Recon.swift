@@ -591,9 +591,12 @@ public enum ReconWords {
     /// Help from the cloud was off by the time the summary was ready to go,
     /// before a preview or after a yes. Nothing went, and no one chose that.
     public static let cloudOff = "Help from the cloud was off by then, so I put this together without it."
-    /// Stopped after the person said send. Some of it may have gone, so it
-    /// never says nothing did.
-    public static let cloudStopped = "It was stopped before an answer came back, so I put this together without the cloud."
+    /// Stopped after the person said send. Some of it may already have
+    /// gone, so it says that plainly and never that nothing did.
+    public static let cloudStopped = "It was stopped after you said send, so some of what I read may already have gone to the cloud. I put this together without it."
+    /// A recon card stopped after the person said send to its summary's
+    /// preview. What was read may already have gone, and stays so.
+    public static let stoppedAfterSend = "I stopped, as you asked. You'd already said send, so some of what I read may already have gone to the cloud, and that can't be called back."
     /// Something in what was read needs care, so none of it was sent.
     public static let keptForCare = "Some of what I read touches on hard things, so I didn't send any of it and put this together without the cloud."
     /// Under a summary put into words in the cloud: its points are a
@@ -655,11 +658,13 @@ public enum ReconWords {
     /// `wordedInCloud`, the brackets say so and name no one, so the words
     /// are never kept as the publisher's own, and no publisher is named
     /// for a line no one here checked they said.
+    /// After a kept point worded in the cloud, in place of its publishers.
+    public static let wordedInCloudMark = "(put into words in the cloud, from the sources it was given)"
     public static func memoryNote(_ point: String, from sources: [String], disagreement: String? = nil,
                                   wordedInCloud: Bool = false) -> String {
         let said: String
         if wordedInCloud {
-            said = "\(point) (put into words in the cloud, from the sources it was given)"
+            said = "\(point) \(wordedInCloudMark)"
         } else {
             said = sources.isEmpty ? point : "\(point) (\(sources.joined(separator: "; ")))"
         }
@@ -682,14 +687,15 @@ public enum ReconWords {
     /// What the person would say, put in the chat when the feed can't start it.
     public static func askLine(_ topic: String) -> String { "Look into \(topic) for me." }
 
-    /// Every fixed line, for the dash and tone checks.
+    /// Every fixed line, for the dash and tone checks. The offer with
+    /// examples and `rememberDetail` follow a place, which only the model
+    /// decides, so the tests read them for each place themselves.
     public static var all: [String] {
-        [offer("the pool"), offer("the pool", examples: true, place: .onDevice),
-         offer("the pool", examples: true, place: .mayLeaveDevice), offerYes, offerNo, offerYesHint, offerNoHint,
+        [offer("the pool"), offerYes, offerNo, offerYesHint, offerNoHint,
          started, offerDeclined,
          couldNotStart, title("the pool"),
          planning, looking, reading(1), reading(4), checkingDates, puttingTogether, doneLine, nothingFoundLine,
-         couldNotRead, wordedInCloud, forgotWhileInCloud, previewForSummary("the pool"), previewForSummary(nil),
+         couldNotRead, wordedInCloud, wordedInCloudMark, forgotWhileInCloud, previewForSummary("the pool"), previewForSummary(nil),
          memoryNote("The pool opens.", from: ["A", "B"], disagreement: "Sources don't agree on this."),
          memoryNote("The pool opens.", from: [], wordedInCloud: true),
          memoryNote("The pool opens.", from: [], disagreement: disputedBy([]), wordedInCloud: true),
@@ -702,10 +708,9 @@ public enum ReconWords {
          disagreement([("Riverside Gazette", "November 3"), ("City of Riverside Parks", "November 10")],
                       newest: "City of Riverside Parks"),
          sourcesHeading, pointsHeading, morePoints(1), morePoints(2), olderLabel, from(["A", "B"]), sourceNumber(1),
-         declinedCloud, cloudUnreadable, cloudUnavailable, cloudWithdrawn, cloudOff, cloudStopped, keptForCare,
+         declinedCloud, cloudUnreadable, cloudUnavailable, cloudWithdrawn, cloudOff, cloudStopped, stoppedAfterSend, keptForCare,
          openSourcesTitle, followUpTitle, rememberTitle,
          openSourcesHint, followUpHint, rememberHint, followUpDraft("the pool"), rememberQuestion,
-         rememberDetail(.onDevice), rememberDetail(.mayLeaveDevice),
          rememberThis, remembered, pageLinkTitle, lookIntoTitle, lookIntoHint, askLine("the pool")]
             + questions(about: "the pool") + gatheredSamples
     }

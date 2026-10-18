@@ -192,9 +192,9 @@ struct CloudReconTests {
     }
 
     @Test func aChatModelOnTheDeviceNeverMayLeaveIt() {
-        #expect(!CloudReconSummarizer(model: LocalStubModel()).mayLeaveDevice)
-        #expect(CloudReconSummarizer(model: cloud(RecordingTransport(), RecordingReviewer(answer: .send))).mayLeaveDevice)
-        #expect(!LocalReconSummarizer().mayLeaveDevice)
+        #expect(!CloudReconSummarizer(model: LocalStubModel()).mayUseCloud)
+        #expect(CloudReconSummarizer(model: cloud(RecordingTransport(), RecordingReviewer(answer: .send))).mayUseCloud)
+        #expect(!LocalReconSummarizer().mayUseCloud)
     }
 
     @Test func linesWithoutARealSourceAreDropped() async {
@@ -331,7 +331,7 @@ struct CloudReconTests {
     @Test func theYesPathLinesAreTheseExactly() {
         #expect(ReconWords.cloudOff == "Help from the cloud was off by then, so I put this together without it.")
         #expect(ReconWords.cloudStopped
-                == "It was stopped before an answer came back, so I put this together without the cloud.")
+                == "It was stopped after you said send, so some of what I read may already have gone to the cloud. I put this together without it.")
         for line in [ReconWords.cloudOff, ReconWords.cloudStopped] {
             #expect(line != ReconWords.cloudWithdrawn)
             #expect(!line.contains("chose") && !line.contains("declined") && !line.contains("Nothing went"))
@@ -381,7 +381,7 @@ struct CloudReconTests {
                      CloudReconSummarizer.prompt(for: asked, sources: sources)] {
             let reviewer = RecordingReviewer(answer: .cancel)
             let transport = RecordingTransport()
-            let chat = Conversation(turns: [ChatTurn(id: UUID(), speaker: .person, text: text)], onDevice: false)
+            let chat = Conversation(turns: [ChatTurn(id: UUID(), speaker: .person, text: text)], place: .mayLeaveDevice)
             _ = try? await chat.appendingReply(from: cloud(transport, reviewer))
             let preview = try #require(reviewer.seen.first)
             #expect(preview.request.text.contains("Please look into the pool using only the sources below"))

@@ -428,6 +428,7 @@ struct ReconSourcesSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     DoneButton(title: FeedWords.doneTitle) { dismiss() }
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
         }
         .presentationDragIndicator(.visible)
@@ -500,6 +501,7 @@ struct ReconRememberSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     DoneButton(title: FeedWords.doneTitle) { dismiss() }
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
         }
         .presentationDragIndicator(.visible)

@@ -14,6 +14,8 @@ public struct FeedItem: Identifiable, Sendable, Equatable {
         case needsYou
         /// Longer work, shown live on a task card.
         case task
+        /// What the person said yes to, and what came of it.
+        case receipt
     }
 
     public let id: String
@@ -54,7 +56,14 @@ public struct FeedItem: Identifiable, Sendable, Equatable {
         case .noticed: FeedWords.noticedLabel
         case .needsYou: FeedWords.needsYouHeading
         case .task: task?.state.label ?? TaskWords.runningLabel
+        case .receipt: ReceiptWords.label
         }
+    }
+
+    /// The receipt this card shows, when it is a receipt card.
+    public var receipt: Receipt? {
+        if kind == .receipt, case .receipt(let receipt) = action { return receipt }
+        return nil
     }
 }
 
@@ -76,6 +85,8 @@ public enum FeedAction: Sendable, Equatable {
     /// Starts looking into this topic, as a task that lands back in the
     /// feed. The tap is the person's go ahead; nothing starts without it.
     case lookInto(String)
+    /// A receipt card, whose one button clears it.
+    case receipt(Receipt)
 
     public var title: String {
         switch self {
@@ -84,6 +95,7 @@ public enum FeedAction: Sendable, Equatable {
         case .review: FeedWords.reviewTitle
         case .task(let task): task.waitsForApproval ? TaskWords.approveTitle : FeedWords.openTitle
         case .lookInto: ReconWords.lookIntoTitle
+        case .receipt: TaskWords.dismissTitle
         }
     }
 
@@ -95,6 +107,7 @@ public enum FeedAction: Sendable, Equatable {
         case .review: FeedWords.reviewHint
         case .task(let task): task.waitsForApproval ? FeedWords.reviewHint : FeedWords.openHint
         case .lookInto: ReconWords.lookIntoHint
+        case .receipt: ReceiptWords.clearHint
         }
     }
 }
@@ -481,8 +494,9 @@ public enum FeedWords {
     public static let talkHint = "Opens the chat with a line ready. Nothing is sent."
     public static let reviewHint = "Opens the question."
     public static let emptyTitle = "A quiet start"
-    /// Only what is true today: the chat is right below. Nothing here says
-    /// the agent works in the background until a real feed source does.
+    /// Only what is true today: the chat is right below. It shows only while
+    /// nothing has been made, background work included, so it never hides
+    /// a card or promises a summary the system may not give time for.
     /// True whether or not a chat is already going, so it never promises a
     /// new one: a line sent from here joins the chat there is.
     public static let empty = "It's just us for now. Write to me below, and I'll answer in the chat."

@@ -15,9 +15,9 @@ final class Starts {
     /// Whether each start was asked from a chat that stays on this device.
     var onDevice: [Bool] = []
     var answer = true
-    func start(_ topic: String, onDevice: Bool = true) -> ReconTap {
+    func start(_ topic: String, place: PrivacyPlace = .onDevice) -> ReconTap {
         topics.append(topic)
-        self.onDevice.append(onDevice)
+        onDevice.append(place.staysOnDevice)
         return answer ? .started : .couldNotStart
     }
 }
@@ -33,7 +33,7 @@ struct ReconUITests {
     func chat(starts: Starts?) -> ChatController {
         let controller = ChatController.make(brand: brand, model: LocalStubModel(),
                                              names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil)
-        if let starts { controller.lookInto = { starts.start($0, onDevice: $1) } }
+        if let starts { controller.lookInto = { starts.start($0, place: $1) } }
         return controller
     }
 
@@ -423,7 +423,7 @@ struct ReconUITests {
         for place in [PrivacyPlace.onDevice, .mayLeaveDevice] {
             #expect(ReconWords.rememberDetail(place).contains("It's still there after this card goes, until you delete it or forget everything."))
         }
-        #expect(TaskWords.forgetTasksDetail.contains("Your notes aren't touched."))
+        #expect(TaskWords.forgetTasksDetail.contains("Your notes aren't touched,"))
     }
 
     /// Forget everything, through the memory screen's model as the home

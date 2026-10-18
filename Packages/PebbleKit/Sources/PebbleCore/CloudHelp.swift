@@ -86,11 +86,21 @@ extension CloudHelpStoring {
 /// iPad. The private words are the most sensitive words in the app, so they
 /// get the same care as the notes. A restored or new device reads as off.
 public final class CloudHelpFileStore: CloudHelpStoring, @unchecked Sendable {
+    /// The private words can be opened only while the device is unlocked,
+    /// as the notes can. Nothing that runs while locked reads them.
+    public static let fileProtection: FileProtectionType = .complete
+
     public let fileURL: URL
+    private let writer: ProtectedWriter
     private let lock = NSLock()
 
-    public init(fileURL: URL) {
+    public convenience init(fileURL: URL) {
+        self.init(fileURL: fileURL, writer: .disk)
+    }
+
+    package init(fileURL: URL, writer: ProtectedWriter) {
         self.fileURL = fileURL
+        self.writer = writer
     }
 
     /// The store in the notes folder on this device.
@@ -123,11 +133,7 @@ public final class CloudHelpFileStore: CloudHelpStoring, @unchecked Sendable {
         // Staged under one known name, then renamed over the real file, as
         // the notes are, so no copy is left anywhere else.
         try removeStaged()
-        #if os(macOS)
-        try data.write(to: stagingURL, options: [.withoutOverwriting])
-        #else
-        try data.write(to: stagingURL, options: [.withoutOverwriting, .completeFileProtection])
-        #endif
+        try writer.write(data, stagingURL, Self.fileProtection)
         guard rename(stagingURL.path, fileURL.path) == 0 else {
             try? removeStaged()
             throw CocoaError(.fileWriteUnknown)
@@ -329,10 +335,12 @@ public enum CloudWords {
     /// cloud was turned off or the screen went away. No one chose anything.
     public static let withdrawn = "Nothing went to the cloud. What you wrote is still here."
     /// The setting was turned off while this chat was using the cloud. It
-    /// says only what the next chat won't do: where it does answer depends
-    /// on the local model, which this line can't see, so it makes no
-    /// device promise.
-    public static let turnedOff = "Help from the cloud is off now, so I didn't send that. A new chat won't use the cloud."
+    /// names only the setting and what happened to this message. Where the
+    /// next chat answers depends on the local model, which this line can't
+    /// see, so it says nothing about the cloud or the device beyond that.
+    /// The words go back in the composer, so they are still here, and the
+    /// line goes once the person clears them.
+    public static let turnedOff = "Help from the cloud is off now, so I didn't send that. What you wrote is still here."
     /// Something earlier in this chat must stay on this device, so no part
     /// of the chat can be sent. Only a new chat can use the cloud again.
     public static let staysHere = "Part of this chat has to stay on this device, so I won't send any of it. A new chat starts fresh, and I can help there."
@@ -341,7 +349,10 @@ public enum CloudWords {
     /// The question before Forget everything, when private words go too.
     /// Tasks go as well, so it says running ones stop, like
     /// `MemoryWords.forgetEverythingDetail`.
-    public static let forgetEverythingDetail = "This removes every note, every task and every word you asked me to hide from this device, and stops any task still going. It can't be undone."
+    public static let forgetEverythingDetail = "This removes every note, every task and every word you asked me to hide from this device, and stops any task still going. It can't be undone. Your choice about nudges stays as it is."
+    /// The same, when the screen has the switch for work while away, like
+    /// `MemoryWords.forgetEverythingDetail(background: true)`.
+    public static let forgetEverythingWithSummariesDetail = "This removes every note, every task, every morning summary and every word you asked me to hide from this device, stops any task still going, and turns off work while you're away. It can't be undone. Your choice about nudges stays as it is."
     /// Forget everything erased the notes but not the private words.
     public static let forgotNotesNotWords = "Your notes are gone, but I couldn't erase your private words just now. Please try Forget everything again in a moment."
     /// The same, when there were tasks and they went too.
@@ -355,6 +366,27 @@ public enum CloudWords {
     /// Forget everything erased the notes, and the private words could only
     /// be erased with the whole cloud setting, which turned it off.
     public static let forgotAndCloudOff = "Gone. I no longer have it. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. You can turn it on again anytime."
+    /// The same, but the morning summaries' file couldn't be erased, like
+    /// `MemoryWords.couldNotForgetSummaries(notes:tasks:words:)`. It opens
+    /// with what went, the notes and the tasks only when there were some,
+    /// as `MemoryWords.forgotAndTurnedOff` says it. Each form is written
+    /// out whole, so the device promise guard checks each word for word.
+    public static func forgotAndCloudOffNotSummaries(notes: Bool, tasks: Bool) -> String {
+        switch (notes, tasks) {
+        case (true, true):
+            "I forgot your notes and tasks, and turned off work while you're away, but I couldn't erase your morning summaries just now. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. Please try Forget everything again in a moment."
+        case (true, false):
+            "I forgot your notes and turned off work while you're away, but I couldn't erase your morning summaries just now. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. Please try Forget everything again in a moment."
+        case (false, true):
+            "I forgot your tasks and turned off work while you're away, but I couldn't erase your morning summaries just now. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. Please try Forget everything again in a moment."
+        case (false, false):
+            "I turned off work while you're away, but I couldn't erase your morning summaries just now. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. Please try Forget everything again in a moment."
+        }
+    }
+    /// Every form of `forgotAndCloudOffNotSummaries`, for the word checks.
+    public static let forgotAndCloudOffNotSummariesLines = [false, true].flatMap { notes in
+        [false, true].map { forgotAndCloudOffNotSummaries(notes: notes, tasks: $0) }
+    }
     /// The same, but the notes couldn't be erased.
     public static let forgotWordsAndCloudNotNotes = "Your private words are gone. To be sure of that I cleared the cloud setting too, so help from the cloud is off. I couldn't erase your notes just now. Please try Forget everything again in a moment."
     /// The same, when there were tasks and they went too.
@@ -362,7 +394,7 @@ public enum CloudWords {
     /// Forgetting tasks when the notes can't be opened, like
     /// `TaskWords.forgetTasksDetail`, when the words always hidden go too.
     /// There may be none, so it says "any".
-    public static let forgetTasksAndWordsDetail = "This stops any task still going, and removes every task, what you told me for it and any words you asked me to hide from this device. It can't be undone. Your notes aren't touched."
+    public static let forgetTasksAndWordsDetail = "This stops any task still going, and removes every task, what you told me for it and any words you asked me to hide from this device. It can't be undone. Your notes aren't touched, and your choice about nudges stays as it is."
     /// The tasks and any private words went.
     public static let tasksAndWordsForgotten = "Your tasks are forgotten, and so are any words you asked me to hide."
     /// The same, when the words could only go with the whole cloud setting,
@@ -371,8 +403,10 @@ public enum CloudWords {
     /// The tasks went, but the private words' file couldn't be reached.
     public static let tasksForgottenNotWords = "Your tasks are forgotten, but I couldn't erase the words you asked me to hide. Closing and reopening the app may help."
 
+    /// Every fixed line. `offDetail` follows a place, which only the model
+    /// decides, so the tests read it for each place themselves.
     public static let all: [String] = [
-        title, toggleTitle, offDetail(.onDevice), offDetail(.mayLeaveDevice), onDetail, unavailable, couldNotOpen,
+        title, toggleTitle, onDetail, unavailable, couldNotOpen,
         rowTitle, rowOff, rowOn,
         askQuestion, askYes, askNo, privateTitle, privateDetail, privatePlaceholder, privateAdd,
         privateRemove("Sam"), privateUnreadable, privateNotSaved, privateTooLong, privateFull, privateAlreadyThere,
@@ -387,5 +421,6 @@ public enum CloudWords {
         forgotNotesAndTasksNotWords, forgotTasksAndWordsNotNotes, forgotTasksNotNotesOrWords,
         forgotTasksAndWordsAndCloudNotNotes, forgetTasksAndWordsDetail, tasksAndWordsForgotten,
         tasksAndWordsAndCloudForgotten, tasksForgottenNotWords,
-    ] + askPoints + Redaction.Kind.allCases.map(\.spoken)
+        forgetEverythingWithSummariesDetail,
+    ] + forgotAndCloudOffNotSummariesLines + askPoints + Redaction.Kind.allCases.map(\.spoken)
 }
