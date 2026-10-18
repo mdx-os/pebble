@@ -449,8 +449,15 @@ final class FeedModel: ObservableObject {
         // ended tasks are let go, closes with it.
         if let reading, taskIDs.contains(reading.id), !ids.contains(reading.id) { self.reading = nil }
         // So does one whose words are gone, as when the note it showed is
-        // forgotten.
-        if let reading, let task = list.first(where: { $0.id == reading.id }), task.result == nil { self.reading = nil }
+        // forgotten. One whose words changed, as when a forget took one
+        // line of a digest, shows the words as they are now.
+        if let reading, let task = list.first(where: { $0.id == reading.id }) {
+            if let result = task.result {
+                if reading.action != .open(result) { open(task) }
+            } else {
+                self.reading = nil
+            }
+        }
         // A question its task let go of, as when a note it drew from
         // changed, closes its sheet too.
         if let reviewing, let id = taskAsked[reviewing.id],

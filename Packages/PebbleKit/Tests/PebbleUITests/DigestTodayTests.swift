@@ -188,6 +188,25 @@ struct DigestTodayTests {
         #expect(feed.reading == nil)
     }
 
+    /// A digest open to read in one window, with a note it quoted
+    /// forgotten through another: the reader shows the digest as it is
+    /// now, without the forgotten words and with the rest.
+    @Test func anOpenDigestLosesALineForgottenInAnotherWindow() throws {
+        try notes.remember("Sam's birthday is May 14", at: Date() - 7_200, source: .toldMe)
+        let done = try keepDigest()
+        let reader = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: rule), tasks: engine,
+                               place: .onDevice)
+        reader.open(try #require(engine.tasks.first { $0.id == done.id }))
+        #expect(reader.reading?.action == .open(try #require(done.result)))
+        let memory = memoryScreen()
+        let sam = try #require(memory.notes.first { $0.text.hasPrefix("Sam's") })
+        memory.forget(sam)
+        #expect(memory.status == MemoryWords.forgotten)
+        let open = try #require(reader.reading)
+        #expect(open.id == done.id)
+        #expect(open.action == .open(DigestWords.heading + ".\n• Dentist on Thursday at 3 (You told me)"))
+    }
+
     /// Keeps a digest through the sheet, as a tap would.
     func keepDigest() throws -> AgentTask {
         let task = try startAndAsk()

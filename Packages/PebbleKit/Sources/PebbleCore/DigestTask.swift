@@ -161,6 +161,24 @@ public enum DigestTask {
         return lines.allSatisfy(couldBeLine)
     }
 
+    /// For a note the agent kept that no task knows the lines of: true
+    /// when it has a digest's shape, its heading or a line ending with
+    /// where a note came from, yet isn't a plain digest of `known`, every
+    /// note's line in it word for word one of them. The person may have
+    /// changed it, so a note's words may be in it put another way.
+    package static func mayHoldReworded(_ text: String, known: Set<String>) -> Bool {
+        let lines = text.components(separatedBy: "\n")
+        guard text.hasPrefix(DigestWords.heading) || lines.contains(where: endsWithLabel) else { return false }
+        guard isPlain(text) else { return true }
+        return lines.dropFirst().contains { $0.hasPrefix("• ") && !known.contains($0) }
+    }
+
+    /// True when `line` ends with a label in brackets, as a note's line does.
+    static func endsWithLabel(_ line: String) -> Bool {
+        guard line.hasSuffix(")"), let open = line.range(of: " (", options: .backwards) else { return false }
+        return isLabel(String(line[open.upperBound..<line.index(before: line.endIndex)]))
+    }
+
     /// True for a line `DigestWords.andMore` can give.
     static func isCount(_ line: String) -> Bool {
         guard let count = Int(line.filter(\.isNumber)), count > 0 else { return false }

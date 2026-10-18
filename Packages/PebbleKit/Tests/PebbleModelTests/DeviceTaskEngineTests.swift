@@ -690,14 +690,17 @@ struct DeviceTaskEngineTests {
     /// line says.
     @Test func aDigestNoTaskKnowsOfIsLookedInWhateverItsHeading() throws {
         let sam = try #require(notes.notes().first { $0.text.hasPrefix("Sam's") })
-        try notes.remember("My week\n" + DigestTask.line(for: sam), at: clock.now(), source: .inferred)
+        let mine = "My week\n" + DigestTask.line(for: sam)
+        try notes.remember(mine, at: clock.now(), source: .inferred)
         let engine = try engine()
         #expect(try notes.forget(sam.id))
         #expect(engine.forgetQuotes(of: sam) == .stayed)
-        // One that never quoted it changes nothing.
+        // One it never quoted is left as it is, but with the digest changed
+        // by the person, its words may be in it put another way.
         let old = try #require(notes.notes().first { $0.text.hasPrefix("Old note") })
         #expect(try notes.forget(old.id))
-        #expect(engine.forgetQuotes(of: old) == .notQuoted)
+        #expect(engine.forgetQuotes(of: old) == .mayHaveStayed)
+        #expect(notes.notes().contains { $0.text == mine })
     }
 
     /// A task file that won't open, as while the device is locked: no look
@@ -796,6 +799,29 @@ struct DeviceTaskEngineTests {
         _ = try MemoryStore(fileURL: notes.fileURL).forget(dentist.id)
         #expect(third.forgetQuotes(of: dentist) == .forgotten)
         #expect(!notes.notes().contains { $0.id == kept.id })
+        // A digest left the same way that the person reworded, so no line
+        // of it is a note's: the words may still be there, and it stays
+        // exactly as they wrote it.
+        try notes.remember("Lunch with Ana on Friday at noon", source: .toldMe)
+        for reworded in [DigestWords.heading + ".\nFriday at noon: lunch with Ana.",
+                         DigestWords.heading + ".\n• Friday at noon: lunch with Ana (You told me)",
+                         "My week.\nFriday at noon: lunch with Ana (You told me)"] {
+            try notes.remember(reworded, source: .inferred)
+            try notes.remember("Sam's birthday is May 14", source: .toldMe)
+            let fourth = try engine()
+            let sam = try #require(notes.notes().first { $0.text.hasPrefix("Sam's") })
+            #expect(try notes.forget(sam.id))
+            #expect(fourth.forgetQuotes(of: sam) == .mayHaveStayed, "\(reworded)")
+            #expect(notes.notes().contains { $0.text == reworded && $0.source == .inferred })
+            let digest = try #require(notes.notes().first { $0.text == reworded })
+            #expect(try notes.forget(digest.id))
+        }
+        // With it gone, nothing is left to fear.
+        try notes.remember("Sam's birthday is May 14", source: .toldMe)
+        let fifth = try engine()
+        let last = try #require(notes.notes().first { $0.text.hasPrefix("Sam's") })
+        #expect(try notes.forget(last.id))
+        #expect(fifth.forgetQuotes(of: last) == .notQuoted)
     }
 
     /// Notes that can't be read when a note's earlier words are named: no

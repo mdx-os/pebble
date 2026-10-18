@@ -564,6 +564,10 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         // changed past finding. Only the agent keeps a note as its own
         // guess, so with none of those there is nothing to fear.
         if !loaded || tasksLost, !others.isEmpty { mayHave = true }
+        // Whatever is known of the tasks, one that looks like a digest the
+        // person changed may hold the words put another way.
+        let lines = Set(all.map(DigestTask.line(for:)))
+        if others.contains(where: { DigestTask.mayHoldReworded($0.text, known: lines) }) { mayHave = true }
         let cleaned = cleanedOf.remove(note.id) != nil
         lock.unlock()
         if stayed { return .stayed }
