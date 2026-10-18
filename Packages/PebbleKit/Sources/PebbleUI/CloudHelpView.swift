@@ -178,21 +178,41 @@ public final class CloudHelp: ObservableObject {
         }
     }
 
-    /// Erases the private words, as Forget everything does. The setting
-    /// itself stays as it was, unless the words can't be read or saved
-    /// without them: then the whole file is erased, which also turns the
-    /// cloud off. Throws only when even that fails.
-    func forgetPrivateWords() throws {
-        if var current = try? store.load() {
+    /// What Forget everything erased of the cloud setting.
+    enum Forgot: Equatable {
+        /// The private words, with the setting left as it was.
+        case privateWords
+        /// The whole setting, to be sure the words went, so the cloud is
+        /// off now when it was on, or might have been.
+        case privateWordsAndCloud
+    }
+
+    /// Erases the private words, as Forget everything does, and any word
+    /// half typed into the field. The setting itself stays as it was,
+    /// unless the words can't be read or saved without them: then the
+    /// whole file is erased, which also turns the cloud off, and the answer
+    /// says so. Throws only when even that fails.
+    @discardableResult
+    func forgetPrivateWords() throws -> Forgot {
+        newPrivateWord = ""
+        let current = try? store.load()
+        if var current {
             current.privateWords = []
             if switchedOff.value { current.isOn = false }
             if (try? store.save(current)) != nil {
                 settings = current
-                return
+                return .privateWords
             }
         }
+        // Unread, it may have said on.
+        let mightHaveBeenOn = current?.isOn ?? true
         try store.erase()
         settings = .off
+        guard mightHaveBeenOn, !switchedOff.value else { return .privateWords }
+        // Off for chats already open, as a switch off is.
+        switchedOff.value = true
+        for review in reviews.allObjects { review.cancelPending() }
+        return .privateWordsAndCloud
     }
 
     enum Outcome {
@@ -374,14 +394,7 @@ public struct CloudHelpView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 10) {
-                TextField(CloudWords.privatePlaceholder, text: $help.newPrivateWord)
-                    .textFieldStyle(.plain)
-                    // The keyboard never learns or suggests private words.
-                    .autocorrectionDisabled()
-                    #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                    #endif
-                    .onSubmit { help.addPrivateWord() }
+                PrivateWordField(word: $help.newPrivateWord) { help.addPrivateWord() }
                 Button { help.addPrivateWord() } label: {
                     Image(systemName: "plus")
                         .font(.headline)
@@ -411,6 +424,29 @@ public struct CloudHelpView: View {
 /// switcher's picture never shows private words or a payload.
 func privateRedaction(_ phase: ScenePhase) -> RedactionReasons {
     phase == .active ? [] : .privacy
+}
+
+/// Where a new private word is typed. What is half typed is as private as
+/// the list, so it hides the same way.
+struct PrivateWordField: View {
+    @Binding var word: String
+    let onSubmit: () -> Void
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        TextField(CloudWords.privatePlaceholder, text: $word)
+            .textFieldStyle(.plain)
+            // The keyboard never learns or suggests private words.
+            .autocorrectionDisabled()
+            #if os(iOS)
+            .textInputAutocapitalization(.never)
+            #endif
+            .onSubmit(onSubmit)
+            // Hidden wherever the system hides private things, and in the
+            // app switcher.
+            .privacySensitive()
+            .redacted(reason: privateRedaction(scenePhase))
+    }
 }
 
 /// The words always hidden, each with a way to stop hiding it.
@@ -444,7 +480,8 @@ struct PrivateWordList: View {
     }
 }
 
-/// The row on the memory screen that opens the cloud setting.
+/// The row on the memory screen that opens the cloud setting. It is the only
+/// way in; see `HomeView.memoryScreen` for when memory can't open.
 struct CloudHelpRow: View {
     @ObservedObject var help: CloudHelp
     @Environment(\.colorScheme) private var scheme
@@ -530,8 +567,8 @@ struct CloudTurnOnSheet: View {
         .presentationDragIndicator(.visible)
     }
 
-    private static let symbols = ["cloud", "eye", "eye.slash", "person.crop.circle", "lock", "network", "heart",
-                                  "arrow.uturn.backward"]
+    private static let symbols = ["cloud", "eye", "eye.slash", "arrow.triangle.2.circlepath", "person.crop.circle",
+                                  "key", "lock", "network", "heart", "arrow.uturn.backward"]
 }
 
 /// "Here is exactly what leaves your device": the whole request, its

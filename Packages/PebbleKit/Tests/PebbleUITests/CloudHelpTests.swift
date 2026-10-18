@@ -61,6 +61,14 @@ final class CountingAuth: CloudAuth, @unchecked Sendable {
     }
 }
 
+/// Refuses every request before sending, as the real transport does when
+/// the labels aren't the ones shown.
+struct RefusingTransport: CloudTransport {
+    func send(_ request: CloudRequest) async throws -> Data {
+        throw CloudTransportError.headersNotShown
+    }
+}
+
 /// A settings store whose saves and erases can be made to fail, as a full
 /// disk or a failed rename would.
 final class FailingCloudStore: CloudHelpStoring, @unchecked Sendable {
@@ -347,6 +355,45 @@ struct CloudHelpTests {
         #expect(CloudWords.previewDetail.contains("internet address"))
     }
 
+    /// Every request carries the whole chat again, so neither the question
+    /// nor the preview says the words go only once.
+    @Test func theWordsSayEarlierMessagesGoAgain() {
+        #expect(!CloudWords.previewDetail.contains("only once"))
+        #expect(CloudWords.previewDetail.contains("Earlier messages in this chat go again with each new one"))
+        #expect(CloudWords.askPoints.contains { $0.contains("Earlier messages in a chat go again with each new one") })
+        #expect(CloudWords.all.allSatisfy { !$0.contains("only once") })
+    }
+
+    /// Sign-in is a hop the preview doesn't show, so the question names it
+    /// in words that stay true whatever sign-in there is, and the promise
+    /// "before anything leaves" is about what comes from a chat.
+    @Test func theQuestionNamesSignIn() throws {
+        let signIn = try #require(CloudWords.askPoints.first { $0.contains("sign in") })
+        #expect(signIn.contains("right after your yes"))
+        #expect(signIn.contains("never carries your chats, notes or private words"))
+        #expect(CloudWords.askPoints[1].hasPrefix("Before anything from a chat leaves"))
+        #expect(CloudWords.onDetail.contains("Before anything from a chat leaves"))
+        // And any real sign-in has to bring its own line.
+        let source = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/PebbleModel/CloudModel.swift")
+        let text = try String(contentsOf: source, encoding: .utf8)
+        #expect(text.contains("must also ship with its\n    /// own disclosure"))
+    }
+
+    /// The question still only signs in after the yes.
+    @Test func signInWaitsForTheYes() async {
+        let auth = CountingAuth()
+        let help = CloudHelp(store: InMemoryCloudHelpStore(), endpoint: endpoint, memory: scratchMemory(), auth: auth,
+                             transport: { TransportMaker().make() })
+        help.setOn(true)
+        #expect(help.asksToTurnOn)
+        #expect(help.signingIn == nil)
+        help.confirmTurnOn()
+        await help.signingIn?.value
+        #expect(auth.signIns == 1)
+    }
+
     // MARK: The preview
 
     @Test func theSheetShowsExactlyTheRequestThatIsSent() async throws {
@@ -363,7 +410,7 @@ struct CloudHelpTests {
         #expect(shown.contains("X-Sample-Sign-In: made-up"))
         #expect(shown.contains("User-Agent: pebble"))
         #expect(shown.contains("Ask [name] to bring the [private] to [address]."))
-        #expect(CloudPreviewSheet.hiddenLine(preview) == "Taken out: 1 private word, 1 address, 1 name.")
+        #expect(CloudPreviewSheet.hiddenLine(preview) == "Taken out of this chat: 1 private word, 1 address, 1 name.")
         #expect(maker.wire.sent.isEmpty)
         review.answer(.send, for: preview.id)
         let next = try await reply.value
@@ -376,6 +423,47 @@ struct CloudHelpTests {
         #expect(wire == shown)
         #expect(sent.allHTTPHeaderFields == preview.request.headers)
         #expect(review.pending == nil)
+    }
+
+    /// The count covers the whole chat, which goes again each time, and the
+    /// line says so rather than reading as new for this message.
+    @Test func theHiddenCountSaysItIsForTheWholeChat() async throws {
+        let maker = TransportMaker()
+        let cloud = help(CloudHelpSettings(isOn: true), endpoint: endpoint, maker: maker)
+        let controller = chat(cloud)
+        let review = try #require(controller.review)
+        controller.submit("Call 416-555-0199")
+        let first = await review.shown()
+        #expect(CloudPreviewSheet.hiddenLine(first) == "Taken out of this chat: 1 phone number.")
+        review.answer(.send, for: first.id)
+        await controller.settled()
+        controller.submit("Thanks")
+        let second = await review.shown()
+        // Nothing new was hidden; the one number is still the one number.
+        #expect(CloudPreviewSheet.hiddenLine(second) == "Taken out of this chat: 1 phone number.")
+        review.answer(.cancel, for: second.id)
+        await controller.settled()
+    }
+
+    /// A request the transport refuses for its labels never left, so the
+    /// turn is taken back and a resend doesn't carry it twice.
+    @Test func aRequestRefusedForItsLabelsTakesTheTurnBack() async throws {
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+                              memory: scratchMemory(), transport: { RefusingTransport() })
+        let controller = chat(cloud)
+        let review = try #require(controller.review)
+        controller.submit("Plan my week")
+        review.answer(.send, for: await review.shown().id)
+        await controller.settled()
+        #expect(personTurns(controller).isEmpty)
+        #expect(controller.draft == "Plan my week")
+        controller.draft = ""
+        controller.submit("Plan my week")
+        let again = await review.shown()
+        let payload = try JSONDecoder().decode(CloudPayload.self, from: again.request.body)
+        #expect(payload.messages.filter { $0.role == "person" }.map(\.text) == ["Plan my week"])
+        review.answer(.cancel, for: again.id)
+        await controller.settled()
     }
 
     @Test func notSendingTakesTheTurnBackAndTheWordsNeverGoLater() async throws {
@@ -616,7 +704,7 @@ struct CloudHelpTests {
     }
 
     /// Words that can't be saved without them are erased with the file,
-    /// which also turns the cloud off.
+    /// which also turns the cloud off, and the line says so.
     @Test func privateWordsThatCantBeSavedAwayAreErasedWithTheFile() throws {
         let memory = scratchMemory("Sam's birthday is May 14.")
         let store = FailingCloudStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"]))
@@ -624,9 +712,79 @@ struct CloudHelpTests {
         let help = cloud(store, maker: TransportMaker())
         let model = MemoryModel(store: memory, alsoForget: { try help.forgetPrivateWords() })
         model.forgetEverything()
-        #expect(model.status == MemoryWords.forgotten)
+        #expect(model.status == CloudWords.forgotAndCloudOff)
+        #expect(CloudWords.forgotAndCloudOff.contains("help from the cloud is off"))
         #expect(store.saved == nil)
         #expect(help.settings == .off)
+    }
+
+    /// Words that can't even be read are erased with the file too. Unread,
+    /// the setting may have said on, so the line says it is off now.
+    @Test func unreadableWordsAreErasedWithTheFileAndTheLineSaysTheCloudIsOff() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("cloud-forget-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let memory = MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
+        _ = try memory.remember("Sam's birthday is May 14.", source: .toldMe)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let store = InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"]))
+        let help = help(endpoint: endpoint, maker: TransportMaker(), memory: memory, store: store)
+        store.makeUnreadable()
+        let model = MemoryModel(store: memory, alsoForget: { try help.forgetPrivateWords() })
+        model.forgetEverything()
+        #expect(model.status == CloudWords.forgotWordsAndCloudNotNotes)
+        #expect(try store.load() == .off)
+    }
+
+    /// When the setting was already off, clearing it turns nothing off, so
+    /// the plain line is the true one.
+    @Test func clearingASettingThatWasOffSaysOnlyGone() throws {
+        let store = FailingCloudStore(CloudHelpSettings(isOn: false, privateWords: ["lemon cake"]))
+        store.savesToFail = .max
+        let help = cloud(store, maker: TransportMaker())
+        let model = MemoryModel(store: scratchMemory("Sam's birthday is May 14."),
+                                alsoForget: { try help.forgetPrivateWords() })
+        model.forgetEverything()
+        #expect(model.status == MemoryWords.forgotten)
+        #expect(store.saved == nil)
+    }
+
+    /// The cloud going off this way closes any preview waiting in an open
+    /// chat, and that chat sends nothing more.
+    @Test func clearingTheSettingClosesAWaitingPreview() async throws {
+        let maker = TransportMaker()
+        let store = FailingCloudStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"]))
+        let help = cloud(store, maker: maker)
+        let controller = chat(help)
+        let review = try #require(controller.review)
+        controller.submit("Plan my week")
+        _ = await review.shown()
+        store.savesToFail = .max
+        #expect(try help.forgetPrivateWords() == .privateWordsAndCloud)
+        await controller.settled()
+        #expect(review.pending == nil)
+        #expect(controller.failure == CloudWords.notSent)
+        #expect(maker.wire.sent.isEmpty)
+    }
+
+    /// A word half typed into the field goes with Forget everything too.
+    @Test func forgetEverythingClearsAHalfTypedWord() throws {
+        let store = InMemoryCloudHelpStore(CloudHelpSettings(privateWords: ["lemon cake"]))
+        let help = help(endpoint: endpoint, maker: TransportMaker(), store: store)
+        help.newPrivateWord = "Riverside Cli"
+        MemoryModel(store: scratchMemory(), alsoForget: { try help.forgetPrivateWords() }).forgetEverything()
+        #expect(help.newPrivateWord.isEmpty)
+        // Even when nothing could be erased.
+        let failing = FailingCloudStore(CloudHelpSettings(privateWords: ["lemon cake"]))
+        failing.savesToFail = .max
+        failing.eraseFails = true
+        let stuck = cloud(failing, maker: TransportMaker())
+        stuck.newPrivateWord = "Riverside Cli"
+        #expect(throws: (any Error).self) { try stuck.forgetPrivateWords() }
+        #expect(stuck.newPrivateWord.isEmpty)
     }
 
     /// Forget everything in the middle of a cloud chat never puts what was
@@ -732,6 +890,8 @@ struct CloudHelpTests {
         // Only a reply that went out keeps the person's turn.
         #expect(!ChatController.nothingWasSent(CloudModelError.unreadableReply))
         #expect(!ChatController.nothingWasSent(URLError(.timedOut)))
+        // Refused before sending, for labels that weren't shown.
+        #expect(ChatController.nothingWasSent(CloudTransportError.headersNotShown))
     }
 
     // MARK: VoiceOver, privacy and size
@@ -794,6 +954,27 @@ struct CloudHelpTests {
         // Leaving the app hides them on its own, for the app switcher.
         let leaving = AnyView(CloudPayloadCard(preview: preview).environment(\.scenePhase, .inactive))
         #expect(try pixels(leaving, size: size) == pixels(payload.redacted(reason: .privacy), size: size))
+    }
+
+    /// A word half typed into the field is as private as the list. A still
+    /// render can't draw a text field, so this reads the field's own code:
+    /// the one place the screen types a private word is marked private and
+    /// hides when the app is not in use.
+    @Test func theHalfTypedWordIsPrivacySensitive() throws {
+        let source = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/PebbleUI/CloudHelpView.swift")
+        let text = try String(contentsOf: source, encoding: .utf8)
+        let start = try #require(text.range(of: "struct PrivateWordField: View {"))
+        let end = try #require(text.range(of: "\n}\n", range: start.upperBound..<text.endIndex))
+        let field = text[start.lowerBound..<end.upperBound]
+        #expect(field.contains("TextField(CloudWords.privatePlaceholder, text: $word)"))
+        #expect(field.contains(".privacySensitive()"))
+        #expect(field.contains(".redacted(reason: privateRedaction(scenePhase))"))
+        #expect(field.contains(".autocorrectionDisabled()"))
+        // And it is the field the screen uses, the only one there.
+        #expect(text.components(separatedBy: "TextField(").count == 2)
+        #expect(text.contains("PrivateWordField(word: $help.newPrivateWord)"))
     }
 
     @Test func privateThingsHideWheneverTheAppIsNotInUse() {

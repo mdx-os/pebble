@@ -123,6 +123,19 @@ public protocol CloudTransport: Sendable {
 /// before.
 public protocol CloudAuth: Sendable {
     func headers(for url: URL) -> [String: String]
+
+    /// Signs in, after the person's yes and before the first preview.
+    ///
+    /// This is the one hop to the network the preview doesn't show, so any
+    /// implementation must keep to what the turn on question already says
+    /// in `CloudWords.askPoints`: it runs only after the yes, and it never
+    /// carries anything from a chat, the notes or the private words.
+    ///
+    /// An implementation that reaches the network must also ship with its
+    /// own disclosure: a line added to `CloudWords.askPoints`, in plain
+    /// words, saying where sign-in goes and what it sends, such as an
+    /// account name or a device token. Without that line it must not be
+    /// used.
     func signIn() async
 }
 

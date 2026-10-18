@@ -202,7 +202,7 @@ public enum CloudWords {
     public static let title = "Help from the cloud"
     public static let toggleTitle = "Use a cloud model"
     public static let offDetail = "Off. Everything I do stays on this device."
-    public static let onDetail = "On for new chats. Before anything leaves this device, I show you exactly what goes, and you decide."
+    public static let onDetail = "On for new chats. Before anything from a chat leaves this device, I show you exactly what goes, and you decide."
     public static let unavailable = "There's no cloud model set up for this device yet, so this stays off."
     public static let rowTitle = "Help from the cloud"
     public static let rowOff = "Off"
@@ -211,9 +211,12 @@ public enum CloudWords {
     public static let askQuestion = "Turn on help from the cloud?"
     public static let askPoints: [String] = [
         "Your next new chat will use a bigger model on a computer somewhere else, not on this device.",
-        "Before anything leaves, I show you exactly what goes. You can send it or keep it here.",
+        "Before anything from a chat leaves, I show you exactly what goes. You can send it or keep it here.",
         "I try to take out names from your notes, emails, phone numbers, addresses, card numbers and your private words first. Check what I show you, since I can miss things.",
+        "Earlier messages in a chat go again with each new one, so you see them in every preview.",
         "The name you gave me goes too, in my first line of each chat.",
+        // Stays true whatever `CloudAuth` does: see `CloudAuth.signIn`.
+        "If that computer needs me to sign in, I do it right after your yes. Signing in never carries your chats, notes or private words.",
         "Your notes themselves never leave this device.",
         "Like any website, the computer it goes to can see this device's internet address.",
         "If you tell me you might be in danger, I answer here and send nothing.",
@@ -242,11 +245,13 @@ public enum CloudWords {
     public static let onNotSaved = "Sorry, I couldn't save that, so help from the cloud is still off. Please try again in a moment."
 
     public static let previewTitle = "Here is exactly what leaves your device"
-    public static let previewDetail = "This is everything I send: where it goes, the labels sent with it, and the words. I took out the personal details I found. It goes only once, and like any website, the computer it goes to also sees this device's internet address."
+    public static let previewDetail = "This is everything I send: where it goes, the labels sent with it, and the words. I took out the personal details I found. Earlier messages in this chat go again with each new one, and like any website, the computer it goes to also sees this device's internet address."
     public static func previewDestination(_ host: String) -> String { "Going to \(host)" }
     public static let previewNothingHidden = "I didn't find anything personal to take out."
     public static func previewHidden(_ parts: [String]) -> String {
-        "Taken out: " + parts.joined(separator: ", ") + "."
+        // Every request carries the whole chat, so the count is for all of
+        // it, not just the newest message.
+        "Taken out of this chat: " + parts.joined(separator: ", ") + "."
     }
     public static let previewSend = "Send this"
     public static let previewCancel = "Don't send"
@@ -283,6 +288,11 @@ public enum CloudWords {
     public static let forgotNotesNotWords = "Your notes are gone, but I couldn't erase your private words just now. Please try Forget everything again in a moment."
     /// Forget everything erased the private words but not the notes.
     public static let forgotWordsNotNotes = "Your private words are gone, but I couldn't erase your notes just now. Please try Forget everything again in a moment."
+    /// Forget everything erased the notes, and the private words could only
+    /// be erased with the whole cloud setting, which turned it off.
+    public static let forgotAndCloudOff = "Gone. I no longer have it. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. You can turn it on again anytime."
+    /// The same, but the notes couldn't be erased.
+    public static let forgotWordsAndCloudNotNotes = "Your private words are gone. To be sure of that I cleared the cloud setting too, so help from the cloud is off. I couldn't erase your notes just now. Please try Forget everything again in a moment."
     /// The chat header when the model is not on this device.
     public static let presence = "Here with you."
 
@@ -296,6 +306,6 @@ public enum CloudWords {
         spokenSignIn("X-Sample", characters: 8),
         spokenMessage(role: "person", text: "Hi"), spokenMessage(role: "agent", text: "Hi"),
         notSent, turnedOff, staysHere, notesUnreadable, forgetEverythingDetail,
-        forgotNotesNotWords, forgotWordsNotNotes, presence,
+        forgotNotesNotWords, forgotWordsNotNotes, forgotAndCloudOff, forgotWordsAndCloudNotNotes, presence,
     ] + askPoints + Redaction.Kind.allCases.map(\.spoken)
 }

@@ -80,10 +80,19 @@ public struct Redactor: Sendable, Equatable {
     public let names: [String]
     /// Words and phrases the person marked private, matched in any case.
     public let privateWords: [String]
+    /// One pattern per name and per private word, built once here rather
+    /// than for every message of every request.
+    let patterns: WordPatterns
 
     public init(names: [String] = [], privateWords: [String] = []) {
         self.names = Self.tidy(names)
         self.privateWords = Self.tidy(privateWords)
+        patterns = WordPatterns(names: self.names, privateWords: self.privateWords)
+    }
+
+    /// The patterns follow from the words, so the words alone decide.
+    public static func == (lhs: Redactor, rhs: Redactor) -> Bool {
+        lhs.names == rhs.names && lhs.privateWords == rhs.privateWords
     }
 
     /// Hides the names found in `notes` and the words the person marked
@@ -137,9 +146,9 @@ public struct Redactor: Sendable, Equatable {
 
     private func matches(of kind: Redaction.Kind, in text: String) -> [NSRange] {
         switch kind {
-        case .privateWord: return Self.wholeWords(privateWords, in: text)
+        case .privateWord: return Self.wholeWords(patterns.privateWords, in: text)
         // "Sam's" becomes "[name]'s", so the sentence still reads.
-        case .name: return Self.wholeWords(names, in: text)
+        case .name: return Self.wholeWords(patterns.names, in: text)
         case .email: return Self.find(Self.email, in: text)
         case .card: return Self.find(Self.card, in: text)
         case .phone: return Self.find(Self.phone, in: text) + Self.nationalPhones(in: text)
@@ -414,16 +423,19 @@ public struct Redactor: Sendable, Equatable {
         return seen
     }
 
-    /// Whole word matches in any case, with straight and curly apostrophes
-    /// alike. Overlapping matches, like a private "lemon cake" and "cake
-    /// shop", are joined into one mask by `redact`.
-    private static func wholeWords(_ words: [String], in text: String) -> [NSRange] {
-        words.flatMap { word in
-            let escaped = NSRegularExpression.escapedPattern(for: word)
-                .replacingOccurrences(of: "'", with: "['\u{2019}\u{2018}\u{02BC}]")
-            let pattern = #"(?<![\p{L}\p{N}])"# + escaped + #"(?![\p{L}\p{N}])"#
-            return find(regex(pattern, caseInsensitive: true), in: text)
-        }
+    /// Whole word matches in any case, one pattern per word, so overlapping
+    /// matches, like a private "lemon cake" and "cake shop", are both found
+    /// and then joined into one mask by `redact`.
+    private static func wholeWords(_ expressions: [NSRegularExpression], in text: String) -> [NSRange] {
+        expressions.flatMap { find($0, in: text) }
+    }
+
+    /// `word` as a whole word in any case, with straight and curly
+    /// apostrophes alike.
+    fileprivate static func wholeWord(_ word: String) -> NSRegularExpression {
+        let escaped = NSRegularExpression.escapedPattern(for: word)
+            .replacingOccurrences(of: "'", with: "['\u{2019}\u{2018}\u{02BC}]")
+        return regex(#"(?<![\p{L}\p{N}])"# + escaped + #"(?![\p{L}\p{N}])"#, caseInsensitive: true)
     }
 
     private static func find(_ expression: NSRegularExpression, in text: String) -> [NSRange] {
@@ -433,5 +445,17 @@ public struct Redactor: Sendable, Equatable {
     private static func regex(_ pattern: String, caseInsensitive: Bool = false) -> NSRegularExpression {
         // The patterns are fixed or escaped, so they always compile.
         try! NSRegularExpression(pattern: pattern, options: caseInsensitive ? [.caseInsensitive] : [])
+    }
+}
+
+/// A redactor's compiled names and private words. Shared by every copy of
+/// that redactor, and never changed after it is made.
+final class WordPatterns: @unchecked Sendable {
+    let names: [NSRegularExpression]
+    let privateWords: [NSRegularExpression]
+
+    init(names: [String], privateWords: [String]) {
+        self.names = names.map(Redactor.wholeWord)
+        self.privateWords = privateWords.map(Redactor.wholeWord)
     }
 }

@@ -35,35 +35,33 @@ private struct GatedModel: ModelClient {
     }
 }
 
-/// Counts calls to a model.
-private actor Calls {
-    private var count = 0
-    func next() -> Int { count += 1; return count }
-}
-
 /// Holds each reply on its own gate, so a test decides exactly when each
 /// one lands, with no timing involved.
 private actor Landed {
+    private(set) var started = false
     private(set) var first = false
+    func markStarted() { started = true }
     func markFirst() { first = true }
 }
 
+/// The reply to "First" waits on `first`, any other on `second`. Chosen by
+/// the words rather than call order, so a stopped reply that never reaches
+/// the model can't hand its gate to the next one.
 private struct TwoGateModel: ModelClient {
     let first: Gate
     let second: Gate
-    let calls = Calls()
     let landed = Landed()
     var runsOnDevice: Bool { true }
 
     func reply(to transcript: [ChatTurn]) async throws -> String {
-        let call = await calls.next()
-        if call == 1 {
+        if transcript.last(where: { $0.speaker == .person })?.text == "First" {
+            await landed.markStarted()
             await first.wait()
             await landed.markFirst()
-        } else {
-            await second.wait()
+            return "Reply 1"
         }
-        return "Reply \(call)"
+        await second.wait()
+        return "Reply 2"
     }
 }
 
@@ -141,6 +139,8 @@ struct WarmthTests {
                                         names: InMemoryAgentNameStore(), replyBeat: .zero)
         controller.submit("First")
         #expect(controller.isReplying)
+        // The first reply is out at the model before it is stopped.
+        while !(await model.landed.started) { await Task.yield() }
         controller.stopReplying()
         #expect(!controller.isReplying)
         controller.submit("Second")

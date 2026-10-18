@@ -15,7 +15,7 @@ public struct MemoryView: View {
     /// With `cloud`, the screen ends with a way into the cloud setting.
     public init(store: MemoryStore, cloud: CloudHelp? = nil) {
         // Forget everything erases the words always hidden too.
-        var alsoForget: (@MainActor () throws -> Void)?
+        var alsoForget: (@MainActor () throws -> CloudHelp.Forgot)?
         if let cloud { alsoForget = { try cloud.forgetPrivateWords() } }
         _model = StateObject(wrappedValue: MemoryModel(store: store, alsoForget: alsoForget))
         self.cloud = cloud
@@ -326,10 +326,11 @@ final class MemoryModel: ObservableObject {
     /// Go up by one each time a note is saved or forgotten, for a light tap.
     @Published private(set) var savedCount = 0
     @Published private(set) var forgottenCount = 0
-    /// Anything else Forget everything erases, like the private words.
-    private let alsoForget: (@MainActor () throws -> Void)?
+    /// Anything else Forget everything erases: the private words, and
+    /// sometimes the cloud setting with them.
+    private let alsoForget: (@MainActor () throws -> CloudHelp.Forgot)?
 
-    init(store: MemoryStore, alsoForget: (@MainActor () throws -> Void)? = nil) {
+    init(store: MemoryStore, alsoForget: (@MainActor () throws -> CloudHelp.Forgot)? = nil) {
         self.store = store
         self.alsoForget = alsoForget
         refresh()
@@ -394,18 +395,24 @@ final class MemoryModel: ObservableObject {
     func forgetEverything() {
         cancelEdit()
         let notesGone = (try? store.forgetEverything()) != nil
-        let restGone = alsoForget.map { forget in (try? forget()) != nil }
-        switch (notesGone, restGone) {
-        case (true, nil), (true, true?):
+        // nil when there is nothing else; .some(nil) when it couldn't go.
+        let rest = alsoForget.map { forget in try? forget() }
+        switch (notesGone, rest) {
+        case (true, nil), (true, .privateWords?):
             status = MemoryWords.forgotten
-        case (true, false?):
+        case (true, .privateWordsAndCloud?):
+            status = CloudWords.forgotAndCloudOff
+        case (true, nil?):
             status = CloudWords.forgotNotesNotWords
-        case (false, true?):
+        case (false, .privateWords?):
             status = CloudWords.forgotWordsNotNotes
+        case (false, .privateWordsAndCloud?):
+            status = CloudWords.forgotWordsAndCloudNotNotes
         case (false, _):
             status = MemoryWords.couldNotForget
         }
-        if notesGone || restGone == true { forgottenCount += 1 }
+        let restGone = rest.map { $0 != nil } == true
+        if notesGone || restGone { forgottenCount += 1 }
         refresh()
     }
 

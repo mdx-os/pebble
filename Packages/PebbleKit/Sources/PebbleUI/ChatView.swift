@@ -559,10 +559,13 @@ final class ChatController: ObservableObject {
     }
 
     /// True when the reply stopped before anything left the device: the
-    /// person said no, the setting was off, the chat must stay here, or
-    /// the notes couldn't be read.
+    /// person said no, the setting was off, the chat must stay here, the
+    /// notes couldn't be read, or the transport refused a request whose
+    /// labels weren't the ones shown. Any other transport failure may have
+    /// come after the bytes went, so the turn stays.
     nonisolated static func nothingWasSent(_ error: Error) -> Bool {
-        switch error as? CloudModelError {
+        if error as? CloudTransportError == .headersNotShown { return true }
+        return switch error as? CloudModelError {
         case .notSent, .off, .staysHere, .notesUnreadable: true
         case .unreadableReply, nil: false
         }

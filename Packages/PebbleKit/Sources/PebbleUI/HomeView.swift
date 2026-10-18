@@ -326,6 +326,14 @@ public struct HomeView: View {
         } else {
             // The store couldn't be opened. Say so rather than hide memory.
             // It is only opened again at launch, so the words say that.
+            //
+            // The cloud setting is reached only through the memory screen,
+            // so there is no way to it from here. That is all right for now:
+            // its file sits in the same folder, so it fails to open with the
+            // notes, and with no notes to read the redactor refuses to send
+            // anything anyway. If the setting ever lives somewhere that can
+            // open on its own, give it a route here too, so the person can
+            // still turn it off.
             ZStack {
                 Backdrop()
                 GentleNotice(text: MemoryWords.couldNotOpen)
