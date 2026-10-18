@@ -24,8 +24,9 @@ final class FeedModel: ObservableObject {
     /// Moves a scripted engine's clock with real time, for the live showcase.
     let drivesTasks: Bool
     /// Where the person's words go, passed down from the model so copy that
-    /// mentions the device never drifts from it.
-    let place: PrivacyPlace
+    /// mentions the device never drifts from it. `HomeView` keeps it up to
+    /// date as chats start and the cloud setting changes.
+    @Published var place: PrivacyPlace
     private let sources: [any FeedSource]
     /// This model's watch on `needsYou`, ended when the model goes, so a
     /// closed window leaves nothing behind.
@@ -688,6 +689,8 @@ struct FeedCard: View {
             .accessibilityHint(action.hint)
             // Voice Control users can say the words they see on the card.
             .accessibilityInputLabels([Text(action.title), Text(item.title)])
+            // Not redundant: `children: .ignore` makes a new element without
+            // the button's trait. The UI tests find these cards as buttons.
             .accessibilityAddTraits(.isButton)
         } else {
             content(actionTitle: nil)

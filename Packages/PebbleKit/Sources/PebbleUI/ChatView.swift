@@ -165,6 +165,7 @@ public struct ChatView: View {
         .onAppear {
             // Sent from Today, the line may be answered, or still on its
             // way, before this screen was here to see it change.
+            Self.cameBack(controller)
             speak(Self.arrival(for: controller, covered: covered))
         }
         .onDisappear {
@@ -313,6 +314,13 @@ public struct ChatView: View {
         controller.leftChat()
     }
 
+    /// The person came back to the chat. A reply still on its way when they
+    /// left will land in front of them, so VoiceOver reads it as it lands,
+    /// as a sighted person sees it.
+    static func cameBack(_ controller: ChatController) {
+        controller.cameBack()
+    }
+
     /// Where the thinking dots sit, so the chat can follow them.
     static let thinkingID = "thinking"
 
@@ -414,9 +422,9 @@ final class ChatController: ObservableObject {
         didSet {
             // "What you wrote is still here" stops being true once the
             // person clears the words, so the line goes with them.
-            if failure == FirstConversation.couldNotAnswer,
+            if let failure, Self.pointsAtTheDraft(failure),
                draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                failure = nil
+                self.failure = nil
             }
         }
     }
@@ -455,23 +463,28 @@ final class ChatController: ObservableObject {
     /// The shortest time the thinking dots show, so a quick reply settles
     /// in after a calm beat instead of snapping onto the screen.
     let replyBeat: Duration
+    /// Where a cloud chat shows its previews. Nil for a chat on this device.
+    let review: CloudReview?
 
     init(brand: Brand, model: any ModelClient, names: any AgentNameStoring,
-         replyBeat: Duration = .milliseconds(600)) {
+         replyBeat: Duration = .milliseconds(600), review: CloudReview? = nil) {
         self.brand = brand
         self.model = model
         self.names = names
         self.replyBeat = replyBeat
+        self.review = review
         let profile = AgentProfile(brand: brand, stored: names.loadDisplayName())
         naming = AgentRenameState(profile: profile)
-        // The privacy line is decided once here. If the model can ever be
-        // swapped, rebuild the opening so it never promises too much.
+        // The privacy line is decided once here, from this chat's model,
+        // which it keeps for life. A new chat gets a new controller.
         conversation = .firstRun(named: profile.displayName.text, place: model.privacyPlace)
     }
 
     static func make(brand: Brand, model: any ModelClient, names: any AgentNameStoring,
-                     conversation: Conversation?) -> ChatController {
-        let controller = ChatController(brand: brand, model: model, names: names)
+                     conversation: Conversation?, review: CloudReview? = nil,
+                     replyBeat: Duration = .milliseconds(600)) -> ChatController {
+        let controller = ChatController(brand: brand, model: model, names: names, replyBeat: replyBeat,
+                                        review: review)
         // A given conversation is used only when its privacy promise
         // matches the model; otherwise the honest opening stands.
         if let conversation, conversation.place == model.privacyPlace {
@@ -541,9 +554,15 @@ final class ChatController: ObservableObject {
         // not added twice. Said again after an answer, they are a new line.
         let isRetry = lastLineUnanswered
             && (conversation.turns.last.map { $0.speaker == .person && $0.text == trimmed } ?? false)
-        if !isRetry {
+        // The line this send asks about, so words that were never sent can
+        // leave the chat again: the one already there on a retry.
+        let personID: UUID
+        if isRetry, let last = conversation.turns.last {
+            personID = last.id
+        } else {
+            personID = UUID()
             do {
-                conversation = try conversation.appendingPerson(trimmed)
+                conversation = try conversation.appendingPerson(trimmed, id: personID)
             } catch {
                 return
             }
@@ -567,10 +586,12 @@ final class ChatController: ObservableObject {
         replyTask = Task {
             let started = ContinuousClock.now
             let next: Conversation?
+            var error: Error?
             do {
                 next = try await snapshot.appendingReply(from: client)
-            } catch {
+            } catch let thrown {
                 next = nil
+                error = thrown
             }
             let waited = ContinuousClock.now - started
             if !caring, waited < beat { try? await Task.sleep(for: beat - waited) }
@@ -583,16 +604,78 @@ final class ChatController: ObservableObject {
                 unheardReply = generation == leftGeneration ? nil
                     : next.turns.last.flatMap { $0.speaker == .agent ? $0.text : nil }
                 conversation = next
+            } else if let error, Self.nothingWasSent(error) {
+                // Words that were not sent leave the conversation, so no
+                // later request carries them. They go back to the composer,
+                // ahead of anything typed since, which is never replaced.
+                conversation = conversation.removingTurn(personID)
+                // Gone from the chat, so sending them again adds them again.
+                lastLineUnanswered = false
+                draft = Self.draft(givingBack: trimmed, to: draft)
+                failure = Self.failureLine(for: error)
             } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 // The failure line promises the words are back, ready to send.
                 draft = trimmed
-                failure = FirstConversation.couldNotAnswer
+                failure = Self.failureLine(for: error)
             } else {
                 // A newer draft is never replaced, so point at the bubble instead.
                 failure = FirstConversation.couldNotAnswerKeptDraft
             }
             isReplying = false
         }
+    }
+
+    /// What to say when no reply came. Choosing not to send is not a failure.
+    nonisolated static func failureLine(for error: Error?) -> String {
+        switch error as? CloudModelError {
+        case .notSent: CloudWords.notSent
+        case .off: CloudWords.turnedOff
+        case .staysHere: CloudWords.staysHere
+        case .notesUnreadable: CloudWords.notesUnreadable
+        default: FirstConversation.couldNotAnswer
+        }
+    }
+
+    /// True for a line that says the words are back in the composer, so it
+    /// goes once the person clears them.
+    nonisolated static func pointsAtTheDraft(_ failure: String) -> Bool {
+        [FirstConversation.couldNotAnswer, CloudWords.notSent, CloudWords.notesUnreadable].contains(failure)
+    }
+
+    /// The words that weren't sent, back in the composer. Anything typed
+    /// since is kept after them, never replaced.
+    nonisolated static func draft(givingBack words: String, to draft: String) -> String {
+        let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return typed.isEmpty ? words : words + "\n" + draft
+    }
+
+    /// True when the reply stopped before anything left the device: the
+    /// person said no, the setting was off, the chat must stay here, the
+    /// notes couldn't be read, the transport refused a request whose
+    /// labels weren't the ones shown, or the reply was cancelled before it
+    /// reached the transport. `CloudModel` throws `CancellationError` only
+    /// from its own check right after the yes, before the transport is
+    /// called; URLSession reports a send cut short as a `URLError`, which
+    /// is not counted here. Any other transport failure may have come
+    /// after the bytes went, so the turn stays.
+    nonisolated static func nothingWasSent(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if error as? CloudTransportError == .headersNotShown { return true }
+        return switch error as? CloudModelError {
+        case .notSent, .off, .staysHere, .notesUnreadable: true
+        case .unreadableReply, nil: false
+        }
+    }
+
+    /// The home screen went away. A preview still waiting for an answer is
+    /// not sent, so the reply never hangs on a sheet no one can see.
+    func screenWentAway() {
+        review?.cancelPending()
+    }
+
+    /// Waits for the current reply to settle, with no timing involved. For tests.
+    func settled() async {
+        await replyTask?.value
     }
 
     /// Stops a reply that is still coming, as when a new chat replaces this
@@ -618,6 +701,12 @@ final class ChatController: ObservableObject {
     func leftChat() {
         unheardReply = nil
         if isReplying { leftGeneration = replyGeneration }
+    }
+
+    /// The chat is on screen again. A reply still coming is theirs to hear
+    /// once more: it lands in front of them, so it is read like any other.
+    func cameBack() {
+        leftGeneration = nil
     }
 
     /// The failure line nobody has heard yet, handed over once.

@@ -69,12 +69,12 @@ enum Theme {
     /// (about 2.5 to 1), so it is a deep brown of the same warmth, well over
     /// the 4.5 to 1 small text needs.
     static let onAccent = onAccentRGB.color
+    static let onAccentRGB = RGB(red: 0.20, green: 0.10, blue: 0.04)
 
     /// Words on `tintFill`, as on the sidebar's chosen row: white, which
     /// reads at over 4.5 to 1 there in both schemes. Only ever on that fill:
     /// `ContrastLint` keeps it to `FillButtonStyle` and HomeSplit's chosen row.
     static let onTintFill = RGB.white.color
-    static let onAccentRGB = RGB(red: 0.20, green: 0.10, blue: 0.04)
 
     /// How strongly the accent tints a soft button, a chip or a pill.
     static let accentWash = 0.14
@@ -84,6 +84,12 @@ enum Theme {
     static let fieldTint = 0.06
     /// How strongly the primary ink tints a button that can't be pressed yet.
     static let disabledTint = 0.08
+
+    /// How strongly the accent marks what was taken out of a cloud preview,
+    /// such as `[name]`, behind the primary words on the payload card.
+    static func maskWash(_ scheme: ColorScheme) -> Double {
+        scheme == .dark ? 0.45 : 0.28
+    }
 
     /// A color for words that reads well in light and dark: `light` in
     /// light mode and `dark` in dark mode.
@@ -152,6 +158,12 @@ enum Theme {
         }
         // Words on the accent fill: the primary button, "Have a look", Send.
         pairs.append(TextPair(text: "onAccent", background: "accent", textColor: onAccentRGB, backgroundColor: accentRGB))
+        for (name, base) in bases {
+            let card = RGB.white.over(base, opacity: cardOpacity(scheme))
+            // A mask such as [name] in the cloud preview's payload card.
+            pairs.append(TextPair(text: "primary", background: "mask on the card on \(name)",
+                                  textColor: ink, backgroundColor: accentRGB.over(card, opacity: maskWash(scheme))))
+        }
         // White words a system control writes on its tint fill: the selected
         // sidebar row and a confirmation button (`DoneButton`).
         pairs.append(TextPair(text: "white", background: "tintFill", textColor: .white, backgroundColor: tintFill.rgb(scheme)))
@@ -328,8 +340,14 @@ struct DoneButton: View {
 
 /// White words on a capsule of `Theme.tintFill`, for `DoneButton`. Not
 /// ready yet, it goes quiet gray on a neutral fill, as the other buttons do.
+///
+/// A style of its own gets no focus ring and no pointer highlight from the
+/// system, so it draws a ring of the fill around itself while the keyboard
+/// is on it (Full Keyboard Access on the Mac, a hardware keyboard on iPad)
+/// and takes the iPad pointer's highlight.
 struct FillButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.isFocused) private var isFocused
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -339,7 +357,13 @@ struct FillButtonStyle: ButtonStyle {
             .frame(minHeight: 44)
             .background(isEnabled ? AnyShapeStyle(Theme.tintFill) : AnyShapeStyle(Color.primary.opacity(Theme.disabledTint)),
                         in: Capsule())
+            .overlay {
+                if isFocused {
+                    Capsule().strokeBorder(Theme.tintFill, lineWidth: 2).padding(-4)
+                }
+            }
             .contentShape(Capsule())
+            .pointerHover(in: Capsule())
             .opacity(configuration.isPressed ? 0.7 : 1)
     }
 }

@@ -1,3 +1,4 @@
+import Combine
 import PebbleCore
 import PebbleModel
 #if canImport(SwiftUI)
@@ -13,10 +14,12 @@ import SwiftUI
 /// conversation and the feed are kept here, so changing the window's shape
 /// never loses them.
 ///
-/// Everything the screen holds (the chat, Today and the memory) takes the
-/// active model's privacy place once, when it is made. So the screen is
-/// keyed on the model: another model starts it fresh, and no word keeps
-/// promising the device after words may leave it, or the other way round.
+/// The screen is keyed on the model it is given, the one that runs here:
+/// another model starts it fresh, so no word keeps promising the device
+/// after words may leave it, or the other way round. The cloud setting is
+/// not part of that key. Turning it on or off never makes a new screen, so
+/// an open cloud chat stays open; instead the screen works out where words
+/// go (`surfacePlace`) and pushes each change into Today and the memory.
 public struct HomeView: View {
     let screen: HomeScreen
 
@@ -32,10 +35,12 @@ public struct HomeView: View {
         looks: UserDefaults = .standard,
         feed: [any FeedSource] = [EmptyFeedSource()],
         needsYou: NeedsYou = NeedsYou(),
-        tasks: (any TaskEngine)? = nil
+        tasks: (any TaskEngine)? = nil,
+        cloud: CloudHelp? = nil
     ) {
         self.init(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
-                  looks: looks, conversation: nil, section: .today, feed: feed, needsYou: needsYou, tasks: tasks)
+                  looks: looks, conversation: nil, section: .today, feed: feed, needsYou: needsYou, tasks: tasks,
+                  cloud: cloud)
     }
 
     /// Opens on a given conversation, section and feed, for screenshots and tests.
@@ -54,11 +59,12 @@ public struct HomeView: View {
         needsYou: NeedsYou,
         tasks: (any TaskEngine)? = nil,
         drivesTasks: Bool = false,
-        now: @escaping () -> Date = { Date() }
+        now: @escaping () -> Date = { Date() },
+        cloud: CloudHelp? = nil
     ) {
         self.init(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                   looks: looks, conversation: conversation, section: section, feed: feed,
-                  needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, now: now, log: nil)
+                  needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, now: now, cloud: cloud, log: nil)
     }
 
     /// The same, writing down what the screen makes in `log`, for tests.
@@ -76,11 +82,13 @@ public struct HomeView: View {
         tasks: (any TaskEngine)? = nil,
         drivesTasks: Bool = false,
         now: @escaping () -> Date = { Date() },
+        cloud: CloudHelp? = nil,
         log: HomeScreenLog?
     ) {
         screen = HomeScreen(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                             looks: looks, conversation: conversation, section: section, feed: feed,
-                            needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, now: now, log: log)
+                            needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, now: now, cloud: cloud,
+                            log: log)
     }
 
     /// Which model the screen was made for: its kind and where its words
@@ -95,8 +103,10 @@ public struct HomeView: View {
     }
 
     public var body: some View {
-        // Load-bearing: the screen's state objects keep the place they were
-        // made with, so only a new identity can change it.
+        // Load-bearing: the screen's state objects keep the model they were
+        // made with, so only a new identity can change it. The cloud model
+        // a chat may get is not here: it is picked per chat, and the places
+        // that read it follow `surfacePlace` instead.
         screen.id(Self.identity(of: screen.model))
     }
 
@@ -105,15 +115,33 @@ public struct HomeView: View {
     static func feedModel(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)? = nil,
                           drivesTasks: Bool = false, model: any ModelClient,
                           now: @escaping () -> Date) -> FeedModel {
-        FeedModel(sources: sources, needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
+        feedModel(sources: sources, needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
                   place: model.privacyPlace, now: now)
+    }
+
+    /// The same, from a place already worked out, as the home screen does
+    /// with the cloud setting in it.
+    static func feedModel(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)? = nil,
+                          drivesTasks: Bool = false, place: PrivacyPlace,
+                          now: @escaping () -> Date) -> FeedModel {
+        FeedModel(sources: sources, needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
+                  place: place, now: now)
     }
 
     /// The memory screen's model, with its privacy place from the active
     /// model, the same way. Forget everything forgets the tasks too.
     static func memoryModel(store: MemoryStore, model: any ModelClient, log: HomeScreenLog? = nil,
                             onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) -> MemoryModel {
-        let memory = MemoryModel(store: store, place: model.privacyPlace, onForgetEverything: onForgetEverything)
+        memoryModel(store: store, place: model.privacyPlace, log: log, onForgetEverything: onForgetEverything)
+    }
+
+    /// The same, from a place already worked out. With `cloud`, Forget
+    /// everything erases the words always hidden too.
+    static func memoryModel(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp? = nil,
+                            log: HomeScreenLog? = nil,
+                            onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) -> MemoryModel {
+        let memory = MemoryModel(store: store, place: place, alsoForget: MemoryView.alsoForget(cloud),
+                                 onForgetEverything: onForgetEverything)
         log?.memories.append(memory)
         return memory
     }
@@ -122,6 +150,35 @@ public struct HomeView: View {
     @discardableResult
     static func sendsFromToday(_ line: String, chat: ChatController) -> Bool {
         chat.send(line)
+    }
+
+    /// A new chat with the model the setting picks now. A chat keeps the
+    /// model it started with, so its opening line stays true; changing the
+    /// cloud setting counts from the next new chat. A cloud chat gets its
+    /// own preview gate, shown over the home screen that holds it.
+    static func newChat(brand: Brand, model: any ModelClient, names: any AgentNameStoring, cloud: CloudHelp?,
+                        conversation: Conversation?) -> ChatController {
+        let review = CloudReview()
+        let chatModel = cloud?.chatModel(local: model, review: review) ?? model
+        return ChatController.make(brand: brand, model: chatModel, names: names, conversation: conversation,
+                                   review: chatModel.privacyPlace.staysOnDevice ? nil : review)
+    }
+
+    /// The flag every device line outside a chat reads: memory, Today's
+    /// sample note, the hello and the cloud setting. On the device only
+    /// when both the open chat and the next new one are, so with the cloud
+    /// on it never promises the device. The chat's own lines read
+    /// `ChatController.privacyPlace` alone. See `PrivacyPlace`.
+    static func surfacePlace(chat: PrivacyPlace?, newChat: PrivacyPlace) -> PrivacyPlace {
+        PrivacyPlace.all(chat ?? newChat, newChat)
+    }
+
+    /// The fallback memory screen's forget, apart from the screen, so tests
+    /// can drive it: every task, then the private words, each whatever
+    /// happens to the other.
+    static func forgetWithoutNotes(cloud: CloudHelp?, forgetTasks: () -> Void) -> CloudHelp.WordsErased? {
+        forgetTasks()
+        return cloud?.eraseWordsWithoutNotes()
     }
 }
 
@@ -142,11 +199,15 @@ struct HomeScreen: View {
     let onboarding: any OnboardingStoring
     let memory: MemoryStore?
     let looks: UserDefaults
+    /// The cloud setting. Nil, or off, means every chat stays on this device.
+    let cloud: CloudHelp?
     let log: HomeScreenLog?
 
     @State private var finished: Bool
     @State private var firstMessage: String?
-    @State private var chat: ChatController?
+    /// The open chat. Kept in a `StateObject` so it is made once, the first
+    /// time the home screen shows, and never by a rebuild of this struct.
+    @StateObject private var chats: ChatSlot
     @State private var section: HomeSection?
     /// On a narrow screen, whether the memory was opened from the chat, so
     /// closing it goes back there rather than to Today.
@@ -155,6 +216,18 @@ struct HomeScreen: View {
     @State private var asksNewChat = false
     /// What to do once the open sheet has finished closing.
     @State private var handoff = SheetHandoff()
+    /// The `privacyPlace` of the model a new chat would get now, kept in
+    /// step with the cloud setting.
+    @State private var newChatPlace: PrivacyPlace
+    /// A cloud chat's preview is waiting for its answer, on screen or held
+    /// back until another sheet closes. It covers the home screen.
+    @State private var previewWaiting = false
+    /// What the fallback memory screen did with the private words when
+    /// the tasks went. Nil until it has tried.
+    @State private var wordsErased: CloudHelp.WordsErased?
+    /// Every change to the cloud setting, as it is about to be set. Made
+    /// once, so a redraw never subscribes again.
+    @State private var cloudSettings: AnyPublisher<CloudHelpSettings, Never>
     @StateObject private var feed: FeedModel
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -175,6 +248,7 @@ struct HomeScreen: View {
         tasks: (any TaskEngine)?,
         drivesTasks: Bool,
         now: @escaping () -> Date,
+        cloud: CloudHelp?,
         log: HomeScreenLog?
     ) {
         self.brand = brand
@@ -183,17 +257,41 @@ struct HomeScreen: View {
         self.onboarding = onboarding
         self.memory = memory
         self.looks = looks
+        self.cloud = cloud
         self.log = log
-        _feed = StateObject(wrappedValue: HomeView.feedModel(sources: feed, needsYou: needsYou, tasks: tasks,
-                                                             drivesTasks: drivesTasks, model: model, now: now))
+        // One store for the notes: the redactor must read the same notes
+        // the memory screen writes.
+        assert(cloud.map { $0.memory === memory } ?? true, "Pass the same MemoryStore to CloudHelp and HomeView")
         let needed = OnboardingFlow.isNeeded(store: onboarding, names: names)
         // People who named their agent before the first run existed count as finished.
         if !needed, !onboarding.hasFinished() { onboarding.markFinished() }
         _finished = State(initialValue: !needed)
         // The chat starts after the first run so it opens with the chosen name.
-        _chat = State(initialValue: needed ? nil
-            : ChatController.make(brand: brand, model: model, names: names, conversation: conversation))
+        // `StateObject` makes it only once, so a rebuild of this struct makes
+        // no chat, no preview gate and no cloud transport.
+        _chats = StateObject(wrappedValue: ChatSlot(needed ? nil
+            : HomeView.newChat(brand: brand, model: model, names: names, cloud: cloud, conversation: conversation)))
+        let newChatPlace = cloud?.privacyPlace(local: model) ?? model.privacyPlace
+        _newChatPlace = State(initialValue: newChatPlace)
+        // A chat made now gets the model the setting picks now, so this is
+        // its place too. A rebuild must never work it out from a chat that
+        // isn't the one open. The `onChange` of `surfacePlace` in `body`
+        // keeps it true, and the memory screen hands it to the setting.
+        _feed = StateObject(wrappedValue: HomeView.feedModel(sources: feed, needsYou: needsYou, tasks: tasks,
+                                                             drivesTasks: drivesTasks, place: newChatPlace, now: now))
         _section = State(initialValue: section)
+        _cloudSettings = State(initialValue: cloud?.$settings.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher())
+    }
+
+    private func newChat() -> ChatController {
+        HomeView.newChat(brand: brand, model: model, names: names, cloud: cloud, conversation: nil)
+    }
+
+    private var chat: ChatController? { chats.chat }
+
+    /// See `HomeView.surfacePlace`.
+    private var surfacePlace: PrivacyPlace {
+        HomeView.surfacePlace(chat: chat?.privacyPlace, newChat: newChatPlace)
     }
 
     /// True when the window is wide enough for a sidebar.
@@ -224,10 +322,11 @@ struct HomeScreen: View {
                 .transition(.opacity)
                 .onAppear { log?.chats.append(chat) }
             } else {
+                // No chat yet, so the hello speaks for the one about to start.
                 OnboardingView(brand: brand, names: names, store: onboarding, looks: looks,
-                               place: model.privacyPlace) { line in
+                               place: surfacePlace) { line in
                     firstMessage = line
-                    chat = ChatController.make(brand: brand, model: model, names: names, conversation: nil)
+                    chats.chat = newChat()
                     withAnimation(.easeInOut(duration: 0.4)) { finished = true }
                 }
                 .transition(.opacity)
@@ -263,6 +362,22 @@ struct HomeScreen: View {
                 memoryOverChat = false
             }
         }
+        // The flag every device line outside the chat reads, kept in step
+        // with the cloud setting and with the chat that is open.
+        .onReceive(cloudSettings) { settings in
+            newChatPlace = cloud?.privacyPlace(local: model, settings: settings) ?? model.privacyPlace
+        }
+        .onChange(of: surfacePlace, initial: true) { _, place in
+            feed.place = place
+        }
+        // What a cloud chat would send, over whichever screen is in front,
+        // so a line sent from Today's composer is previewed too. It waits,
+        // unsent, while another sheet or a question is open, and while it
+        // waits it covers the home screen like any sheet (`HomeCover`).
+        .cloudPreview(chat?.review, blocked: cover.anySheetOpen || cover.questionOpen,
+                      waiting: $previewWaiting)
+        // A preview can't wait on a window that is gone, so it is not sent.
+        .onDisappear { chat?.screenWentAway() }
         .sheet(isPresented: $showsShortcuts, onDismiss: sheetClosed) {
             KeyboardShortcutsView()
         }
@@ -286,8 +401,9 @@ struct HomeScreen: View {
             Text(HomeWords.newChatDetail)
         }
         .focusedSceneValue(\.homeActions, HomeActions(
-            // A question on screen waits for its answer; no shortcut sweeps it away.
-            canNavigate: finished && feed.reviewing == nil,
+            // A question or a cloud preview on screen waits for its answer;
+            // no shortcut sweeps it away.
+            canNavigate: finished && !cover.waitsForAnAnswer,
             newChat: startNewChat,
             show: { place in afterClosingSheets { go(place) } },
             showShortcuts: { afterClosingSheets { showsShortcuts = true } }
@@ -312,8 +428,10 @@ struct HomeScreen: View {
     /// Today's composer sends the way the chat's does, through
     /// `ChatController.send` into the same conversation, so care comes
     /// first and nothing can act without asking. Then the chat opens on it.
+    /// In a cloud chat the line goes through the same preview as one typed
+    /// in the chat, shown over the chat as it opens.
     private func send(fromToday line: String) {
-        guard let chat, feed.reviewing == nil, HomeView.sendsFromToday(line, chat: chat) else { return }
+        guard let chat, !cover.waitsForAnAnswer, HomeView.sendsFromToday(line, chat: chat) else { return }
         // The person's own words went first, so a line picked during the
         // first run is no longer waiting to be sent.
         firstMessage = nil
@@ -336,9 +454,10 @@ struct HomeScreen: View {
 
     /// A question can't show over a sheet, so close any sheet first and ask
     /// once it has gone. Nothing open means no wait.
-    /// A question on screen is never closed for this; it waits for its answer.
+    /// A question or a cloud preview is never closed for this; it waits for
+    /// its answer.
     private func afterClosingSheets(_ then: @escaping () -> Void) {
-        guard feed.reviewing == nil else { return }
+        guard !cover.waitsForAnAnswer else { return }
         let closesMemory = cover.memorySheetOpen
         let after = closesMemory ? (memoryOverChat ? HomeSection.chat : .today) : section
         // Run once the sheet has finished closing, not after a guessed time,
@@ -356,7 +475,8 @@ struct HomeScreen: View {
     /// Command Return, the handoff and the chat's quiet always agree.
     private var cover: HomeCover {
         HomeCover(usesSidebar: usesSidebar, section: section, showsShortcuts: showsShortcuts,
-                  readerOpen: feed.reading != nil, questionOpen: feed.reviewing != nil)
+                  readerOpen: feed.reading != nil, questionOpen: feed.reviewing != nil,
+                  previewOpen: previewWaiting)
     }
 
     /// A sheet finished closing. What was waiting runs only if nothing is
@@ -369,7 +489,7 @@ struct HomeScreen: View {
         guard finished else { return }
         chat?.stopReplying()
         firstMessage = nil
-        chat = ChatController.make(brand: brand, model: model, names: names, conversation: nil)
+        chats.chat = newChat()
         section = .chat
     }
 
@@ -450,20 +570,52 @@ struct HomeScreen: View {
             .id(ObjectIdentifier(chat))
     }
 
+    /// The fallback memory screen's forget: every task, then the private
+    /// words, each whatever happens to the other.
+    private func forgetTasksWithoutNotes() {
+        wordsErased = HomeView.forgetWithoutNotes(cloud: cloud) { feed.forgetTasks() }
+    }
+
     @ViewBuilder
     private var memoryScreen: some View {
         if let memory {
             // Built inside MemoryView's StateObject, once per screen, never
-            // on each pass through here.
-            MemoryView(model: HomeView.memoryModel(store: memory, model: model, log: log,
-                                                   onForgetEverything: { feed.forgetTasks() }))
+            // on each pass through here. `place` then keeps its words in
+            // step with the cloud setting and the open chat.
+            MemoryView(model: HomeView.memoryModel(store: memory, place: surfacePlace, cloud: cloud, log: log,
+                                                   onForgetEverything: { feed.forgetTasks() }),
+                       place: surfacePlace, cloud: cloud)
         } else {
             // The store couldn't be opened. Say so rather than hide memory.
             // Tasks can still be forgotten here, since Forget everything isn't.
+            //
+            // The cloud setting is reached only through the memory screen,
+            // so it has no way in from here, and that is safe. The notes
+            // folder is the only place either can be kept, so if it can't
+            // be opened the setting's file can't be either: the app makes
+            // the setting with `CloudHelp.couldNotOpen`, which reads as off,
+            // can't be turned on and says why. Even if it could, with no
+            // notes to read the redactor refuses to send anything. If the
+            // setting is ever kept somewhere that opens on its own, give it
+            // a route here, so it can always be seen and turned off.
+            //
+            // Private words kept from an earlier launch go with the tasks,
+            // through `CloudHelp.eraseWordsWithoutNotes`, and the line says
+            // whether they could.
             MemoryUnavailableView(hasTasks: feed.hasTasks, forgotten: feed.tasksForgotten,
-                                  underway: feed.forgotUnderway, onForgetTasks: { feed.forgetTasks() })
+                                  underway: feed.forgotUnderway, wordsErased: wordsErased,
+                                  erasesWords: cloud != nil, onForgetTasks: forgetTasksWithoutNotes)
         }
     }
+}
+
+/// The home screen's open chat. Starting a new one replaces it, which
+/// redraws the home screen.
+@MainActor
+final class ChatSlot: ObservableObject {
+    @Published var chat: ChatController?
+
+    init(_ chat: ChatController?) { self.chat = chat }
 }
 
 /// The chat's composer, at the foot of Today. It shares the chat's draft,
@@ -569,16 +721,23 @@ struct HomeCover: Equatable {
     var readerOpen: Bool
     /// A question waiting for its answer.
     var questionOpen: Bool
+    /// A cloud chat's preview waiting for its answer: on screen, or held
+    /// back, unsent, until the sheet in front of it closes.
+    var previewOpen = false
 
     /// On a narrow window the memory opens as a sheet over the chat or Today.
     var memorySheetOpen: Bool { !usesSidebar && section == .memory }
 
-    /// Any sheet but a question: the shortcuts, a piece of work to read, or
-    /// the memory on a narrow window.
+    /// Any sheet but a question or a preview: the shortcuts, a piece of
+    /// work to read, or the memory on a narrow window.
     var anySheetOpen: Bool { showsShortcuts || readerOpen || memorySheetOpen }
 
+    /// A question or a preview is up. Each waits for its answer, so no
+    /// shortcut, handoff or send from Today sweeps it away.
+    var waitsForAnAnswer: Bool { questionOpen || previewOpen }
+
     /// The chat says nothing aloud while anything covers it.
-    var chatIsCovered: Bool { anySheetOpen || questionOpen }
+    var chatIsCovered: Bool { anySheetOpen || waitsForAnAnswer }
 
     /// Command Return may send a chat line only with nothing in front.
     var chatSendsFromKeyboard: Bool { !chatIsCovered }
@@ -658,7 +817,7 @@ struct HomeSplit<TodayScreen: View, ChatScreen: View, MemoryScreen: View>: View 
         NavigationSplitView {
             List(selection: $section) {
                 ForEach(HomeSection.allCases, id: \.self) { place in
-                    let chosen = Self.isChosen(place, section: section)
+                    let chosen = Self.isChosen(place, section: section) && Self.drawsOwnFill
                     let count = place == .today ? needsYouCount : 0
                     NavigationLink(value: place) {
                         HStack {
@@ -669,6 +828,8 @@ struct HomeSplit<TodayScreen: View, ChatScreen: View, MemoryScreen: View>: View 
                                 Spacer()
                                 Text(count, format: .number)
                                     .monospacedDigit()
+                                    // Heard as what it counts, not a bare number.
+                                    .accessibilityLabel(Self.spokenCount(count))
                             }
                         }
                         .foregroundStyle(chosen ? AnyShapeStyle(Theme.onTintFill) : AnyShapeStyle(.primary))
@@ -704,9 +865,26 @@ struct HomeSplit<TodayScreen: View, ChatScreen: View, MemoryScreen: View>: View 
         }
     }
 
+    /// Whether the chosen row draws its own fill, with white words on it.
+    /// Only iOS, which draws the chosen row in gray glass. The Mac draws its
+    /// own selection, and turns it gray when the list loses focus, which
+    /// would leave white words on gray, so there the system's stands.
+    static var drawsOwnFill: Bool {
+        #if os(iOS)
+        true
+        #else
+        false
+        #endif
+    }
+
     /// The row drawn chosen: the selection, or Today before there is one.
     static func isChosen(_ place: HomeSection, section: HomeSection?) -> Bool {
         place == (section ?? .today)
+    }
+
+    /// What VoiceOver hears for the count the chosen row draws itself.
+    static func spokenCount(_ count: Int) -> String {
+        HomeWords.waiting(count)
     }
 
     /// What VoiceOver hears of a row: chosen exactly when it is drawn so.
@@ -748,6 +926,13 @@ public struct HomeCommands: Commands {
 
     public init() {}
 
+    /// Command 1 to Command 9 for the first nine places. A tenth gets no
+    /// shortcut rather than a key that doesn't exist.
+    static func goShortcut(for index: Int) -> KeyboardShortcut? {
+        guard (0..<9).contains(index) else { return nil }
+        return KeyboardShortcut(KeyEquivalent(Character(String(index + 1))))
+    }
+
     public var body: some Commands {
         CommandGroup(replacing: .newItem) {
             Button(HomeWords.newChatTitle) { actions?.newChat() }
@@ -758,7 +943,7 @@ public struct HomeCommands: Commands {
             // Numbered in sidebar order, the way Apple's apps do it.
             ForEach(Array(HomeSection.allCases.enumerated()), id: \.element) { index, place in
                 Button(place.title) { actions?.show(place) }
-                    .keyboardShortcut(KeyEquivalent(Character(String(index + 1))))
+                    .keyboardShortcut(Self.goShortcut(for: index))
                     .disabled(actions?.canNavigate != true)
             }
         }

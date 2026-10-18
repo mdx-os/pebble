@@ -1,9 +1,9 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test repeat-test build screenshots ui-screenshots device-screenshots ui-test brand-check secrets-check pulse clean
+.PHONY: verify generate test repeat-test build build-release screenshots ui-screenshots device-screenshots ui-test brand-check local-config-check secrets-check pulse clean
 
 ## verify: everything CI runs. Run this before every PR.
-verify: brand-check test build screenshots
+verify: brand-check local-config-check test build build-release screenshots
 
 ## generate: create Pebble.xcodeproj from project.yml (the project file is not committed)
 generate:
@@ -28,6 +28,12 @@ build: generate
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -destination 'platform=macOS,arch=arm64' -derivedDataPath $(DERIVED)
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -destination 'generic/platform=iOS Simulator' -derivedDataPath $(DERIVED) CODE_SIGNING_ALLOWED=NO
 
+## build-release: compile the app in Release for macOS and the iOS Simulator, so
+## code kept to Debug (the showcase screens) can never break a shipped build
+build-release: generate
+	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath $(DERIVED)
+	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath $(DERIVED) CODE_SIGNING_ALLOWED=NO
+
 ## screenshots: first screen on iPhone, iPad and Mac, written to build/screenshots,
 ## plus the dark iPad sidebar and the sheets with Done. Fails unless the dark
 ## shots show the orange fill with white words on it (scripts/check-screenshots.sh).
@@ -49,19 +55,26 @@ device-screenshots: generate
 		sh scripts/device-screenshots.sh $(or $(OUT),build/screenshots/devices)
 
 ## ui-test: drive the app in the Simulator: the iPad sidebar, Return to send,
-## and the keyboard shortcuts, on an iPad and an iPhone
+## the keyboard shortcuts and the cloud screens, on an iPad and an iPhone
 ui-test: generate
 	xcodebuild test -quiet -project Pebble.xcodeproj -scheme Pebble -derivedDataPath $(DERIVED) \
 		-destination 'platform=iOS Simulator,name=$(or $(PEBBLE_IPAD),iPad Pro 13-inch (M5))' \
 		-destination 'platform=iOS Simulator,name=$(or $(PEBBLE_IPHONE),iPhone 17 Pro)' \
-		-only-testing:PebbleAppUITests/HomeLayoutUITests
+		-only-testing:PebbleAppUITests/HomeLayoutUITests \
+		-only-testing:PebbleAppUITests/CloudUITests
 
 ## brand-check: the product name must live only in Config/Brand.xcconfig
 brand-check:
 	sh scripts/brand-check.sh
 
-## secrets-check: scan git history for leaked secrets
+## local-config-check: fail if Config/Cloud.local.xcconfig is tracked by git
+local-config-check:
+	sh scripts/local-config-check.sh
+
+## secrets-check: scan git history for leaked secrets, and fail if the
+## one-machine Config/Cloud.local.xcconfig is ever tracked
 secrets-check:
+	sh scripts/local-config-check.sh
 	gitleaks git --no-banner --redact .
 
 clean:

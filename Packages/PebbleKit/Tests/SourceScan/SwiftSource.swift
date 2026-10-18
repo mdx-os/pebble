@@ -184,6 +184,10 @@ public struct SwiftSource: Sendable {
     /// Every call to one of `names`, written `name(` with nothing but white
     /// space between, new lines included, and not part of a longer name.
     /// Arguments run to the balanced closing paren, across lines.
+    ///
+    /// It over-matches on purpose. Swift never reads `foo\n(x)` as a call,
+    /// but this does, so a guard built on it flags a little more than the
+    /// compiler would accept, never less.
     public func calls(named names: Set<String>) -> [Call] {
         var found: [Call] = []
         var i = 0

@@ -14,8 +14,13 @@ mkdir -p "$out" build
 darkened=""
 restore_light() {
   for sim in $darkened; do xcrun simctl ui "$sim" appearance light 2>/dev/null || true; done
+  darkened=""
 }
+# Not every sh runs the EXIT trap on a signal, so Ctrl-C and a kill restore
+# too, then stop the script.
 trap restore_light EXIT
+trap 'restore_light; exit 130' INT
+trap 'restore_light; exit 143' TERM
 
 swiftc -O scripts/same-shot.swift -o build/same-shot
 
@@ -51,9 +56,19 @@ settled_shot() {
   rm -f "$2.next.png"
 }
 
-# The app itself, never a UI test runner that `make ui-test` left beside it.
+# The app itself, picked by bundle id. Products also holds the UI test
+# runner once `make ui-test` has run, so the first .app is not always it.
 built_app() {
-  find "$derived/Build/Products/$1" -maxdepth 1 -name '*.app' ! -name '*-Runner.app' | head -n 1
+  for app in "$derived/Build/Products/$1"/*.app; do
+    plist="$app/Info.plist"
+    [ -f "$plist" ] || plist="$app/Contents/Info.plist"
+    if [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist" 2>/dev/null)" = "$bundle_id" ]; then
+      echo "$app"
+      return
+    fi
+  done
+  echo "screenshots: no app with bundle id $bundle_id in $derived/Build/Products/$1" >&2
+  exit 1
 }
 
 echo "screenshots: building for iOS Simulator"

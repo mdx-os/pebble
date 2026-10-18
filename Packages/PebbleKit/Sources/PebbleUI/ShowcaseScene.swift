@@ -17,6 +17,9 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// A reply on its way, a new chat with its starters, a memory with
     /// nothing in it yet, and a note just saved.
     case thinking, newChat, memoryEmpty, memorySaved
+    /// The cloud setting off, the question before it turns on, and the
+    /// preview of exactly what would leave the device.
+    case cloudOff, cloudAsk, cloudPreview
     /// Today with live task cards on the scripted engine, held still at a
     /// moment: working, trying another way, waiting on the person, and done.
     /// `tasksLive` plays the same tasks in real time.
@@ -86,7 +89,19 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
             case .memoryEmpty:
                 MemoryView(store: Self.emptyMemory(), place: LocalStubModel().privacyPlace)
             case .memorySaved:
-                MemoryView(model: Self.savedNoteMemory(place: LocalStubModel().privacyPlace))
+                MemoryView(model: Self.savedNoteMemory(place: LocalStubModel().privacyPlace),
+                           place: LocalStubModel().privacyPlace)
+            case .cloudOff, .cloudAsk:
+                NavigationStack {
+                    // With the cloud off and no cloud chat open, the flag
+                    // is the on-device model's, as `HomeView` would give it.
+                    CloudHelpView(help: Self.sampleCloud(),
+                                  place: HomeView.surfacePlace(chat: LocalStubModel().privacyPlace,
+                                                               newChat: LocalStubModel().privacyPlace),
+                                  asking: self == .cloudAsk)
+                }
+            case .cloudPreview:
+                Self.cloudPreviewChat(brand: brand, looks: looks)
             case .confirm, .confirmTimedOut:
                 ZStack {
                     Backdrop()
@@ -274,6 +289,50 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         return controller
     }
 
+    /// A made up address on a domain kept for examples. Nothing is ever sent
+    /// from the showcase: its transport refuses every request.
+    static let sampleEndpoint = URL(string: "https://cloud.example.com")!
+
+    /// The cloud setting, off, with one private word.
+    @MainActor
+    static func sampleCloud() -> CloudHelp {
+        CloudHelp(
+            store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: false, privateWords: ["lemon cake"])),
+            endpoint: sampleEndpoint, memory: sampleMemory(), transport: { NoSendTransport() }
+        )
+    }
+
+    /// A chat on the cloud model with its preview showing, presented the
+    /// way `HomeView` presents it. The preview is built by the same code a
+    /// real reply uses.
+    @MainActor
+    static func cloudPreviewChat(brand: Brand, looks: UserDefaults) -> some View {
+        let memory = sampleMemory()
+        let auth = SampleSignIn()
+        let help = CloudHelp(
+            store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"])),
+            endpoint: sampleEndpoint, memory: memory, auth: auth, transport: { NoSendTransport() }
+        )
+        let review = CloudReview()
+        let model = help.chatModel(local: LocalStubModel(), review: review)
+        var turns = Conversation.firstRun(named: "Pip", place: model.privacyPlace).turns
+        turns.append(ChatTurn(id: UUID(), speaker: .person, text: "Help me write a note to Sam about Saturday. The party moved to 42 Maple Street. He can call me at 416 555 0199 or email jo.lee@example.com, and don't mention the lemon cake."))
+        let conversation = Conversation(turns: turns, place: model.privacyPlace)
+        let redactor = Redactor(memory: memory.notes(), privateWords: help.settings.privateWords)
+        if let preview = try? CloudModel.preview(for: turns, endpoint: sampleEndpoint, redactor: redactor,
+                                                 headers: auth.headers(for: CloudModel.url(for: sampleEndpoint))) {
+            review.show(preview)
+        }
+        let controller = ChatController.make(brand: brand, model: model, names: InMemoryAgentNameStore(stored: "Pip"),
+                                             conversation: conversation, review: review)
+        controller.isReplying = true
+        return ZStack {
+            Backdrop()
+            ChatView(controller: controller, look: AgentLook.load(from: looks), firstMessage: nil, covered: true)
+        }
+        .cloudPreview(review)
+    }
+
     static func emptyMemory() -> MemoryStore {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("showcase-empty-memory-\(UUID().uuidString).json")
         let store = MemoryStore(fileURL: url)
@@ -317,5 +376,20 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         _ = try? store.remember("Prefers tea in the afternoon", at: now - day, source: .inferred)
         return store
     }
+}
+#endif
+
+#if DEBUG
+/// The showcase's transport. It sends nothing, ever.
+struct NoSendTransport: CloudTransport {
+    func send(_ request: CloudRequest) async throws -> Data {
+        throw CloudModelError.notSent
+    }
+}
+
+/// The showcase's sign-in: one made-up header, so the preview shows how a
+/// sign-in label looks and VoiceOver can be heard leaving its value out.
+struct SampleSignIn: CloudAuth {
+    func headers(for url: URL) -> [String: String] { ["X-Sample-Sign-In": "made-up-sample"] }
 }
 #endif

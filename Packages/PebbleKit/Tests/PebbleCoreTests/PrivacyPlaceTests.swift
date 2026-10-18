@@ -14,6 +14,7 @@ struct PrivacyPlaceTests {
             FirstConversation.opening(named: "Pip", place: place),
             FirstRunWords.helloDetail(place),
             FeedWords.sampleNote(place),
+            CloudWords.offDetail(place),
         ]
     }
 
