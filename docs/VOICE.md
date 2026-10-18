@@ -140,7 +140,8 @@ Words a person reads clear 4.5 to 1 against what they sit on, in light and
 dark. Use `Theme.accentText` for words in the accent's warmth,
 `Theme.secondaryText` for quieter words and placeholders, and `Theme.onAccent`
 on the accent fill. A system control that fills with the tint and writes
-white on it (the selected sidebar row, Done) takes `Theme.tintFill`. The raw
+white on it (the selected sidebar row, Done) takes `Theme.tintFill`, and only
+those: it is a fill, never words, and the sidebar's icons in it clear 3 to 1. The raw
 accent and the system grays are too faint for words.
 `ContrastGuardTests` checks every pair in `Theme.textPairs` and scans the
 screens for colors outside them.

@@ -22,7 +22,13 @@ public struct MemoryView: View {
         _model = StateObject(wrappedValue: MemoryModel(store: store, place: place, onForgetEverything: onForgetEverything))
     }
 
-    /// Shows a model that already has something to say, for screenshots.
+    /// Takes a model built from the active model, as `HomeView` does, or
+    /// one that already has something to say, for screenshots.
+    ///
+    /// Load-bearing: `model()` is called inside StateObject's own
+    /// autoclosure, so it runs once for the screen, not on every pass of
+    /// the view around it. Calling it first would reset "Saved." and a
+    /// pending Forget everything on every publish.
     init(model: @autoclosure @escaping () -> MemoryModel) {
         _model = StateObject(wrappedValue: model())
     }

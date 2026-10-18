@@ -241,6 +241,48 @@ struct TodayFollowupsTests {
         #expect(model.feed.needsYou.count == 1)
     }
 
+    /// Only changes from `NeedsYou`'s hook wait a turn. A yes rebuilds the
+    /// feed in the same call, so the card is gone before anything can read
+    /// it, and a tap on the card it left behind opens nothing.
+    ///
+    /// And ask-first never rests on that timing: a second yes for the same
+    /// question, from a sheet opened again, acts at most once, and once the
+    /// action has gone ahead `AskFirst` refuses any later yes.
+    @Test func aSecondYesOnAnAnsweredQuestionIsRefused() throws {
+        let rule = AskFirst.isolated()
+        let asks = NeedsYou(rule: rule)
+        let request = try #require(asks.ask(note))
+        let model = FeedModel(sources: [EmptyFeedSource()], needsYou: asks, place: .onDevice)
+        let card = try #require(model.feed.needsYou.first)
+        model.perform(card, talk: { _ in })
+        #expect(model.reviewing == request)
+        var yeses: [Approval] = []
+        func sheet() -> ConfirmationState {
+            ConfirmationState(request: request, rule: model.rule,
+                              onApprove: { yeses.append($0); model.approved($0) },
+                              onDecline: { model.closedQuestion(request) })
+        }
+        #expect(sheet().tapPrimary() == .approved)
+        // No wait for `settled()`: gone in the same call.
+        #expect(model.reviewing == nil)
+        #expect(model.feed.needsYou.isEmpty)
+        model.perform(card, talk: { _ in })
+        #expect(model.reviewing == nil, "the card left behind opens nothing")
+
+        // The same question's sheet opened again before the asker acted:
+        // its yes is the first one again, never a second go-ahead.
+        _ = sheet().tapPrimary()
+        #expect(yeses.count <= 2)
+        let first = try #require(yeses.first)
+        #expect(rule.decide(note, approval: first) == .proceed)
+        for yes in yeses { #expect(rule.decide(note, approval: yes) == .stop, "only one go-ahead") }
+
+        // After the action, a yes is refused outright.
+        #expect(sheet().tapPrimary() != .approved)
+        #expect(rule.sayYes(to: request) == .timedOut)
+        #expect(model.feed.needsYou.isEmpty)
+    }
+
     // MARK: The privacy place, from the model the home screen is given
 
     /// A model that does not run here, like a cloud model would.
@@ -262,14 +304,109 @@ struct TodayFollowupsTests {
             #expect(memory.place == place)
             #expect(MemoryWords.privacyNote(memory.place).contains("this device") == (place == .onDevice))
         }
-        // And HomeView builds them no other way.
+        // And HomeView builds them no other way: each is made in one place,
+        // the factory checked above, and the memory screen only through it.
         let home = try #require(try ContrastGuardTests.sources().first { $0.name == "HomeView.swift" }?.text)
         let source = SwiftSource(home)
         #expect(source.calls(named: ["FeedModel"]).count == 1)
         #expect(source.calls(named: ["MemoryModel"]).count == 1)
-        #expect(source.calls(named: ["MemoryView"]).allSatisfy { $0.arguments.hasPrefix("model: Self.memoryModel(") })
-        #expect(source.calls(named: ["feedModel"]).count == 2, "declared once and used once, in init")
+        #expect(source.calls(named: ["MemoryView"]).allSatisfy { $0.arguments.hasPrefix("model: HomeView.memoryModel(") })
     }
+
+    /// Two of the same kind of model are the same screen; another kind, or
+    /// one whose words go elsewhere, is a new one.
+    @Test func theScreenIsKeyedOnTheModel() {
+        #expect(HomeView.identity(of: LocalStubModel()) == HomeView.identity(of: LocalStubModel()))
+        #expect(HomeView.identity(of: LocalStubModel()) != HomeView.identity(of: RemoteModel()))
+        #expect(HomeView.identity(of: LocalStubModel()) != HomeView.identity(of: SwitchingModel(runsOnDevice: false)))
+        #expect(HomeView.identity(of: SwitchingModel(runsOnDevice: true))
+                != HomeView.identity(of: SwitchingModel(runsOnDevice: false)))
+    }
+
+    /// One kind of model whose words may stay or go, as an adapter with a
+    /// local and a cloud setting would be.
+    private struct SwitchingModel: ModelClient {
+        let runsOnDevice: Bool
+        func reply(to transcript: [ChatTurn]) async throws -> String { "Hi." }
+    }
+
+    #if os(macOS)
+    /// Counts the Today models made, since each one starts by watching the
+    /// engine. Nothing else about it is used.
+    private final class CountingEngine: TaskEngine, @unchecked Sendable {
+        let rule = AskFirst.isolated()
+        private(set) var watchers = 0
+        var tasks: [AgentTask] { [] }
+        func start(_ request: TaskRequest) -> String { "" }
+        func observe(_ onChange: @escaping @Sendable (TaskSnapshot) -> Void) -> TaskObservation {
+            watchers += 1
+            return TaskObservation {}
+        }
+        func redirect(_ id: String, with instructions: String) -> Bool { false }
+        func stop(_ id: String) -> Bool { false }
+        func dismiss(_ id: String) -> Bool { false }
+        func clear() -> ClearedTasks { .none }
+        func retry(_ id: String) -> Bool { false }
+        func resume(_ id: String, with approval: Approval) -> TaskApproval { .refused }
+        func questionClosed(_ request: ConfirmationRequest) {}
+        func refresh() {}
+    }
+
+    /// The model swapped while the home screen is up: Today's model is made
+    /// again, from the new model, so its words change with it. Drawn again
+    /// with the same model, nothing is made again.
+    @MainActor
+    @Test func anotherModelMakesTheHomeScreenAgain() throws {
+        let engine = CountingEngine()
+        let looks = try #require(UserDefaults(suiteName: "swap-\(UUID().uuidString)"))
+        func home(_ model: any ModelClient) -> HomeView {
+            HomeView(brand: brand, model: model, names: InMemoryAgentNameStore(stored: "Pip"),
+                     onboarding: InMemoryOnboardingStore(finished: true), memory: nil, looks: looks,
+                     conversation: nil, section: .today, feed: [SampleFeedSource()],
+                     needsYou: NeedsYou(rule: engine.rule), tasks: engine, now: { ShowcaseScene.morning })
+        }
+        let host = NSHostingView(rootView: home(LocalStubModel()))
+        host.frame = CGRect(x: 0, y: 0, width: 600, height: 800)
+        host.layoutSubtreeIfNeeded()
+        #expect(engine.watchers == 1)
+        host.rootView = home(LocalStubModel())
+        host.layoutSubtreeIfNeeded()
+        #expect(engine.watchers == 1, "the same model keeps the same screen")
+        host.rootView = home(RemoteModel())
+        host.layoutSubtreeIfNeeded()
+        #expect(engine.watchers == 2, "another model makes Today's model again")
+        // What the new one says, built the same way from the new model.
+        let today = HomeView.feedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()),
+                                       model: RemoteModel(), now: { ShowcaseScene.morning })
+        #expect(!FeedWords.sampleNote(today.place).contains("this device"))
+        #expect(FeedWords.sampleNote(.onDevice).contains("this device"))
+    }
+
+    /// The memory screen's model is made once, inside its StateObject,
+    /// however often the screen around it is drawn again. So a "Saved."
+    /// or a Forget everything waiting for its answer is never lost to a
+    /// publish on Today or in the chat.
+    @MainActor
+    @Test func theMemoryModelIsMadeOnce() throws {
+        let store = ShowcaseScene.emptyMemory()
+        var made = 0
+        func screen() -> MemoryView {
+            MemoryView(model: {
+                made += 1
+                return HomeView.memoryModel(store: store, model: LocalStubModel())
+            }())
+        }
+        let host = NSHostingView(rootView: screen())
+        host.frame = CGRect(x: 0, y: 0, width: 600, height: 800)
+        host.layoutSubtreeIfNeeded()
+        #expect(made == 1)
+        for _ in 0..<3 {
+            host.rootView = screen()
+            host.layoutSubtreeIfNeeded()
+        }
+        #expect(made == 1, "drawn again, never made again")
+    }
+    #endif
 
     // MARK: Closing a sheet, then moving on
 

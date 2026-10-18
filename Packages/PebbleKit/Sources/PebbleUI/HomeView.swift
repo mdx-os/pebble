@@ -12,30 +12,13 @@ import SwiftUI
 /// chat opens on top of it, and the memory opens over either. The
 /// conversation and the feed are kept here, so changing the window's shape
 /// never loses them.
+///
+/// Everything the screen holds (the chat, Today and the memory) takes the
+/// active model's privacy place once, when it is made. So the screen is
+/// keyed on the model: another model starts it fresh, and no word keeps
+/// promising the device after words may leave it, or the other way round.
 public struct HomeView: View {
-    let brand: Brand
-    let model: any ModelClient
-    let names: any AgentNameStoring
-    let onboarding: any OnboardingStoring
-    let memory: MemoryStore?
-    let looks: UserDefaults
-
-    @State private var finished: Bool
-    @State private var firstMessage: String?
-    @State private var chat: ChatController?
-    @State private var section: HomeSection?
-    /// On a narrow screen, whether the memory was opened from the chat, so
-    /// closing it goes back there rather than to Today.
-    @State private var memoryOverChat = false
-    @State private var showsShortcuts = false
-    @State private var asksNewChat = false
-    /// What to do once the open sheet has finished closing.
-    @State private var handoff = SheetHandoff()
-    @StateObject private var feed: FeedModel
-    #if os(iOS)
-    @Environment(\.horizontalSizeClass) private var sizeClass
-    #endif
-    @Environment(\.scenePhase) private var scenePhase
+    let screen: HomeScreen
 
     /// `feed` is where finished work comes from. Questions come only from
     /// `needsYou` and `tasks`, which both ask through `AskFirst`. `tasks`
@@ -73,22 +56,26 @@ public struct HomeView: View {
         drivesTasks: Bool = false,
         now: @escaping () -> Date = { Date() }
     ) {
-        self.brand = brand
-        self.model = model
-        self.names = names
-        self.onboarding = onboarding
-        self.memory = memory
-        self.looks = looks
-        _feed = StateObject(wrappedValue: Self.feedModel(sources: feed, needsYou: needsYou, tasks: tasks,
-                                                         drivesTasks: drivesTasks, model: model, now: now))
-        let needed = OnboardingFlow.isNeeded(store: onboarding, names: names)
-        // People who named their agent before the first run existed count as finished.
-        if !needed, !onboarding.hasFinished() { onboarding.markFinished() }
-        _finished = State(initialValue: !needed)
-        // The chat starts after the first run so it opens with the chosen name.
-        _chat = State(initialValue: needed ? nil
-            : ChatController.make(brand: brand, model: model, names: names, conversation: conversation))
-        _section = State(initialValue: section)
+        screen = HomeScreen(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
+                            looks: looks, conversation: conversation, section: section, feed: feed,
+                            needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, now: now)
+    }
+
+    /// Which model the screen was made for: its kind and where its words
+    /// go. Either changing makes a new screen.
+    struct ModelIdentity: Hashable {
+        let kind: ObjectIdentifier
+        let staysOnDevice: Bool
+    }
+
+    static func identity(of model: any ModelClient) -> ModelIdentity {
+        ModelIdentity(kind: ObjectIdentifier(type(of: model)), staysOnDevice: model.privacyPlace.staysOnDevice)
+    }
+
+    public var body: some View {
+        // Load-bearing: the screen's state objects keep the place they were
+        // made with, so only a new identity can change it.
+        screen.id(Self.identity(of: screen.model))
     }
 
     /// Today's model, which takes its privacy place from the active model,
@@ -105,6 +92,72 @@ public struct HomeView: View {
     static func memoryModel(store: MemoryStore, model: any ModelClient,
                             onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) -> MemoryModel {
         MemoryModel(store: store, place: model.privacyPlace, onForgetEverything: onForgetEverything)
+    }
+
+    /// The send itself, apart from moving, so tests can drive it.
+    @discardableResult
+    static func sendsFromToday(_ line: String, chat: ChatController) -> Bool {
+        chat.send(line)
+    }
+}
+
+/// The home screen itself, for one model. See `HomeView`.
+struct HomeScreen: View {
+    let brand: Brand
+    let model: any ModelClient
+    let names: any AgentNameStoring
+    let onboarding: any OnboardingStoring
+    let memory: MemoryStore?
+    let looks: UserDefaults
+
+    @State private var finished: Bool
+    @State private var firstMessage: String?
+    @State private var chat: ChatController?
+    @State private var section: HomeSection?
+    /// On a narrow screen, whether the memory was opened from the chat, so
+    /// closing it goes back there rather than to Today.
+    @State private var memoryOverChat = false
+    @State private var showsShortcuts = false
+    @State private var asksNewChat = false
+    /// What to do once the open sheet has finished closing.
+    @State private var handoff = SheetHandoff()
+    @StateObject private var feed: FeedModel
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
+    @Environment(\.scenePhase) private var scenePhase
+
+    init(
+        brand: Brand,
+        model: any ModelClient,
+        names: any AgentNameStoring,
+        onboarding: any OnboardingStoring,
+        memory: MemoryStore?,
+        looks: UserDefaults,
+        conversation: Conversation?,
+        section: HomeSection,
+        feed: [any FeedSource],
+        needsYou: NeedsYou,
+        tasks: (any TaskEngine)?,
+        drivesTasks: Bool,
+        now: @escaping () -> Date
+    ) {
+        self.brand = brand
+        self.model = model
+        self.names = names
+        self.onboarding = onboarding
+        self.memory = memory
+        self.looks = looks
+        _feed = StateObject(wrappedValue: HomeView.feedModel(sources: feed, needsYou: needsYou, tasks: tasks,
+                                                             drivesTasks: drivesTasks, model: model, now: now))
+        let needed = OnboardingFlow.isNeeded(store: onboarding, names: names)
+        // People who named their agent before the first run existed count as finished.
+        if !needed, !onboarding.hasFinished() { onboarding.markFinished() }
+        _finished = State(initialValue: !needed)
+        // The chat starts after the first run so it opens with the chosen name.
+        _chat = State(initialValue: needed ? nil
+            : ChatController.make(brand: brand, model: model, names: names, conversation: conversation))
+        _section = State(initialValue: section)
     }
 
     /// True when the window is wide enough for a sidebar.
@@ -128,6 +181,10 @@ public struct HomeView: View {
                         stack(chat)
                     }
                 }
+                // Here, around Today and the chat both, so the tap never
+                // rests on which screen is still on show once a send from
+                // Today has moved to the chat.
+                .modifier(SendTap(chat: chat))
                 .transition(.opacity)
             } else {
                 OnboardingView(brand: brand, names: names, store: onboarding, looks: looks,
@@ -219,17 +276,11 @@ public struct HomeView: View {
     /// `ChatController.send` into the same conversation, so care comes
     /// first and nothing can act without asking. Then the chat opens on it.
     private func send(fromToday line: String) {
-        guard let chat, feed.reviewing == nil, Self.sendsFromToday(line, chat: chat) else { return }
+        guard let chat, feed.reviewing == nil, HomeView.sendsFromToday(line, chat: chat) else { return }
         // The person's own words went first, so a line picked during the
         // first run is no longer waiting to be sent.
         firstMessage = nil
         go(.chat)
-    }
-
-    /// The send itself, apart from moving, so tests can drive it.
-    @discardableResult
-    static func sendsFromToday(_ line: String, chat: ChatController) -> Bool {
-        chat.send(line, from: .today)
     }
 
     /// Chats aren't kept yet, so starting over asks first once the person
@@ -365,8 +416,10 @@ public struct HomeView: View {
     @ViewBuilder
     private var memoryScreen: some View {
         if let memory {
-            MemoryView(model: Self.memoryModel(store: memory, model: model,
-                                               onForgetEverything: { feed.forgetTasks() }))
+            // Built inside MemoryView's StateObject, once per screen, never
+            // on each pass through here.
+            MemoryView(model: HomeView.memoryModel(store: memory, model: model,
+                                                   onForgetEverything: { feed.forgetTasks() }))
         } else {
             // The store couldn't be opened. Say so rather than hide memory.
             // Tasks can still be forgotten here, since Forget everything isn't.
@@ -428,15 +481,28 @@ struct TodayComposer: View {
         .onChange(of: chat.failure) { speakFailure() }
         .onChange(of: inFront) { speakFailure() }
         .onAppear { speakFailure() }
-        // Sending from here moves to the chat at once, so the tap is played
-        // here, where the person pressed, not by the chat.
-        .haptic(.sent, trigger: chat.sent, when: { $0.tapsAt(.today) })
         .background {
             // Solid, so cards scrolling under it never show through the words.
             Theme.backdropEnds(scheme).bottom.color
                 .ignoresSafeArea(edges: .bottom)
                 .overlay(alignment: .top) { Rectangle().fill(Theme.hairline(scheme)).frame(height: 1) }
         }
+    }
+}
+
+/// The light tap for a line the person sent, from Today or the chat. It
+/// wraps both screens, so it never sits on a screen that leaves as it
+/// sends: Today moves to the chat in the same pass as its send, and a
+/// tap left to either screen could be lost or felt twice.
+struct SendTap: ViewModifier {
+    @ObservedObject var chat: ChatController
+
+    /// Whether the send count changing to `count` is felt. A new chat
+    /// starts at zero, which is no send.
+    static func plays(_ count: Int) -> Bool { count > 0 }
+
+    func body(content: Content) -> some View {
+        content.haptic(.sent, trigger: chat.sentCount, when: Self.plays)
     }
 }
 

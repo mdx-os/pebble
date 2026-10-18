@@ -160,8 +160,8 @@ public struct ChatView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.4, dampingFraction: 0.85),
                    value: controller.conversation.turns.count)
-        // A line sent from Today is felt there; this is for the chat's own.
-        .haptic(.sent, trigger: controller.sent, when: { $0.tapsAt(.chat) })
+        // The send's tap is played by `SendTap` around the whole home
+        // screen, so it is felt whichever screen sent it.
         .onAppear {
             // Sent from Today, the line may be answered, or still on its
             // way, before this screen was here to see it change.
@@ -433,24 +433,13 @@ final class ChatController: ObservableObject {
     /// land under a sheet, or while Today is behind the chat.
     private(set) var unheardFailure: String?
 
-    /// Where a line was sent from, so the tap is felt from the screen the
-    /// person pressed.
-    enum SendPlace: Equatable { case chat, today }
-
-    /// How many lines the person has sent, and where the newest came from.
-    struct Sent: Equatable {
-        var count = 0
-        var from = SendPlace.chat
-
-        /// Whether the screen at `place` plays the light tap for this send:
-        /// only the one it was sent from, so a send is never felt twice and
-        /// never missed when the sender leaves the screen as it sends.
-        func tapsAt(_ place: SendPlace) -> Bool { count > 0 && from == place }
-    }
-
-    @Published private(set) var sent = Sent()
-    /// Goes up by one each time the person sends something.
-    var sentCount: Int { sent.count }
+    /// Goes up by one each time the person sends something by hand, from
+    /// the chat or from Today. `SendTap` plays the light tap for it.
+    @Published private(set) var sentCount = 0
+    /// True while the chat's last line is the person's and no reply took
+    /// it: the reply failed or was stopped. Only then are the same words
+    /// sent again a retry rather than a new line.
+    private var lastLineUnanswered = false
     /// The shortest time the thinking dots show, so a quick reply settles
     /// in after a calm beat instead of snapping onto the screen.
     let replyBeat: Duration
@@ -523,21 +512,23 @@ final class ChatController: ObservableObject {
     /// when the line went out, false when there was nothing to send or a
     /// reply was still coming.
     @discardableResult
-    func send(_ text: String, from place: SendPlace = .chat) -> Bool {
+    func send(_ text: String) -> Bool {
         let before = sentCount
-        submit(text, from: place)
+        submit(text)
         return sentCount != before
     }
 
     /// Sends `text`. `byHand` is false for the line the first run sends on
     /// its own, which gets no tap since the person didn't just press anything.
-    func submit(_ text: String, byHand: Bool = true, from place: SendPlace = .chat) {
+    func submit(_ text: String, byHand: Bool = true) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isReplying else { return }
         let clearsDraft = trimmed == draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        // The same words sent again after their reply failed are already
-        // the last line of the chat, so they are asked again, not added twice.
-        let isRetry = conversation.turns.last.map { $0.speaker == .person && $0.text == trimmed } ?? false
+        // The same words sent again after their reply failed or was stopped
+        // are already the last line of the chat, so they are asked again,
+        // not added twice. Said again after an answer, they are a new line.
+        let isRetry = lastLineUnanswered
+            && (conversation.turns.last.map { $0.speaker == .person && $0.text == trimmed } ?? false)
         if !isRetry {
             do {
                 conversation = try conversation.appendingPerson(trimmed)
@@ -545,10 +536,11 @@ final class ChatController: ObservableObject {
                 return
             }
         }
+        lastLineUnanswered = false
         if clearsDraft {
             draft = ""
         }
-        if byHand { sent = Sent(count: sent.count + 1, from: place) }
+        if byHand { sentCount += 1 }
         failure = nil
         unheardReply = nil
         isReplying = true
@@ -573,6 +565,8 @@ final class ChatController: ObservableObject {
             // A reply that was stopped, or overtaken by a newer one, takes
             // nothing and changes nothing; only the newest reply settles.
             guard !Task.isCancelled, generation == replyGeneration else { return }
+            // No reply means the person's line still waits for one.
+            lastLineUnanswered = next == nil
             if let next {
                 unheardReply = next.turns.last.flatMap { $0.speaker == .agent ? $0.text : nil }
                 conversation = next
@@ -591,6 +585,7 @@ final class ChatController: ObservableObject {
     /// Stops a reply that is still coming, as when a new chat replaces this
     /// one. Nothing it would have said is added.
     func stopReplying() {
+        if isReplying { lastLineUnanswered = true }
         replyTask?.cancel()
         replyTask = nil
         replyGeneration += 1

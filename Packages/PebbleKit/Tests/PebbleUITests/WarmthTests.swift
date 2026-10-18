@@ -2,6 +2,7 @@
 import Foundation
 import PebbleCore
 import PebbleModel
+import SourceScan
 import SwiftUI
 import Testing
 @testable import PebbleUI
@@ -31,6 +32,28 @@ private struct GatedModel: ModelClient {
     func reply(to transcript: [ChatTurn]) async throws -> String {
         await gate.wait()
         if fails { throw ModelClientError.noPersonTurn }
+        return "Here's a plan"
+    }
+}
+
+/// Counts the replies asked for.
+private actor Tries {
+    private var count = 0
+    func next() -> Int {
+        count += 1
+        return count
+    }
+}
+
+/// Fails its first reply and answers every one after, each once the gate opens.
+private struct FailsOnceModel: ModelClient {
+    let gate: Gate
+    let tries = Tries()
+    var runsOnDevice: Bool { true }
+
+    func reply(to transcript: [ChatTurn]) async throws -> String {
+        await gate.wait()
+        if await tries.next() == 1 { throw ModelClientError.noPersonTurn }
         return "Here's a plan"
     }
 }
@@ -550,16 +573,67 @@ struct WarmthTests {
         #expect(controller.conversation.turns.filter { $0.speaker == .person }.map(\.text) == ["Plan my day", "Plan my week"])
     }
 
+    /// Only a line no reply took is asked again. The same words said again
+    /// after an answer are a new line, and so are words cleared by hand and
+    /// typed again after a failure, since the line is still unanswered.
+    @Test func onlyAnUnansweredLineIsAskedAgain() async throws {
+        let gate = Gate()
+        await gate.release()
+        let answered = ChatController(brand: brand, model: GatedModel(gate: gate),
+                                      names: InMemoryAgentNameStore(), replyBeat: .zero)
+        #expect(answered.send("Thanks"))
+        await settle(answered)
+        // Its last line is the agent's, so the same words are new.
+        #expect(answered.send("Thanks"))
+        await settle(answered)
+        #expect(answered.conversation.turns.filter { $0.speaker == .person }.map(\.text) == ["Thanks", "Thanks"])
+
+        // A person line left last without a failure, as a future flow might
+        // leave one, is not a retry either.
+        let quiet = ChatController(brand: brand, model: GatedModel(gate: gate),
+                                   names: InMemoryAgentNameStore(), replyBeat: .zero)
+        quiet.conversation = try quiet.conversation.appendingPerson("Hello")
+        #expect(quiet.send("Hello"))
+        await settle(quiet)
+        #expect(quiet.conversation.turns.filter { $0.speaker == .person }.map(\.text) == ["Hello", "Hello"])
+
+        // A stopped reply leaves its line unanswered, so it is asked again.
+        let held = Gate()
+        let stopped = ChatController(brand: brand, model: GatedModel(gate: held),
+                                     names: InMemoryAgentNameStore(), replyBeat: .zero)
+        #expect(stopped.send("Plan my day"))
+        stopped.stopReplying()
+        await held.release()
+        await settle(stopped)
+        #expect(stopped.send("Plan my day"))
+        await settle(stopped)
+        #expect(stopped.conversation.turns.filter { $0.speaker == .person }.map(\.text) == ["Plan my day"])
+
+        // After a failure, words cleared and typed again still ask again.
+        let flaky = ChatController(brand: brand, model: FailsOnceModel(gate: gate),
+                                   names: InMemoryAgentNameStore(), replyBeat: .zero)
+        #expect(flaky.send("Plan my day"))
+        await settle(flaky)
+        flaky.draft = ""
+        #expect(flaky.failure == nil)
+        #expect(flaky.send("Plan my day"))
+        await settle(flaky)
+        #expect(flaky.conversation.turns.filter { $0.speaker == .person }.map(\.text) == ["Plan my day"])
+        #expect(flaky.conversation.turns.last?.text == "Here's a plan")
+    }
+
     /// Sending again from Today after a failure doesn't duplicate it either.
     @Test func resendingFromTodayDoesNotDuplicateTheLine() async throws {
         let gate = Gate()
-        let controller = ChatController(brand: brand, model: GatedModel(gate: gate),
+        let controller = ChatController(brand: brand, model: FailsOnceModel(gate: gate),
                                         names: InMemoryAgentNameStore(), replyBeat: .zero)
-        // Where a failed reply leaves things: the line unanswered, last.
-        controller.conversation = try controller.conversation.appendingPerson("Plan my day")
-        controller.draft = "Plan my day"
-        #expect(HomeView.sendsFromToday(controller.draft, chat: controller))
         await gate.release()
+        // A failed reply leaves the line unanswered, last, and the words back.
+        #expect(HomeView.sendsFromToday("Plan my day", chat: controller))
+        await settle(controller)
+        #expect(controller.failure == FirstConversation.couldNotAnswer)
+        #expect(controller.draft == "Plan my day")
+        #expect(HomeView.sendsFromToday(controller.draft, chat: controller))
         await settle(controller)
         #expect(controller.conversation.turns.filter { $0.text == "Plan my day" }.count == 1)
         #expect(controller.conversation.turns.last?.text == "Here's a plan")
@@ -567,38 +641,53 @@ struct WarmthTests {
 
     // MARK: The tap for a send
 
-    /// Each send is felt once, from the screen it was sent from: Today's
-    /// own send taps on Today even though the chat opens on it, and the
-    /// chat never taps for it as well.
-    @Test func theSendTapComesFromTheScreenThatSent() async {
+    /// Every send by hand is felt, from Today or the chat alike, and a new
+    /// chat starting at zero is not.
+    @Test func everySendByHandIsFelt() async {
         let controller = ChatController(brand: brand, model: LocalStubModel(),
                                         names: InMemoryAgentNameStore(), replyBeat: .zero)
-        #expect(!controller.sent.tapsAt(.today) && !controller.sent.tapsAt(.chat), "nothing sent yet")
+        #expect(!SendTap.plays(controller.sentCount), "nothing sent yet")
         HomeView.sendsFromToday("Help me plan my morning.", chat: controller)
-        #expect(controller.sent.tapsAt(.today))
-        #expect(!controller.sent.tapsAt(.chat))
+        #expect(controller.sentCount == 1 && SendTap.plays(controller.sentCount))
         await settle(controller)
         controller.send("gym, groceries")
-        #expect(controller.sent.tapsAt(.chat))
-        #expect(!controller.sent.tapsAt(.today))
+        #expect(controller.sentCount == 2 && SendTap.plays(controller.sentCount))
         await settle(controller)
-        // The first run's own line is no press, so no tap anywhere.
+        // The first run's own line is no press, so no tap.
         let first = ChatController(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(), replyBeat: .zero)
         first.submit("Help me plan my morning.", byHand: false)
-        #expect(!first.sent.tapsAt(.chat) && !first.sent.tapsAt(.today))
+        #expect(first.sentCount == 0 && !SendTap.plays(first.sentCount))
         await settle(first)
         // And it is felt only on a phone.
         #expect(Haptic.sent.feedback(on: .phone) != nil)
         #expect(Haptic.sent.feedback(on: .pad) == nil)
     }
 
-    /// Both screens attach the tap, each for its own sends.
-    @Test func bothComposersAttachTheSendTap() throws {
-        let sources = try ContrastGuardTests.sources()
-        let home = try #require(sources.first { $0.name == "HomeView.swift" }?.text)
-        let chat = try #require(sources.first { $0.name == "ChatView.swift" }?.text)
-        #expect(home.contains(".haptic(.sent, trigger: chat.sent, when: { $0.tapsAt(.today) })"))
-        #expect(chat.contains(".haptic(.sent, trigger: controller.sent, when: { $0.tapsAt(.chat) })"))
+    /// The tap is played once, around Today and the chat both, so a send
+    /// from Today is felt even though Today leaves as it sends, and never
+    /// felt twice. No screen plays a send tap of its own.
+    @Test func theSendTapWrapsBothScreens() throws {
+        let sources = try ContrastGuardTests.screenSources()
+        var sendTaps: [(file: String, call: SwiftSource.Call)] = []
+        for file in sources {
+            for call in SwiftSource(file.text).calls(named: ["haptic"]) where call.arguments.hasPrefix(".sent") {
+                sendTaps.append((file.name, call))
+            }
+        }
+        #expect(sendTaps.count == 1, "one send tap, not one per screen")
+        #expect(sendTaps.first?.file == "PebbleUI/HomeView.swift")
+        #expect(sendTaps.first?.call.arguments.contains("chat.sentCount") == true)
+
+        let home = SwiftSource(try #require(sources.first { $0.name == "PebbleUI/HomeView.swift" }?.text))
+        let applied = home.calls(named: ["SendTap"])
+        #expect(applied.count == 1, "applied in one place")
+        let tap = try #require(applied.first).offset
+        // After both layouts, Today's and the chat's, in the same Group,
+        // and before the first run, which has no chat yet.
+        let split = try #require(home.calls(named: ["HomeSplit"]).first).offset
+        let stack = try #require(home.calls(named: ["stack"]).first).offset
+        let onboarding = try #require(home.calls(named: ["OnboardingView"]).first).offset
+        #expect(split < tap && stack < tap && tap < onboarding)
     }
 
     /// "What you wrote is still here" goes once the person clears the words

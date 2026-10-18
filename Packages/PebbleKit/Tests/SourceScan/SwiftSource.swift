@@ -29,6 +29,30 @@ public struct SwiftSource: Sendable {
         public let line: Int
         /// Where the call's name starts in `code`.
         public let offset: Int
+        /// Just past the call's closing paren in `code`.
+        public let end: Int
+    }
+
+    /// The code of the trailing closure right after `call`, between its
+    /// balanced braces, or nil when no `{` follows.
+    public func trailingClosure(of call: Call) -> String? {
+        trailingClosureBraces(of: call).map { String(code[($0.lowerBound + 1)..<min($0.upperBound, code.count)]) }
+    }
+
+    /// Where the trailing closure's `{` and its matching `}` are in `code`,
+    /// as `open..<close`, or nil when no `{` follows the call.
+    public func trailingClosureBraces(of call: Call) -> Range<Int>? {
+        var open = call.end
+        while open < code.count, code[open].isWhitespace { open += 1 }
+        guard open < code.count, code[open] == "{" else { return nil }
+        var depth = 0
+        var close = open
+        while close < code.count {
+            if code[close] == "{" { depth += 1 }
+            if code[close] == "}" { depth -= 1; if depth == 0 { break } }
+            close += 1
+        }
+        return open..<close
     }
 
     /// The source with every comment and every string literal's contents
@@ -90,9 +114,19 @@ public struct SwiftSource: Sendable {
                         let after = j + escape.count
                         if after < chars.count, chars[after] == "(" {
                             // An interpolation: skip to its balanced close.
+                            // A string inside it is skipped whole, so a
+                            // paren in its words never counts.
                             var depth = 0
                             var k = after
                             while k < chars.count {
+                                if chars[k] == "\"" {
+                                    k += 1
+                                    while k < chars.count, chars[k] != "\"", chars[k] != "\n" {
+                                        k += chars[k] == "\\" ? 2 : 1
+                                    }
+                                    k += 1
+                                    continue
+                                }
                                 if chars[k] == "(" { depth += 1 }
                                 if chars[k] == ")" { depth -= 1; if depth == 0 { break } }
                                 if chars[k] == "\n" { line += 1 }
@@ -100,6 +134,10 @@ public struct SwiftSource: Sendable {
                             }
                             j = k + 1
                         } else {
+                            // An escape. A `\` at the end of a line in a
+                            // multi-line string joins the lines, and the new
+                            // line it skips still counts.
+                            if after < chars.count, chars[after] == "\n" { line += 1 }
                             j = after + 1
                         }
                         continue
@@ -170,20 +208,34 @@ public struct SwiftSource: Sendable {
             }
             let raw = String(code[(open + 1)..<min(close, code.count)])
             let folded = raw.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-            found.append(Call(name: name, arguments: folded, line: line(at: i), offset: i))
+            found.append(Call(name: name, arguments: folded, line: line(at: i), offset: i,
+                              end: min(close + 1, code.count)))
             i = j
         }
         return found
     }
 
-    /// Every `.swift` file under `folder`, by path relative to it.
+    /// Every `.swift` file under `folder`, by path relative to it. Both
+    /// sides resolve symlinks, such as `/var` and `/private/var`, the same
+    /// way, so the names never come out cut in the wrong place.
     public static func files(under folder: URL) throws -> [(name: String, text: String)] {
-        guard let walk = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: nil) else { return [] }
+        let resolved = folder.resolvingSymlinksInPath().standardizedFileURL
+        guard let walk = FileManager.default.enumerator(at: resolved, includingPropertiesForKeys: nil) else { return [] }
+        let base = resolved.pathComponents
         let urls = walk.compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
         return try urls.map { url in
-            let name = String(url.standardizedFileURL.path.dropFirst(folder.standardizedFileURL.path.count + 1))
+            let parts = url.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+            guard Array(parts.prefix(base.count)) == base else { throw Outside(path: url.path, folder: folder.path) }
+            let name = parts.dropFirst(base.count).joined(separator: "/")
             return (name, try String(contentsOf: url, encoding: .utf8))
         }.sorted { $0.name < $1.name }
+    }
+
+    /// A file that resolves to somewhere outside the folder it was found in.
+    public struct Outside: Error, CustomStringConvertible {
+        public let path: String
+        public let folder: String
+        public var description: String { "\(path) is not under \(folder)" }
     }
 
     /// The repository's root, found from a test file's `#filePath`.

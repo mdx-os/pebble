@@ -116,6 +116,15 @@ struct ContrastGuardTests {
             ".foregroundStyle(\n    .white.opacity(\n        0.8))",
             // A confirmation button fills with the tint and writes in white.
             "ToolbarItem(placement: .confirmationAction) {\n    Button(\"Done\") { dismiss() }\n}",
+            // The next item's DoneButton doesn't count for this one.
+            "ToolbarItem(placement: .confirmationAction) {\n    Button(\"Done\") { dismiss() }\n}\n"
+                + "ToolbarItem(placement: .cancellationAction) {\n    DoneButton { dismiss() }\n}",
+            // The fill tint, anywhere but a fill.
+            #"Text("Open").tint(Theme.tintFill)"#,
+            #"Text("Open").foregroundStyle(Theme.tintFill)"#,
+            "List { Text(\"a\") }\nText(\"b\").tint(Theme.tintFill)",
+            "struct DoneButton: View { var body: some View { Button(\"Done\") {} } }\n"
+                + "struct Other: View { var body: some View { Text(\"x\").tint(Theme.tintFill) } }",
         ]
         for line in wrong {
             #expect(!ContrastLint.problems(in: line).isEmpty, "missed: \(line)")
@@ -125,7 +134,8 @@ struct ContrastGuardTests {
             #".foregroundStyle(Theme.secondaryText)"#,
             #".background(Theme.accent, in: Capsule())"#,
             #".tint(Theme.accentText)"#,
-            #".tint(Theme.tintFill)"#,
+            "List(selection: $section) {\n    Text(\"a\")\n}\n// The sidebar.\n.tint(Theme.tintFill)",
+            "struct DoneButton: View {\n    var body: some View {\n        Button(\"Done\") {}\n            .tint(Theme.tintFill)\n    }\n}",
             "Image(systemName: \"sparkles\")\n    .font(.largeTitle)\n    .foregroundStyle(Theme.accentSymbol)",
             "// .foregroundStyle(Theme.accent) is wrong",
             "/* .foregroundStyle(Theme.accent)\n   .tint(.orange) */",
@@ -147,6 +157,34 @@ struct ContrastGuardTests {
     @Test func theScanPointsAtTheCall() {
         let text = "let a = 1\n// .tint(.orange)\nText(\"x\")\n    .foregroundStyle(\n        Theme.accent)\n"
         #expect(ContrastLint.problems(in: text).map(\.line) == [4])
+    }
+
+    /// Lines still count after a `\` joins two lines of a multi-line
+    /// string, and a paren in a string inside an interpolation never
+    /// throws the count off.
+    @Test func theScanCountsLinesThroughEveryKindOfString() {
+        let joined = "let a = \"\"\"\n    one \\\n    two\n    \"\"\"\nText(\"x\")\n"
+        #expect(SwiftSource(joined).literals.map(\.line) == [1, 5])
+        let paren = "let a = \"\\(f(\"(\"))\"\nText(\"x\")\n    .foregroundStyle(Theme.accent)\n"
+        #expect(SwiftSource(paren).literals.map(\.line) == [1, 2])
+        #expect(ContrastLint.problems(in: paren).map(\.line) == [3])
+    }
+
+    /// Names come out right when the folder is reached through a symlink,
+    /// as `/var` is for `/private/var`.
+    @Test func filesAreNamedFromTheFolderThroughSymlinks() throws {
+        let real = FileManager.default.temporaryDirectory.appendingPathComponent("scan-\(UUID().uuidString)")
+        let link = FileManager.default.temporaryDirectory.appendingPathComponent("scan-link-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: link)
+            try? FileManager.default.removeItem(at: real)
+        }
+        try FileManager.default.createDirectory(at: real.appendingPathComponent("Sub"), withIntermediateDirectories: true)
+        try "let a = 1".write(to: real.appendingPathComponent("A.swift"), atomically: true, encoding: .utf8)
+        try "let b = 2".write(to: real.appendingPathComponent("Sub/B.swift"), atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        #expect(try SwiftSource.files(under: real).map(\.name) == ["A.swift", "Sub/B.swift"])
+        #expect(try SwiftSource.files(under: link).map(\.name) == ["A.swift", "Sub/B.swift"])
     }
 }
 
@@ -215,12 +253,26 @@ enum ContrastLint {
             found.append(Problem(line: call.line,
                                  reason: "a tint colors the words of system controls; tint with Theme.accentText or Theme.tintFill only"))
         }
+        // `tintFill` is too faint for words on dark, so it tints only what
+        // fills with it: the sidebar's List and DoneButton.
+        for call in source.calls(named: ["tint"]) where call.arguments == "Theme.tintFill" {
+            if !tintsAFill(call, in: source) {
+                found.append(Problem(line: call.line,
+                                     reason: "Theme.tintFill is only for the sidebar List and DoneButton, where it is a fill"))
+            }
+        }
+        // Anything else in tintFill is drawn in it, words or icons.
+        for call in source.calls(named: ["foregroundStyle", "foregroundColor"]) where call.arguments.contains("Theme.tintFill") {
+            found.append(Problem(line: call.line, reason: "Theme.tintFill is a fill, never words"))
+        }
         // A confirmation button is drawn filled with the tint, with white
         // words on it, so it must be a DoneButton, which tints it to keep
         // those words readable.
+        // Only its own closure counts, never the next item's.
         for call in source.calls(named: ["ToolbarItem"]) where call.arguments.contains(".confirmationAction") {
-            let after = String(source.code[call.offset...].prefix(300))
-            if !after.contains("DoneButton") {
+            let content = source.trailingClosure(of: call) ?? ""
+            if !content.contains("DoneButton")
+                || content.range(of: #"\bButton\s*[({]"#, options: .regularExpression) != nil {
                 found.append(Problem(line: call.line,
                                      reason: "a confirmation button fills with the tint; use DoneButton so its words stay readable"))
             }
@@ -235,6 +287,22 @@ enum ContrastLint {
             }
         }
         return found.sorted { $0.line < $1.line }
+    }
+
+    /// True when a `.tint(Theme.tintFill)` call is on a `List(` whose
+    /// closure it closes, or is in `DoneButton`'s body.
+    static func tintsAFill(_ call: SwiftSource.Call, in source: SwiftSource) -> Bool {
+        for list in source.calls(named: ["List"]) where list.offset < call.offset {
+            // Only white space and a `.` between the List's closure and the tint.
+            guard let braces = source.trailingClosureBraces(of: list), braces.upperBound < call.offset else { continue }
+            let between = String(source.code[(braces.upperBound + 1)..<call.offset])
+            if between.trimmingCharacters(in: .whitespacesAndNewlines) == "." { return true }
+        }
+        let code = String(source.code[..<call.offset])
+        guard let done = code.range(of: "struct DoneButton", options: .backwards) else { return false }
+        // Still inside DoneButton: no other type starts between.
+        let after = code[done.upperBound...]
+        return after.range(of: #"\b(struct|class|enum|extension)\s"#, options: .regularExpression) == nil
     }
 }
 #endif
