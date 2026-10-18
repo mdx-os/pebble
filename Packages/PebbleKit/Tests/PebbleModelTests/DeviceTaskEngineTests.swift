@@ -21,6 +21,15 @@ final class DigestClock: @unchecked Sendable {
     }
 }
 
+/// Every snapshot an observer was told, from any thread.
+final class Heard: @unchecked Sendable {
+    private let lock = NSLock()
+    private var snapshots: [TaskSnapshot] = []
+
+    func add(_ snapshot: TaskSnapshot) { lock.lock(); snapshots.append(snapshot); lock.unlock() }
+    var all: [TaskSnapshot] { lock.lock(); defer { lock.unlock() }; return snapshots }
+}
+
 /// A model that may send words away, as a cloud model does.
 struct LeavesTheDevice: ModelClient {
     func reply(to transcript: [ChatTurn]) async throws -> String { "" }
@@ -70,24 +79,23 @@ struct DeviceTaskEngineTests {
         #expect(engine?.place == LocalStubModel().privacyPlace)
     }
 
-    /// The place is never written by hand: only the factory, which reads
-    /// it from the model, makes an engine.
-    @Test func onlyTheFactoryMakesTheEngine() throws {
-        let sources = URL(fileURLWithPath: #filePath)
+    /// The place is never written by hand. The engine is made only from an
+    /// `OnDeviceTasks.Key`, which only `OnDeviceTasks.swift` can make, so
+    /// the compiler refuses any other maker. This checks the one maker
+    /// there is: its place is the model's, every time.
+    @Test func theFactoryTakesThePlaceFromTheModel() throws {
+        let first = try engine()
+        let second = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes))
+        #expect(first.place == LocalStubModel().privacyPlace)
+        #expect(second.place == LocalStubModel().privacyPlace)
+        #expect(first.place.staysOnDevice)
+    }
+
+    @Test func theEngineNeverReachesTheNetwork() throws {
+        let file = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Sources")
-        let app = sources.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("App")
-        var makers: [String] = []
-        for root in [sources, app] {
-            let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?
-                .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" } ?? []
-            for file in files where try String(contentsOf: file, encoding: .utf8).contains("DeviceTaskEngine(") {
-                makers.append(file.lastPathComponent)
-            }
-        }
-        #expect(makers == ["OnDeviceTasks.swift"])
-        let engine = try String(contentsOf: sources.appendingPathComponent("PebbleCore/DeviceTaskEngine.swift"), encoding: .utf8)
+            .appendingPathComponent("Sources/PebbleModel/DeviceTaskEngine.swift")
+        let engine = try String(contentsOf: file, encoding: .utf8)
         for word in ["URLSession", "URLRequest", "http"] { #expect(!engine.contains(word), "\(word) in the engine") }
     }
 
@@ -142,6 +150,9 @@ struct DeviceTaskEngineTests {
         #expect(after.count == before.count + 1)
         #expect(after.last?.text == question.action.details)
         #expect(after.last?.source == .inferred)
+        // Each note's line keeps where that note came from.
+        #expect(question.action.details.contains("Dentist on Thursday at 3 (From Calendar)"))
+        #expect(question.action.details.contains("Loves lemon cake. (You told me)"))
         let done = try #require(engine.tasks.first)
         #expect(done.state == .done)
         #expect(done.step == DigestWords.done)
@@ -212,6 +223,92 @@ struct DeviceTaskEngineTests {
         #expect(!text.contains("lemon cake"))
     }
 
+    /// Keeps a digest and returns it with the engine, the task's id and
+    /// the note it became.
+    func keepDigest() throws -> (DeviceTaskEngine, String, MemoryNote) {
+        let engine = try engine()
+        let (task, question) = try runToQuestion(engine)
+        guard case .approved(let approval) = rule.sayYes(to: question) else { throw ApprovalMissing() }
+        #expect(engine.resume(task.id, with: approval) == .proceeding)
+        let kept = try #require(notes.notes().last)
+        #expect(kept.text == question.action.details)
+        return (engine, task.id, kept)
+    }
+
+    struct ApprovalMissing: Error {}
+
+    /// A kept digest's words live only in the notes. The file never holds
+    /// them, and once the digest note and a note it quoted are forgotten,
+    /// nothing of either is left in the file or on the card, then or after
+    /// a relaunch.
+    @Test func forgettingTheNotesLeavesNothingOfThemBehind() throws {
+        let (engine, id, kept) = try keepDigest()
+        #expect(engine.tasks.first?.result == kept.text)
+        let file = try String(contentsOf: tasksFile, encoding: .utf8)
+        #expect(!file.contains("Dentist"))
+        #expect(!file.contains(DigestWords.heading))
+
+        let dentist = try #require(notes.notes().first { $0.text.hasPrefix("Dentist") })
+        #expect(try notes.forget(dentist.id))
+        #expect(try notes.forget(kept.id))
+        engine.refresh()
+        let card = try #require(engine.tasks.first { $0.id == id })
+        #expect(card.result == nil)
+        #expect(card.step == DigestWords.removed)
+
+        let again = try self.engine()
+        let back = try #require(again.tasks.first { $0.id == id })
+        #expect(back.result == nil)
+        #expect(back.step == DigestWords.removed)
+        for text in [try String(contentsOf: tasksFile, encoding: .utf8), "\(back)"] {
+            #expect(!text.contains("Dentist"))
+            #expect(!text.contains("lemon cake"))
+            #expect(!text.contains(DigestWords.heading))
+        }
+    }
+
+    /// Forgetting only a note the digest quoted takes the digest's words
+    /// off the card too, though the digest note itself stays in the notes.
+    @Test func forgettingOneQuotedNoteTakesTheWordsOffTheCard() throws {
+        let (engine, id, kept) = try keepDigest()
+        let heard = Heard()
+        let watch = engine.observe { heard.add($0) }
+        let cake = try #require(notes.notes().first { $0.text.contains("lemon cake") && $0.id != kept.id })
+        #expect(try notes.forget(cake.id))
+        engine.refresh()
+        let card = try #require(engine.tasks.first { $0.id == id })
+        #expect(card.result == nil)
+        #expect(card.step == DigestWords.done)
+        // Observers hear it, so an open card follows.
+        #expect(heard.all.count == 2)
+        #expect(heard.all.last?.tasks.first { $0.id == id }?.result == nil)
+        watch.cancel()
+        let again = try self.engine()
+        #expect(again.tasks.first { $0.id == id }?.result == nil)
+    }
+
+    /// A file left unreadable at launch, as on a locked device, is read on
+    /// refresh, and its tasks join those started meanwhile, which keep
+    /// going and keep their question.
+    @Test(.enabled(if: getuid() != 0, "root can read a locked file"))
+    func aLateFirstReadKeepsTasksStartedMeanwhile() throws {
+        let (_, keptID, _) = try keepDigest()
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: tasksFile.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: tasksFile.path) }
+        let locked = try engine()
+        #expect(locked.tasks.isEmpty)
+        let (task, question) = try runToQuestion(locked)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: tasksFile.path)
+        locked.refresh()
+        let ids = locked.tasks.map(\.id)
+        #expect(ids == [task.id, keptID])
+        #expect(locked.tasks.first?.state == .waitingOnYou)
+        #expect(locked.tasks.first?.question == question)
+        #expect(!rule.isClosed(question))
+        // Both are written once the file has been read.
+        #expect(try self.engine().tasks.map(\.id) == ids)
+    }
+
     @Test func aTaskGoingWhenTheAppClosedComesBackStoppedNeverDone() throws {
         let engine = try engine()
         let (task, _) = try runToQuestion(engine)
@@ -242,6 +339,23 @@ struct DeviceTaskEngineTests {
         #expect(back.wrapUp?.underway == DigestTask.saveTodo)
         #expect(back.wrapUp?.notDone == [])
         #expect(back.wrapUp?.underwayLine == TaskWords.mayBeDone(DigestTask.saveTodo))
+        #expect(back.progress != .fraction(1))
+    }
+
+    /// Only a task that was done comes back looking complete. One that
+    /// stopped or failed never shows a full bar.
+    @Test func onlyADoneTaskComesBackFull() throws {
+        let json = ["done", "stopped", "failed"].map { state in
+            """
+            {"id":"device-task:\(state)","title":"\(DigestTask.title)","step":"x","state":"\(state)",
+             "history":[],"startedAt":0,"updatedAt":0,"saving":false}
+            """
+        }.joined(separator: ",")
+        try Data("[\(json)]".utf8).write(to: tasksFile)
+        let back = Dictionary(uniqueKeysWithValues: try engine().tasks.map { ($0.state, $0.progress) })
+        #expect(back[.done] == .fraction(1))
+        #expect(back[.stopped] == .indeterminate)
+        #expect(back[.failed] == .indeterminate)
     }
 
     // MARK: Forget everything
@@ -279,6 +393,9 @@ struct DeviceTaskEngineTests {
         var week = (0..<40).map { MemoryNote(text: "Note number \($0) " + String(repeating: "word ", count: 30),
                                              savedAt: now - Double($0) * 3_600, source: .toldMe) }
         week.append(MemoryNote(text: DigestWords.heading + ". Last week's", savedAt: now - 60, source: .inferred))
+        // The person's own note with the same first words is theirs, not a digest.
+        let typed = MemoryNote(text: DigestWords.heading + " I mostly rested", savedAt: now - 30, source: .toldMe)
+        #expect(DigestTask.thisWeek(week + [typed], now: now).last == typed)
         let picked = DigestTask.thisWeek(week, now: now)
         #expect(picked.count == 40)
         let digest = DigestTask.digest(of: picked, now: now)

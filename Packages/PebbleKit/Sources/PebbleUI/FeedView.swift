@@ -70,6 +70,9 @@ final class FeedModel: ObservableObject {
     /// True from forgetting every task until a new one starts, so the
     /// memory screen can say the tasks are gone.
     @Published private(set) var tasksForgotten = false
+    /// Goes up by one with each change the engine tells of, so the memory
+    /// screen can look again at what Forget everything would erase.
+    @Published private(set) var tasksSeen = 0
     private let clock: () -> ContinuousClock.Instant
     /// Says a line to VoiceOver. Tests replace it to hear what would be said.
     var announce: @MainActor (TaskAnnouncer.Line) -> Void = FeedModel.post
@@ -204,11 +207,16 @@ final class FeedModel: ObservableObject {
         return tasks.builtIns.filter { !going.contains($0.title) }
     }
 
-    /// Starts one of the engine's own tasks from its offer on Today.
+    /// Starts one of the engine's own tasks from its offer on Today. The
+    /// offer goes once its task is going, taking VoiceOver's place with it,
+    /// so the task's first step is said at once.
     func start(_ request: TaskRequest) {
         guard let tasks, tasks.builtIns.contains(request) else { return }
-        tasks.start(request)
+        let id = tasks.start(request)
         refresh()
+        if let task = tasks.tasks.first(where: { $0.id == id }), let line = announcer.started(task, at: clock()) {
+            announce(line)
+        }
     }
 
     /// True while the engine keeps a file of its tasks, so Forget
@@ -253,6 +261,7 @@ final class FeedModel: ObservableObject {
     func tasksChanged(_ snapshot: TaskSnapshot) {
         guard snapshot.sequence > seen else { return }
         seen = snapshot.sequence
+        tasksSeen += 1
         if track(snapshot.tasks) { rebuild() }
         for line in announcer.lines(for: snapshot.tasks, at: clock()) { announce(line) }
     }
@@ -270,6 +279,9 @@ final class FeedModel: ObservableObject {
         // A result open to read whose task went away, as when the oldest
         // ended tasks are let go, closes with it.
         if let reading, taskIDs.contains(reading.id), !ids.contains(reading.id) { self.reading = nil }
+        // So does one whose words are gone, as when the note it showed is
+        // forgotten.
+        if let reading, let task = list.first(where: { $0.id == reading.id }), task.result == nil { self.reading = nil }
         taskIDs = ids
         if !ids.isEmpty && tasksForgotten { tasksForgotten = false }
         let next = list.map(\.card)
@@ -834,19 +846,19 @@ struct TaskOfferCard: View {
     var body: some View {
         Button(action: start) {
             VStack(alignment: .leading, spacing: 10) {
+                // The section above says what this is, so the card leads
+                // with the task itself.
                 Label {
-                    Text(DigestWords.offerHeading)
+                    Text(request.title)
+                        .font(.system(.headline, design: .rounded))
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
                 } icon: {
                     Image(systemName: "sparkles")
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Theme.accentSymbol)
                 }
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(Theme.secondaryText)
-                Text(request.title)
-                    .font(.system(.headline, design: .rounded))
-                    .foregroundStyle(.primary)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
                 Text(DigestWords.startTitle)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Theme.accentText)

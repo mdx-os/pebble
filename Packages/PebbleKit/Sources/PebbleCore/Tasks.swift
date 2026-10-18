@@ -402,7 +402,7 @@ public final class TaskObservation: @unchecked Sendable {
 /// moving through it. After that a new step or state is said once, with at
 /// least `minimumGap` between lines. A step that arrives too soon waits, and
 /// only the newest waiting step is said. A task that needs the person, or
-/// that ends, is said straight away.
+/// that ends, is said straight away, and so is one the person just started.
 public struct TaskAnnouncer: Sendable {
     public static let minimumGap: Duration = .seconds(4)
 
@@ -412,6 +412,8 @@ public struct TaskAnnouncer: Sendable {
     }
 
     private var heard: [String: Heard] = [:]
+    /// What was last said for each task, so a line is never said twice.
+    private var said: [String: Heard] = [:]
     private var waiting: [String: String] = [:]
     private var lastSpoken: ContinuousClock.Instant?
     private var primed = false
@@ -441,6 +443,7 @@ public struct TaskAnnouncer: Sendable {
             let line = Self.line(for: task)
             if Self.isUrgent(task.state) && before?.state != task.state {
                 waiting[task.id] = nil
+                said[task.id] = current
                 out.append(Line(text: line, urgent: true))
             } else {
                 waiting[task.id] = line
@@ -450,6 +453,7 @@ public struct TaskAnnouncer: Sendable {
         let ids = Set(tasks.map(\.id))
         waiting = waiting.filter { ids.contains($0.key) }
         heard = heard.filter { ids.contains($0.key) }
+        said = said.filter { ids.contains($0.key) }
 
         if !out.isEmpty {
             lastSpoken = now
@@ -458,8 +462,22 @@ public struct TaskAnnouncer: Sendable {
         if let lastSpoken, now - lastSpoken < Self.minimumGap { return [] }
         guard let next = tasks.first(where: { waiting[$0.id] != nil }), let text = waiting[next.id] else { return [] }
         waiting[next.id] = nil
+        said[next.id] = heard[next.id]
         lastSpoken = now
         return [Line(text: text, urgent: false)]
+    }
+
+    /// The line for a task the person just started, said at once rather
+    /// than waiting its turn: the button they were on is gone, so this is
+    /// how they hear it began. Nil when that line was already said.
+    public mutating func started(_ task: AgentTask, at now: ContinuousClock.Instant) -> Line? {
+        let current = Heard(state: task.state, step: task.step)
+        heard[task.id] = current
+        waiting[task.id] = nil
+        guard said[task.id] != current else { return nil }
+        said[task.id] = current
+        lastSpoken = now
+        return Line(text: Self.line(for: task), urgent: true)
     }
 
     static func isUrgent(_ state: TaskState) -> Bool {

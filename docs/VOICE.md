@@ -104,7 +104,9 @@ its own review.
 Before the agent sends, buys or shares anything, it asks. It asks too
 before it keeps something new in the person's notes that they didn't type,
 such as the weekly digest ("Keep this in What I remember?"). The question
-names exactly what will happen, to whom, and for how much. The buttons say
+names exactly what will happen, to whom, and for how much. A digest line
+ends with where its note came from, in the same words as the note's own
+label ("(From Calendar)", "(You told me)"), so nothing is relabelled. The buttons say
 what they do ("Yes, go ahead" and "Not now", from `ProposedAction.yesTitle`
 and `noTitle`; `CopyDashTests` checks they match), and the promise underneath
 says the yes counts once, for exactly what is shown.

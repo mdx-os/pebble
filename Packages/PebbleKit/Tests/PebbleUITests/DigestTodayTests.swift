@@ -1,4 +1,5 @@
 #if canImport(SwiftUI)
+import Combine
 import Foundation
 import PebbleCore
 import PebbleModel
@@ -111,6 +112,54 @@ struct DigestTodayTests {
         #expect(memory.hasStoredFile)
         memory.forgetEverything()
         #expect(!memory.hasStoredFile)
+    }
+
+    /// Start takes the offer, and VoiceOver's place, away, so the first
+    /// step is said at once, even right after another line, and only once.
+    @Test func startSaysTheFirstStepAtOnce() throws {
+        var heard: [TaskAnnouncer.Line] = []
+        feed.announce = { heard.append($0) }
+        // Something was just said: a task asking, then stopping.
+        let first = try startAndAsk()
+        feed.stop(first)
+        #expect(!heard.isEmpty)
+        heard.removeAll()
+        feed.start(DigestTask.request)
+        let reading = TaskAnnouncer.Line(text: DigestTask.title + ". " + DigestWords.reading, urgent: true)
+        #expect(heard == [reading])
+        feed.refresh()
+        #expect(heard == [reading])
+    }
+
+    /// The memory screen looks again as tasks change elsewhere, so Forget
+    /// everything shows once a task's file is made, with no other nudge.
+    @Test func theMemoryScreenFollowsTheTasks() throws {
+        for note in notes.notes() { _ = try notes.forget(note.id) }
+        let memory = MemoryModel(store: notes, place: .onDevice, othersStored: { feed.tasksStored },
+                                 othersChanged: feed.$tasksSeen.map { _ in () }.eraseToAnyPublisher())
+        #expect(!memory.hasStoredFile)
+        feed.start(DigestTask.request)
+        #expect(memory.hasStoredFile)
+    }
+
+    /// Forgetting the kept digest on the memory screen takes its words
+    /// off Today's card, and closes them if they are open.
+    @Test func forgettingTheDigestNoteTakesItsWordsOffToday() throws {
+        let task = try startAndAsk()
+        feed.review(task)
+        let request = try #require(feed.reviewing)
+        ConfirmationState(request: request, rule: rule, onApprove: { feed.approved($0) }, onDecline: {}).tapPrimary()
+        let done = try #require(engine.tasks.first)
+        #expect(done.result != nil)
+        feed.open(done)
+        #expect(feed.reading != nil)
+        let memory = MemoryModel(store: notes, place: .onDevice, onNotesChanged: { feed.refresh() })
+        let digest = try #require(memory.notes.first { $0.text.hasPrefix(DigestWords.heading) })
+        memory.forget(digest)
+        let card = try #require(feed.feed.groups.flatMap(\.items).compactMap(\.task).first { $0.id == done.id })
+        #expect(card.result == nil)
+        #expect(card.step == DigestWords.removed)
+        #expect(feed.reading == nil)
     }
 
     /// Tasks whose file couldn't be erased are never said to be gone.

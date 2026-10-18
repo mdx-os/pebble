@@ -1,4 +1,5 @@
 import Foundation
+import PebbleCore
 
 /// The app's real task engine. It runs only with a model on this device,
 /// reads and writes nothing but the person's notes and its own file, and
@@ -13,9 +14,15 @@ import Foundation
 /// line that says so, never as finished. One that had a yes and was saving
 /// when the app closed comes back saying the save may be done.
 ///
-/// Made only by `OnDeviceTasks.engine(model:notes:)` in PebbleModel, which
-/// reads `place` from the model. Nothing else makes one, so the place is
-/// never written by hand.
+/// No note's words are ever in this engine's file or held by it once a
+/// digest is kept. The file keeps only which note the digest became and
+/// which notes it drew from, and a card reads the words from the notes each
+/// time. Forgetting the digest note, or any note it quoted, takes the words
+/// off the card.
+///
+/// Made only by `OnDeviceTasks.engine(model:notes:)`, from an
+/// `OnDeviceTasks.Key` that only it can make, so the place is read from the
+/// model and the compiler, not a test, keeps it from being written by hand.
 ///
 /// Steps move on with `runPending()`. With a `pace`, the engine calls it
 /// itself while work is waiting; without one, the caller does, so tests
@@ -40,10 +47,14 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         var stage: Stage
         /// This week's notes, once read. Never written to the task file.
         var notes: [MemoryNote] = []
-        /// The digest, once written. Never written to the task file until
-        /// it has been kept as a note.
+        /// The digest, once written, until it is kept or let go. Never
+        /// written to the task file.
         var digest: String?
         var question: ConfirmationRequest?
+        /// The note the digest was kept as.
+        var kept: UUID?
+        /// The notes the digest was written from.
+        var drewFrom: [UUID] = []
     }
 
     private struct PendingAsk {
@@ -52,7 +63,7 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     }
 
     public let rule: AskFirst
-    /// From the model, through `OnDeviceTasks`. The engine does nothing
+    /// From the model, through `OnDeviceTasks.Key`. The engine does nothing
     /// unless it says every word stays here.
     public let place: PrivacyPlace
     /// The notes it reads, and the only place it ever writes a note.
@@ -65,19 +76,24 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     private var runs: [Run] = []
     private var observers: [UUID: @Sendable (TaskSnapshot) -> Void] = [:]
     private var sequence = 0
+    /// The tasks as observers last heard them.
+    private var published: [AgentTask] = []
     private var withdrawals: [ConfirmationRequest] = []
     private var driving = false
     /// False while the file was there but couldn't be opened, as when the
     /// device is locked at launch. Nothing is written over it until it has
     /// been read.
     private var loaded = false
+    /// True when a change came while the file was unread, so it is written
+    /// once it has been.
+    private var unsaved = false
 
     /// Ended tasks kept at most, like `LocalFakeEngine.endedLimit`.
     public static let endedLimit = 12
 
-    package init(place: PrivacyPlace, notes: MemoryStore, fileURL: URL, rule: AskFirst = .shared,
-                 pace: Duration? = .milliseconds(900), clock: @escaping @Sendable () -> Date = { Date() }) {
-        self.place = place
+    init(key: OnDeviceTasks.Key, notes: MemoryStore, fileURL: URL, rule: AskFirst,
+         pace: Duration?, clock: @escaping @Sendable () -> Date) {
+        self.place = key.place
         self.notes = notes
         self.fileURL = fileURL
         self.rule = rule
@@ -85,6 +101,7 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         self.clock = clock
         lock.lock()
         loadFile()
+        published = shown()
         lock.unlock()
     }
 
@@ -99,7 +116,7 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
 
     public var tasks: [AgentTask] {
         lock.lock(); defer { lock.unlock() }
-        return runs.reversed().map(\.task)
+        return shown()
     }
 
     /// True while the task file is on disk, readable or not, so Forget
@@ -143,7 +160,7 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         let key = UUID()
         lock.lock()
         observers[key] = onChange
-        let snapshot = TaskSnapshot(sequence: sequence, tasks: runs.reversed().map(\.task))
+        let snapshot = TaskSnapshot(sequence: sequence, tasks: shown())
         lock.unlock()
         onChange(snapshot)
         return TaskObservation { [weak self] in
@@ -227,6 +244,7 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
             runs.removeAll()
             // A file left unread, as on a locked device, goes too.
             loaded = true
+            unsaved = false
             let erased = (try? removeFile()) != nil
             return ClearedTasks(forgotten: forgotten, underway: underway, erased: erased)
         }
@@ -269,14 +287,17 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         guard verdict == .proceed else { return verdict == .timedOut ? .timedOut : .refused }
         guard let digest else { return .refused }
         // The only write to the notes, after a yes `AskFirst` honored, and
-        // outside this engine's lock.
-        let saved: Bool
-        if case .saved? = try? notes.remember(digest, at: clock(), source: .inferred) { saved = true } else { saved = false }
+        // outside this engine's lock. Each line already names where its
+        // note came from, and the digest itself is the agent's own work.
+        var kept: UUID?
+        if case .saved(let note)? = try? notes.remember(digest, at: clock(), source: .inferred) { kept = note.id }
         mutate {
             guard let index = runs.firstIndex(where: { $0.task.id == id }), runs[index].stage == .saving else { return }
-            if saved {
+            if let kept {
                 end(&runs[index], as: .done, line: DigestWords.done, wrapUp: nil)
-                runs[index].task.result = digest
+                // Only which note, never its words: the card reads them
+                // from the notes, so forgetting the note takes them away.
+                runs[index].kept = kept
                 runs[index].task.progress = .fraction(1)
             } else {
                 end(&runs[index], as: .failed, line: DigestWords.couldNotSave,
@@ -297,6 +318,8 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         }
     }
 
+    /// Settles questions that closed, reads a file left unread at launch,
+    /// and tells observers if a kept digest's words changed in the notes.
     public func refresh() {
         lock.lock()
         let open = runs.compactMap { $0.stage == .waiting ? $0.question : nil }
@@ -314,6 +337,26 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     }
 
     // MARK: Steps. Everything below runs inside the lock.
+
+    /// The tasks as their cards show them, newest first. A kept digest's
+    /// words are read from the notes each time, and shown only while the
+    /// digest note and every note it drew from are still there. While the
+    /// notes can't be read, no words are shown.
+    private func shown() -> [AgentTask] {
+        var all: [MemoryNote]?
+        if runs.contains(where: { $0.kept != nil }), case .notes(let read) = notes.contents() { all = read }
+        let ids = Set(all?.map(\.id) ?? [])
+        return runs.reversed().map { run in
+            var task = run.task
+            guard let kept = run.kept, let all else { return task }
+            if let note = all.first(where: { $0.id == kept }) {
+                if run.drewFrom.allSatisfy(ids.contains) { task.result = note.text }
+            } else {
+                task.step = DigestWords.removed
+            }
+            return task
+        }
+    }
 
     private func step(_ run: inout Run) {
         let now = clock()
@@ -345,6 +388,7 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
             run.task.updatedAt = now
         case .writing:
             run.digest = DigestTask.digest(of: run.notes, now: now)
+            run.drewFrom = run.notes.map(\.id)
             run.notes = []
             run.task.record(TaskStep(DigestWords.writing, mark: .done, at: now))
             run.task.progress = .fraction(0.75)
@@ -408,12 +452,19 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     }
 
     /// Runs a change inside the lock, asks and withdraws outside it, keeps
-    /// the file in step, then tells observers once.
+    /// the file in step, then tells observers once. A question whose task
+    /// went in the change is withdrawn, so no sheet is left open with
+    /// nothing behind it.
     private func mutate<T>(_ change: () -> T) -> T {
         lock.lock()
         let before = runs.map(\.task)
         let stagesBefore = runs.map(\.stage)
+        let questionsBefore = runs.compactMap { run in run.question.map { (run.task.id, $0) } }
         let value = change()
+        let ids = Set(runs.map(\.task.id))
+        for (id, question) in questionsBefore where !ids.contains(id) && !withdrawals.contains(question) {
+            withdrawals.append(question)
+        }
         var work = takeRuleWork()
         lock.unlock()
         while !work.withdrawals.isEmpty || !work.asks.isEmpty {
@@ -426,11 +477,14 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         }
         lock.lock()
         dropOldEnded()
-        let after = runs.map(\.task)
-        let changed = before != after
-        if changed || stagesBefore != runs.map(\.stage) { saveFile() }
-        if changed { sequence += 1 }
-        let snapshot = TaskSnapshot(sequence: sequence, tasks: Array(after.reversed()))
+        if unsaved || before != runs.map(\.task) || stagesBefore != runs.map(\.stage) { saveFile() }
+        let after = shown()
+        let changed = after != published
+        if changed {
+            sequence += 1
+            published = after
+        }
+        let snapshot = TaskSnapshot(sequence: sequence, tasks: after)
         let listeners = changed ? Array(observers.values) : []
         lock.unlock()
         for listener in listeners { listener(snapshot) }
@@ -479,7 +533,9 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     }
 
     /// Reads the file. A task that was still going when the app closed
-    /// comes back stopped, and says so.
+    /// comes back stopped, and says so. Read late, as once a locked device
+    /// opens, the tasks it holds join any started since, which stay as
+    /// they are.
     private func loadFile() {
         let manager = FileManager.default
         try? manager.removeItem(at: stagingURL)
@@ -493,19 +549,27 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         // Unreadable: start with none. The file is replaced on the next
         // change, or erased by Forget everything.
         guard let stored = try? Self.decoder.decode([StoredTask].self, from: data) else { return }
-        runs = stored.map { Run(task: $0.restored(at: clock()), stage: .ended) }
+        let going = Set(runs.map(\.task.id))
+        let back = stored.filter { !going.contains($0.id) }.map { stored in
+            Run(task: stored.restored(at: clock()), stage: .ended, kept: stored.kept, drewFrom: stored.drewFrom ?? [])
+        }
+        runs = back + runs
     }
 
     /// Writes every task, or removes the file once there are none. Only
-    /// what the card shows is kept: never the notes read or a digest that
-    /// wasn't kept.
+    /// what the card shows is kept, and never a note's words: not the
+    /// notes read, not a draft, and not a digest once kept.
     private func saveFile() {
-        guard loaded else { return }
+        guard loaded else {
+            unsaved = true
+            return
+        }
+        unsaved = false
         if runs.isEmpty {
             try? removeFile()
             return
         }
-        let stored = runs.map { StoredTask($0.task, saving: $0.stage == .saving) }
+        let stored = runs.map { StoredTask($0.task, saving: $0.stage == .saving, kept: $0.kept, drewFrom: $0.drewFrom) }
         guard let data = try? Self.encoder.encode(stored) else { return }
         let manager = FileManager.default
         try? manager.removeItem(at: stagingURL)
@@ -533,8 +597,9 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     private static let decoder = JSONDecoder()
 }
 
-/// A task as the file keeps it: what its card shows, and whether a save
-/// the person said yes to was under way.
+/// A task as the file keeps it: what its card shows, whether a save the
+/// person said yes to was under way, and for a kept digest, which notes
+/// to read its words from. Never a note's words.
 struct StoredTask: Codable, Equatable {
     struct Step: Codable, Equatable {
         let text: String
@@ -554,128 +619,46 @@ struct StoredTask: Codable, Equatable {
     let state: String
     let history: [Step]
     let wrapUp: WrapUp?
-    let result: String?
     let startedAt: Date
     let updatedAt: Date
     /// The person said yes and the note was being written.
     let saving: Bool
+    /// The note the digest was kept as.
+    let kept: UUID?
+    /// The notes a kept digest drew from.
+    let drewFrom: [UUID]?
 
-    init(_ task: AgentTask, saving: Bool) {
+    init(_ task: AgentTask, saving: Bool, kept: UUID? = nil, drewFrom: [UUID] = []) {
         id = task.id
         title = task.title
         step = task.step
         state = task.state.rawValue
         history = task.history.map { Step(text: $0.text, mark: $0.mark.rawValue, at: $0.at) }
         wrapUp = task.wrapUp.map { WrapUp(kept: $0.kept, notDone: $0.notDone, underway: $0.underway) }
-        result = task.result
         startedAt = task.startedAt
         updatedAt = task.updatedAt
         self.saving = saving
+        self.kept = kept
+        self.drewFrom = kept == nil ? nil : drewFrom
     }
 
     /// The task as it comes back after the app closed. One that ended
-    /// comes back as it was. One that was still going comes back stopped,
-    /// never done, and a save said yes to may be done.
+    /// comes back as it was, full only if it was done. One that was still
+    /// going comes back stopped, never done, and a save said yes to may be
+    /// done.
     func restored(at now: Date) -> AgentTask {
         let steps = history.map { TaskStep($0.text, mark: TaskStep.Mark(rawValue: $0.mark) ?? .done, at: $0.at) }
         let state = TaskState(rawValue: self.state) ?? .stopped
         guard !state.isFinished else {
-            return AgentTask(id: id, title: title, step: step, progress: .fraction(1), state: state, history: steps,
+            return AgentTask(id: id, title: title, step: step, progress: state == .done ? .fraction(1) : .indeterminate,
+                             state: state, history: steps,
                              wrapUp: wrapUp.map { TaskWrapUp(kept: $0.kept, notDone: $0.notDone, underway: $0.underway) },
-                             result: result, startedAt: startedAt, updatedAt: updatedAt)
+                             startedAt: startedAt, updatedAt: updatedAt)
         }
         return AgentTask(id: id, title: title, step: DigestWords.stoppedWhenClosed, progress: .indeterminate,
                          state: .stopped, history: steps,
                          wrapUp: TaskWrapUp(kept: [], notDone: saving ? [] : [DigestTask.saveTodo],
                                             underway: saving ? DigestTask.saveTodo : nil),
                          startedAt: startedAt, updatedAt: now)
-    }
-}
-
-/// The one built-in task: the past week's notes, tidied into a short
-/// digest the person can keep as a note.
-public enum DigestTask {
-    public static let title = "Tidy my notes into a short weekly digest"
-    public static let request = TaskRequest(title: title)
-
-    /// "I didn't ..." for the save.
-    public static let saveTodo = "keep the digest in your notes"
-    static let todos = ["read your notes", "write the digest", saveTodo]
-
-    /// The longest line a note gets in the digest.
-    static let lineLimit = 90
-
-    /// Where the digest goes, as the question names it.
-    public static let notes = Recipient(id: "notes:what-i-remember", displayName: DigestWords.yourNotes,
-                                        handle: MemoryWords.title)
-
-    /// The question: keep exactly this text as a new note.
-    public static func keep(_ digest: String) -> ProposedAction {
-        ProposedAction(kind: .save, recipient: notes, details: digest)
-    }
-
-    /// Notes from the last seven days, oldest first, leaving out earlier
-    /// digests.
-    package static func thisWeek(_ all: [MemoryNote], now: Date) -> [MemoryNote] {
-        let since = now.addingTimeInterval(-7 * 86_400)
-        return all.filter { $0.savedAt >= since && $0.savedAt <= now && !$0.text.hasPrefix(DigestWords.heading) }
-    }
-
-    /// A short digest, no longer than a note may be: a heading, then one
-    /// line per note, each shortened, and a count of any left out. Hidden
-    /// characters are taken out, so the question shows exactly what is kept.
-    package static func digest(of week: [MemoryNote], now: Date) -> String {
-        var lines = [DigestWords.heading + "."]
-        var left = week.count
-        for note in week {
-            let text = tidy(note.text)
-            guard !text.isEmpty else { left -= 1; continue }
-            let line = "• " + (text.count > lineLimit ? String(text.prefix(lineLimit)) + "..." : text)
-            let more = left - 1 > 0 ? "\n" + DigestWords.andMore(left - 1) : ""
-            let next = (lines + [line]).joined(separator: "\n")
-            guard (next + more).count <= MemoryStore.maxLength, (next + more).utf8.count <= MemoryStore.maxBytes else { break }
-            lines.append(line)
-            left -= 1
-        }
-        if left > 0 { lines.append(DigestWords.andMore(left)) }
-        return lines.joined(separator: "\n")
-    }
-
-    private static func tidy(_ text: String) -> String {
-        String(String.UnicodeScalarView(text.unicodeScalars.filter { scalar in
-            let p = scalar.properties
-            return p.generalCategory != .format && p.generalCategory != .control && !p.isDefaultIgnorableCodePoint
-                && scalar.value != 0x2800 && scalar.value != 0x3164
-        }))
-        .split(whereSeparator: { $0.isWhitespace || $0.isNewline })
-        .joined(separator: " ")
-    }
-}
-
-/// Words for the digest task and for Today's offer of it.
-public enum DigestWords {
-    public static let offerHeading = "Something I can do"
-    public static let offerDetail = "I read only your notes, and I ask you first before I keep anything."
-    public static let startTitle = "Start"
-    public static let startHint = "Starts it. I'll ask you before I keep anything."
-    public static let reading = "Reading your notes"
-    public static let picking = "Picking out this week's notes"
-    public static let writing = "Writing a short digest"
-    public static let askLine = "Your digest is ready. I'll wait for your yes before I keep it in your notes."
-    public static let saving = "Keeping the digest in your notes"
-    public static let done = "Your weekly digest is in your notes."
-    public static let nothingThisWeek = "There were no notes from this week to tidy, so I didn't write a digest."
-    public static let couldNotRead = "Sorry, I couldn't read your notes just now, so I stopped. Nothing was changed."
-    public static let couldNotSave = "Sorry, I couldn't keep the digest in your notes just now. Nothing was saved."
-    public static let cantSteer = "Thanks. I can't change how I tidy this one yet, so I'm going on as I was."
-    public static let cantDoThatYet = "Sorry, I can't do that one yet."
-    /// A task that was going when the app closed. It is never called done.
-    public static let stoppedWhenClosed = "I stopped when the app closed, so I didn't finish this."
-    /// Who the question names as the place the digest goes.
-    public static let yourNotes = "Your notes"
-    /// The digest's first line, also how an earlier digest is told apart.
-    public static let heading = "This week in your notes"
-    public static func andMore(_ count: Int) -> String {
-        count == 1 ? "And 1 more note." : "And \(count) more notes."
     }
 }

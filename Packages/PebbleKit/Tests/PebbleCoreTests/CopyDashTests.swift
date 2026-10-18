@@ -144,7 +144,7 @@ extension DigestWords {
     /// Every line the digest task and its offer can show or say.
     static var all: [String] {
         [offerHeading, offerDetail, startTitle, startHint, reading, picking, writing, askLine, saving, done,
-         nothingThisWeek, couldNotRead, couldNotSave, cantSteer, cantDoThatYet, stoppedWhenClosed, yourNotes,
+         removed, nothingThisWeek, couldNotRead, couldNotSave, cantSteer, cantDoThatYet, stoppedWhenClosed, yourNotes,
          heading, andMore(1), andMore(3), DigestTask.keep("x").question, TaskWords.declined(DigestTask.saveTodo),
          TaskWrapUp(kept: [], notDone: [DigestTask.saveTodo]).notDoneLine ?? ""]
     }

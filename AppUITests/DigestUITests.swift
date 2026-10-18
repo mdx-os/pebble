@@ -73,6 +73,7 @@ final class DigestUITests: XCTestCase {
 
         let offer = app.buttons["Tidy my notes into a short weekly digest"].firstMatch
         XCTAssertTrue(offer.waitForExistence(timeout: 10))
+        keep("today-offer", app)
         offer.tap()
         let approve = app.buttons["Check and approve"].firstMatch
         XCTAssertTrue(approve.waitForExistence(timeout: 15))
@@ -80,6 +81,13 @@ final class DigestUITests: XCTestCase {
 
         approve.tap()
         XCTAssertTrue(app.staticTexts["Keep this in What I remember?"].waitForExistence(timeout: 5))
+        // The sheet shows the real digest, each line with where its note
+        // came from. Only once that is drawn is the example line looked
+        // for, so its absence means the sheet is not an example.
+        let asked = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@ AND label CONTAINS %@",
+                                                         "This week in your notes", "Dentist on Thursday at 3 (You told me)"))
+        XCTAssertTrue(asked.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["sampleLabel"].exists)
         XCTAssertFalse(app.staticTexts["This is an example. Nothing here was really done."].exists)
         keep("ask-first", app)
 

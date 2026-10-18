@@ -1,3 +1,4 @@
+import Combine
 import PebbleCore
 #if canImport(SwiftUI)
 import SwiftUI
@@ -510,16 +511,29 @@ final class MemoryModel: ObservableObject {
     /// True while something else Forget everything erases is on disk, such
     /// as the task engine's file, so the button stays while it is there.
     private let othersStored: @MainActor () -> Bool
+    /// Runs after a note is changed or forgotten, so anything showing its
+    /// words, such as a kept digest on Today, looks again.
+    private let onNotesChanged: @MainActor () -> Void
+    private var watchingOthers: AnyCancellable?
 
+    /// With `othersChanged`, the screen looks again each time it fires, as
+    /// when a task elsewhere makes or erases its file, so Forget everything
+    /// shows while there is anything to erase.
     init(store: MemoryStore, place: PrivacyPlace, alsoForget: (@MainActor () throws -> CloudHelp.Forgot)? = nil,
          onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none },
-         othersStored: @escaping @MainActor () -> Bool = { false }) {
+         othersStored: @escaping @MainActor () -> Bool = { false },
+         othersChanged: AnyPublisher<Void, Never>? = nil,
+         onNotesChanged: @escaping @MainActor () -> Void = {}) {
         self.store = store
         self.place = place
         self.alsoForget = alsoForget
         self.onForgetEverything = onForgetEverything
         self.othersStored = othersStored
+        self.onNotesChanged = onNotesChanged
         refresh()
+        watchingOthers = othersChanged?.sink { [weak self] in
+            MainActor.assumeIsolated { self?.refresh() }
+        }
     }
 
     func refresh() {
@@ -563,6 +577,7 @@ final class MemoryModel: ObservableObject {
     func saveEdit() {
         guard let id = editingID else { return }
         report(try store.edit(id, to: editDraft)) { self.cancelEdit() }
+        onNotesChanged()
     }
 
     func forget(_ note: MemoryNote) {
@@ -579,6 +594,7 @@ final class MemoryModel: ObservableObject {
             status = MemoryWords.couldNotForget
         }
         refresh()
+        onNotesChanged()
     }
 
     /// Erases the notes and, whatever happens to them, everything else
@@ -608,8 +624,10 @@ final class MemoryModel: ObservableObject {
         return line == MemoryWords.forgotten ? TaskWords.forgotNotesNotTasks : line + " " + TaskWords.couldNotEraseTasks
     }
 
-    /// What Forget everything says went, from what each part did. Tasks
-    /// can't fail to go, so they are named only when something else stayed.
+    /// What Forget everything says went, from what each part did, with
+    /// `tasksGone` true only once the tasks and their file went. Tasks are
+    /// named here only when something else stayed; tasks whose file stayed
+    /// are said by `forgotLineWithTasks`.
     static func forgotLine(notesGone: Bool, rest: CloudHelp.Forgot??, tasksGone: Bool) -> String {
         switch (notesGone, rest) {
         case (true, nil), (true, .privateWords?):
