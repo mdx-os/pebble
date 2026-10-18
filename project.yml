@@ -31,6 +31,8 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         PebbleBrandName: $(BRAND_NAME)
+        # Empty unless set in Config/Cloud.xcconfig. Empty means no cloud model.
+        PebbleCloudEndpoint: $(PEBBLE_CLOUD_ENDPOINT)
         LSApplicationCategoryType: public.app-category.productivity
         UILaunchScreen: {}
         # Every orientation on iPad, which Split View, Slide Over and Stage Manager need.
