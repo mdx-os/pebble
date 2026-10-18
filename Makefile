@@ -1,6 +1,6 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test repeat-test build build-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-config-check secrets-check pulse clean
+.PHONY: verify generate test repeat-test mutation-check build build-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-config-check secrets-check pulse clean
 
 ## verify: everything CI runs. Run this before every PR. The screenshots are
 ## made after every other step and then checked against the working tree.
@@ -22,6 +22,13 @@ test:
 ## test. FILTER= narrows the run; without it the whole suite runs each time.
 repeat-test:
 	sh scripts/repeat-test.sh $(or $(N),30) "$(FILTER)"
+
+## mutation-check: prove the tests can fail. Each entry in
+## scripts/mutation-manifest.txt breaks one thing, such as one source guard
+## rule, on a copy in build/mutation, and its tests must then fail. The
+## working tree is never touched. ONLY= runs the entries whose tests match.
+mutation-check:
+	sh scripts/mutation-check.sh scripts/mutation-manifest.txt "$(ONLY)"
 
 ## pulse: fetch the competitor watch and write a digest of real changes.
 ## When something changed, also write build/pulse/notify.md and build/pulse/summary.json.

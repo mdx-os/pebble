@@ -26,6 +26,8 @@ in lint, a skill, or CI.
 - The screenshots also get a `STAMP` with the commit and the working tree's hash. `make verify` makes them and then fails with "screenshots are stale, rerun make screenshots" if the stamp is missing or the tree has changed since. The tree hash is the contract: the same files make the same screenshots, so committing or amending them with nothing changed keeps them fresh. The commit line is only there to read. Screenshots always show the code as it is now
 - `make screenshots-check`: that check alone, and `make screenshots-check-test` its self-test
 - `make generate`: regenerate `Pebble.xcodeproj` after editing `project.yml`
+- `make mutation-check`: break each entry of `scripts/mutation-manifest.txt` on a copy in
+  `build/mutation` and require its tests to fail. `ONLY=` runs the entries whose tests match
 - `make secrets-check`: gitleaks over git history
 
 ## Layout and layers
@@ -40,6 +42,12 @@ in lint, a skill, or CI.
   - `PebbleUI`: SwiftUI views shared by every platform. Imports PebbleCore and PebbleModel.
 - New code goes in a package, not in `App/`. New layers get added to
   `Package.swift` with their place in the order written down.
+- The source guards (privacy promise, contrast, accent, platform gate) read
+  Swift through `Tests/GuardScan`, one SwiftSyntax parse per file, never a
+  regex over the text. A new rule goes there with a name, a wrong case in
+  `GuardWrongCaseTests` that names it, and a `scripts/mutation-manifest.txt`
+  entry that turns it off. swift-syntax is pinned to an exact version and
+  only GuardScan uses it.
 
 ## Background work
 

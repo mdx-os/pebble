@@ -19,6 +19,9 @@ import PackageDescription
 // only the test targets use it, to read Swift source for their guards.
 // TestScratch is the same kind of helper: a folder of scratch files for
 // each test, removed when it ends.
+// GuardScan is one too: the source guards' shared scanner and their rules,
+// built on SwiftSyntax. swift-syntax is pinned to an exact version and only
+// GuardScan uses it, so no product, and nothing the app ships, depends on it.
 let package = Package(
     name: "PebbleKit",
     platforms: [.iOS(.v26), .macOS(.v26)],
@@ -30,6 +33,9 @@ let package = Package(
         .library(name: "PebbleUI", targets: ["PebbleUI"]),
         .executable(name: "pulse", targets: ["pulse"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/swiftlang/swift-syntax.git", exact: "603.0.0"),
+    ],
     targets: [
         .target(name: "PebbleCore"),
         .target(name: "PebblePulse", dependencies: ["PebbleCore"]),
@@ -39,13 +45,20 @@ let package = Package(
         .executableTarget(name: "pulse", dependencies: ["PebbleCore", "PebblePulse"]),
         .target(name: "SourceScan", path: "Tests/SourceScan"),
         .target(name: "TestScratch", path: "Tests/TestScratch"),
-        .testTarget(name: "PebbleCoreTests", dependencies: ["PebbleCore", "SourceScan", "TestScratch"]),
+        .target(name: "GuardScan",
+                dependencies: [
+                    .product(name: "SwiftSyntax", package: "swift-syntax"),
+                    .product(name: "SwiftParser", package: "swift-syntax"),
+                    .product(name: "SwiftOperators", package: "swift-syntax"),
+                ],
+                path: "Tests/GuardScan"),
+        .testTarget(name: "PebbleCoreTests", dependencies: ["PebbleCore", "SourceScan", "TestScratch", "GuardScan"]),
         .testTarget(name: "PebblePulseTests", dependencies: ["PebblePulse", "PebbleCore"]),
         .testTarget(name: "PebbleModelTests", dependencies: ["PebbleModel", "PebbleCore"]),
         .testTarget(name: "PebbleBackgroundTests",
                     dependencies: ["PebbleBackground", "PebbleCore", "SourceScan", "TestScratch"]),
         .testTarget(name: "PebbleUITests",
                     dependencies: ["PebbleUI", "PebbleModel", "PebbleCore", "PebbleBackground", "SourceScan",
-                                   "TestScratch"]),
+                                   "TestScratch", "GuardScan"]),
     ]
 )
