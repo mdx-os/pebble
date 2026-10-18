@@ -44,6 +44,9 @@ struct ReconTests {
         // Asked for outright, papers are what to read.
         ("Can you research papers on sleep for me", "papers on sleep"),
         ("please research papers on sleep", "papers on sleep"),
+        // Only whole words come off the end, after a space or a comma.
+        ("look into why the new rules displease", "why the new rules displease"),
+        ("Look into the bus strike, please", "the bus strike"),
     ])
     func asksToLookIntoSomething(said: String, topic: String) {
         #expect(ReconIntent.topic(in: said) == topic)
@@ -69,6 +72,7 @@ struct ReconTests {
         // With nothing asking before it, "research papers" starts a statement.
         "Research papers show coffee is fine",
         "So research papers say sleep matters",
+        "Research please",
         "",
     ])
     func ordinarySentencesAreNotRequests(said: String) {
@@ -244,7 +248,7 @@ struct ReconTests {
 
     @Test func theGatheredLineSaysWhen() throws {
         var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "America/Toronto")!
+        calendar.timeZone = try #require(TimeZone(identifier: "America/Toronto"))
         let now = Self.readOn
         #expect(ReconWords.gathered(now - 60, now: now, calendar: calendar).hasPrefix("Gathered today at "))
         #expect(ReconWords.gathered(now - 86_400, now: now, calendar: calendar).hasPrefix("Gathered yesterday at "))
@@ -274,6 +278,39 @@ struct ReconTests {
         #expect(ReconText.differ(ReconText.values(in: "on November 3"), ReconText.values(in: "on November 10")))
         #expect(!ReconText.differ(ReconText.values(in: "on November 3"), ReconText.values(in: "November 3 and 10 dollars")))
         #expect(!ReconText.differ(ReconText.values(in: "at 9"), ReconText.values(in: "at 10")))
+    }
+
+    /// The same date or price written two ways is one value, so it never
+    /// makes two sources look as if they disagree.
+    @Test(arguments: [
+        // A year on one side only: the same day.
+        ("It reopens on November 3.", "It reopens on November 3, 2025."),
+        ("$6 for a swim.", "$6.00 for a swim."),
+        ("$6 for a swim.", "6 dollars for a swim."),
+        ("It cost $1,200,000 to fix.", "It cost $1.2 million to fix."),
+        ("It cost $1,200,000 to fix.", "It cost 1,200,000 dollars to fix."),
+    ])
+    func oneValueWrittenTwoWaysAgrees(one: String, other: String) {
+        #expect(!ReconText.differ(ReconText.values(in: one), ReconText.values(in: other)))
+        #expect(!ReconText.differ(ReconText.values(in: other), ReconText.values(in: one)))
+    }
+
+    /// And values that are truly different still disagree.
+    @Test(arguments: [
+        ("It reopens on November 3, 2025.", "It reopens on November 3, 2026."),
+        ("It reopens on November 3.", "It reopens on November 10, 2025."),
+        ("$6 for a swim.", "$6.50 for a swim."),
+        ("It cost $1,200,000 to fix.", "It cost $1,300,000 to fix."),
+        ("It cost $1.2 million to fix.", "It cost $12 to fix."),
+    ])
+    func differentValuesStillDisagree(one: String, other: String) {
+        #expect(ReconText.differ(ReconText.values(in: one), ReconText.values(in: other)))
+    }
+
+    /// Digits in groups of three are one amount, not a number cut at its comma.
+    @Test func moneyInGroupsOfThreeIsReadWhole() {
+        #expect(ReconText.values(in: "It cost $1,200,000 to fix.").map(\.text) == ["$1,200,000"])
+        #expect(ReconText.values(in: "About 2,500 dollars each.").map(\.text) == ["2,500 dollars"])
     }
 
     // MARK: On the task engine

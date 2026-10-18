@@ -549,7 +549,9 @@ final class FeedModel: ObservableObject {
         // On the main thread it is withdrawn then and there, so a Send
         // tapped right after can't go. A change published on any other
         // thread hops to the main one first, and never traps.
-        cloudWatch = cloudSettings.dropFirst().removeDuplicates()
+        // Duplicates go before the first is dropped, so saving the settings
+        // as they already were changes nothing.
+        cloudWatch = cloudSettings.removeDuplicates().dropFirst()
             .sink { @Sendable [weak self] _ in
                 if Thread.isMainThread {
                     MainActor.assumeIsolated { self?.cloudReview.cancelPending() }
@@ -796,6 +798,15 @@ final class FeedModel: ObservableObject {
     /// back from the flow doesn't clear its tasks a second time.
     private var forgetting = false
 
+    /// Run with every Forget everything, here or in another window, so a
+    /// chat wired to this Today lets go of what it holds for a recon. Each
+    /// says false once its chat has gone, and is let go then.
+    private var forgetHooks: [@MainActor () -> Bool] = []
+
+    func whenForgotten(_ hook: @escaping @MainActor () -> Bool) {
+        forgetHooks.append(hook)
+    }
+
     /// The line kept on Today after forgetting: a step said yes to that may
     /// be done, and a summary that may have gone to the cloud already.
     static func forgetLine(_ underway: String?, inCloud: Bool) -> String? {
@@ -834,6 +845,7 @@ final class FeedModel: ObservableObject {
         // Clearing cancels the work too, but that answers only on a later
         // turn of the main actor.
         cloudReview.cancelPending()
+        forgetHooks = forgetHooks.filter { $0() }
         askedBy.removeAll()
         usedYes.removeAll()
         var something = what.something

@@ -77,6 +77,16 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
     /// whether each may leave the device. Held from the moment a start is
     /// let through until its run is noted, so two asks at once start one.
     private var starting: [String: Bool] = [:]
+    /// Held from just before the engine is given a recon's task until its
+    /// run is noted or let go, and by `clear` and `saved`. So a start knows
+    /// whether the engine forgot everything before it had the task or after,
+    /// and nothing is saved while the engine holds a recon not yet noted.
+    /// Recursive, since the engine tells its observers inside `start`, and
+    /// one may forget everything or save right there.
+    private let startLock = NSRecursiveLock()
+    /// The titles of recons the engine has been given and the runner hasn't
+    /// noted yet, with how many of each. Their tasks are never saved.
+    private var titlesStarting: [String: Int] = [:]
 
     private struct Run {
         let task: ReconTask
@@ -186,6 +196,11 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         }
         let (sources, failed) = read(task, isSample: provider.isSample)
         let gatheredAt = now()
+        startLock.lock()
+        lock.lock()
+        let given = generation
+        titlesStarting[task.title, default: 0] += 1
+        lock.unlock()
         // Not under the lock: the engine tells its observers, this one
         // included, before `start` returns.
         let id = scripted.start(task.script(sources: sources.count))
@@ -193,10 +208,13 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         // summary is stamped as one, and no point of it is ever kept.
         let isSample = provider.isSample || scripted.isSample(id)
         lock.lock()
-        // Forget everything came while this was being started, before or
-        // after the engine took the task. Nothing it read is kept, and
-        // the task goes too, so no card is left that no one asked for.
+        // Forget everything came while this was being started. Nothing it
+        // read is kept, and no card is left that no one asked for.
         let forgotten = generation != begun
+        // Forgotten before the engine had the task, so the task is still
+        // there and goes now. Forgotten after, the engine's forget took it,
+        // and the id may be a newer task's by now, so it is left alone.
+        let left = forgotten && generation == given
         if !forgotten {
             starting[key] = nil
             runs[id] = Run(task: task, summarizer: summarizer, isSample: isSample,
@@ -204,11 +222,16 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
                            read: sources.count, scripted: sources.count, gatheredAt: gatheredAt, readFailed: failed)
         }
         lock.unlock()
-        if forgotten {
+        if left {
             _ = engine.stop(id)
             _ = engine.dismiss(id)
-            return .notStarted
         }
+        lock.lock()
+        titlesStarting[task.title, default: 1] -= 1
+        if titlesStarting[task.title] == 0 { titlesStarting[task.title] = nil }
+        lock.unlock()
+        startLock.unlock()
+        if forgotten { return .notStarted }
         changed()
         return .started(id)
     }
@@ -604,6 +627,9 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
     /// steps under way is the engine's.
     @discardableResult
     public func clear() -> ClearedTasks {
+        // So a recon being given to the engine is given wholly before this
+        // forget or wholly after it.
+        startLock.lock()
         lock.lock()
         let works = runs.values.compactMap(\.work)
         runs.removeAll()
@@ -615,6 +641,7 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         // Cancelling also withdraws a cloud preview still waiting for an answer.
         for work in works { work.cancel() }
         let cleared = engine.clear()
+        startLock.unlock()
         changed()
         return cleared
     }
@@ -622,13 +649,24 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
     /// Tries a stuck task again. A recon reads its sources again and puts a
     /// new summary together when it gets there, so a retried card always
     /// ends, and never shows a summary from before.
+    ///
+    /// One the engine finished but this runner ended, as when its sources
+    /// couldn't be read or it was stopped while its summary was coming, may
+    /// have nothing left for the engine to play. Then its card goes and the
+    /// same topic is looked into again, with the same summarizer, under a
+    /// new id.
     @discardableResult
     public func retry(_ id: String) -> Bool {
         lock.lock()
-        let task = runs[id]?.task
-        let isSample = runs[id]?.isSample ?? false
+        let run = runs[id]
+        let task = run?.task
+        let isSample = run?.isSample ?? false
         lock.unlock()
-        guard engine.retry(id) else { return false }
+        guard engine.retry(id) else {
+            guard let run, run.readFailed || run.stopped,
+                  engine.tasks.first(where: { $0.id == id })?.state == .done, dismiss(id) else { return false }
+            return start(lookingInto: run.task.topic, with: run.summarizer).startedID != nil
+        }
         guard let task else { return true }
         let (sources, failed) = read(task, isSample: isSample)
         let gatheredAt = now()
@@ -707,11 +745,17 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
 /// Tasks kept while the app is closed pass through to the engine, when it
 /// keeps them. A recon is never kept: what it read and its summary live
 /// only in memory, so a card picked up again would have nothing behind it,
-/// and its topic is never written down.
+/// and its topic is never written down. That holds while one is being
+/// started too: the engine has its task before the runner has noted it.
 extension ReconRunner: KeepsTasks {
     public func saved() -> [SavedTask] {
         guard let keeper = engine as? any KeepsTasks else { return [] }
-        return keeper.saved().filter { !isRecon($0.id) }
+        startLock.lock(); defer { startLock.unlock() }
+        let kept = keeper.saved()
+        lock.lock()
+        let starting = titlesStarting
+        lock.unlock()
+        return kept.filter { !isRecon($0.id) && starting[$0.title] == nil }
     }
 
     public func restore(_ saved: [SavedTask], now: Date) {

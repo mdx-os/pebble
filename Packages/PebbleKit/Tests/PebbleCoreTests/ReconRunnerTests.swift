@@ -210,6 +210,89 @@ struct ReconRunnerTests {
         #expect(runner.heldCount == (runs: 0, starting: 0))
     }
 
+    /// Forget everything lands as the engine tells its watchers about a new
+    /// recon, and a newer one starts right after, given the same id by an
+    /// engine that counts again from a forget. The forgotten start leaves
+    /// the newer card alone: the engine's forget already took its own task.
+    @Test func aForgottenStartLeavesANewerCardWithItsIDAlone() throws {
+        let engine = ReplayEngine(reusesIDs: true)
+        let runner = ReconRunner(engine: engine, provider: CountingProvider(now: { Self.readOn }), now: { Self.readOn })
+        let forgot = ForgetOnce()
+        let newer = Answers()
+        let watch = runner.observe { [runner] snapshot in
+            if !snapshot.tasks.isEmpty, forgot.first() {
+                _ = runner.clear()
+                newer.add(runner.start(lookingInto: SampleSources.libraryTopic))
+            }
+        }
+        defer { watch.cancel() }
+        #expect(runner.lookInto(SampleSources.poolTopic) == nil)
+        let id = try #require(newer.list.first?.startedID)
+        let card = try #require(runner.tasks.first { $0.id == id })
+        #expect(runner.tasks.count == 1)
+        #expect(card.title == ReconWords.title(SampleSources.libraryTopic))
+        #expect(card.state == .running)
+        #expect(runner.isRecon(id))
+        #expect(runner.heldCount == (runs: 1, starting: 0))
+        // It plays on to its own summary.
+        engine.finish(id)
+        #expect(runner.summary(for: id)?.topic == SampleSources.libraryTopic)
+    }
+
+    /// Forget everything lands before the engine is given the task. The
+    /// task the engine is given after it still goes, and nothing is kept.
+    @Test func aStartForgottenBeforeTheEngineHadItTakesItsTaskAway() {
+        let engine = ReplayEngine(reusesIDs: true)
+        let provider = CountingProvider(now: { Self.readOn })
+        let runner = ReconRunner(engine: engine, provider: provider, now: { Self.readOn })
+        provider.whileReading = { [runner] in _ = runner.clear() }
+        #expect(runner.lookInto(SampleSources.poolTopic) == nil)
+        #expect(engine.tasks.isEmpty)
+        #expect(runner.heldCount == (runs: 0, starting: 0))
+    }
+
+    /// The engine tells its watchers about a recon's task before the runner
+    /// has noted it, and one may save the tasks right there, as the app
+    /// going to the background does. The topic is never in what is saved;
+    /// another task saved in the same breath is.
+    @Test func aSaveWhileAReconStartsNeverKeepsItsTopic() throws {
+        let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
+        let runner = ReconRunner(engine: engine, provider: Self.sources)
+        let other = runner.start(TaskRequest(title: "Book the car service"))
+        let saves = SavedLists()
+        let watch = runner.observe { [runner] snapshot in
+            if snapshot.tasks.count > 1 { saves.add(runner.saved()) }
+        }
+        defer { watch.cancel() }
+        let id = try #require(runner.lookInto(SampleSources.poolTopic))
+        #expect(!saves.lists.isEmpty)
+        for list in saves.lists {
+            #expect(!list.contains { $0.title.localizedCaseInsensitiveContains("pool") })
+            #expect(!list.contains { $0.id == id })
+            #expect(list.map(\.id) == [other])
+        }
+        #expect(runner.saved().map(\.id) == [other])
+    }
+
+    /// The same, when Forget everything lands before the engine is given
+    /// the task: until the runner has taken it away again, a save in that
+    /// window keeps nothing of it either.
+    @Test func aSaveWhileAForgottenReconIsTakenAwayNeverKeepsItsTopic() {
+        let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
+        let provider = CountingProvider(now: { Self.readOn })
+        let runner = ReconRunner(engine: engine, provider: provider)
+        provider.whileReading = { [runner] in _ = runner.clear() }
+        let saves = SavedLists()
+        let watch = runner.observe { [runner] snapshot in
+            if !snapshot.tasks.isEmpty { saves.add(runner.saved()) }
+        }
+        defer { watch.cancel() }
+        #expect(runner.lookInto(SampleSources.poolTopic) == nil)
+        #expect(!saves.lists.isEmpty)
+        #expect(saves.lists.allSatisfy { $0.isEmpty })
+        #expect(engine.tasks.isEmpty)
+    }
+
     // MARK: One recon per topic, decided in the runner
 
     /// Two asks for one topic at once, as a double tap or the feed and a
@@ -637,6 +720,57 @@ struct ReconRunnerTests {
         #expect(runner.dismiss(id))
     }
 
+    /// The engine finished a recon whose pages couldn't be read, so it has
+    /// nothing to play again. Try again takes the card away and looks into
+    /// the same topic afresh, and this time the pages are read.
+    @Test func retryingAReconThatCouldNotReadLooksAgain() throws {
+        let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
+        let provider = FlakyProvider()
+        provider.failing = true
+        let runner = ReconRunner(engine: engine, provider: provider)
+        let failed = try #require(runner.lookInto(SampleSources.poolTopic))
+        engine.advance(by: 60)
+        #expect(runner.tasks.first { $0.id == failed }?.state == .failed)
+        provider.failing = false
+        #expect(runner.retry(failed))
+        #expect(runner.tasks.first { $0.id == failed } == nil)
+        #expect(runner.held(failed) == nil)
+        let again = try #require(runner.tasks.first)
+        #expect(runner.tasks.count == 1)
+        #expect(again.state == .running)
+        #expect(again.title == ReconWords.title(SampleSources.poolTopic))
+        engine.advance(by: 60)
+        #expect(runner.tasks.first { $0.id == again.id }?.state == .done)
+        #expect(runner.summary(for: again.id)?.points.isEmpty == false)
+    }
+
+    /// The engine had finished and the card waited only on its summary when
+    /// Stop was tapped, so the engine has nothing to play again either. Try
+    /// again looks into it afresh, with the same summarizer.
+    @Test func retryingAReconStoppedWhileItsSummaryCameLooksAgain() async throws {
+        let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
+        let runner = ReconRunner(engine: engine, provider: Self.sources)
+        let gate = Gate()
+        let stopped = try #require(runner.lookInto(SampleSources.poolTopic, with: GatedSummarizer(gate: gate)))
+        engine.advance(by: 60)
+        #expect(engine.tasks.first { $0.id == stopped }?.state == .done)
+        #expect(runner.stop(stopped))
+        #expect(runner.tasks.first { $0.id == stopped }?.state == .stopped)
+        #expect(runner.retry(stopped))
+        #expect(runner.tasks.first { $0.id == stopped } == nil)
+        let again = try #require(runner.tasks.first)
+        #expect(runner.tasks.count == 1)
+        #expect(again.state == .running)
+        engine.advance(by: 12)
+        // Still being put together by the gated summarizer, which one on
+        // this device would have finished at once.
+        #expect(runner.held(again.id)?.working == true)
+        await gate.open()
+        await runner.settleEverything()
+        engine.advance(by: 60)
+        #expect(runner.tasks.first { $0.id == again.id }?.state == .done)
+    }
+
     // MARK: Pages
 
     @Test func sampleSourcesAreNeverFutureDated() {
@@ -818,6 +952,30 @@ final class ShrinkingProvider: SourceProvider, @unchecked Sendable {
         let all = try ReconTests.sources.sources(for: task).map(notExample)
         return limit.map { Array(all.prefix($0)) } ?? all
     }
+}
+
+/// The sample pages, on this device, that can't be read while `failing`.
+final class FlakyProvider: SourceProvider, @unchecked Sendable {
+    private let lock = NSLock()
+    private var fails = false
+    var failing: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return fails }
+        set { lock.lock(); fails = newValue; lock.unlock() }
+    }
+    var runsOnDevice: Bool { true }
+    var isSample: Bool { false }
+    func sources(for task: ReconTask) throws -> [ReconSource] {
+        if failing { throw FailingProvider.Unreadable() }
+        return try ReconTests.sources.sources(for: task).map(notExample)
+    }
+}
+
+/// Every list of saved tasks a test was given, from any thread.
+final class SavedLists: @unchecked Sendable {
+    private let lock = NSLock()
+    private var saved: [[SavedTask]] = []
+    var lists: [[SavedTask]] { lock.lock(); defer { lock.unlock() }; return saved }
+    func add(_ list: [SavedTask]) { lock.lock(); saved.append(list); lock.unlock() }
 }
 
 /// On this device, and can't be read.

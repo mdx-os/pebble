@@ -249,6 +249,25 @@ struct ReconFeedTests {
         #expect(chat.conversation.turns.last?.text == ReconWords.alreadyReady)
     }
 
+    /// Forget everything takes a chat's offer away, so a tap after it can
+    /// never start a recon on a topic from before.
+    @Test func forgetEverythingTakesTheChatsOffer() throws {
+        let model = HomeView.reconFeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()),
+                                            tasks: nil, drivesTasks: false, reading: ReconTestData.sources,
+                                            place: .onDevice, memory: nil, model: LocalStubModel(), cloud: nil,
+                                            now: { [morning] in morning })
+        let runner = try #require(model.recon)
+        let chat = HomeView.wired(ChatController.make(brand: brand, model: LocalStubModel(),
+                                                      names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil,
+                                                      replyBeat: .zero), to: model)
+        chat.submit("Look into the Riverside pool reopening")
+        #expect(chat.reconOffer != nil)
+        model.forgetEverything()
+        #expect(chat.reconOffer == nil)
+        chat.acceptReconOffer()
+        #expect(runner.tasks.isEmpty)
+    }
+
     /// With the cloud on, Today's recon may be put into words there. An
     /// on-device chat asking for the same topic is told so, so its promise
     /// to stay on this device stays true. Nothing is sent by the ask.
@@ -1169,14 +1188,14 @@ struct ReconFeedTests {
     /// Today as the home screen makes it, with the cloud on, reading `pages`.
     func cloudToday(reading pages: any SourceProvider = ReconTestData.sources,
                     transport: @escaping @Sendable () -> any CloudTransport,
-                    notes: MemoryStore) -> (FeedModel, ReconRunner, CloudHelp) {
+                    notes: MemoryStore) throws -> (FeedModel, ReconRunner, CloudHelp) {
         let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
                               memory: notes, transport: transport)
         let model = HomeView.reconFeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()),
                                             tasks: nil, drivesTasks: false, reading: pages, place: .mayLeaveDevice,
                                             memory: notes, model: LocalStubModel(), cloud: cloud,
                                             now: { [morning] in morning })
-        return (model, model.recon!, cloud)
+        return (model, try #require(model.recon), cloud)
     }
 
     /// Words no line after a yes may use: it was neither taken away
@@ -1194,7 +1213,7 @@ struct ReconFeedTests {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
         defer { discard(notes) }
-        let (model, runner, cloud) = cloudToday(transport: { maker.make() }, notes: notes)
+        let (model, runner, cloud) = try cloudToday(transport: { maker.make() }, notes: notes)
         #expect(model.lookInto(SampleSources.poolTopic))
         let id = try #require(runner.tasks.first?.id)
         runner.advance(by: 12)
@@ -1218,7 +1237,7 @@ struct ReconFeedTests {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
         defer { discard(notes) }
-        let (model, runner, _) = cloudToday(transport: { maker.make() }, notes: notes)
+        let (model, runner, _) = try cloudToday(transport: { maker.make() }, notes: notes)
         #expect(model.lookInto(SampleSources.poolTopic))
         let id = try #require(runner.tasks.first?.id)
         runner.advance(by: 12)
@@ -1241,7 +1260,7 @@ struct ReconFeedTests {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
         defer { discard(notes) }
-        let (model, runner, _) = cloudToday(transport: { maker.make() }, notes: notes)
+        let (model, runner, _) = try cloudToday(transport: { maker.make() }, notes: notes)
         #expect(model.lookInto(SampleSources.poolTopic))
         let id = try #require(runner.tasks.first?.id)
         runner.advance(by: 12)
@@ -1262,7 +1281,7 @@ struct ReconFeedTests {
         let wire = HeldWire(reply: "POINT: The pool reopens on November 10. [2]")
         let notes = ShowcaseScene.emptyMemory()
         defer { discard(notes) }
-        let (model, runner, _) = cloudToday(transport: { URLSessionCloudTransport(load: wire.load) }, notes: notes)
+        let (model, runner, _) = try cloudToday(transport: { URLSessionCloudTransport(load: wire.load) }, notes: notes)
         #expect(model.lookInto(SampleSources.poolTopic))
         let id = try #require(runner.tasks.first?.id)
         runner.advance(by: 12)
@@ -1295,7 +1314,7 @@ struct ReconFeedTests {
         let calm = "The Riverside pool reopens on November 10. Family swim at the pool runs on Saturdays."
         let provider = CountingProvider(now: { [morning] in morning })
         provider.give([page("A sign by the Riverside pool lists a suicide prevention line. " + calm)])
-        let (model, runner, _) = cloudToday(reading: provider, transport: { maker.make() }, notes: notes)
+        let (model, runner, _) = try cloudToday(reading: provider, transport: { maker.make() }, notes: notes)
         #expect(model.lookInto(SampleSources.poolTopic))
         let id = try #require(runner.tasks.first?.id)
         var sawPreview = false
@@ -1318,7 +1337,7 @@ struct ReconFeedTests {
         // The control: the same pages without those words reach a preview.
         let calmProvider = CountingProvider(now: { [morning] in morning })
         calmProvider.give([page(calm)])
-        let (control, controlRunner, _) = cloudToday(reading: calmProvider, transport: { maker.make() }, notes: notes)
+        let (control, controlRunner, _) = try cloudToday(reading: calmProvider, transport: { maker.make() }, notes: notes)
         #expect(control.lookInto(SampleSources.poolTopic))
         let controlID = try #require(controlRunner.tasks.first?.id)
         controlRunner.advance(by: 12)
@@ -1352,7 +1371,7 @@ struct ReconFeedTests {
             defer { discard(notes) }
             let provider = CountingProvider(now: { [morning] in morning })
             provider.give([heavy])
-            let (model, runner, _) = cloudToday(reading: provider, transport: { maker.make() }, notes: notes)
+            let (model, runner, _) = try cloudToday(reading: provider, transport: { maker.make() }, notes: notes)
             // Every preview Today's gate puts up, however briefly.
             let shown = PreviewLog()
             let watch = model.cloudReview.$pending.sink { if $0 != nil { shown.note() } }
@@ -1413,7 +1432,7 @@ struct ReconFeedTests {
         let notes = ShowcaseScene.emptyMemory()
         defer { discard(notes) }
         _ = try notes.remember("Swim lessons with Priya on Tuesdays.", source: .toldMe)
-        let (model, runner, _) = cloudToday(transport: { maker.make() }, notes: notes)
+        let (model, runner, _) = try cloudToday(transport: { maker.make() }, notes: notes)
         #expect(model.lookInto("Priya's swim lessons at the Riverside pool"))
         let id = try #require(runner.tasks.first?.id)
         runner.advance(by: 12)
@@ -1466,7 +1485,7 @@ struct ReconFeedTests {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
         defer { discard(notes) }
-        let (model, runner, cloud) = cloudToday(transport: { maker.make() }, notes: notes)
+        let (model, runner, cloud) = try cloudToday(transport: { maker.make() }, notes: notes)
         let card = try #require(model.feed.groups.flatMap(\.items).first { $0.id == "sample:pool" })
         model.perform(card) { _ in }
         let id = try #require(runner.tasks.first?.id)

@@ -323,7 +323,7 @@ public enum ReconIntent {
         guard let verb = asked.first(where: { lower().hasPrefix($0 + " ") }) else { return nil }
         var topic = String(said.dropFirst(verb.count + 1))
         topic = topic.trimmingCharacters(in: CharacterSet(charactersIn: " ?.!,"))
-        for ending in endings where topic.lowercased().hasSuffix(ending) {
+        for ending in endings where ends(topic, with: ending) {
             topic = String(topic.dropLast(ending.count)).trimmingCharacters(in: CharacterSet(charactersIn: " ,"))
         }
         let first = topic.split(separator: " ").first.map { $0.lowercased() } ?? ""
@@ -347,6 +347,15 @@ public enum ReconIntent {
         "looking into", "researching", "finding out more about", "finding out about", "digging into", "reading up on",
     ]
     private static let endings = ["for me please", "for me", "please", "if you can", "when you can"]
+
+    /// True when `topic` ends in `ending` as whole words, so "displease"
+    /// never loses its "please".
+    private static func ends(_ topic: String, with ending: String) -> Bool {
+        let lower = topic.lowercased()
+        guard lower.hasSuffix(ending) else { return false }
+        let before = lower.dropLast(ending.count).last
+        return before == nil || before == " " || before == ","
+    }
     private static let notTopics: Set<String> = ["it", "this", "that", "them", "these", "those", "that for me", "something"]
     /// A word right after "research" that makes the sentence a statement.
     private static let statementWords: Set<String> = [

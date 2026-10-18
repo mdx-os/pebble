@@ -293,6 +293,33 @@ struct ReconUITests {
         #expect(runner.summary(for: id)?.note == ReconWords.cloudWithdrawn)
     }
 
+    /// Saving the cloud settings as they already were changes nothing, so
+    /// Today's preview stays up and the person can still answer it.
+    @Test func savingTheSameCloudSettingsLeavesThePreviewUp() async throws {
+        let maker = TransportMaker()
+        let notes = scratchMemory()
+        defer { discard(notes) }
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+                              memory: notes, transport: { maker.make() })
+        let (model, _, runner) = feed(memory: nil)
+        let review = model.cloudReview
+        model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel(), review: review)) }
+        let settings = PassthroughSubject<CloudHelpSettings, Never>()
+        model.follow(cloudSettings: settings.eraseToAnyPublisher())
+        settings.send(CloudHelpSettings(isOn: true))
+        #expect(model.lookInto(SampleSources.poolTopic))
+        runner.advance(by: 12)
+        await eventually { review.pending != nil }
+        let preview = try #require(review.pending)
+        settings.send(CloudHelpSettings(isOn: true))
+        #expect(review.pending == preview)
+        // The control: a real change still withdraws it.
+        settings.send(CloudHelpSettings(isOn: false))
+        #expect(review.pending == nil)
+        await runner.settleEverything()
+        #expect(maker.wire.sent.isEmpty)
+    }
+
     /// The path a person takes: Today's cloud preview is up, and Forget
     /// everything is tapped on the memory screen the home screen made. With
     /// the real cloud summarizer and Today's own gate, the preview goes at

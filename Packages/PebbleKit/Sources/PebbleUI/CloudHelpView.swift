@@ -1014,19 +1014,23 @@ struct CloudPreviewPresenter: ViewModifier {
     let blocked: Bool
     let waiting: Binding<Bool>?
     var purpose: ((CloudPreview) -> String?)? = nil
+    /// The preview the sheet put on screen last.
+    @State private var presented: UUID?
 
     /// The preview to put on screen now: none while something else is open.
     static func shown(_ pending: CloudPreview?, blocked: Bool) -> CloudPreview? {
         blocked ? nil : pending
     }
 
-    /// The sheet was closed without Send, as by swiping it down. The person
-    /// saw the preview and chose not to send it, so it is answered Don't
-    /// send, the same as the button, for that preview only. A preview held
-    /// back by another sheet was never on screen, so it is left waiting.
-    static func closed(_ review: CloudReview, blocked: Bool) {
-        guard !blocked, let shown = shown(review.pending, blocked: blocked) else { return }
-        review.dismissed(shown.id)
+    /// The sheet showing `presented` was closed without Send, as by swiping
+    /// it down. The person saw that preview and chose not to send it, so it
+    /// is answered Don't send, the same as the button, and only it: one
+    /// waiting behind it, which takes its place once it is answered, was
+    /// never shown by this sheet. A preview held back by another sheet was
+    /// never on screen, so it is left waiting.
+    static func closed(_ review: CloudReview, presented: UUID?, blocked: Bool) {
+        guard !blocked, let presented, shown(review.pending, blocked: blocked)?.id == presented else { return }
+        review.dismissed(presented)
     }
 
     func body(content: Content) -> some View {
@@ -1034,11 +1038,12 @@ struct CloudPreviewPresenter: ViewModifier {
         // Send is tied to the preview that sheet showed.
         content.sheet(
             item: Binding(get: { Self.shown(review.pending, blocked: blocked) },
-                          set: { if $0 == nil { Self.closed(review, blocked: blocked) } })
+                          set: { if $0 == nil { Self.closed(review, presented: presented, blocked: blocked) } })
         ) { preview in
             CloudPreviewSheet(preview: preview, purpose: purpose?(preview),
                               onSend: { review.answer(.send, for: preview.id) },
                               onCancel: { review.answer(.cancel, for: preview.id) })
+                .onAppear { presented = preview.id }
         }
         .onChange(of: review.pending?.id, initial: true) { _, id in
             waiting?.wrappedValue = id != nil

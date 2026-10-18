@@ -159,9 +159,9 @@ public struct LocalReconSummarizer: ReconSummarizer {
     }
 
     private static func firstDiffering(_ line: Line, from others: [Line]) -> String? {
-        let theirs = Set(others.flatMap(\.values))
+        let theirs = others.flatMap(\.values)
         return line.values.first { value in
-            value.kind.canDisagree && !theirs.contains(value)
+            value.kind.canDisagree && !theirs.contains(where: value.matches)
                 && theirs.contains { $0.kind == value.kind }
         }?.text
     }
@@ -180,13 +180,22 @@ public enum ReconText {
         public let kind: Kind
         /// As written, such as "November 3".
         public let text: String
-        /// For comparing, such as "november 3".
+        /// For comparing, such as "november 3", or "1200000" for "$1.2 million".
         let key: String
+        /// A date's year, when it gives one.
+        var year: String?
 
-        public static func == (a: Value, b: Value) -> Bool { a.kind == b.kind && a.key == b.key }
+        public static func == (a: Value, b: Value) -> Bool { a.kind == b.kind && a.key == b.key && a.year == b.year }
         public func hash(into hasher: inout Hasher) {
             hasher.combine(kind)
             hasher.combine(key)
+        }
+
+        /// The same date or price, however it was written. A date with no
+        /// year matches the same day in any year, so "November 3" and
+        /// "November 3, 2025" agree, and only two years given can differ.
+        func matches(_ other: Value) -> Bool {
+            kind == other.kind && key == other.key && (year == nil || other.year == nil || year == other.year)
         }
     }
 
@@ -241,7 +250,8 @@ public enum ReconText {
                 guard !found.contains(where: { NSIntersectionRange($0.0, match.range).length > 0 }),
                       let r = Range(match.range, in: text) else { continue }
                 let written = String(text[r])
-                found.append((match.range, Value(kind: kind, text: written, key: key(written, kind: kind))))
+                let (key, year) = key(written, kind: kind)
+                found.append((match.range, Value(kind: kind, text: written, key: key, year: year)))
             }
         }
         add(date, .date)
@@ -254,29 +264,43 @@ public enum ReconText {
     /// matches the other's.
     public static func differ(_ a: [Value], _ b: [Value]) -> Bool {
         for kind in [Value.Kind.date, .money] {
-            let left = Set(a.filter { $0.kind == kind })
-            let right = Set(b.filter { $0.kind == kind })
-            if !left.isEmpty, !right.isEmpty, left.isDisjoint(with: right) { return true }
+            let left = a.filter { $0.kind == kind }
+            let right = b.filter { $0.kind == kind }
+            if !left.isEmpty, !right.isEmpty, !left.contains(where: { value in right.contains(where: value.matches) }) {
+                return true
+            }
         }
         return false
     }
 
-    private static func key(_ written: String, kind: Value.Kind) -> String {
+    /// How a value is compared: a date as its month and day, with its year
+    /// apart, and a price as its amount, so "$6", "$6.00" and "6 dollars"
+    /// are one, and so are "$1,200,000" and "$1.2 million".
+    private static func key(_ written: String, kind: Value.Kind) -> (String, year: String?) {
         let lower = written.lowercased()
         switch kind {
         case .money:
             let digits = lower.filter { $0.isNumber || $0 == "." }
-            return lower.contains("million") ? digits + "m" : digits
-        case .date, .number:
-            return lower.split(whereSeparator: { $0 == " " || $0 == "," }).joined(separator: " ")
+            guard var amount = Decimal(string: digits, locale: Locale(identifier: "en_US_POSIX")) else { return (digits, nil) }
+            if lower.contains("million") { amount *= 1_000_000 }
+            return ("\(amount)", nil)
+        case .date:
+            let parts = lower.split(whereSeparator: { $0 == " " || $0 == "," })
+            let year = parts.count > 2 ? String(parts[2]) : nil
+            return (parts.prefix(2).joined(separator: " "), year)
+        case .number:
+            return (lower, nil)
         }
     }
 
     private static let months = "January|February|March|April|May|June|July|August|September|October|November|December"
     private static let date = try! NSRegularExpression(
         pattern: #"\b(?:"# + months + #")\s+\d{1,2}(?:,\s*\d{4})?\b"#)
+    /// An amount is digits in groups of three, as in "1,200,000", or plain
+    /// digits, either with cents or a decimal part.
+    private static let amount = #"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"#
     private static let money = try! NSRegularExpression(
-        pattern: #"\$\s?\d+(?:[.,]\d+)?(?:\s+million)?|\b\d+(?:[.,]\d+)?(?:\s+million)?\s+dollars\b"#,
+        pattern: #"\$\s?"# + amount + #"(?:\s+million)?|\b"# + amount + #"(?:\s+million)?\s+dollars\b"#,
         options: [.caseInsensitive])
     private static let number = try! NSRegularExpression(pattern: #"\b\d+(?:[.:]\d+)?\b"#)
 

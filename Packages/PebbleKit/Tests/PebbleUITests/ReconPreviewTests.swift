@@ -18,14 +18,14 @@ struct ReconPreviewTests {
 
     /// Today as the home screen makes it, with the cloud on.
     func cloudToday(transport: @escaping @Sendable () -> any CloudTransport,
-                    notes: MemoryStore) -> (FeedModel, ReconRunner, CloudHelp) {
+                    notes: MemoryStore) throws -> (FeedModel, ReconRunner, CloudHelp) {
         let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
                               memory: notes, transport: transport)
         let model = HomeView.reconFeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()),
                                             tasks: nil, drivesTasks: false, reading: ReconTestData.sources,
                                             place: .mayLeaveDevice, memory: notes, model: LocalStubModel(),
                                             cloud: cloud, now: { [morning] in morning })
-        return (model, model.recon!, cloud)
+        return (model, try #require(model.recon), cloud)
     }
 
     func preview(run: String?) -> CloudPreview {
@@ -77,6 +77,23 @@ struct ReconPreviewTests {
         review.cancelPending()
         #expect(await otherAnswer.value == .withdrawn)
         #expect(await againAnswer.value == .withdrawn)
+
+        // A chat's previews have no run: a newer one takes the older one's
+        // place too, and leaves a summary's waiting as it was.
+        let summary = preview(run: "task:3")
+        let chat = preview(run: nil)
+        let newer = preview(run: nil)
+        let summaryAnswer = Task { await review.review(summary) }
+        #expect(await review.shown() == summary)
+        let chatAnswer = Task { await review.review(chat) }
+        await eventually { review.waiting.count == 2 }
+        let newerAnswer = Task { await review.review(newer) }
+        #expect(await chatAnswer.value == .withdrawn)
+        await eventually { review.waiting.count == 2 }
+        #expect(review.waiting == [summary, newer])
+        review.cancelPending()
+        #expect(await summaryAnswer.value == .withdrawn)
+        #expect(await newerAnswer.value == .withdrawn)
     }
 
     /// Two recons on Today with the cloud on: both previews wait, neither
@@ -86,7 +103,7 @@ struct ReconPreviewTests {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
         defer { discard(notes) }
-        let (model, runner, _) = cloudToday(transport: { maker.make() }, notes: notes)
+        let (model, runner, _) = try cloudToday(transport: { maker.make() }, notes: notes)
         let review = model.cloudReview
         #expect(model.lookInto(SampleSources.poolTopic))
         #expect(model.lookInto(SampleSources.libraryTopic))
@@ -121,7 +138,7 @@ struct ReconPreviewTests {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
         defer { discard(notes) }
-        let (model, runner, _) = cloudToday(transport: { maker.make() }, notes: notes)
+        let (model, runner, _) = try cloudToday(transport: { maker.make() }, notes: notes)
         #expect(model.lookInto(SampleSources.poolTopic))
         let id = try #require(runner.tasks.first?.id)
         runner.advance(by: 12)
@@ -142,7 +159,7 @@ struct ReconPreviewTests {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
         defer { discard(notes) }
-        let (model, runner, _) = cloudToday(transport: { maker.make() }, notes: notes)
+        let (model, runner, _) = try cloudToday(transport: { maker.make() }, notes: notes)
         let review = model.cloudReview
         #expect(model.lookInto(SampleSources.poolTopic))
         #expect(model.lookInto(SampleSources.libraryTopic))
@@ -203,7 +220,7 @@ struct ReconPreviewTests {
         let wire = HeldWire(reply: "POINT: The pool reopens on November 10. [2]")
         let notes = ShowcaseScene.emptyMemory()
         defer { discard(notes) }
-        let (model, runner, _) = cloudToday(transport: { URLSessionCloudTransport(load: wire.load) }, notes: notes)
+        let (model, runner, _) = try cloudToday(transport: { URLSessionCloudTransport(load: wire.load) }, notes: notes)
         #expect(model.lookInto(SampleSources.poolTopic))
         let id = try #require(runner.tasks.first?.id)
         runner.advance(by: 12)
@@ -268,7 +285,7 @@ struct ReconPreviewTests {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
         defer { discard(notes) }
-        let (model, runner, _) = cloudToday(transport: { maker.make() }, notes: notes)
+        let (model, runner, _) = try cloudToday(transport: { maker.make() }, notes: notes)
         #expect(model.lookInto(SampleSources.poolTopic))
         let id = try #require(runner.tasks.first?.id)
         runner.advance(by: 12)
@@ -302,9 +319,31 @@ struct ReconPreviewTests {
         let shown = preview(run: "task:1")
         let answer = Task { await review.review(shown) }
         #expect(await review.shown() == shown)
-        CloudPreviewPresenter.closed(review, blocked: false)
+        CloudPreviewPresenter.closed(review, presented: shown.id, blocked: false)
         #expect(await answer.value == .cancel)
         #expect(review.pending == nil)
+    }
+
+    /// Two wait. Send answers the first, and the second takes its place.
+    /// The sheet that showed the first closing then says nothing about the
+    /// second, which it never showed: that one still waits for its answer.
+    @Test func closingTheSentPreviewsSheetLeavesTheNextWaiting() async throws {
+        let review = CloudReview()
+        let first = preview(run: "task:1")
+        let second = preview(run: "task:2")
+        let firstAnswer = Task { await review.review(first) }
+        #expect(await review.shown() == first)
+        let secondAnswer = Task { await review.review(second) }
+        await eventually { review.waiting.count == 2 }
+        review.answer(.send, for: first.id)
+        #expect(await firstAnswer.value == .send)
+        #expect(review.pending == second)
+        CloudPreviewPresenter.closed(review, presented: first.id, blocked: false)
+        #expect(review.pending == second)
+        #expect(review.waiting == [second])
+        // Its own sheet closing is a no for it.
+        CloudPreviewPresenter.closed(review, presented: second.id, blocked: false)
+        #expect(await secondAnswer.value == .cancel)
     }
 
     /// A preview held back by another sheet was never on screen, so closing
@@ -314,7 +353,7 @@ struct ReconPreviewTests {
         let held = preview(run: nil)
         let answer = Task { await review.review(held) }
         #expect(await review.shown() == held)
-        CloudPreviewPresenter.closed(review, blocked: true)
+        CloudPreviewPresenter.closed(review, presented: held.id, blocked: true)
         #expect(review.pending == held)
         review.answer(.send, for: held.id)
         #expect(await answer.value == .send)
@@ -326,12 +365,12 @@ struct ReconPreviewTests {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
         defer { discard(notes) }
-        let (model, runner, _) = cloudToday(transport: { maker.make() }, notes: notes)
+        let (model, runner, _) = try cloudToday(transport: { maker.make() }, notes: notes)
         #expect(model.lookInto(SampleSources.poolTopic))
         let id = try #require(runner.tasks.first?.id)
         runner.advance(by: 12)
-        _ = await model.cloudReview.shown()
-        CloudPreviewPresenter.closed(model.cloudReview, blocked: false)
+        let shown = await model.cloudReview.shown()
+        CloudPreviewPresenter.closed(model.cloudReview, presented: shown.id, blocked: false)
         await runner.settle(id)
         runner.advance(by: 30)
         #expect(runner.summary(for: id)?.note == ReconWords.declinedCloud)

@@ -699,6 +699,12 @@ final class ChatController: ObservableObject {
         }
     }
 
+    /// Forget everything ran: the offer goes with no line said, so a tap
+    /// can never start a recon on a topic from before it.
+    func forgetReconOffer() {
+        reconOffer = nil
+    }
+
     /// The person tapped Not now. Nothing starts.
     func declineReconOffer() {
         guard reconOffer != nil else { return }

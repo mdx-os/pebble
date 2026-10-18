@@ -270,6 +270,11 @@ public struct HomeView: View {
             ? { [weak feed] topic, place in feed?.start(lookingInto: topic, place: place) ?? .couldNotStart }
             : nil
         chat.reconReadsExamples = feed.readsExamples
+        // Forget everything, in this window or another, takes the offer too.
+        feed.whenForgotten { [weak chat] in
+            chat?.forgetReconOffer()
+            return chat != nil
+        }
         return chat
     }
 
