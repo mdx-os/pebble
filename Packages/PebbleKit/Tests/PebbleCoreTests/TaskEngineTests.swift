@@ -890,7 +890,7 @@ struct TaskEngineTests {
             lines += [script.title, script.doneLine, script.result ?? ""]
             for step in script.steps {
                 lines += [step.text, step.todo, step.kept ?? "", step.slowLine, step.retryLine]
-                if case .ask(let action, let askLine) = step.kind { lines += [askLine, action.details] }
+                if case .ask(let action, let askLine) = step.kind { lines += [askLine, action.details, action.outcome ?? ""] }
             }
         }
         for line in lines {

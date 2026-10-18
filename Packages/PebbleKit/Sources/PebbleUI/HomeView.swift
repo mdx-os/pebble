@@ -36,11 +36,13 @@ public struct HomeView: View {
         feed: [any FeedSource] = [EmptyFeedSource()],
         needsYou: NeedsYou = NeedsYou(),
         tasks: (any TaskEngine)? = nil,
+        kept: TaskStore? = nil,
+        notifier: (any QuestionNotifying)? = nil,
         cloud: CloudHelp? = nil
     ) {
         self.init(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                   looks: looks, conversation: nil, section: .today, feed: feed, needsYou: needsYou, tasks: tasks,
-                  cloud: cloud)
+                  kept: kept, notifier: notifier, cloud: cloud)
     }
 
     /// Opens on a given conversation, section and feed, for screenshots and tests.
@@ -59,12 +61,16 @@ public struct HomeView: View {
         needsYou: NeedsYou,
         tasks: (any TaskEngine)? = nil,
         drivesTasks: Bool = false,
+        kept: TaskStore? = nil,
+        notifier: (any QuestionNotifying)? = nil,
+        opensQuestion: Bool = false,
         now: @escaping () -> Date = { Date() },
         cloud: CloudHelp? = nil
     ) {
         screen = HomeScreen(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                             looks: looks, conversation: conversation, section: section, feed: feed,
-                            needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, now: now, cloud: cloud)
+                            needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, kept: kept,
+                            notifier: notifier, opensQuestion: opensQuestion, now: now, cloud: cloud)
     }
 
     /// Which model the screen was made for: its kind and where its words
@@ -89,19 +95,29 @@ public struct HomeView: View {
     /// Today's model, which takes its privacy place from the active model,
     /// so the example note never promises the device when words may leave.
     static func feedModel(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)? = nil,
-                          drivesTasks: Bool = false, model: any ModelClient,
+                          drivesTasks: Bool = false, flow: NeedsYouFlow? = nil, model: any ModelClient,
                           now: @escaping () -> Date) -> FeedModel {
         feedModel(sources: sources, needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
-                  place: model.privacyPlace, now: now)
+                  flow: flow, place: model.privacyPlace, now: now)
+    }
+
+    /// The app's one Needs you flow, whichever window asks. A nudge says
+    /// the name the person chose, read each time one is sent, so a rename
+    /// just before the app goes away is the name it says.
+    static func flow(store: TaskStore, notifier: (any QuestionNotifying)?, brand: Brand,
+                     names: any AgentNameStoring) -> NeedsYouFlow {
+        NeedsYouFlow.forApp(store: store, notifier: notifier, agentName: {
+            AgentProfile(brand: brand, stored: names.loadDisplayName()).displayName.text
+        })
     }
 
     /// The same, from a place already worked out, as the home screen does
     /// with the cloud setting in it.
     static func feedModel(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)? = nil,
-                          drivesTasks: Bool = false, place: PrivacyPlace,
+                          drivesTasks: Bool = false, flow: NeedsYouFlow? = nil, place: PrivacyPlace,
                           now: @escaping () -> Date) -> FeedModel {
         FeedModel(sources: sources, needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
-                  place: place, now: now)
+                  place: place, flow: flow, now: now)
     }
 
     /// The memory screen's model, with its privacy place from the active
@@ -192,6 +208,8 @@ struct HomeScreen: View {
     /// once, so a redraw never subscribes again.
     @State private var cloudSettings: AnyPublisher<CloudHelpSettings, Never>
     @StateObject private var feed: FeedModel
+    /// Opens the first waiting question once, for the showcase.
+    private let opensQuestion: Bool
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -210,6 +228,9 @@ struct HomeScreen: View {
         needsYou: NeedsYou,
         tasks: (any TaskEngine)?,
         drivesTasks: Bool,
+        kept: TaskStore?,
+        notifier: (any QuestionNotifying)?,
+        opensQuestion: Bool,
         now: @escaping () -> Date,
         cloud: CloudHelp?
     ) {
@@ -219,6 +240,7 @@ struct HomeScreen: View {
         self.onboarding = onboarding
         self.memory = memory
         self.looks = looks
+        self.opensQuestion = opensQuestion
         self.cloud = cloud
         // One store for the notes: the redactor must read the same notes
         // the memory screen writes.
@@ -238,8 +260,11 @@ struct HomeScreen: View {
         // its place too. A rebuild must never work it out from a chat that
         // isn't the one open. The `onChange` of `surfacePlace` in `body`
         // keeps it true, and the memory screen hands it to the setting.
-        _feed = StateObject(wrappedValue: HomeView.feedModel(sources: feed, needsYou: needsYou, tasks: tasks,
-                                                             drivesTasks: drivesTasks, place: newChatPlace, now: now))
+        _feed = StateObject(wrappedValue: HomeView.feedModel(
+            sources: feed, needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
+            // A nudge says the name the person chose, read when it is sent.
+            flow: kept.map { HomeView.flow(store: $0, notifier: notifier, brand: brand, names: names) },
+            place: newChatPlace, now: now))
         _section = State(initialValue: section)
         _cloudSettings = State(initialValue: cloud?.$settings.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher())
     }
@@ -304,6 +329,34 @@ struct HomeScreen: View {
         .task { await feed.keepFresh() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { feed.refresh() }
+            // Away, a waiting question may nudge; back in front, its nudge
+            // goes. A glance at Control Center is neither.
+            switch phase {
+            case .active: feed.scene(isActive: true)
+            case .background: feed.scene(isActive: false)
+            default: break
+            }
+        }
+        // A waiting cloud preview covers the screen, so no question is
+        // nudged until it has its answer.
+        .onChange(of: previewWaiting, initial: true) { _, waiting in feed.preview(waiting: waiting) }
+        // A nudge opened: Today, with its card in view, in the window in
+        // front. A question or a cloud preview already up stays up, and the
+        // nudge is let go; any other sheet makes way.
+        .background {
+            if let flow = feed.flow {
+                NudgeOpened(flow: flow) {
+                    guard flow.takesOpened(in: feed.window, canShow: finished && !cover.waitsForAnAnswer) else { return }
+                    if showsShortcuts { showsShortcuts = false }
+                    if feed.reading != nil { feed.reading = nil }
+                    if section != .today { go(.today) }
+                }
+            }
+        }
+        .task {
+            // The showcase's open question, as a tap on Approve would open it.
+            guard opensQuestion, let task = FeedModel.pinnedTasks(in: feed.feed).first else { return }
+            feed.review(task)
         }
         // A question or any sheet, the memory on a narrow window included,
         // sits in front; Command Return can't send a chat line from behind it.
@@ -544,7 +597,7 @@ struct HomeScreen: View {
             // step with the cloud setting and the open chat.
             MemoryView(model: HomeView.memoryModel(store: memory, place: surfacePlace, cloud: cloud,
                                                    onForgetEverything: { feed.forgetTasks() }),
-                       place: surfacePlace, cloud: cloud)
+                       place: surfacePlace, cloud: cloud, holdsMore: feed.hasSomethingToForget)
         } else {
             // The store couldn't be opened. Say so rather than hide memory.
             // Tasks can still be forgotten here, since Forget everything isn't.
@@ -562,7 +615,7 @@ struct HomeScreen: View {
             // Private words kept from an earlier launch go with the tasks,
             // through `CloudHelp.eraseWordsWithoutNotes`, and the line says
             // whether they could.
-            MemoryUnavailableView(hasTasks: feed.hasTasks, forgotten: feed.tasksForgotten,
+            MemoryUnavailableView(hasTasks: feed.hasSomethingToForget, forgotten: feed.tasksForgotten,
                                   underway: feed.forgotUnderway, wordsErased: wordsErased,
                                   erasesWords: cloud != nil, onForgetTasks: forgetTasksWithoutNotes)
         }
@@ -636,6 +689,21 @@ struct TodayComposer: View {
                 .ignoresSafeArea(edges: .bottom)
                 .overlay(alignment: .top) { Rectangle().fill(Theme.hairline(scheme)).frame(height: 1) }
         }
+    }
+}
+
+/// Hears a nudge being opened, once each time, so the home screen can
+/// bring Today to the front.
+struct NudgeOpened: View {
+    @ObservedObject var flow: NeedsYouFlow
+    let action: () -> Void
+
+    var body: some View {
+        Color.clear
+            .onChange(of: flow.focus, initial: true) { _, id in
+                if id != nil { action() }
+            }
+            .accessibilityHidden(true)
     }
 }
 

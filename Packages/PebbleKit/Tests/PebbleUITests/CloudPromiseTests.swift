@@ -698,7 +698,8 @@ struct CloudPromiseTests {
         let source = try String(contentsOf: Self.sources.appendingPathComponent("PebbleUI/MemoryView.swift"),
                                 encoding: .utf8)
         #expect(source.contains(".onAppear { cloud?.refresh() }"))
-        #expect(source.contains("model.hasStoredFile || help.mayHavePrivateWords"))
+        #expect(source.contains("mayHaveWords: help.mayHavePrivateWords"))
+        #expect(MemoryView.showsForgetEverything(hasNotes: false, mayHaveWords: true, holdsMore: false))
     }
 
     /// The setting's changes reach the home screen through one publisher,
