@@ -19,6 +19,13 @@ private final class Naps {
     var count = 0
 }
 
+/// Counts calls from a `@Sendable` hook. Main actor bound, so it is
+/// Sendable and the hook changes it only on the main actor.
+@MainActor
+private final class Tally {
+    var count = 0
+}
+
 /// The composer on Today, the count beside Today, the sheet handoff, and
 /// the example markers.
 @MainActor
@@ -144,9 +151,9 @@ struct TodayFollowupsTests {
         let rule = AskFirst.isolated()
         let asks = NeedsYou(rule: rule)
         let model = FeedModel(sources: [EmptyFeedSource()], needsYou: asks, place: .onDevice)
-        var calls = 0
+        let calls = Tally()
         let counted = NeedsYou(rule: .isolated())
-        counted.onChange = { MainActor.assumeIsolated { calls += 1 } }
+        counted.onChange = { MainActor.assumeIsolated { calls.count += 1 } }
 
         let first = try #require(asks.ask(note))
         #expect(model.feed.needsYou.count == 1)
@@ -163,15 +170,20 @@ struct TodayFollowupsTests {
         let asked = try #require(counted.ask(note))
         counted.dismissed(asked)
         counted.dismissed(asked)
-        #expect(calls == 2)
+        #expect(calls.count == 2)
     }
 
     // MARK: Closing a sheet, then moving on
 
+    private let todayNarrow = SheetHandoff.Place(section: .today, usesSidebar: false)
+
     @Test func theHandoffWaitsForTheSheetToGo() {
         var handoff = SheetHandoff()
         var ran = 0
-        handoff.hold { ran += 1 }
+        handoff.hold({ ran += 1 }, at: todayNarrow)
+        // The home screen arriving where it was meant to be keeps it waiting.
+        handoff.moved(to: todayNarrow)
+        #expect(handoff.waiting != nil)
         // Another sheet is still on its way out: keep waiting.
         #expect(handoff.sheetClosed(stillOpen: true, questionOpen: false) == nil)
         handoff.sheetClosed(stillOpen: false, questionOpen: false)?()
@@ -185,10 +197,72 @@ struct TodayFollowupsTests {
     @Test func aQuestionThatOpensMeanwhileWins() {
         var handoff = SheetHandoff()
         var ran = false
-        handoff.hold { ran = true }
+        handoff.hold({ ran = true }, at: todayNarrow)
         #expect(handoff.sheetClosed(stillOpen: false, questionOpen: true) == nil)
         #expect(!ran)
         #expect(handoff.waiting == nil)
+    }
+
+    /// The window turned into a sidebar mid-close, so the sheet that was
+    /// closing may never say so. A much later, unrelated dismissal must not
+    /// run what was held.
+    @Test func aResizeMidCloseDropsTheHandoff() {
+        var handoff = SheetHandoff()
+        var ran = false
+        handoff.hold({ ran = true }, at: todayNarrow)
+        handoff.moved(to: SheetHandoff.Place(section: .today, usesSidebar: true))
+        #expect(handoff.waiting == nil)
+        handoff.sheetClosed(stillOpen: false, questionOpen: false)?()
+        #expect(!ran)
+    }
+
+    /// Moving to another section before the sheet is gone drops it too.
+    @Test func movingElsewhereMidCloseDropsTheHandoff() {
+        var handoff = SheetHandoff()
+        var ran = false
+        handoff.hold({ ran = true }, at: todayNarrow)
+        handoff.moved(to: SheetHandoff.Place(section: .chat, usesSidebar: false))
+        handoff.sheetClosed(stillOpen: false, questionOpen: false)?()
+        #expect(!ran)
+    }
+
+    /// When nothing was open to close, the step runs at once and anything
+    /// older is cleared, so a later dismissal runs nothing.
+    @Test func nothingOpenClearsAnOlderHandoff() throws {
+        var handoff = SheetHandoff()
+        var ran = false
+        handoff.hold({ ran = true }, at: todayNarrow)
+        handoff.clear()
+        handoff.sheetClosed(stillOpen: false, questionOpen: false)?()
+        #expect(!ran)
+        #expect(handoff.waiting == nil)
+        // The home screen clears it on that path, and drops it on a move.
+        let source = try #require(try ContrastGuardTests.sources().first { $0.name == "HomeView.swift" }?.text)
+        let nothingOpen = try #require(source.range(of: "guard anySheetOpen else {"))
+        #expect(source[nothingOpen.upperBound...].prefix(200).contains("handoff.clear()"))
+        #expect(source.contains("handoff.moved(to: now)"))
+    }
+
+    // MARK: Command Return
+
+    /// Command Return never sends from behind a question, the shortcuts or
+    /// a piece of work open to read; and Today's composer only while Today
+    /// is in front.
+    @Test func commandReturnNeverSendsFromBehindASheet() throws {
+        #expect(HomeView.sendsFromKeyboard(questionOpen: false, sheetOpen: false))
+        #expect(!HomeView.sendsFromKeyboard(questionOpen: true, sheetOpen: false))
+        #expect(!HomeView.sendsFromKeyboard(questionOpen: false, sheetOpen: true))
+        let source = try #require(try ContrastGuardTests.sources().first { $0.name == "HomeView.swift" }?.text)
+        #expect(source.contains("sheetOpen: showsShortcuts || feed.reading != nil"))
+        #expect(source.contains("keyboardSends: section == .today && keyboardSends"))
+    }
+
+    /// A VoiceOver user hears that sending from Today opens the chat.
+    @Test func todaysComposerSaysWhereTheWordsGo() {
+        let composer = TodayComposer(chat: chat(), keyboardSends: true, send: { _ in }).composer
+        #expect(composer.hint == FeedWords.composerHint)
+        #expect(FeedWords.composerHint.contains("chat"))
+        #expect(Composer(draft: .constant(""), isBusy: false, keyboardSends: true, send: { _ in }).hint == nil)
     }
 
     /// No guessed delay is left in the home screen.

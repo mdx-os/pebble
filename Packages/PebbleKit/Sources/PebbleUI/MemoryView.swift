@@ -319,8 +319,15 @@ final class MemoryModel: ObservableObject {
     var canAdd: Bool { !isUnreadable && !isUnavailable }
 
     /// The store refuses notes it can't read or open, so the words that were
-    /// typed stay in the field and the file stays as it was.
+    /// typed stay in the field and the file stays as it was. The screen
+    /// refuses first too, as a second guard, so notes it last saw as
+    /// unreadable or locked are never written over even if the store
+    /// changes how it reads them.
     func add() {
+        guard canAdd else {
+            status = isUnavailable ? MemoryWords.unavailable : MemoryWords.unreadable
+            return
+        }
         report(try store.remember(newNote, source: .toldMe)) { self.newNote = "" }
     }
 

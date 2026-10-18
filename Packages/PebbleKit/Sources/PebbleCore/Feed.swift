@@ -382,6 +382,9 @@ public enum FeedWords {
     /// Only what is true today: the chat is right below. Nothing here says
     /// the agent works in the background until a real feed source does.
     public static let empty = "It's just us for now. Write to me below, and we'll start a chat."
+    /// VoiceOver's hint on Today's composer, which shares the chat's
+    /// placeholder, so the person knows where the words go.
+    public static let composerHint = "Sends to the chat and opens it."
     /// Said first on an example card, so VoiceOver never takes it for real work.
     public static let exampleMarker = "Example"
     /// Over the example cards. The device promise is made only when `place`

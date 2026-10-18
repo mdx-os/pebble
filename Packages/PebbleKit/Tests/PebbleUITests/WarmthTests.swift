@@ -258,6 +258,22 @@ struct WarmthTests {
         #expect(HomeView.chatIsCovered(usesSidebar: false, section: .chat, showsShortcuts: false, feedSheetOpen: true))
     }
 
+    /// A reply that lands while a sheet covers the chat is not read over the
+    /// sheet. It is still in the transcript, and the same reply is read once
+    /// nothing covers the chat.
+    @Test func aReplyThatLandsWhileCoveredIsNotReadOverTheSheet() async throws {
+        let controller = ChatController(brand: brand, model: LocalStubModel(),
+                                        names: InMemoryAgentNameStore(stored: "Pip"), replyBeat: .zero)
+        let covered = HomeView.chatIsCovered(usesSidebar: true, section: .chat, showsShortcuts: true)
+        #expect(covered)
+        controller.submit("Help me plan my morning.")
+        await settle(controller)
+        let reply = try #require(controller.conversation.turns.last)
+        #expect(reply.speaker == .agent)
+        #expect(ChatView.announcement(for: controller.conversation, covered: covered) == nil)
+        #expect(ChatView.announcement(for: controller.conversation, covered: false) == reply.text)
+    }
+
     /// The example note says "this device" only when the model keeps every
     /// word here, and the feed takes its place from the model, not a flag
     /// of its own.
@@ -287,6 +303,69 @@ struct WarmthTests {
         // A writer that skips the screen is refused by the store itself.
         #expect(throws: MemoryStore.Unreadable.self) { try MemoryStore(fileURL: url).remember("Walks at noon", source: .inferred) }
         #expect(try Data(contentsOf: url) == bytes)
+    }
+
+    /// Notes that can't be opened right now, such as on a locked iPhone, are
+    /// never written over. A file with no read permission stands in for the
+    /// locked file here.
+    @Test func lockedNotesTurnOffAddingAndStayOnDisk() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("warmth-locked-\(UUID().uuidString).json")
+        let seed = MemoryStore(fileURL: url)
+        try seed.remember("Prefers tea", source: .toldMe)
+        let bytes = try Data(contentsOf: url)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            try? seed.forgetEverything()
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+        // The stand-in needs permissions enforced, as they are for a normal user.
+        try #require(FileManager.default.isReadableFile(atPath: url.path) == false)
+
+        let model = MemoryModel(store: MemoryStore(fileURL: url), place: .onDevice)
+        #expect(model.isUnavailable)
+        #expect(!model.canAdd)
+        model.newNote = "Walks at noon"
+        model.add()
+        #expect(model.status == MemoryWords.unavailable)
+        #expect(model.savedCount == 0)
+        #expect(model.newNote == "Walks at noon")
+        // A writer that skips the screen is refused by the store itself.
+        #expect(throws: MemoryStore.Unavailable.self) { try MemoryStore(fileURL: url).remember("Walks at noon", source: .inferred) }
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        #expect(try Data(contentsOf: url) == bytes)
+    }
+
+    /// The screen's own guard holds even when the store would now accept the
+    /// note: what the screen last saw as locked is not written to until it
+    /// looks again.
+    @Test func theScreenRefusesNotesItLastSawAsLocked() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("warmth-guard-\(UUID().uuidString).json")
+        let seed = MemoryStore(fileURL: url)
+        try seed.remember("Prefers tea", source: .toldMe)
+        let bytes = try Data(contentsOf: url)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            try? seed.forgetEverything()
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+        try #require(FileManager.default.isReadableFile(atPath: url.path) == false)
+        let model = MemoryModel(store: MemoryStore(fileURL: url), place: .onDevice)
+        #expect(model.isUnavailable)
+
+        // Opened again behind the screen's back.
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        model.newNote = "Walks at noon"
+        model.add()
+        #expect(model.status == MemoryWords.unavailable)
+        #expect(model.newNote == "Walks at noon")
+        #expect(try Data(contentsOf: url) == bytes)
+        // Looking again is what lets the note in.
+        model.refresh()
+        #expect(model.canAdd)
+        model.add()
+        #expect(model.savedCount == 1)
+        #expect(model.notes.count == 2)
     }
 
     @Test func theDotsHoldStillWithReduceMotion() {
@@ -405,6 +484,11 @@ struct WarmthTests {
     // MARK: Privacy
 
     /// A note's words never reach the model, not even across a full turn.
+    ///
+    /// Today this passes because no code links the memory to the chat at
+    /// all; there is no filter here for it to cover. It is a tripwire: the
+    /// day memory is wired into what the model sees, this fails, so that
+    /// change has to decide on purpose what may reach the model.
     @Test func aMemoryNoteNeverReachesTheModel() async throws {
         let token = UUID().uuidString
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("warmth-private-\(UUID().uuidString).json")
@@ -456,6 +540,12 @@ struct WarmthTests {
         let model = ShowcaseScene.savedNoteMemory(place: .onDevice)
         #expect(model.status == MemoryWords.saved(.onDevice))
         #expect(model.notes.count == 1)
+        // The screen still shows the note and its Forget everything, but the
+        // scratch file is gone, so nothing is left behind and the empty
+        // scene stays empty.
+        #expect(model.hasStoredFile)
+        #expect(!model.store.hasStoredFile)
+        #expect(ShowcaseScene.emptyMemory().notes().isEmpty)
         let renderer = ImageRenderer(content: ShowcaseScene.memorySaved.view(brand: brand)
             .environment(\.colorScheme, scheme)
             .frame(width: 393, height: 852))

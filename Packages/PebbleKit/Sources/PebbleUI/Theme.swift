@@ -26,6 +26,11 @@ enum Theme {
 
     /// The accent for a symbol beside words, such as a card's kind icon.
     /// Only ever on an `Image`; `ContrastGuardTests` checks.
+    ///
+    /// This is the raw accent, about 2.4 to 1 on a light card. That is fine
+    /// while the symbol is decoration next to words that say the same thing.
+    /// A symbol that carries meaning on its own needs 3 to 1 (WCAG 1.4.11),
+    /// so give it a deeper color, such as `accentText`, rather than this.
     static let accentSymbol = accent
 
     /// Words in the accent's warmth, such as "Open" on a card: a deeper

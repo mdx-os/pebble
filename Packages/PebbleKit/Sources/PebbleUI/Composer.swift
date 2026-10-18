@@ -18,6 +18,9 @@ struct Composer: View {
     let keyboardSends: Bool
     var identifier = "composer"
     var lines: ClosedRange<Int> = 1...6
+    /// What VoiceOver adds after the field's name, when sending does more
+    /// than the placeholder says.
+    var hint: String?
     let send: (String) -> Void
 
     private var canSend: Bool {
@@ -32,6 +35,7 @@ struct Composer: View {
                 .lineLimit(lines)
                 .submitLabel(.send)
                 .accessibilityIdentifier(identifier)
+                .accessibilityHint(hint.map { Text($0) } ?? Text(verbatim: ""))
                 // Keyboards are reported a moment after first asking, so ask early.
                 .onAppear { _ = Self.shiftIsDown }
                 .padding(.horizontal, 14)

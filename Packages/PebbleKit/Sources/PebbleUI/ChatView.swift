@@ -121,7 +121,7 @@ public struct ChatView: View {
             }
             .onChange(of: controller.conversation.turns.count) {
                 Self.scrollToLatest(controller.conversation, with: scroller, animated: !reduceMotion)
-                if let line = Self.announcement(for: controller.conversation) {
+                if let line = Self.announcement(for: controller.conversation, covered: covered) {
                     AccessibilityNotification.Announcement(line).post()
                 }
             }
@@ -269,13 +269,16 @@ public struct ChatView: View {
         beat + .milliseconds(400)
     }
 
-    /// "Thinking it over." and the failure line are spoken only while the
-    /// chat is in front. Another sheet over it means quiet.
+    /// "Thinking it over.", the failure line and a new reply are spoken only
+    /// while the chat is in front. Another sheet over it means quiet.
     static func speaks(covered: Bool) -> Bool { !covered }
 
-    /// New lines from the agent are read out, since they may land offscreen.
-    static func announcement(for conversation: Conversation) -> String? {
-        guard let last = conversation.turns.last, last.speaker == .agent, !conversation.isWaitingForPerson else {
+    /// New lines from the agent are read out, since they may land offscreen,
+    /// but never over a sheet that covers the chat. The reply stays in the
+    /// transcript, so it is still there to read once the sheet goes.
+    static func announcement(for conversation: Conversation, covered: Bool) -> String? {
+        guard speaks(covered: covered), let last = conversation.turns.last, last.speaker == .agent,
+              !conversation.isWaitingForPerson else {
             return nil
         }
         return last.text

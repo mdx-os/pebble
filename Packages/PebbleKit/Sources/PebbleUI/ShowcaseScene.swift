@@ -153,12 +153,18 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     }
 
     /// A first note, just added the way a person adds one, so the saved
-    /// line shows under it.
+    /// line shows under it. The note goes to a scratch file of its own,
+    /// which is removed once it is saved: the model keeps what it read, so
+    /// the screen still shows the note and nothing is left behind.
     @MainActor
     static func savedNoteMemory(place: PrivacyPlace) -> MemoryModel {
-        let model = MemoryModel(store: emptyMemory(), place: place)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("showcase-saved-memory-\(UUID().uuidString).json")
+        let store = MemoryStore(fileURL: url)
+        let model = MemoryModel(store: store, place: place)
         model.newNote = "Sam's birthday is May 14. Loves lemon cake."
         model.add()
+        try? store.forgetEverything()
         return model
     }
 

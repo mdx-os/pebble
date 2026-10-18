@@ -130,9 +130,13 @@ public struct HomeView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { feed.refresh() }
         }
-        // A question on screen waits for its answer; Command Return can't
-        // send a chat line from behind it.
-        .environment(\.sendsFromKeyboard, feed.reviewing == nil)
+        // A question, the shortcuts or a piece of work open to read sits in
+        // front; Command Return can't send a chat line from behind it.
+        .environment(\.sendsFromKeyboard, keyboardSends)
+        // Something waiting on a sheet to close is only for where it was asked.
+        .onChange(of: SheetHandoff.Place(section: section, usesSidebar: usesSidebar)) { _, now in
+            handoff.moved(to: now)
+        }
         .onChange(of: section) { old, new in
             // The sidebar can change places without `go`, so keep where the
             // memory was opened from true, and forget it once the memory
@@ -225,10 +229,17 @@ public struct HomeView: View {
     /// A question on screen is never closed for this; it waits for its answer.
     private func afterClosingSheets(_ then: @escaping () -> Void) {
         guard feed.reviewing == nil else { return }
-        guard anySheetOpen else { return then() }
-        // Run once the sheet has finished closing, not after a guessed time.
-        handoff.hold(then)
-        if !usesSidebar && section == .memory { section = memoryOverChat ? .chat : .today }
+        guard anySheetOpen else {
+            // Nothing to wait for, so nothing older may run later either.
+            handoff.clear()
+            return then()
+        }
+        let closesMemory = !usesSidebar && section == .memory
+        let after = closesMemory ? (memoryOverChat ? HomeSection.chat : .today) : section
+        // Run once the sheet has finished closing, not after a guessed time,
+        // and only if the home screen is still where it will be then.
+        handoff.hold(then, at: SheetHandoff.Place(section: after, usesSidebar: usesSidebar))
+        if closesMemory { section = after }
         showsShortcuts = false
         feed.reading = nil
     }
@@ -315,12 +326,22 @@ public struct HomeView: View {
         }
     }
 
+    /// Whether Command Return may send a chat line: never from behind a
+    /// question or another sheet. Today's composer also needs Today in front.
+    static func sendsFromKeyboard(questionOpen: Bool, sheetOpen: Bool) -> Bool {
+        !questionOpen && !sheetOpen
+    }
+
+    private var keyboardSends: Bool {
+        Self.sendsFromKeyboard(questionOpen: feed.reviewing != nil, sheetOpen: showsShortcuts || feed.reading != nil)
+    }
+
     /// Today, with the chat's composer right on it: type and go.
     private func todayScreen(_ chat: ChatController) -> some View {
         FeedView(model: feed, look: AgentLook.load(from: looks), onTalk: { talk(about: $0) })
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 // Command Return belongs to whichever composer is in front.
-                TodayComposer(chat: chat, keyboardSends: feed.reviewing == nil && section == .today) {
+                TodayComposer(chat: chat, keyboardSends: section == .today && keyboardSends) {
                     send(fromToday: $0)
                 }
             }
@@ -364,9 +385,14 @@ struct TodayComposer: View {
     @Environment(\.colorScheme) private var scheme
     @ScaledMetric(relativeTo: .body) private var columnWidth: CGFloat = Theme.chatWidth
 
-    var body: some View {
+    /// The shared field, with a hint that sending here opens the chat.
+    var composer: Composer {
         Composer(draft: $chat.draft, isBusy: chat.isReplying, keyboardSends: keyboardSends,
-                 identifier: "todayComposer", lines: 1...4, send: send)
+                 identifier: "todayComposer", lines: 1...4, hint: FeedWords.composerHint, send: send)
+    }
+
+    var body: some View {
+        composer
             .padding(.vertical, 12)
             .readableColumn(columnWidth)
             .background {
@@ -397,17 +423,42 @@ struct ChatToolbarButton: View {
 /// showing the shortcuts. It waits for the sheet to say it has gone, not
 /// for a guessed time, and is dropped if a question opened meanwhile,
 /// since a question waits for its answer.
+///
+/// It is held for one place: the section the home screen will show once
+/// the sheet is gone, at the window's current shape. If the place changes
+/// first, say the window is resized from a sidebar to one column mid-close,
+/// the sheet that was meant to close may never say so, and a much later
+/// dismissal would run it by surprise. So a move elsewhere drops it.
 struct SheetHandoff {
-    private(set) var waiting: (() -> Void)?
+    struct Place: Equatable {
+        var section: HomeSection?
+        var usesSidebar: Bool
+    }
 
-    mutating func hold(_ then: @escaping () -> Void) {
+    private(set) var waiting: (() -> Void)?
+    private var place: Place?
+
+    mutating func hold(_ then: @escaping () -> Void, at place: Place) {
         waiting = then
+        self.place = place
+    }
+
+    /// Nothing waits any more, such as when nothing was open to close.
+    mutating func clear() {
+        waiting = nil
+        place = nil
+    }
+
+    /// The section or the window's shape changed. Anything held for
+    /// another place is dropped.
+    mutating func moved(to now: Place) {
+        if waiting != nil, now != place { clear() }
     }
 
     /// A sheet has gone. What to run now, if anything.
     mutating func sheetClosed(stillOpen: Bool, questionOpen: Bool) -> (() -> Void)? {
         guard let then = waiting, !stillOpen else { return nil }
-        waiting = nil
+        clear()
         return questionOpen ? nil : then
     }
 }
@@ -473,7 +524,8 @@ extension FocusedValues {
 
 extension EnvironmentValues {
     /// Whether Command Return may send the chat line. Off while a question
-    /// sheet waits for its answer, like the other shortcuts.
+    /// sheet waits for its answer, like the other shortcuts, and while the
+    /// shortcuts or a piece of work to read covers the chat.
     @Entry var sendsFromKeyboard = true
 }
 
