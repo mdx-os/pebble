@@ -205,6 +205,31 @@ final class HomeLayoutUITests: XCTestCase {
         }
     }
 
+    /// An earlier launch left background work on, the way the version
+    /// before kept it: the switch in UserDefaults and the morning summary
+    /// queued in the runner's file. The app starts its runner as it always
+    /// does, before launch ends, reads the switch as on and moves it beside
+    /// the file, and the memory screen says when it looks next. The seed
+    /// points the runner at a scratch folder, so nothing of the person's is
+    /// touched, and it is the app's own home screen, not the showcase.
+    func testALaunchWithBackgroundWorkAlreadyOnKeepsItOn() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-pebbleBackgroundSeed", "on", "-backgroundWork.on", "YES",
+                               "-pebble.onboarding.finished", "YES", "-pebble.agent.displayName", "Pip"]
+        app.launch()
+        let memory = app.buttons["What I remember"].firstMatch
+        XCTAssertTrue(memory.waitForExistence(timeout: 10), "the app's home, past the first run")
+        memory.tap()
+        let toggle = app.switches["backgroundSwitch"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        for _ in 0..<8 where !toggle.isHittable { app.swipeUp() }
+        XCTAssertEqual(toggle.value as? String, "1", "still on after the launch")
+        let next = app.staticTexts["backgroundNext"]
+        XCTAssertTrue(next.waitForExistence(timeout: 5))
+        XCTAssertTrue(next.label.hasPrefix("I'll look next"), next.label)
+        app.terminate()
+    }
+
     /// Typing on Today and pressing Command 2 still goes to the chat, and
     /// the words come along.
     func testCommandTwoGoesToTheChatFromTodaysComposer() throws {

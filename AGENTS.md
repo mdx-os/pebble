@@ -32,7 +32,7 @@ in lint, a skill, or CI.
   - `PebbleCore`: plain types. No SwiftUI, no networking.
   - `PebblePulse`: competitor watch fetching and snapshots. Imports PebbleCore.
   - `PebbleModel`: model adapter. `ModelClient`, the on-device placeholder and `CloudModel` (off by default, every request previewed and redacted by `Redactor` in PebbleCore). Imports PebbleCore. MLX and Ollama adapters plug in here.
-  - `PebbleBackground`: gives the background runner time (`BGTaskScheduler` on iOS, `NSBackgroundActivityScheduler` on the Mac). Imports PebbleCore. Scheduling decisions are pure functions in `BackgroundPlan`; the runner and its store live in `Background.swift`.
+  - `PebbleBackground`: gives the background runner time (`BGTaskScheduler` on iOS, `NSBackgroundActivityScheduler` on the Mac). Imports PebbleCore. Scheduling decisions are pure functions in `BackgroundPlan`; the runner, its store and its switch live in PebbleCore's `Background.swift`, so no platform code goes there.
   - `PebbleUI`: SwiftUI views shared by every platform. Imports PebbleCore and PebbleModel.
 - New code goes in a package, not in `App/`. New layers get added to
   `Package.swift` with their place in the order written down.
@@ -51,6 +51,16 @@ in lint, a skill, or CI.
 - The summary's file uses `completeUntilFirstUserAuthentication`, so it
   opens once the device has been unlocked since it started. Notes and
   private words keep `.complete`, and the summary never copies their words.
+- The switch lives in `background-switch.json` with no file protection
+  (`.none`), so a run before the first unlock can read it. It holds only a
+  bool, dates and a reason (on or off, the next due time, why a run waited,
+  whether a Forget everything is pending), never anything of the person's.
+  Keep it that way: nothing else goes in that file. `UserDefaults` can't be
+  read before the first unlock, so the switch is not kept there.
+- "Locked" for the runner means its file can't be opened yet, found by
+  trying the file (`BackgroundConditions.background(store:...)`). Never
+  derive it from `isProtectedDataAvailable` or the screen lock: a phone
+  locked after its first unlock still makes the summary overnight.
 
 ## The name
 

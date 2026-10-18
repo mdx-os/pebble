@@ -11,8 +11,8 @@ import PackageDescription
 //   PebbleBackground  gives the background runner time: BGTaskScheduler on
 //                iPhone and iPad, NSBackgroundActivityScheduler on the Mac.
 //                Imports PebbleCore. Scheduling decisions are pure
-//                functions in `BackgroundPlan`; the runner and its store
-//                live in `Background.swift`.
+//                functions in `BackgroundPlan`; the runner, its store and
+//                its switch live in PebbleCore's `Background.swift`.
 //   PebbleUI     SwiftUI views shared by Mac, iPhone and iPad.
 //                Imports PebbleCore and PebbleModel.
 // SourceScan is not a layer. It lives under Tests, is in no product, and
@@ -39,6 +39,8 @@ let package = Package(
         .testTarget(name: "PebbleCoreTests", dependencies: ["PebbleCore", "SourceScan"]),
         .testTarget(name: "PebblePulseTests", dependencies: ["PebblePulse", "PebbleCore"]),
         .testTarget(name: "PebbleModelTests", dependencies: ["PebbleModel", "PebbleCore"]),
-        .testTarget(name: "PebbleUITests", dependencies: ["PebbleUI", "PebbleModel", "PebbleCore", "SourceScan"]),
+        .testTarget(name: "PebbleBackgroundTests", dependencies: ["PebbleBackground", "PebbleCore", "SourceScan"]),
+        .testTarget(name: "PebbleUITests",
+                    dependencies: ["PebbleUI", "PebbleModel", "PebbleCore", "PebbleBackground", "SourceScan"]),
     ]
 )

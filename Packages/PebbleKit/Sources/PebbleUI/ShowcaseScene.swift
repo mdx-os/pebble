@@ -318,7 +318,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         }
         runner.turnOn(now: yesterday - 60 * 60)
         runner.runDue(now: yesterday + 60, conditions: BackgroundConditions(moment: .background, lowPower: true))
-        runner.runDue(now: today + 60, conditions: BackgroundConditions(moment: .background, locked: true))
+        runner.runDue(now: today + 60, conditions: BackgroundConditions(moment: .background, fileShut: true))
         runner.runDue(now: morning - 5 * 60, conditions: .foreground)
         return runner
     }

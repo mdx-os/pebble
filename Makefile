@@ -3,9 +3,11 @@ DERIVED := build/DerivedData
 .PHONY: verify generate test repeat-test build build-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-config-check secrets-check pulse clean
 
 ## verify: everything CI runs. Run this before every PR. The screenshots are
-## made and then checked against the working tree in the same run: the check
-## is the recipe, so it runs after every prerequisite, even with -j.
-verify: brand-check local-config-check screenshots-check-test test build build-release screenshots
+## made after every other step and then checked against the working tree.
+## Both are the recipe, so even with -j nothing runs beside them that could
+## change the tree between the stamp and the check.
+verify: brand-check local-config-check screenshots-check-test test build build-release
+	$(MAKE) screenshots
 	sh scripts/screenshot-stamp.sh check build/screenshots
 
 ## generate: create Pebble.xcodeproj from project.yml (the project file is not committed)

@@ -91,10 +91,16 @@ public final class CloudHelpFileStore: CloudHelpStoring, @unchecked Sendable {
     public static let fileProtection: FileProtectionType = .complete
 
     public let fileURL: URL
+    private let writer: ProtectedWriter
     private let lock = NSLock()
 
-    public init(fileURL: URL) {
+    public convenience init(fileURL: URL) {
+        self.init(fileURL: fileURL, writer: .disk)
+    }
+
+    package init(fileURL: URL, writer: ProtectedWriter) {
         self.fileURL = fileURL
+        self.writer = writer
     }
 
     /// The store in the notes folder on this device.
@@ -127,7 +133,7 @@ public final class CloudHelpFileStore: CloudHelpStoring, @unchecked Sendable {
         // Staged under one known name, then renamed over the real file, as
         // the notes are, so no copy is left anywhere else.
         try removeStaged()
-        try data.write(to: stagingURL, options: .staged(Self.fileProtection))
+        try writer.write(data, stagingURL, Self.fileProtection)
         guard rename(stagingURL.path, fileURL.path) == 0 else {
             try? removeStaged()
             throw CocoaError(.fileWriteUnknown)

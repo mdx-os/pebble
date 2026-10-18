@@ -60,12 +60,28 @@ public struct BackgroundJob: Codable, Sendable, Equatable, Identifiable {
     public var due: Date
     /// Why the last chance passed it by, if one did.
     public var held: BackgroundHold?
+    /// How many chances in a row passed it by, so the asks for time back
+    /// off over a long night. Back to zero once it runs or moves on.
+    public var holds: Int
 
-    public init(id: UUID = UUID(), kind: BackgroundJobKind, due: Date, held: BackgroundHold? = nil) {
+    public init(id: UUID = UUID(), kind: BackgroundJobKind, due: Date, held: BackgroundHold? = nil, holds: Int = 0) {
         self.id = id
         self.kind = kind
         self.due = due
         self.held = held
+        self.holds = holds
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, kind, due, held, holds }
+
+    /// A file from before `holds` was kept reads as none.
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        kind = try values.decode(BackgroundJobKind.self, forKey: .kind)
+        due = try values.decode(Date.self, forKey: .due)
+        held = try values.decodeIfPresent(BackgroundHold.self, forKey: .held)
+        holds = try values.decodeIfPresent(Int.self, forKey: .holds) ?? 0
     }
 }
 
@@ -80,17 +96,19 @@ public struct BackgroundConditions: Sendable, Equatable {
 
     public var moment: Moment
     public var lowPower: Bool
-    /// True before the first unlock since the device started, while the
-    /// runner's file can't be opened. Locked again after that, the file
-    /// opens, so this is false.
-    public var locked: Bool
+    /// True while the runner's file can't be opened yet, as before the
+    /// first unlock since the device started. This is not the screen
+    /// lock: a phone locked again after that still opens the file, so this
+    /// is false and the summary is made overnight. It comes from trying
+    /// the file, through `background(store:lowPower:deadline:)`.
+    public var fileShut: Bool
     /// When the system takes the time back. Nil when there is no limit.
     public var deadline: Date?
 
-    public init(moment: Moment, lowPower: Bool = false, locked: Bool = false, deadline: Date? = nil) {
+    public init(moment: Moment, lowPower: Bool = false, fileShut: Bool = false, deadline: Date? = nil) {
         self.moment = moment
         self.lowPower = lowPower
-        self.locked = locked
+        self.fileShut = fileShut
         self.deadline = deadline
     }
 
@@ -98,6 +116,14 @@ public struct BackgroundConditions: Sendable, Equatable {
     /// Power Mode doesn't hold back a run here, since the person is here
     /// and the summary only counts what is on screen anyway.
     public static let foreground = BackgroundConditions(moment: .foreground)
+
+    /// A run the system gave time for while the app was closed. Whether the
+    /// file is shut is found by trying to open `store`, never from the
+    /// screen or from whether protected data is available, so a run while
+    /// the screen is locked after the first unlock goes ahead.
+    public static func background(store: BackgroundStore, lowPower: Bool, deadline: Date?) -> BackgroundConditions {
+        BackgroundConditions(moment: .background, lowPower: lowPower, fileShut: store.isShut, deadline: deadline)
+    }
 }
 
 /// What to do with one job at one moment.
@@ -118,6 +144,13 @@ public enum BackgroundPlan {
     public static let morningHour = 7
     /// How soon to ask for time again after a run was held back.
     public static let retryAfterHold: TimeInterval = 15 * 60
+    /// After this many holds in a row, each ask waits twice as long as the
+    /// one before, up to `longestRetry`.
+    public static let holdsBeforeBackingOff = 3
+    public static let longestRetry: TimeInterval = 2 * 60 * 60
+    /// How often the Mac looks while the app is running. Its own value:
+    /// a different thing from the wait after a hold, though the same today.
+    public static let macLookInterval: TimeInterval = 15 * 60
     /// Cards older than this go.
     public static let keepResultsFor: TimeInterval = 7 * 24 * 60 * 60
     /// And never more than this many.
@@ -151,7 +184,7 @@ public enum BackgroundPlan {
                               calendar: Calendar) -> BackgroundDecision {
         if now < job.due { return .notYet(job.due) }
         if now >= lastChance(for: job, calendar: calendar) { return .missed }
-        if conditions.locked { return .hold(.locked) }
+        if conditions.fileShut { return .hold(.locked) }
         if conditions.moment == .background {
             if conditions.lowPower { return .hold(.lowPower) }
             if let deadline = conditions.deadline, deadline.timeIntervalSince(now) < job.kind.expectedSeconds {
@@ -165,7 +198,16 @@ public enum BackgroundPlan {
     /// or a little later for one already due and held back. Nil with
     /// nothing queued, so the ask is cancelled.
     public static func nextWake(for queue: [BackgroundJob], now: Date) -> Date? {
-        queue.map { $0.due > now ? $0.due : now + retryAfterHold }.min()
+        queue.map { $0.due > now ? $0.due : now + retry(afterHolds: $0.holds) }.min()
+    }
+
+    /// How long to wait before asking again after `holds` holds in a row:
+    /// a quarter hour for the first few, then twice as long each time, so
+    /// a night in Low Power Mode or before the first unlock isn't woken
+    /// every quarter hour until it ends.
+    public static func retry(afterHolds holds: Int) -> TimeInterval {
+        let doublings = min(max(0, holds - holdsBeforeBackingOff), 8)
+        return min(retryAfterHold * Double(1 << doublings), longestRetry)
     }
 
     /// Where a missed job goes next: this morning if today's is still to
@@ -313,13 +355,17 @@ public struct BackgroundState: Codable, Sendable, Equatable {
 
 /// Whether background work is on. Off until the person turns it on.
 ///
-/// It also keeps when the next job is due, and why a run waited before the
-/// file could be read: only a time and a reason, nothing of the person's,
-/// so they can live where a launch while locked can read and write them.
-/// The next launch, often a new process, still knows the run waited.
+/// It also keeps when the next job is due, why a run waited before the
+/// runner's file could be read, and whether a Forget everything still has
+/// that file to erase: a bool, dates and a reason, nothing of the person's,
+/// so they can live where a launch before the first unlock can read and
+/// write them. The next launch, often a new process, still knows them.
 public protocol BackgroundSwitch: Sendable {
     var isOn: Bool { get }
     func set(_ on: Bool)
+    /// False when the switch couldn't be read just now, so off may not be
+    /// off. The runner never takes that as off.
+    var isKnown: Bool { get }
     /// The soonest job's due time, as last known. Nil with nothing queued.
     var nextDue: Date? { get }
     func setNextDue(_ due: Date?)
@@ -327,54 +373,215 @@ public protocol BackgroundSwitch: Sendable {
     /// the file has taken it.
     var heldBeforeLoad: BackgroundHeldRun? { get }
     func setHeldBeforeLoad(_ held: BackgroundHeldRun?)
+    /// True from the start of a Forget everything until the runner's file
+    /// is erased, so a file that couldn't be erased is tried again, and
+    /// nothing in it is shown or run meanwhile.
+    var forgetPending: Bool { get }
+    func setForgetPending(_ pending: Bool)
 }
 
 /// A run that waited before the runner's file could be read.
 public struct BackgroundHeldRun: Codable, Sendable, Equatable {
     public let hold: BackgroundHold
+    /// The latest time it waited.
     public let at: Date
+    /// How many times it waited, so the asks for time back off.
+    public let count: Int
 
-    public init(hold: BackgroundHold, at: Date) {
+    public init(hold: BackgroundHold, at: Date, count: Int = 1) {
         self.hold = hold
         self.at = at
+        self.count = count
     }
 }
 
-/// The switch, saved in `UserDefaults`. Readable while the device is
-/// locked, so a run in the night knows whether it may go ahead.
-public struct UserDefaultsBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
-    public static let key = "backgroundWork.on"
-    public static let nextDueKey = "backgroundWork.nextDue"
-    public static let heldKey = "backgroundWork.held"
-    public static let heldAtKey = "backgroundWork.heldAt"
-    private let defaults: UserDefaults
+/// The switch, in a small file of its own next to the runner's.
+///
+/// It holds only a bool, the next due time, why a run waited and whether a
+/// Forget everything is pending: nothing of the person's, no words and no
+/// counts. So it is written with no file protection, and a run before the
+/// first unlock since the device started can read whether it may go ahead
+/// and keep why it waited. `UserDefaults` can't be read then.
+///
+/// An earlier version kept the switch in `UserDefaults`. Until the switch
+/// is set here, it is read from there, and moved here the first time
+/// `UserDefaults` has it, so a launch before the first unlock, which sees
+/// nothing there, never writes it over as off.
+public final class FileBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
+    /// No protection: what this file holds is safe to read before the
+    /// first unlock, and has to be.
+    public static let fileProtection: FileProtectionType = .none
 
-    public init(defaults: UserDefaults = .standard) {
+    /// Where the earlier version kept it.
+    public enum LegacyKeys {
+        public static let on = "backgroundWork.on"
+        public static let nextDue = "backgroundWork.nextDue"
+        public static let held = "backgroundWork.held"
+        public static let heldAt = "backgroundWork.heldAt"
+        static let all = [on, nextDue, held, heldAt]
+    }
+
+    struct Saved: Codable, Equatable {
+        /// Nil until set here or moved from `UserDefaults`.
+        var on: Bool?
+        var nextDue: Date?
+        var held: BackgroundHeldRun?
+        var forgetPending: Bool?
+    }
+
+    public let fileURL: URL
+    private let defaults: UserDefaults?
+    private let writer: ProtectedWriter
+    private let lock = NSLock()
+    /// What was last read or written. Nil until the file is read.
+    private var saved: Saved?
+    /// True while the file is there but couldn't be read. Nothing is
+    /// written over it then; changes wait in `waiting`.
+    private var unreadable = false
+    /// Changes made while the file couldn't be read, laid over it once it can.
+    private var waiting: [(inout Saved) -> Void] = []
+
+    /// `defaults` is where an earlier version kept the switch, to move from.
+    package init(fileURL: URL, defaults: UserDefaults? = nil, writer: ProtectedWriter = .disk) {
+        self.fileURL = fileURL
         self.defaults = defaults
+        self.writer = writer
     }
 
-    public var isOn: Bool { defaults.bool(forKey: Self.key) }
-    public func set(_ on: Bool) { defaults.set(on, forKey: Self.key) }
+    private static let sharedLock = NSLock()
+    nonisolated(unsafe) private static var shared: FileBackgroundSwitch?
 
-    public var nextDue: Date? { defaults.object(forKey: Self.nextDueKey) as? Date }
-    public func setNextDue(_ due: Date?) {
-        if let due { defaults.set(due, forKey: Self.nextDueKey) } else { defaults.removeObject(forKey: Self.nextDueKey) }
+    /// The one switch, beside the runner's file.
+    public static func onDevice(fileManager: FileManager = .default,
+                                defaults: UserDefaults = .standard) throws -> FileBackgroundSwitch {
+        sharedLock.lock()
+        defer { sharedLock.unlock() }
+        if let shared { return shared }
+        let folder = try MemoryStore.onDeviceFolder(fileManager: fileManager)
+        let toggle = FileBackgroundSwitch(fileURL: folder.appendingPathComponent("background-switch.json"),
+                                          defaults: defaults)
+        shared = toggle
+        return toggle
     }
 
-    public var heldBeforeLoad: BackgroundHeldRun? {
-        guard let raw = defaults.string(forKey: Self.heldKey), let hold = BackgroundHold(rawValue: raw),
-              let at = defaults.object(forKey: Self.heldAtKey) as? Date else { return nil }
-        return BackgroundHeldRun(hold: hold, at: at)
+    package var stagingURL: URL {
+        fileURL.deletingLastPathComponent().appendingPathComponent("." + fileURL.lastPathComponent + ".next")
     }
 
-    public func setHeldBeforeLoad(_ held: BackgroundHeldRun?) {
-        if let held {
-            defaults.set(held.hold.rawValue, forKey: Self.heldKey)
-            defaults.set(held.at, forKey: Self.heldAtKey)
-        } else {
-            defaults.removeObject(forKey: Self.heldKey)
-            defaults.removeObject(forKey: Self.heldAtKey)
+    public var isOn: Bool { read { $0.on ?? false } }
+    public func set(_ on: Bool) { update { $0.on = on } }
+
+    public var isKnown: Bool { read { _ in !unreadable } }
+
+    public var nextDue: Date? { read(\.nextDue) }
+    public func setNextDue(_ due: Date?) { update { $0.nextDue = due } }
+
+    public var heldBeforeLoad: BackgroundHeldRun? { read(\.held) }
+    public func setHeldBeforeLoad(_ held: BackgroundHeldRun?) { update { $0.held = held } }
+
+    public var forgetPending: Bool { read { $0.forgetPending ?? false } }
+    public func setForgetPending(_ pending: Bool) { update { $0.forgetPending = pending ? true : nil } }
+
+    private func read<T>(_ value: (Saved) -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return value(current())
+    }
+
+    private func update(_ body: @escaping (inout Saved) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        var next = current()
+        body(&next)
+        if unreadable {
+            waiting.append(body)
+            saved = next
+            return
         }
+        guard next != saved else { return }
+        saved = next
+        write(next)
+    }
+
+    /// With the lock held. What the file says, with anything still kept in
+    /// `UserDefaults` moved over.
+    private func current() -> Saved {
+        if saved == nil || unreadable { reload() }
+        var value = saved ?? Saved()
+        if value.on == nil { moveFromDefaults(&value) }
+        return value
+    }
+
+    /// With the lock held.
+    private func reload() {
+        if let data = FileManager.default.contents(atPath: fileURL.path) {
+            // A file that can't be decoded starts over: it holds nothing
+            // of the person's.
+            var read = (try? JSONDecoder().decode(Saved.self, from: data)) ?? Saved()
+            for change in waiting { change(&read) }
+            let changed = !waiting.isEmpty
+            waiting = []
+            unreadable = false
+            saved = read
+            if changed { write(read) }
+        } else if FileManager.default.fileExists(atPath: fileURL.path) {
+            unreadable = true
+            if saved == nil { saved = Saved() }
+        } else {
+            // No file: what is in memory is all there is.
+            let changed = !waiting.isEmpty
+            waiting = []
+            unreadable = false
+            if saved == nil { saved = Saved() }
+            if changed, let saved { write(saved) }
+        }
+    }
+
+    /// With the lock held. Until the switch is set here, `UserDefaults`
+    /// is read each time, since before the first unlock it reads as empty.
+    private func moveFromDefaults(_ value: inout Saved) {
+        guard let defaults, defaults.object(forKey: LegacyKeys.on) != nil else { return }
+        value.on = defaults.bool(forKey: LegacyKeys.on)
+        if value.nextDue == nil { value.nextDue = defaults.object(forKey: LegacyKeys.nextDue) as? Date }
+        if value.held == nil, let raw = defaults.string(forKey: LegacyKeys.held),
+           let hold = BackgroundHold(rawValue: raw), let at = defaults.object(forKey: LegacyKeys.heldAt) as? Date {
+            value.held = BackgroundHeldRun(hold: hold, at: at)
+        }
+        saved = value
+        // Moved once: the old keys go only once the file has it.
+        guard !unreadable, write(value) else { return }
+        for key in LegacyKeys.all { defaults.removeObject(forKey: key) }
+    }
+
+    /// With the lock held. Staged and renamed over the file, as the other
+    /// stores write theirs.
+    @discardableResult
+    private func write(_ value: Saved) -> Bool {
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let data = try encoder.encode(value)
+            if FileManager.default.fileExists(atPath: stagingURL.path) {
+                try FileManager.default.removeItem(at: stagingURL)
+            }
+            try writer.write(data, stagingURL, Self.fileProtection)
+            guard rename(stagingURL.path, fileURL.path) == 0 else {
+                try? FileManager.default.removeItem(at: stagingURL)
+                return false
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Removes the file, for tests.
+    package func removeFile() {
+        lock.lock()
+        defer { lock.unlock() }
+        try? FileManager.default.removeItem(at: fileURL)
+        try? FileManager.default.removeItem(at: stagingURL)
+        saved = nil
     }
 }
 
@@ -384,11 +591,14 @@ public final class InMemoryBackgroundSwitch: BackgroundSwitch, @unchecked Sendab
     private var on: Bool
     private var due: Date?
     private var held: BackgroundHeldRun?
+    private var pending = false
 
     public init(on: Bool = false, nextDue: Date? = nil) {
         self.on = on
         due = nextDue
     }
+
+    public var isKnown: Bool { true }
 
     public var heldBeforeLoad: BackgroundHeldRun? {
         lock.lock(); defer { lock.unlock() }
@@ -398,6 +608,17 @@ public final class InMemoryBackgroundSwitch: BackgroundSwitch, @unchecked Sendab
     public func setHeldBeforeLoad(_ held: BackgroundHeldRun?) {
         lock.lock()
         self.held = held
+        lock.unlock()
+    }
+
+    public var forgetPending: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return pending
+    }
+
+    public func setForgetPending(_ pending: Bool) {
+        lock.lock()
+        self.pending = pending
         lock.unlock()
     }
 
@@ -441,18 +662,27 @@ public final class BackgroundStore: @unchecked Sendable {
     public let fileURL: URL
     /// True for a store that keeps nothing on disk, for the showcase.
     private let diskless: Bool
+    private let writer: ProtectedWriter
+    /// The errors opening the file gives while its protection keeps it
+    /// shut. A file shut by its protection class gives `EPERM`; anything
+    /// else, such as a disk error, is not the lock.
+    private let shutErrors: Set<Int32>
     private let lock = NSLock()
 
     /// Package access: the app uses `onDevice()`. Tests point a store at a
-    /// scratch file.
-    package init(fileURL: URL) {
+    /// scratch file, and may fake the lock with another error.
+    package init(fileURL: URL, writer: ProtectedWriter = .disk, shutErrors: Set<Int32> = [EPERM]) {
         self.fileURL = fileURL
         diskless = false
+        self.writer = writer
+        self.shutErrors = shutErrors
     }
 
     private init(diskless: Void) {
         fileURL = URL(fileURLWithPath: "/dev/null")
         self.diskless = true
+        writer = .disk
+        shutErrors = []
     }
 
     /// A store that writes nothing anywhere, so the showcase leaves no file
@@ -488,15 +718,33 @@ public final class BackgroundStore: @unchecked Sendable {
     }
 
     /// Whether the file can be opened now. False while it is there but
-    /// shut, as before the first unlock since the device started. True
-    /// with no file.
+    /// won't open, whatever the reason. True with no file.
     public var canOpen: Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard !diskless, FileManager.default.fileExists(atPath: fileURL.path) else { return true }
-        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return false }
-        try? handle.close()
-        return true
+        return openError() == nil
+    }
+
+    /// True while the file is there and its protection keeps it shut, as
+    /// before the first unlock since the device started. Found by trying
+    /// to open it, so a phone whose screen is locked after that first
+    /// unlock opens the file, and this is false.
+    public var isShut: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return openError().map(shutErrors.contains) ?? false
+    }
+
+    /// With the lock held. Why the file won't open, or nil if it opens or
+    /// isn't there.
+    private func openError() -> Int32? {
+        guard !diskless, FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+        let descriptor = open(fileURL.path, O_RDONLY)
+        guard descriptor < 0 else {
+            close(descriptor)
+            return nil
+        }
+        return errno
     }
 
     /// What was kept. Empty with no file. A file that can't be decoded,
@@ -517,8 +765,10 @@ public final class BackgroundStore: @unchecked Sendable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(state)
+        // A staged copy left by a save cut short goes first, or the write,
+        // which never replaces a file, would fail every time after.
         try removeStaged()
-        try data.write(to: stagingURL, options: .staged(Self.fileProtection))
+        try writer.write(data, stagingURL, Self.fileProtection)
         guard rename(stagingURL.path, fileURL.path) == 0 else {
             try? removeStaged()
             throw Unavailable()
@@ -598,6 +848,12 @@ public final class BackgroundRunner: @unchecked Sendable {
     /// Turned on or off before the file could be read. The queue saved in
     /// the file then follows this, so an old queue never comes back.
     private var switchedBeforeLoad: Bool?
+    /// A run held back before the file could be read, kept here too in
+    /// case the switch couldn't keep it.
+    private var heldWaiting: BackgroundHeldRun?
+    /// A Forget everything whose file is still to be erased, kept here too
+    /// in case the switch couldn't keep it.
+    private var forgetWaiting = false
     /// Questions `propose` asked and not yet answered, so turning off or
     /// forgetting can withdraw them.
     private var proposals: [ConfirmationRequest] = []
@@ -617,14 +873,14 @@ public final class BackgroundRunner: @unchecked Sendable {
         self.sample = sample
     }
 
-    /// The app's runner, on the device's store with the saved switch. It
-    /// reads the same `needsYou` and `tasks` as Today, which have been
-    /// watching since `launchedAt`. Nil if the store's folder can't be made.
+    /// The app's runner, on the device's store with the switch beside it.
+    /// It reads the same `needsYou` and `tasks` as Today, which have been
+    /// watching since `launchedAt`. Nil if the folder can't be made.
     public static func onDevice(needsYou: NeedsYou, tasks: (any TaskEngine)?, launchedAt: Date = Date(),
                                 store: () throws -> BackgroundStore = { try BackgroundStore.onDevice() },
-                                toggle: any BackgroundSwitch = UserDefaultsBackgroundSwitch(),
+                                toggle: () throws -> any BackgroundSwitch = { try FileBackgroundSwitch.onDevice() },
                                 calendar: Calendar = .current) -> BackgroundRunner? {
-        guard let store = try? store() else { return nil }
+        guard let store = try? store(), let toggle = try? toggle() else { return nil }
         return BackgroundRunner(store: store, toggle: toggle, needsYou: needsYou, tasks: tasks,
                                 watchingSince: launchedAt, calendar: calendar)
     }
@@ -664,6 +920,21 @@ public final class BackgroundRunner: @unchecked Sendable {
 
     public var isOn: Bool { toggle.isOn }
 
+    /// What the switch says, as far as can be told now.
+    public enum SwitchReading: Sendable, Equatable {
+        case on, off
+        /// It reads off, but may not have been read: the switch says so, or
+        /// it reads off while the runner's file is shut, before the first
+        /// unlock, when a switch kept where nothing opens then would read
+        /// off too. Never taken as off, so nothing is cancelled on its word.
+        case unknown
+    }
+
+    public var switchReading: SwitchReading {
+        if toggle.isOn { return .on }
+        return toggle.isKnown && !store.isShut ? .off : .unknown
+    }
+
     /// Turns background work on, with the morning summary due at the next
     /// morning. Turning it on again changes nothing.
     public func turnOn(now: Date) {
@@ -678,14 +949,24 @@ public final class BackgroundRunner: @unchecked Sendable {
     /// Turns it off. The queue goes, so nothing more runs, and any question
     /// it asked is withdrawn. Cards already made stay until they are
     /// forgotten. The next summary after turning on again counts from the
-    /// evening before it, never across the days it was off.
+    /// evening before it, never across the days it was off. A run that
+    /// waited for the file is forgotten too, so it is never said of a job
+    /// queued after turning on again.
     public func turnOff() {
         toggle.set(false)
+        clearHeldBeforeLoad()
         change(switching: false) { state in
             state.queue.removeAll()
             state.lastSummary = nil
         }
         withdrawProposals()
+    }
+
+    private func clearHeldBeforeLoad() {
+        lock.lock()
+        heldWaiting = nil
+        lock.unlock()
+        toggle.setHeldBeforeLoad(nil)
     }
 
     // MARK: Reading
@@ -705,38 +986,39 @@ public final class BackgroundRunner: @unchecked Sendable {
     }
 
     /// When the platform should give the runner time next. Nil while off
-    /// or with nothing queued. While on with a file that can't be read
-    /// yet, as on a launch while locked, the queue is still in the file,
-    /// so the ask must not be cancelled: it asks for the due time the
-    /// switch keeps, or a little later if that has come or isn't known.
+    /// or with nothing queued. While the switch is on but the file can't
+    /// be read yet, or the switch can't be told from off, the queue may
+    /// still be in the file, so the ask is never cancelled: it asks for
+    /// the due time the switch keeps, or a little later if that has come
+    /// or isn't known, backing off as the holds add up.
     public func nextWake(now: Date) -> Date? {
-        guard isOn else { return nil }
+        let reading = switchReading
+        guard reading != .off else { return nil }
         lock.lock()
         loadIfNeeded()
         let isLoaded = loaded
         let queue = state.queue
+        let holds = latestHeld?.count ?? 0
         lock.unlock()
-        guard isLoaded else {
+        guard isLoaded, reading == .on else {
             if let due = toggle.nextDue, due > now { return due }
-            return now + BackgroundPlan.retryAfterHold
+            return now + BackgroundPlan.retry(afterHolds: holds)
         }
         return BackgroundPlan.nextWake(for: queue, now: now)
     }
 
-    /// True when a job that is due waits because a run was held back, so
-    /// the platform can tell the system the run didn't do its work. Before
-    /// the file can be read, that is a hold kept beside the switch at or
-    /// after the due time it keeps.
-    public func isHeldBack(now: Date) -> Bool {
-        guard isOn else { return false }
+    /// True when a run just now did the work it was given time for, so the
+    /// platform can tell the system. False while off, or while it can't be
+    /// told from off, since nothing was done; false when the file couldn't
+    /// be read, as before the first unlock or after a disk error; and false
+    /// while a job that is due waits because a run was held back.
+    public func didItsWork(now: Date) -> Bool {
+        guard switchReading == .on else { return false }
         lock.lock()
         defer { lock.unlock() }
         loadIfNeeded()
-        guard loaded else {
-            guard let held = toggle.heldBeforeLoad else { return false }
-            return toggle.nextDue.map { held.at >= $0 } ?? true
-        }
-        return state.queue.contains { $0.held != nil && $0.due <= now }
+        guard loaded, !forgetIsPending else { return false }
+        return !state.queue.contains { $0.held != nil && $0.due <= now }
     }
 
     /// The cards, as a source for Today.
@@ -752,7 +1034,10 @@ public final class BackgroundRunner: @unchecked Sendable {
     @discardableResult
     public func runDue(now: Date, conditions: BackgroundConditions,
                        time: BackgroundTime? = nil) -> [BackgroundResult] {
-        guard isOn else { return [] }
+        // Off is off. A switch that can't be told from off goes as far as
+        // keeping why the run waited, but runs nothing.
+        let reading = switchReading
+        guard reading != .off else { return [] }
         // Read outside the runner's lock: `NeedsYou` and the engine take
         // their own, and may call back.
         let questions = needsYou?.items(now: now)
@@ -760,13 +1045,18 @@ public final class BackgroundRunner: @unchecked Sendable {
 
         lock.lock()
         loadIfNeeded()
-        guard loaded else {
+        guard loaded, reading == .on else {
             // The file can't be opened, so neither can anything be written.
-            // If that is because the device hasn't been unlocked yet, say
-            // so beside the switch, where the next launch reads it, for the
-            // card that comes later. Anything else, such as a disk error,
-            // is no lock, and no reason is claimed.
-            if conditions.locked { toggle.setHeldBeforeLoad(BackgroundHeldRun(hold: .locked, at: now)) }
+            // If that is because it is shut until the first unlock, say so
+            // beside the switch, where the next launch reads it, and here,
+            // in case the switch can't keep it, for the card that comes
+            // later. Anything else, such as a disk error, is no lock, and
+            // no reason is claimed.
+            if !loaded, conditions.fileShut {
+                let held = BackgroundHeldRun(hold: .locked, at: now, count: (latestHeld?.count ?? 0) + 1)
+                heldWaiting = held
+                toggle.setHeldBeforeLoad(held)
+            }
             lock.unlock()
             return []
         }
@@ -782,12 +1072,20 @@ public final class BackgroundRunner: @unchecked Sendable {
                 case .notYet:
                     break
                 case .hold(let reason):
+                    // Counted only in the background, where each hold asks
+                    // for time again: the person opening the app isn't a wake.
+                    if conditions.moment == .background { job.holds += 1; changed = true }
                     if job.held != reason { job.held = reason; changed = true }
                 case .missed:
                     // With no tasks to count and Needs you in memory only, a
                     // day the app never ran would almost always have been
                     // quiet, and a quiet morning leaves no card. So no card
                     // claims a summary was missed; the job still moves on.
+                    //
+                    // `lastSummary` stays as it was, so the next summary's
+                    // window can reach back days: its words then say "since
+                    // Tuesday" rather than "overnight", and `watchedWindow`
+                    // leaves out what finished unless it was watched all along.
                     if self.tasks != nil {
                         made.append(BackgroundResult(madeAt: now, content: .missed(
                             kind: job.kind, due: job.due, held: job.held,
@@ -795,12 +1093,14 @@ public final class BackgroundRunner: @unchecked Sendable {
                     }
                     job.due = BackgroundPlan.afterMissing(now: now, calendar: calendar)
                     job.held = nil
+                    job.holds = 0
                     changed = true
                     continue
                 case .run:
                     if let result = run(job, now: now, questions: questions, tasks: taskList) { made.append(result) }
                     job.due = BackgroundPlan.nextMorning(after: now, calendar: calendar)
                     job.held = nil
+                    job.holds = 0
                     changed = true
                 }
                 break
@@ -908,21 +1208,43 @@ public final class BackgroundRunner: @unchecked Sendable {
     /// Forget everything: background work turns off, any question it asked
     /// is withdrawn, the queue and every card go, and the file is erased.
     /// Nothing is left to run. Throws if the file couldn't be erased; what
-    /// was in memory is gone either way.
+    /// was in memory is gone either way, and the erase is tried again the
+    /// next time the runner looks, in this launch or a later one. Until it
+    /// goes, nothing in that file is shown, run or written over.
     public func forget() throws {
+        // Kept beside the switch first, so a launch after a failed erase
+        // knows the file is not to be read.
+        toggle.setForgetPending(true)
         toggle.set(false)
         toggle.setNextDue(nil)
         withdrawProposals()
         lock.lock()
+        forgetWaiting = true
         state = .empty
         // Nothing to read back: the file is about to go.
         loaded = true
         unsaved = false
         switchedBeforeLoad = nil
+        heldWaiting = nil
         lock.unlock()
         toggle.setHeldBeforeLoad(nil)
         defer { didChange() }
+        lock.lock()
+        defer { lock.unlock() }
+        try eraseForgottenFile()
+    }
+
+    /// With the lock held. True while a Forget everything still has the
+    /// file to erase.
+    private var forgetIsPending: Bool { forgetWaiting || toggle.forgetPending }
+
+    /// With the lock held. Erases the file a Forget everything left, if
+    /// there is one, and says so beside the switch once it is gone.
+    private func eraseForgottenFile() throws {
+        guard forgetIsPending else { return }
         try store.forget()
+        forgetWaiting = false
+        toggle.setForgetPending(false)
     }
 
     /// Takes one card away.
@@ -971,8 +1293,18 @@ public final class BackgroundRunner: @unchecked Sendable {
 
     /// With the lock held. A file that can't be opened yet is left for
     /// the next look; anything changed meanwhile is laid over it then.
+    /// A file Forget everything couldn't erase is erased first, and while
+    /// it still can't be, it is never read: none of its cards come back.
     private func loadIfNeeded() {
+        let erased = (try? eraseForgottenFile()) != nil
         guard !loaded else { return }
+        guard erased else {
+            // Started from nothing, as Forget everything left it.
+            switchedBeforeLoad = nil
+            loaded = true
+            applyHeldBeforeLoad()
+            return
+        }
         do {
             let saved = try store.load()
             if unsaved {
@@ -1011,18 +1343,27 @@ public final class BackgroundRunner: @unchecked Sendable {
     /// can say why. A hold from before the job was due held nothing back,
     /// and is never said.
     private func applyHeldBeforeLoad() {
-        guard let held = toggle.heldBeforeLoad else { return }
+        guard let held = latestHeld else { return }
         for index in state.queue.indices where state.queue[index].held == nil && held.at >= state.queue[index].due {
             state.queue[index].held = held.hold
+            state.queue[index].holds += held.count
             unsaved = true
         }
-        toggle.setHeldBeforeLoad(nil)
+        heldWaiting = nil
+        if toggle.heldBeforeLoad != nil { toggle.setHeldBeforeLoad(nil) }
     }
 
-    /// With the lock held. Writes only once the file has been read, and
-    /// keeps the change for later if it can't be written now.
+    /// With the lock held. The latest run that waited for the file, as
+    /// the switch kept it or, if it couldn't, as this launch did.
+    private var latestHeld: BackgroundHeldRun? {
+        [toggle.heldBeforeLoad, heldWaiting].compactMap { $0 }.max { $0.at < $1.at }
+    }
+
+    /// With the lock held. Writes only once the file has been read, never
+    /// while a Forget everything still has it to erase, and keeps the
+    /// change for later if it can't be written now.
     private func saveIfNeeded() {
-        guard unsaved, loaded else { return }
+        guard unsaved, loaded, !forgetIsPending else { return }
         if (try? store.save(state)) != nil { unsaved = false }
     }
 

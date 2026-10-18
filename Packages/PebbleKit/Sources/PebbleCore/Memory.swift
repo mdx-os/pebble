@@ -197,6 +197,21 @@ extension Data.WritingOptions {
     }
 }
 
+/// Writes a store's staged copy with the store's protection class. Each
+/// store takes one, so a test can see the class every save really asks for.
+package struct ProtectedWriter: Sendable {
+    package let write: @Sendable (Data, URL, FileProtectionType) throws -> Void
+
+    package init(_ write: @escaping @Sendable (Data, URL, FileProtectionType) throws -> Void) {
+        self.write = write
+    }
+
+    /// The real write, with `Data.WritingOptions.staged(_:)`.
+    package static let disk = ProtectedWriter { data, url, protection in
+        try data.write(to: url, options: .staged(protection))
+    }
+}
+
 /// Notes the agent keeps, stored only on this device.
 ///
 /// The person can see every note, change it, and remove it. Removing a note
@@ -234,12 +249,14 @@ public final class MemoryStore: @unchecked Sendable {
     public static let fileProtection: FileProtectionType = .complete
 
     public let fileURL: URL
+    private let writer: ProtectedWriter
     private let lock = NSLock()
 
     /// Package access: the app uses `onDevice()` so there is one store per
     /// file. Tests and screenshots point a store at a scratch file.
-    package init(fileURL: URL) {
+    package init(fileURL: URL, writer: ProtectedWriter = .disk) {
         self.fileURL = fileURL
+        self.writer = writer
     }
 
     /// The only other file this store ever writes: the next version of the
@@ -397,7 +414,7 @@ public final class MemoryStore: @unchecked Sendable {
         // Stage under one known name, then rename over the real file. The
         // system never makes a copy somewhere this store can't clean up.
         try removeStaged()
-        try data.write(to: stagingURL, options: .staged(Self.fileProtection))
+        try writer.write(data, stagingURL, Self.fileProtection)
         guard rename(stagingURL.path, fileURL.path) == 0 else {
             try? removeStaged()
             throw CocoaError(.fileWriteUnknown)

@@ -1,5 +1,7 @@
 #if canImport(SwiftUI)
+import Combine
 import Foundation
+import PebbleBackground
 import PebbleCore
 import PebbleModel
 import SourceScan
@@ -392,17 +394,17 @@ struct BackgroundFeedTests {
 
     /// The app wires no task engine yet, so the line under the switch, read
     /// as the person turns it on, doesn't promise what finished. With an
-    /// engine, it does.
+    /// engine, it does. The app's wiring comes from `BackgroundWiring.app`,
+    /// the same factory this reads.
     @Test func theSwitchPromisesWhatFinishedOnlyWithTasksToCount() throws {
-        let app = try String(contentsOf: SwiftSource.repositoryRoot(from: #filePath)
-            .appendingPathComponent("App/Sources/PebbleApp.swift"), encoding: .utf8)
-        #expect(app.contains("private let tasks: (any TaskEngine)? = nil"), "the app wires no engine yet")
-        #expect(app.contains("BackgroundRunner.onDevice(needsYou: asks, tasks: tasks)"))
-
         let store = scratchStore()
         defer { try? store.forget() }
-        let wired = try #require(BackgroundRunner.onDevice(needsYou: NeedsYou(rule: .isolated()), tasks: nil,
-                                                           store: { store }, toggle: InMemoryBackgroundSwitch()))
+        let asks = NeedsYou(rule: .isolated())
+        let wiring = BackgroundWiring.app(needsYou: asks, store: { store }, toggle: { InMemoryBackgroundSwitch() })
+        #expect(wiring.tasks == nil, "the app wires no engine yet")
+        let wired = try #require(wiring.service.runner)
+        #expect(wired.tasks == nil, "the runner counts the same tasks as Today")
+        #expect(wired.needsYou === asks)
         let asTheAppHasIt = MemoryModel(store: scratchMemory(), place: .onDevice, background: wired)
         #expect(!asTheAppHasIt.backgroundDetail.contains("finished"))
         #expect(asTheAppHasIt.backgroundDetail
@@ -417,19 +419,46 @@ struct BackgroundFeedTests {
 
     /// The memory screen follows the runner: turned on in another window,
     /// or a card made in Today, it shows here without waiting to come back.
-    @Test func theMemoryScreenFollowsTheRunner() async {
+    @Test(.timeLimit(.minutes(1))) func theMemoryScreenFollowsTheRunner() async {
         let runner = runner(on: false)
         let memory = MemoryModel(store: scratchMemory(), place: .onDevice, background: runner, now: { Self.at(9) })
         #expect(!memory.backgroundOn)
         #expect(!memory.hasSomethingToForget)
 
-        // Another window turns it on and Today makes a card.
+        // Another window turns it on and Today makes a card. The screen
+        // hears of it on a later turn of the main actor; this waits for
+        // that, however long the machine takes.
         runner.turnOn(now: Self.at(6))
         runner.runDue(now: Self.at(7), conditions: .foreground)
-        for _ in 0..<100 where !memory.hasSomethingToForget { await Task.yield() }
+        var watch: AnyCancellable?
+        await withCheckedContinuation { (heard: CheckedContinuation<Void, Never>) in
+            watch = memory.$hasBackgroundToForget.first { $0 }.sink { _ in heard.resume() }
+        }
+        watch?.cancel()
         #expect(memory.backgroundOn)
         #expect(memory.backgroundNext != nil)
         #expect(memory.hasSomethingToForget)
+    }
+
+    /// VoiceOver reads a summary or missed card as one thought, and the
+    /// body is in it, not only the title: the detail behind the card is
+    /// for reading, the body is what the card says.
+    @Test func theCardsSpokenTextIncludesItsBody() {
+        let summary = BackgroundResult(madeAt: Self.at(7), content: .morningSummary(MorningSummary(
+            waiting: 1, finished: nil, couldNotFinish: nil, since: Self.at(19, days: -1), late: .locked)))
+        let missed = BackgroundResult(madeAt: Self.at(7), content: .missed(kind: .morningSummary,
+                                                                           due: Self.at(7, days: -1), held: .lowPower))
+        let several = BackgroundResult(madeAt: Self.at(7), content: .missed(
+            kind: .morningSummary, due: Self.at(7, days: -3), held: nil, through: Self.at(7, days: -1)))
+        for result in [summary, missed, several] {
+            let item = result.item(calendar: Self.calendar)
+            #expect(!item.body.isEmpty)
+            for isSample in [false, true] {
+                let spoken = FeedCard(item: item, time: "7:00 AM", isSample: isSample, perform: {}).spoken
+                #expect(spoken.contains(item.title))
+                #expect(spoken.contains(item.body), "the body is read too: \(spoken)")
+            }
+        }
     }
 
     /// Forget everything names work while away only where there is a switch for it.

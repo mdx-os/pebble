@@ -6,18 +6,26 @@
 #   scripts/screenshot-stamp.sh check DIR...       fail unless each DIR/STAMP matches the tree now
 #
 # The tree hash covers every file git would add, tracked or new, and leaves
-# out what .gitignore leaves out. It is made in a throwaway index
-# (GIT_INDEX_FILE), so the real index and anything staged stay as they are.
+# out what .gitignore leaves out. It is worked out in memory only: each
+# file is hashed with `git hash-object` without -w, and so is the list of
+# them, so nothing is written into .git/objects (an untracked file that
+# should have been ignored, such as a stray key, never lands there as a
+# loose object) and the real index and anything staged stay as they are.
 set -eu
 
 tree_hash() {
   scratch="$(mktemp -d)"
-  # The throwaway index starts from HEAD, so only changed files are hashed again.
-  if git rev-parse --verify -q HEAD >/dev/null; then
-    GIT_INDEX_FILE="$scratch/index" git read-tree HEAD
-  fi
-  GIT_INDEX_FILE="$scratch/index" git add -A
-  hash="$(GIT_INDEX_FILE="$scratch/index" git write-tree)"
+  # Tracked files still on disk, and new files .gitignore doesn't leave out.
+  # A deleted file isn't listed, so deleting one changes the hash too.
+  git ls-files -z --cached --others --exclude-standard | tr '\0' '\n' | LC_ALL=C sort -u |
+    while IFS= read -r path; do
+      if [ -f "$path" ]; then printf '%s\n' "$path"; fi
+    done > "$scratch/paths"
+  while IFS= read -r path; do
+    if [ -x "$path" ]; then echo 100755; else echo 100644; fi
+  done < "$scratch/paths" > "$scratch/modes"
+  git hash-object --stdin-paths < "$scratch/paths" > "$scratch/blobs"
+  hash="$(paste -d ' ' "$scratch/modes" "$scratch/blobs" "$scratch/paths" | git hash-object --stdin)"
   rm -rf "$scratch"
   echo "$hash"
 }
