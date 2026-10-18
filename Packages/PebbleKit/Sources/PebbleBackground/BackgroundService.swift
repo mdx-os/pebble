@@ -29,6 +29,9 @@ public final class BackgroundService {
     private var scheduler: (any BackgroundScheduling)?
     private let clock: () -> Date
     private var planWatch: BackgroundRunner.Observation?
+    /// The wake last asked for, while that ask stands. Nil once cancelled,
+    /// or once a run has used it.
+    private var asked: Date?
 
     /// `scheduler` is the system's unless a test passes its own.
     public init(runner: BackgroundRunner?, scheduler: (any BackgroundScheduling)? = nil,
@@ -56,12 +59,18 @@ public final class BackgroundService {
     /// The runner gives no wake when it is off for certain, so a switch
     /// that can't be read yet never cancels an ask at once; one that still
     /// can't be read once a morning has passed stops asking.
+    ///
+    /// Each change to the runner plans again, and most leave the wake where
+    /// it was, so the same ask is never made twice in a row.
     func plan() {
         guard let wake = runner?.nextWake(now: clock()) else {
             scheduler?.cancel()
+            asked = nil
             return
         }
+        guard wake != asked else { return }
         scheduler?.ask(at: wake)
+        asked = wake
     }
 
     /// A run the system gave time for. It asks for the next time first, so
@@ -76,6 +85,8 @@ public final class BackgroundService {
     @discardableResult
     func run(now: Date, conditions: BackgroundConditions, time: BackgroundTime) -> Bool {
         guard let runner else { return false }
+        // The system used the ask to start this run, so the next is new.
+        asked = nil
         plan()
         runner.runDue(now: now, conditions: conditions, time: time)
         plan()

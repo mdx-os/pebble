@@ -190,6 +190,13 @@ public enum MemoryWords {
     public static let summariesGone = "Your morning summaries are gone, and work while you're away is off."
     /// The same, when the summaries' file couldn't be erased either.
     public static let summariesStayed = "Work while you're away is off, but I couldn't erase your morning summaries either."
+    /// Where the notes couldn't be opened, the morning summaries can still
+    /// be forgotten on their own, and the words say the rest stays.
+    public static let forgetSummariesTitle = "Forget morning summaries"
+    public static let forgetSummariesQuestion = "Forget morning summaries?"
+    public static let forgetSummariesDetail = "This erases every morning summary and turns off work while you're away. It can't be undone. Your notes and tasks aren't touched."
+    /// When their file couldn't be erased there.
+    public static let couldNotForgetSummariesAlone = "I turned off work while you're away, but I couldn't erase your morning summaries just now. Please try again in a moment."
     /// The advice that ends a Forget everything line when something stayed.
     /// Whatever is said after such a line goes before it, so it comes last.
     public static let retryAdvice = ["Please try Forget everything again in a moment.", "Please try again in a moment."]

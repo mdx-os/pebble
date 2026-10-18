@@ -11,6 +11,11 @@ import PebbleCore
 /// left it, seeding nothing, so a test can see what that launch kept.
 /// Any launch without either removes that folder, so the test leaves
 /// nothing behind once the app opens again.
+///
+/// The seeded switch reads the earlier version's keys from a throwaway
+/// suite of its own, never from the app's own `UserDefaults`, so moving
+/// them over can't move or remove the keys a dev device really keeps. A
+/// launch argument still reaches it, as it reaches every suite.
 public enum BackgroundSeed {
     public static let launchKey = "backgroundSeed"
 
@@ -19,12 +24,20 @@ public enum BackgroundSeed {
         FileManager.default.temporaryDirectory.appendingPathComponent("ui-background-seed")
     }
 
-    public static func launched(defaults: UserDefaults = .standard, folder: URL = scratchFolder)
+    /// The throwaway suite the seeded switch moves the old keys from.
+    public static let legacySuite = "ui-background-seed"
+
+    public static func launched(defaults: UserDefaults = .standard, folder: URL = scratchFolder,
+                                legacySuite: String = legacySuite)
         -> (store: BackgroundStore, toggle: any BackgroundSwitch)? {
         let mode = defaults.string(forKey: launchKey)
-        if mode != "again" { try? FileManager.default.removeItem(at: folder) }
+        if mode != "again" {
+            try? FileManager.default.removeItem(at: folder)
+            defaults.removePersistentDomain(forName: legacySuite)
+        }
         guard mode == "on" || mode == "again" else { return nil }
-        guard (try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)) != nil else {
+        guard (try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)) != nil,
+              let legacy = UserDefaults(suiteName: legacySuite) else {
             return nil
         }
         let store = BackgroundStore(fileURL: folder.appendingPathComponent("background.json"))
@@ -32,9 +45,9 @@ public enum BackgroundSeed {
             let due = BackgroundPlan.nextMorning(after: Date(), calendar: .current)
             try? store.save(BackgroundState(queue: [BackgroundJob(kind: .morningSummary, due: due)]))
         }
-        // With no file yet, the switch is read from `UserDefaults` and moved.
+        // With no file yet, the switch is read from the suite and moved.
         let toggle = FileBackgroundSwitch(fileURL: folder.appendingPathComponent("background-switch.json"),
-                                          defaults: defaults)
+                                          defaults: legacy)
         return (store, toggle)
     }
 }

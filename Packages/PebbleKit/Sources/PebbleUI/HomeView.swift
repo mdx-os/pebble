@@ -716,9 +716,13 @@ struct HomeScreen: View {
             // Private words kept from an earlier launch go with the tasks,
             // through `CloudHelp.eraseWordsWithoutNotes`, and the line says
             // whether they could.
+            //
+            // Background work keeps its own file, so its switch and a way to
+            // forget its summaries are here whenever its runner was built.
             MemoryUnavailableView(hasTasks: feed.hasSomethingToForget, forgotten: feed.tasksForgotten,
                                   underway: feed.forgotUnderway, wordsErased: wordsErased,
-                                  erasesWords: cloud != nil, onForgetTasks: forgetTasksWithoutNotes)
+                                  erasesWords: cloud != nil, background: background,
+                                  onForgetTasks: forgetTasksWithoutNotes)
         }
     }
 }

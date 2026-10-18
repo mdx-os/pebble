@@ -182,6 +182,8 @@ public struct MemoryView: View {
             // And the next summary's day may have moved on meanwhile.
             if phase == .active { model.refreshBackground() }
         }
+        // And while the screen stays open, at the due time and at midnight.
+        .task(id: model.backgroundNextChange) { await model.refreshBackgroundAtNextChange() }
         .haptic(.saved, trigger: model.savedCount)
         .haptic(.forgotten, trigger: model.forgottenCount)
         // The flag can change under an open screen; the words follow it.
@@ -343,6 +345,9 @@ struct MemoryUnavailableView: View {
     var wordsErased: CloudHelp.WordsErased?
     /// Whether forgetting here erases the private words too.
     var erasesWords = false
+    /// Background work, whose switch and summaries need no notes, so they
+    /// are here too. Nil hides them.
+    var background: BackgroundRunner?
     let onForgetTasks: @MainActor () -> Void
     @State private var asking = false
     /// The button goes once the tasks do, so VoiceOver goes to the line
@@ -369,35 +374,15 @@ struct MemoryUnavailableView: View {
     var body: some View {
         ZStack {
             Backdrop()
-            VStack(spacing: 18) {
-                GentleNotice(text: MemoryWords.couldNotOpen)
-                if hasTasks {
-                    Button(role: .destructive) { asking = true } label: {
-                        Text(TaskWords.forgetTasksTitle)
-                            .font(.subheadline.weight(.semibold))
-                            // The system red is about 3.6 to 1 on white.
-                            .foregroundStyle(Theme.dangerText)
-                            .frame(maxWidth: .infinity, minHeight: 44)
-                    }
-                    .accessibilityIdentifier("forgetTasks")
-                } else if let status {
-                    Text(status)
-                        .font(.footnote)
-                        .foregroundStyle(Theme.secondaryText)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity)
-                        .accessibilityIdentifier("tasksForgotten")
-                        .accessibilityFocused($statusFocused)
-                        .onAppear {
-                            // A beat later, once it is on screen; set in
-                            // the same pass that adds it, SwiftUI drops it.
-                            Task { @MainActor in statusFocused = true }
-                        }
+            // Centred while it fits, and scrolled once the switch and its
+            // words make it taller than the screen.
+            GeometryReader { space in
+                ScrollView {
+                    content
+                        .frame(maxWidth: .infinity, minHeight: space.size.height)
                 }
+                .scrollBounceBehavior(.basedOnSize)
             }
-            .padding(Theme.gutter)
-            .frame(maxWidth: Theme.readableWidth)
         }
         .confirmationDialog(TaskWords.forgetTasksQuestion, isPresented: $asking, titleVisibility: .visible) {
             Button(TaskWords.forgetTasksTitle, role: .destructive, action: forgetTasks)
@@ -405,6 +390,42 @@ struct MemoryUnavailableView: View {
         } message: {
             Text(detail)
         }
+    }
+
+    private var content: some View {
+        VStack(spacing: 18) {
+            GentleNotice(text: MemoryWords.couldNotOpen)
+            if hasTasks {
+                Button(role: .destructive) { asking = true } label: {
+                    Text(TaskWords.forgetTasksTitle)
+                        .font(.subheadline.weight(.semibold))
+                        // The system red is about 3.6 to 1 on white.
+                        .foregroundStyle(Theme.dangerText)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .accessibilityIdentifier("forgetTasks")
+            } else if let status {
+                Text(status)
+                    .font(.footnote)
+                    .foregroundStyle(Theme.secondaryText)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity)
+                    .accessibilityIdentifier("tasksForgotten")
+                    .accessibilityFocused($statusFocused)
+                    .onAppear {
+                        // A beat later, once it is on screen; set in
+                        // the same pass that adds it, SwiftUI drops it.
+                        Task { @MainActor in statusFocused = true }
+                    }
+            }
+            if let background {
+                BackgroundFallbackSection(model: BackgroundSettingModel(runner: background))
+                    .padding(.top, 8)
+            }
+        }
+        .padding(Theme.gutter)
+        .frame(maxWidth: Theme.readableWidth)
     }
 
     /// What the dialog's button does.
@@ -477,6 +498,144 @@ struct BackgroundRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
+    }
+}
+
+/// What the switch for background work shows, read from its runner, the
+/// same on the memory screen and on the one shown when the notes couldn't
+/// be opened.
+struct BackgroundSetting: Equatable {
+    var isOn = false
+    /// "I'll look next at 7:00 AM tomorrow." while it is on.
+    var next: String?
+    /// When `next` next changes its words, so an open screen says it again.
+    var nextChange: Date?
+    /// True while background work has a file or cards.
+    var hasSomethingToForget = false
+
+    init() {}
+
+    init(_ runner: BackgroundRunner, now: Date) {
+        isOn = runner.isOn
+        let due = isOn ? runner.queue.map(\.due).min() : nil
+        next = due.map { BackgroundWords.nextDue($0, now: now) }
+        nextChange = due.map { BackgroundWords.nextDueChanges($0, now: now) }
+        hasSomethingToForget = runner.store.hasStoredFile || !runner.results.isEmpty
+    }
+
+    /// The wait before looking again, in real time.
+    static let sleep: @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }
+}
+
+/// The switch for background work, and a way to forget its summaries, on
+/// the screen shown when the notes couldn't be opened. The runner keeps its
+/// own file, so neither needs the notes. Forget everything isn't there, so
+/// the summaries go on their own, and the words say the rest stays.
+@MainActor
+final class BackgroundSettingModel: ObservableObject {
+    let runner: BackgroundRunner
+    @Published private(set) var setting = BackgroundSetting()
+    @Published var askForget = false
+    /// What happened when the summaries were forgotten. Nil before then.
+    @Published private(set) var status: String?
+    /// Goes up by one each time something was erased, for a light tap.
+    @Published private(set) var forgottenCount = 0
+    private let now: () -> Date
+    private var watch: BackgroundRunner.Observation?
+    /// Speaks a line to VoiceOver. Tests listen in.
+    var announce: @MainActor (String) -> Void = { AccessibilityNotification.Announcement($0).post() }
+
+    init(runner: BackgroundRunner, now: @escaping () -> Date = { Date() }) {
+        self.runner = runner
+        self.now = now
+        refresh()
+        watch = runner.observe { [weak self] in
+            Task { @MainActor in self?.refresh() }
+        }
+    }
+
+    deinit {
+        if let watch { runner.stopObserving(watch) }
+    }
+
+    var detail: String {
+        BackgroundWords.settingDetail(whileClosed: BackgroundRow.runsWhileClosed, countsTasks: runner.tasks != nil)
+    }
+
+    /// As on the memory screen: on, VoiceOver hears when it looks next.
+    func set(_ on: Bool) {
+        if on { runner.turnOn(now: now()) } else { runner.turnOff() }
+        refresh()
+        if on, let next = setting.next { announce(next) }
+    }
+
+    func refresh() {
+        let next = BackgroundSetting(runner, now: now())
+        if setting != next { setting = next }
+    }
+
+    /// As `MemoryModel.refreshBackgroundAtNextChange`.
+    func refreshAtNextChange(sleep: (TimeInterval) async throws -> Void = BackgroundSetting.sleep) async {
+        guard let next = setting.nextChange else { return }
+        while now() < next {
+            do { try await sleep(next.timeIntervalSince(now())) } catch { return }
+        }
+        refresh()
+    }
+
+    /// Turns background work off, withdraws what it asked, and erases its
+    /// summaries, as Forget everything does for them, then says what went.
+    func forget() {
+        let erased = (try? runner.forget()) != nil
+        status = erased ? MemoryWords.summariesGone : MemoryWords.couldNotForgetSummariesAlone
+        if erased { forgottenCount += 1 }
+        refresh()
+        if let status { announce(status) }
+    }
+}
+
+/// `BackgroundSettingModel` on screen: the switch, then the button to
+/// forget the summaries while there are some, and what that did.
+struct BackgroundFallbackSection: View {
+    @StateObject private var model: BackgroundSettingModel
+
+    init(model: @autoclosure @escaping () -> BackgroundSettingModel) {
+        _model = StateObject(wrappedValue: model())
+    }
+
+    var body: some View {
+        VStack(spacing: 18) {
+            BackgroundRow(isOn: Binding(get: { model.setting.isOn }, set: { model.set($0) }),
+                          detail: model.detail, nextDue: model.setting.next)
+            if model.setting.hasSomethingToForget {
+                Button(role: .destructive) { model.askForget = true } label: {
+                    Text(MemoryWords.forgetSummariesTitle)
+                        .font(.subheadline.weight(.semibold))
+                        // The system red is about 3.6 to 1 on white.
+                        .foregroundStyle(Theme.dangerText)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .accessibilityIdentifier("forgetSummaries")
+            }
+            if let status = model.status {
+                Text(status)
+                    .font(.footnote)
+                    .foregroundStyle(Theme.secondaryText)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity)
+                    .accessibilityIdentifier("summariesForgotten")
+            }
+        }
+        .confirmationDialog(MemoryWords.forgetSummariesQuestion, isPresented: $model.askForget,
+                            titleVisibility: .visible) {
+            Button(MemoryWords.forgetSummariesTitle, role: .destructive) { model.forget() }
+            Button(MemoryWords.cancelTitle, role: .cancel) {}
+        } message: {
+            Text(MemoryWords.forgetSummariesDetail)
+        }
+        .haptic(.forgotten, trigger: model.forgottenCount)
+        .task(id: model.setting.nextChange) { await model.refreshAtNextChange() }
     }
 }
 
@@ -629,6 +788,8 @@ final class MemoryModel: ObservableObject {
     @Published private(set) var backgroundOn = false
     /// "I'll look next at 7:00 AM tomorrow." while it is on.
     @Published private(set) var backgroundNext: String?
+    /// When `backgroundNext` next changes its words.
+    @Published private(set) var backgroundNextChange: Date?
     /// True while background work has a file or cards, so Forget everything
     /// shows even with no notes, and the summaries can always be removed.
     @Published private(set) var hasBackgroundToForget = false
@@ -687,19 +848,35 @@ final class MemoryModel: ObservableObject {
 
     func refreshBackground() {
         guard let background else { return }
-        let on = background.isOn
-        if backgroundOn != on { backgroundOn = on }
-        let now = now()
-        let next = on ? background.queue.map(\.due).min().map { BackgroundWords.nextDue($0, now: now) } : nil
-        if backgroundNext != next { backgroundNext = next }
-        let stored = backgroundStored
-        if hasBackgroundToForget != stored { hasBackgroundToForget = stored }
+        let setting = BackgroundSetting(background, now: now())
+        if backgroundOn != setting.isOn { backgroundOn = setting.isOn }
+        if backgroundNext != setting.next { backgroundNext = setting.next }
+        if backgroundNextChange != setting.nextChange { backgroundNextChange = setting.nextChange }
+        if hasBackgroundToForget != setting.hasSomethingToForget {
+            hasBackgroundToForget = setting.hasSomethingToForget
+        }
     }
 
-    /// True while background work has a file or cards.
-    private var backgroundStored: Bool {
+    /// Waits until the line under the switch changes its words, then says
+    /// it again, so "today" never stays up past the time or midnight while
+    /// the screen is open. The screen runs it again each time that moment
+    /// moves. `sleep` is passed in so tests can move a clock instead.
+    func refreshBackgroundAtNextChange(sleep: (TimeInterval) async throws -> Void = BackgroundSetting.sleep) async {
+        guard let next = backgroundNextChange else { return }
+        while now() < next {
+            do { try await sleep(next.timeIntervalSince(now())) } catch { return }
+        }
+        refreshBackground()
+    }
+
+    /// True while a morning summary the runner made is kept: on its cards,
+    /// or in a file an earlier Forget everything couldn't erase.
+    private var summariesMade: Bool {
         guard let background else { return false }
-        return background.store.hasStoredFile || !background.results.isEmpty
+        // The file first: reading the cards tries the erase again, and the
+        // file may be gone after it.
+        let kept = ((try? background.store.load())?.results ?? []) + background.results
+        return kept.contains { if case .morningSummary = $0.content { true } else { false } }
     }
 
     func refresh() {
@@ -785,9 +962,9 @@ final class MemoryModel: ObservableObject {
         // again while the rest goes, and its summaries go. It turns off and
         // its cards go from memory even if its file can't be erased. Before
         // Today's part, so Today redraws with the cards already gone.
-        // Summaries erased are named, and tapped for, only when there were
-        // some: with no file and no cards, nothing of them went.
-        let hadSummaries = backgroundStored
+        // Summaries erased are named, and tapped for, only when one was
+        // made: a file holding only the queue had none to go.
+        let hadSummaries = summariesMade
         let summaries = background.map { background -> Summaries in
             (try? background.forget()) != nil ? .erased : .stayed
         }.flatMap { $0 == .erased && !hadSummaries ? nil : $0 }
@@ -813,8 +990,9 @@ final class MemoryModel: ObservableObject {
     /// when all the rest went, the line says just what stayed, and when
     /// something else stayed too, a sentence about them follows. Then
     /// `underway`, if a step said yes to may have happened. Any advice to
-    /// try again comes after those. Where only the summaries stayed, the
-    /// line names only what went: the notes only with `hadNotes`.
+    /// try again then comes last. Where only the summaries stayed, the
+    /// line names only what went: the notes only with `hadNotes`. With
+    /// nothing to say of the summaries, `underway` simply follows the line.
     ///
     /// With `sent`, something was handed to the cloud this session, and a
     /// copy of it may be there now. Nothing here can erase that, so the line
@@ -832,24 +1010,27 @@ final class MemoryModel: ObservableObject {
         case (true, true, .privateWordsAndCloud?): CloudWords.forgotAndCloudOffAfterSending
         default: plain
         }
+        let cloudCopy = sent ? CloudWords.sentCantBeErased : nil
+        guard let summaries else {
+            return [beforeRetry(line, [cloudCopy].compactMap { $0 }), underway].compactMap { $0 }.joined(separator: " ")
+        }
         let restWent = notesGone && (rest.map { $0 != nil } ?? true)
         let said: String
         let aboutSummaries: String?
         switch (summaries, restWent) {
-        case (nil, _), (.erased?, true):
+        case (.erased, true):
             said = line; aboutSummaries = nil
-        case (.erased?, false):
+        case (.erased, false):
             said = line; aboutSummaries = MemoryWords.summariesGone
-        case (.stayed?, true):
+        case (.stayed, true):
             said = rest == .some(.some(.privateWordsAndCloud))
                 ? CloudWords.forgotAndCloudOffNotSummaries(notes: hadNotes, tasks: tasksGone)
                 : MemoryWords.couldNotForgetSummaries(notes: hadNotes, tasks: tasksGone,
                                                       words: rest == .some(.some(.privateWords)))
             aboutSummaries = nil
-        case (.stayed?, false):
+        case (.stayed, false):
             said = line; aboutSummaries = MemoryWords.summariesStayed
         }
-        let cloudCopy = sent ? CloudWords.sentCantBeErased : nil
         return beforeRetry(said, [aboutSummaries, underway, cloudCopy].compactMap { $0 })
     }
 

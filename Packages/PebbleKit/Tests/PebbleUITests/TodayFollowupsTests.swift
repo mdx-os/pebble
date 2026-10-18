@@ -35,8 +35,13 @@ struct TodayFollowupsTests {
     let note = ProposedAction(kind: .send, recipient: Recipient(id: "c:1", displayName: "Sam", handle: "416 555 0101"),
                               details: "Running ten minutes late")
 
-    private func chat(beat: Duration = .zero) -> ChatController {
-        ChatController(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"), replyBeat: beat)
+    private func chat(beat: Duration = .zero, sleeps: Sleeps? = nil) -> ChatController {
+        guard let sleeps else {
+            return ChatController(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
+                                  replyBeat: beat)
+        }
+        return ChatController(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
+                              replyBeat: beat, sleep: { await sleeps.ask($0) })
     }
 
     // MARK: Type and go from Today
@@ -60,13 +65,14 @@ struct TodayFollowupsTests {
     }
 
     /// Words of care come first from Today too, with no beat held back.
+    /// Read from what the reply asked to wait, never from the wall clock.
     @Test func careComesFirstFromToday() async {
-        let chat = chat(beat: .seconds(60))
-        let started = ContinuousClock.now
+        let sleeps = Sleeps()
+        let chat = chat(beat: .seconds(60), sleeps: sleeps)
         #expect(HomeView.sendsFromToday("I want to end my life", chat: chat))
         await chat.replyTask?.value
         #expect(chat.conversation.turns.last?.text == CareCheck.reply)
-        #expect(ContinuousClock.now - started < .seconds(60))
+        #expect(await sleeps.asked.isEmpty, "the care reply waited for the beat")
     }
 
     /// A line sent from Today counts as speaking, so a new chat asks first.

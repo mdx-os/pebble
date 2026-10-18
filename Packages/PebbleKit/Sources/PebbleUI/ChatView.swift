@@ -476,15 +476,21 @@ final class ChatController: ObservableObject {
     /// The shortest time the thinking dots show, so a quick reply settles
     /// in after a calm beat instead of snapping onto the screen.
     let replyBeat: Duration
+    /// How the beat is waited out. Always a real sleep in the app; tests
+    /// pass one that writes down each wait, so whether a reply took the
+    /// beat never rests on how fast the machine is.
+    private let sleep: @Sendable (Duration) async -> Void
     /// Where a cloud chat shows its previews. Nil for a chat on this device.
     let review: CloudReview?
 
     init(brand: Brand, model: any ModelClient, names: any AgentNameStoring,
-         replyBeat: Duration = .milliseconds(600), review: CloudReview? = nil) {
+         replyBeat: Duration = .milliseconds(600), review: CloudReview? = nil,
+         sleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }) {
         self.brand = brand
         self.model = model
         self.names = names
         self.replyBeat = replyBeat
+        self.sleep = sleep
         self.review = review
         let profile = AgentProfile(brand: brand, stored: names.loadDisplayName())
         naming = AgentRenameState(profile: profile)
@@ -593,6 +599,7 @@ final class ChatController: ObservableObject {
         let snapshot = conversation
         let client = model
         let beat = replyBeat
+        let sleep = sleep
         // Words of care are never held back, not even for a beat. Decided
         // from the turns, the same way the reply itself is chosen.
         let caring = CareCheck.answersWithCare(snapshot.turns)
@@ -607,7 +614,7 @@ final class ChatController: ObservableObject {
                 error = thrown
             }
             let waited = ContinuousClock.now - started
-            if !caring, waited < beat { try? await Task.sleep(for: beat - waited) }
+            if !caring, waited < beat { await sleep(beat - waited) }
             // A reply that was stopped, overtaken by a newer one, or left in
             // a chat that ended takes nothing and changes nothing: no words
             // go back to the draft and no failure is set. Only the newest

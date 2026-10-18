@@ -177,6 +177,7 @@ perl: s~let cloudCopy = sent \?~let cloudCopy = false ?~
 test: afterSendingNoForgetLineSaysGone afterSendingTheSummaryLinesStayHonest
 file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
 perl: s~return beforeRetry\(said, \[aboutSummaries, underway, cloudCopy\]\.compactMap \{ \$0 \}\)~return beforeRetry(said, [aboutSummaries, underway].compactMap { \$0 }) + (cloudCopy.map { " " + \$0 } ?? "")~
+perl: s~return \[beforeRetry\(line, \[cloudCopy\]\.compactMap \{ \$0 \}\), underway\]~return [[line, cloudCopy].compactMap { \$0 }.joined(separator: " "), underway]~
 
 test: forgetEverythingWithNothingSentEndsTheChatAndSaysGone
 file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
