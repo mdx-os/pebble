@@ -6,6 +6,51 @@ import MLXLMCommon
 import PebbleCore
 import Tokenizers
 
+/// One line the on-device model sees, in chat order.
+public struct OnDeviceTranscriptLine: Sendable, Equatable {
+    public enum Role: Sendable, Equatable {
+        case system
+        case agent
+        case person
+    }
+
+    public let role: Role
+    public let text: String
+
+    public init(role: Role, text: String) {
+        self.role = role
+        self.text = text
+    }
+}
+
+/// The words sent to the on-device model with a transcript. Only
+/// `MLXChatModel` sends them, and it runs here, so the system line is true.
+public enum OnDeviceTranscript {
+    /// Plain words in front of the transcript. The product name is not included.
+    public static let instructions = "You are the person's agent on this device. Reply in plain words. Stay with what they asked. Nothing from this conversation leaves the device."
+
+    /// Stop a reply after this many tokens so generation finishes.
+    public static let maxReplyTokens = 512
+
+    /// How many recent turns go with the system line. Older turns are left out.
+    public static let maxHistoryTurns = 24
+
+    /// The system line, then the most recent turns in order.
+    public static func lines(for transcript: [ChatTurn]) -> [OnDeviceTranscriptLine] {
+        var lines = [OnDeviceTranscriptLine(role: .system, text: instructions)]
+        let recent = transcript.suffix(maxHistoryTurns)
+        for turn in recent {
+            switch turn.speaker {
+            case .agent:
+                lines.append(OnDeviceTranscriptLine(role: .agent, text: turn.text))
+            case .person:
+                lines.append(OnDeviceTranscriptLine(role: .person, text: turn.text))
+            }
+        }
+        return lines
+    }
+}
+
 /// Why an on-device model folder could not be loaded.
 ///
 /// A failure is remembered. The next reply throws the same error and does not
@@ -35,6 +80,12 @@ public actor MLXChatModel: ModelClient {
     public init(directory: URL) {
         self.directory = directory
     }
+
+    /// The weights and every word stay on this device.
+    public nonisolated var runsOnDevice: Bool { true }
+
+    /// The folder this model loads.
+    public nonisolated var folder: URL { directory }
 
     public func reply(to transcript: [ChatTurn]) async throws -> String {
         guard transcript.contains(where: { $0.speaker == .person }) else {

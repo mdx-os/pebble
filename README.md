@@ -9,9 +9,16 @@ in one place, `Config/Brand.xcconfig`, so the product can be renamed without
 touching code.
 
 Status: the app opens a first conversation on Mac, iPhone, and iPad. You can
-name your agent on the device. Replies come from an on-device placeholder
-unless you point the app at an MLX model directory that is already on the
-device. See [the roadmap](#roadmap).
+name your agent on the device. After the first run, home is Today, with the
+chat's composer right on it: type, press Return, and the chat opens with your
+words sent. Today is built to hold what the agent did, made and noticed, with
+any question that needs your yes pinned on top, but no real source of
+finished work ships yet, so for now it is a quiet place to start a chat. The
+feed shows sample cards, marked as examples, only in the showcase screens.
+Replies come from a small open model running on the device, through MLX,
+once you choose to download it from the memory screen. Until then an
+on-device placeholder says plainly that the model isn't ready. See
+[the roadmap](#roadmap).
 
 ## Build it
 
@@ -39,7 +46,7 @@ Config/Brand.xcconfig the product name, set once
 Packages/PebbleKit/   shared code, in layers
   PebbleCore            plain types, no UI, no networking
   PebblePulse           competitor watch fetching and snapshots
-  PebbleModel           model adapter, the on-device placeholder, and MLX
+  PebbleModel           model adapter, the on-device placeholder, MLX and its download
   PebbleUI              SwiftUI views
 pulse/                source list and snapshots
 scripts/              build helpers
@@ -47,32 +54,59 @@ scripts/              build helpers
 
 ## The model
 
-The chat asks a `ModelClient` for each reply. The default is `LocalStubModel`,
-an on-device placeholder with fixed warm replies. Tests, screenshots, and CI
-use that default, so they do not download a model and they do not need a GPU.
+The chat asks a `ModelClient` for each reply. The app makes one,
+`OnDeviceChat`, and shares it with every window. It answers with
+`MLXChatModel`, running Qwen3 4B Instruct 2507 (4-bit MLX weights, pinned in
+`PinnedModel`) on the device, once that model is downloaded. Until then it
+holds `LocalStubModel`, which says plainly that the model isn't ready and how
+to get it, instead of pretending to answer. Tests, screenshots, and CI use the
+placeholder, so they never download or load a model and need no GPU.
 
-`OnDeviceModel.client()` returns the placeholder unless a local folder is
-configured and usable. Developers launching the app from Xcode can set the
-environment variable `PEBBLE_MLX_MODEL`. Nothing in the app writes the
-UserDefaults key `pebble.mlx.modelDirectory` yet. If that key is already set,
-the app reads it when the environment variable is unset. The environment
-variable wins when both are set.
+Getting the model is always the person's choice: What I remember, then
+Download on-device model, about 2.3 GB. Nothing is fetched at launch or on its
+own. The download fetches only the pinned files at the pinned revision from
+huggingface.co, with an ephemeral session, no cookies, no credentials and
+nothing from a chat. Files land in a temporary folder under
+`Application Support/<product name>/Models`, which backups skip; only once
+every file has its pinned size and SHA-256 does the folder take its finished
+name, and the chat moves to the model from its next reply. A stop, a failure
+or a mismatch removes what came, and Try again starts over. All the network
+code is in `PebbleModel/ModelDownload.swift`; `make local-only-check` lets
+`URLSession` appear there and in `CloudModel.swift`, by exact path, and
+nowhere else in the app, `PebbleCore`, `PebbleBackground` or `PebbleModel`.
 
-The value can be an absolute path, a path that starts with `~`, or a `file://`
-URL with no host. The folder must be a directory that contains `config.json`,
-`tokenizer.json`, and at least one `.safetensors` file. The app loads that
-folder on device and does not fetch weights. A blank value, a relative path,
-a remote address, a file URL with a host, a missing or unusable folder, or
-weights that are too large for the memory on this device keeps the placeholder.
+The model is used only if its weights leave 1 GB of the memory this process
+can draw on (`OnDeviceModel.headroomBytes`), so it fits iPhone 17e and the Mac.
 
-`MLXChatModel` implements `reply(to:)` and is passed to `ChatView` the same
-way as `LocalStubModel`. The app creates one client and uses it for every
-window. Ollama is not plugged in yet. When it is, it should send the transcript
+Developers can point the app at another folder: the environment variable
+`PEBBLE_MLX_MODEL`, or the UserDefaults key `onDeviceModelFolder`, wins over
+the download. The value can be an absolute path, a path that starts with `~`,
+or a `file://` URL with no host. The folder must contain `config.json`,
+`tokenizer.json`, and at least one `.safetensors` file. A blank value, a
+relative path, a remote address, a file URL with a host, a missing or
+unusable folder, or weights too large for the memory here keeps the
+placeholder, which says why.
+
+Ollama is not plugged in yet. When it is, it should send the transcript
 to an Ollama server the person is already running on this machine, at
 `127.0.0.1` port `11434`, and that request stays in `PebbleModel`.
 
 `PebbleCore` does not do networking. A cloud model stays off until the person
 chooses one.
+
+- Cloud: `CloudModel` sends to the address in `Config/Cloud.local.xcconfig`,
+  which git ignores and which doesn't exist by default, so the setting can't
+  be turned on. Turning it on (What I remember, then Help from the cloud)
+  asks first and counts from the next new chat. Every request is redacted on
+  the device by `Redactor` and shown to the person in full, method, address,
+  headers and body, before it is sent. Redirects are refused. Words of crisis
+  and chats that promised to stay on the device are never sent, and nothing
+  is sent when the notes or private words can't be read. The setting and the
+  private words are kept next to the notes, out of backups. Sign-in is a
+  `CloudAuth` hook that adds nothing by default and may only use the network
+  after the person says yes; no keys live in the repo. `CloudModel` reports
+  `PrivacyPlace.mayLeaveDevice`, so a chat started with the cloud on makes
+  no device promise anywhere.
 
 ## The agent's name
 
@@ -84,7 +118,7 @@ first conversation. It is not someone in your contacts.
 
 1. A repo that proves itself: one command builds, tests and screenshots every platform.
 2. A daily pulse on what's new in AI and in other personal agents. Fetching, a digest of real changes, and idea cards drafted from that digest are in place.
-3. Mia talks: a named agent with a face and a first conversation. You can rename the agent on the device. The chat calls a local model adapter. The default is an on-device placeholder. MLX answers when a model directory on the device is configured. Ollama is not plugged in yet. (now)
+3. Mia talks: a named agent with a face and a first conversation. You can rename the agent on the device. The chat answers with a small open model through MLX, on the device, once the person downloads it; until then a placeholder says so. Ollama is not plugged in yet. (now)
 4. A daily briefing, ideas and activity inside the app.
 5. Mia improves Mia: small, verified changes every day.
 

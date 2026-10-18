@@ -1,5 +1,4 @@
 import Foundation
-import os
 import PebbleCore
 #if canImport(Darwin)
 import Darwin
@@ -7,120 +6,111 @@ import Darwin
 
 /// Which on-device model the chat should use.
 public enum OnDeviceModelKind: Sendable, Equatable {
-    /// The fixed placeholder. This is the default.
-    case stub
+    /// The placeholder, which says plainly why the model isn't ready.
+    case stub(OnDeviceModelNotReady)
     /// An MLX model directory already on the device.
     case mlx(directory: URL)
-}
 
-/// One line the on-device model sees, in chat order.
-public struct OnDeviceTranscriptLine: Sendable, Equatable {
-    public enum Role: Sendable, Equatable {
-        case system
-        case agent
-        case person
-    }
-
-    public let role: Role
-    public let text: String
-
-    public init(role: Role, text: String) {
-        self.role = role
-        self.text = text
-    }
-}
-
-/// How a configured local model is chosen, and the words sent with a transcript.
-///
-/// Nothing here contacts the network. A missing or unusable path stays on the
-/// placeholder, so CI, tests, and screenshots do not load weights.
-public enum OnDeviceTranscript {
-    /// Plain words in front of the transcript. The product name is not included.
-    public static let instructions = "You are the person's agent on this device. Reply in plain words. Stay with what they asked. Nothing from this conversation leaves the device."
-
-    /// Stop a reply after this many tokens so generation finishes.
-    public static let maxReplyTokens = 512
-
-    /// How many recent turns go with the system line. Older turns are left out.
-    public static let maxHistoryTurns = 24
-
-    /// The system line, then the most recent turns in order.
-    public static func lines(for transcript: [ChatTurn]) -> [OnDeviceTranscriptLine] {
-        var lines = [OnDeviceTranscriptLine(role: .system, text: instructions)]
-        let recent = transcript.suffix(maxHistoryTurns)
-        for turn in recent {
-            switch turn.speaker {
-            case .agent:
-                lines.append(OnDeviceTranscriptLine(role: .agent, text: turn.text))
-            case .person:
-                lines.append(OnDeviceTranscriptLine(role: .person, text: turn.text))
-            }
-        }
-        return lines
+    public var isStub: Bool {
+        if case .stub = self { return true }
+        return false
     }
 }
 
 /// Resolves the model the chat uses.
 ///
-/// The environment variable wins over UserDefaults. Both name a directory
-/// already on the device. The placeholder is used when neither is set, when
-/// the value cannot be read as a local folder, or when that folder is missing,
-/// incomplete, or too large for the memory on this device.
+/// A developer's folder comes first: the environment variable, then the
+/// UserDefaults key, each naming a directory already on the device. Without
+/// either, the folder the person downloaded from the memory screen is used
+/// once it is whole. The placeholder is used when there is nothing, when a
+/// configured value cannot be read as a local folder, or when the folder is
+/// missing, incomplete, or too large for the memory on this device, and it
+/// says which. Nothing here contacts the network, and nothing is logged:
+/// the memory screen shows which it chose.
 public enum OnDeviceModel {
     public static let environmentKey = "PEBBLE_MLX_MODEL"
-    public static let defaultsKey = "pebble.mlx.modelDirectory"
+    public static let defaultsKey = "onDeviceModelFolder"
 
-    /// Weights may use at most half of the memory this process can draw on.
-    static let weightShareDenominator: UInt64 = 2
-
-    private static let log = Logger(subsystem: "com.mdxos.pebble", category: "model")
+    /// Memory the model needs beyond its weights: the key and value cache
+    /// for a long chat (about 150 KB a token for the pinned model, so about
+    /// 300 MB at 2,000 tokens), the MLX buffer cache (capped at 64 MB), the
+    /// work of one step, and the app itself. Measured on a Mac, the pinned
+    /// model peaked 0.49 GB over its weights on short chats; this leaves
+    /// twice that. The rule it replaced let weights use only half of the
+    /// memory available, which on iPhone 17e would turn away the 2.26 GB
+    /// model that runs there at about 26 tokens a second.
+    public static let headroomBytes: UInt64 = 1 << 30
 
     public static func kind(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         defaults: UserDefaults = .standard,
-        weightBudget: UInt64 = OnDeviceModel.defaultWeightBudget()
+        folders: ModelFolders? = nil,
+        pin: PinnedModel = .default,
+        availableMemory: UInt64 = OnDeviceModel.availableMemory()
     ) -> OnDeviceModelKind {
-        let path = nonempty(environment[environmentKey]) ?? nonempty(defaults.string(forKey: defaultsKey))
-        return kind(configuredPath: path, weightBudget: weightBudget)
+        if let path = nonempty(environment[environmentKey]) ?? nonempty(defaults.string(forKey: defaultsKey)) {
+            return kind(configuredPath: path, availableMemory: availableMemory)
+        }
+        guard let folders else { return .stub(.notDownloaded) }
+        return kind(downloaded: folders.ready(for: pin), pin: pin, availableMemory: availableMemory)
     }
 
     public static func kind(
         configuredPath: String?,
-        weightBudget: UInt64 = OnDeviceModel.defaultWeightBudget()
+        availableMemory: UInt64 = OnDeviceModel.availableMemory()
     ) -> OnDeviceModelKind {
-        guard let directory = directory(from: configuredPath) else { return .stub }
-        guard let usable = usableDirectory(directory, weightBudget: weightBudget) else { return .stub }
-        return .mlx(directory: usable)
+        guard let directory = directory(from: configuredPath) else { return .stub(.notDownloaded) }
+        return usable(directory, availableMemory: availableMemory)
     }
 
-    /// The client `ChatView` should use. The placeholder unless a usable MLX folder is configured.
+    /// The downloaded folder, only when every pinned file is in it at its size.
+    public static func kind(
+        downloaded folder: URL,
+        pin: PinnedModel,
+        availableMemory: UInt64 = OnDeviceModel.availableMemory()
+    ) -> OnDeviceModelKind {
+        guard FileManager.default.fileExists(atPath: folder.path) else { return .stub(.notDownloaded) }
+        guard ModelInstaller.isComplete(folder, pin: pin) else { return .stub(.incomplete) }
+        return usable(folder, availableMemory: availableMemory)
+    }
+
+    /// The client the app makes once and shares with every chat. It starts
+    /// on what `kind` finds, and moves to the model when a download finishes.
     public static func client(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         defaults: UserDefaults = .standard,
-        weightBudget: UInt64 = OnDeviceModel.defaultWeightBudget()
-    ) -> any ModelClient {
-        switch kind(environment: environment, defaults: defaults, weightBudget: weightBudget) {
-        case .stub:
-            log.info("Using the placeholder.")
-            return LocalStubModel()
-        case .mlx(let directory):
-            log.info("Using the on-device model at \(directory.path, privacy: .private)")
-            return MLXChatModel(directory: directory)
+        folders: ModelFolders? = nil,
+        pin: PinnedModel = .default,
+        availableMemory: UInt64 = OnDeviceModel.availableMemory()
+    ) -> OnDeviceChat {
+        OnDeviceChat(model(for: kind(environment: environment, defaults: defaults, folders: folders, pin: pin,
+                                     availableMemory: availableMemory)))
+    }
+
+    /// The model for a kind: MLX for a usable folder, otherwise the
+    /// placeholder, which says why instead of pretending to answer.
+    public static func model(for kind: OnDeviceModelKind) -> any ModelClient {
+        switch kind {
+        case .stub(let reason): LocalStubModel(notReady: reason)
+        case .mlx(let directory): MLXChatModel(directory: directory)
         }
     }
 
-    /// Half of the memory available to this process.
+    /// Whether weights of this size leave `headroomBytes` of `available`.
+    public static func fits(weightBytes: UInt64, available: UInt64) -> Bool {
+        weightBytes <= available && available - weightBytes >= headroomBytes
+    }
+
+    /// The memory this process can draw on.
     ///
     /// iPhone and iPad use the memory the process can still spend.
     /// Mac uses the machine's physical memory.
-    public static func defaultWeightBudget() -> UInt64 {
-        let available: UInt64
+    public static func availableMemory() -> UInt64 {
         #if os(iOS)
-        available = UInt64(os_proc_available_memory())
+        UInt64(os_proc_available_memory())
         #else
-        available = ProcessInfo.processInfo.physicalMemory
+        ProcessInfo.processInfo.physicalMemory
         #endif
-        return available / weightShareDenominator
     }
 
     private static func nonempty(_ value: String?) -> String? {
@@ -129,78 +119,55 @@ public enum OnDeviceModel {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    /// An absolute file directory, or nil when the value must not be loaded.
+    /// An absolute file directory, or nil when the value must not be loaded:
+    /// a relative path, a home shortcut that can't be expanded, an address
+    /// that can't be read, a remote one, or a file address with a host.
     private static func directory(from configuredPath: String?) -> URL? {
         guard let trimmed = nonempty(configuredPath) else { return nil }
         if trimmed.contains("://") {
             return directory(fromAddress: trimmed)
         }
-        guard let expanded = expandHomeShortcut(trimmed) else { return nil }
-        guard expanded.hasPrefix("/") else {
-            log.info("A relative path was ignored, so replies stay on the placeholder.")
-            return nil
-        }
+        guard let expanded = expandHomeShortcut(trimmed), expanded.hasPrefix("/") else { return nil }
         return URL(fileURLWithPath: expanded, isDirectory: true)
     }
 
     private static func expandHomeShortcut(_ path: String) -> String? {
         guard path.hasPrefix("~") else { return path }
         let expanded = (path as NSString).expandingTildeInPath
-        guard expanded.hasPrefix("/") else {
-            log.info("A home shortcut could not be expanded, so replies stay on the placeholder.")
-            return nil
-        }
-        return expanded
+        return expanded.hasPrefix("/") ? expanded : nil
     }
 
     private static func directory(fromAddress raw: String) -> URL? {
-        guard let url = URL(string: raw) else {
-            log.info("The configured address could not be read, so replies stay on the placeholder.")
-            return nil
-        }
-        guard url.isFileURL else {
-            log.info("A remote address was ignored, so replies stay on the placeholder.")
-            return nil
-        }
-        if let host = url.host, !host.isEmpty {
-            log.info("A file address with a host was ignored, so replies stay on the placeholder.")
-            return nil
-        }
-        guard url.path.hasPrefix("/") else {
-            log.info("A relative path was ignored, so replies stay on the placeholder.")
-            return nil
-        }
+        guard let url = URL(string: raw), url.isFileURL else { return nil }
+        if let host = url.host, !host.isEmpty { return nil }
+        guard url.path.hasPrefix("/") else { return nil }
         return URL(fileURLWithPath: url.path, isDirectory: true)
     }
 
-    /// The resolved directory when it contains a usable model, otherwise nil.
-    private static func usableDirectory(_ url: URL, weightBudget: UInt64) -> URL? {
+    /// MLX at the resolved directory when it holds a usable model, otherwise
+    /// the placeholder with the reason: no folder, no config.json or
+    /// tokenizer.json, no weights, weights that can't be measured, or
+    /// weights too large for the memory here.
+    private static func usable(_ url: URL, availableMemory: UInt64) -> OnDeviceModelKind {
         let resolved = url.resolvingSymlinksInPath()
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: resolved.path, isDirectory: &isDirectory),
               isDirectory.boolValue else {
-            log.info("No model folder at the configured path, so replies stay on the placeholder. \(resolved.path, privacy: .private)")
-            return nil
+            return .stub(.notDownloaded)
         }
         let config = resolved.appendingPathComponent("config.json")
         let tokenizer = resolved.appendingPathComponent("tokenizer.json")
         guard FileManager.default.fileExists(atPath: config.path),
               FileManager.default.fileExists(atPath: tokenizer.path) else {
-            log.info("The model folder is missing config.json or tokenizer.json, so replies stay on the placeholder. \(resolved.path, privacy: .private)")
-            return nil
+            return .stub(.incomplete)
         }
         switch safetensorsBytes(in: resolved) {
-        case .none:
-            log.info("The model folder has no weights file, so replies stay on the placeholder. \(resolved.path, privacy: .private)")
-            return nil
-        case .unreadable:
-            log.info("The weights could not be measured, so replies stay on the placeholder. \(resolved.path, privacy: .private)")
-            return nil
-        case .bytes(let weightBytes) where weightBytes > weightBudget:
-            log.info("The model is too big for the memory on this device, so replies stay on the placeholder. \(resolved.path, privacy: .private)")
-            return nil
+        case .none, .unreadable:
+            return .stub(.incomplete)
+        case .bytes(let weightBytes) where !fits(weightBytes: weightBytes, available: availableMemory):
+            return .stub(.needsMoreMemory)
         case .bytes:
-            return resolved
+            return .mlx(directory: resolved)
         }
     }
 

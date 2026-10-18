@@ -6,3 +6,5 @@ xcuserdata/
 Packages/*/.build/
 Packages/*/.swiftpm/
 pulse/digest.json
+# A real cloud address for one machine. Never committed.
+Config/Cloud.local.xcconfig

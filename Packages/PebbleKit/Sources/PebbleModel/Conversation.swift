@@ -8,24 +8,29 @@ public enum ConversationError: Error, Equatable, Sendable {
     case emptyReply
     /// A reply was asked for before the person had spoken.
     case missingPerson
+    /// The opening promised words stay on this device, but the model does not run here.
+    case leavesDevice
 }
 
 /// The turns so far, and how a new line is added.
 public struct Conversation: Sendable, Equatable {
     public private(set) var turns: [ChatTurn]
+    /// Whether the opening may promise that words stay on this device.
+    public let place: PrivacyPlace
 
-    public init(turns: [ChatTurn]) {
+    public init(turns: [ChatTurn], place: PrivacyPlace = .mayLeaveDevice) {
         self.turns = turns
+        self.place = place
     }
 
-    public static func firstRun(named name: String) -> Conversation {
+    public static func firstRun(named name: String, place: PrivacyPlace = .mayLeaveDevice) -> Conversation {
         Conversation(turns: [
             ChatTurn(
                 id: FirstConversation.openingID,
                 speaker: .agent,
-                text: FirstConversation.opening(named: name)
+                text: FirstConversation.opening(named: name, place: place)
             ),
-        ])
+        ], place: place)
     }
 
     /// Rewrites the opening line when the person has not spoken yet.
@@ -37,10 +42,10 @@ public struct Conversation: Sendable, Equatable {
             return ChatTurn(
                 id: turn.id,
                 speaker: .agent,
-                text: FirstConversation.opening(named: name.text)
+                text: FirstConversation.opening(named: name.text, place: place)
             )
         }
-        return Conversation(turns: turns)
+        return Conversation(turns: turns, place: place)
     }
 
     public var isWaitingForPerson: Bool {
@@ -56,10 +61,26 @@ public struct Conversation: Sendable, Equatable {
         return next
     }
 
+    /// The conversation without the turn `id`, as when the person chose not
+    /// to send it. Later requests then never carry those words.
+    public func removingTurn(_ id: UUID) -> Conversation {
+        var next = self
+        next.turns.removeAll { $0.id == id }
+        return next
+    }
+
     /// Asks `model` to answer the turns so far and appends that reply.
+    /// Words of crisis get a caring reply before any device check, so a
+    /// remote model never blocks 988.
     public func appendingReply(from model: any ModelClient, id: UUID = UUID()) async throws -> Conversation {
         guard turns.last?.speaker == .person else { throw ConversationError.missingPerson }
-        let reply = try await model.reply(to: turns)
+        let reply: String
+        if let care = CareCheck.reply(after: turns) {
+            reply = care
+        } else {
+            if place.staysOnDevice && !model.privacyPlace.staysOnDevice { throw ConversationError.leavesDevice }
+            reply = try await model.reply(to: CareCheck.redacted(turns))
+        }
         let cleaned = reply.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { throw ConversationError.emptyReply }
         var next = self

@@ -3,89 +3,121 @@ import PebbleCore
 import PebbleModel
 import Testing
 
+/// Plenty of memory, so only the rule under test decides.
+let plentyOfMemory: UInt64 = 64 << 30
+
 struct OnDeviceModelTests {
-    @Test func missingConfigurationUsesTheStub() throws {
-        let defaults = try freshDefaults()
+    @Test func missingConfigurationUsesTheStubAndSaysItIsNotDownloaded() throws {
+        let name = "tests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
         let kind = OnDeviceModel.kind(environment: [:], defaults: defaults)
         let client = OnDeviceModel.client(environment: [:], defaults: defaults)
-        #expect(kind == .stub)
-        #expect(client is LocalStubModel)
+        #expect(kind == .stub(.notDownloaded))
+        #expect((client.active as? LocalStubModel)?.notReady == .notDownloaded)
+        #expect(client.runsOnDevice)
     }
 
     @Test func blankConfigurationUsesTheStub() throws {
-        let defaults = try freshDefaults()
+        let name = "tests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
         defaults.set("   ", forKey: OnDeviceModel.defaultsKey)
-        #expect(OnDeviceModel.kind(environment: ["PEBBLE_MLX_MODEL": "  "], defaults: defaults) == .stub)
-        #expect(OnDeviceModel.kind(configuredPath: nil) == .stub)
+        #expect(OnDeviceModel.kind(environment: [OnDeviceModel.environmentKey: "  "], defaults: defaults).isStub)
+        #expect(OnDeviceModel.kind(configuredPath: nil).isStub)
     }
 
     @Test func relativePathUsesTheStub() {
-        #expect(OnDeviceModel.kind(configuredPath: "models/local") == .stub)
-        #expect(OnDeviceModel.kind(configuredPath: "https://example.com/weights") == .stub)
+        #expect(OnDeviceModel.kind(configuredPath: "models/local").isStub)
+        #expect(OnDeviceModel.kind(configuredPath: "https://example.com/weights").isStub)
     }
 
     @Test func nonexistentFolderUsesTheStub() throws {
         let missing = FileManager.default.temporaryDirectory
-            .appendingPathComponent("pebble-missing-\(UUID().uuidString)", isDirectory: true)
-        #expect(OnDeviceModel.kind(configuredPath: missing.path) == .stub)
-        let defaults = try freshDefaults()
+            .appendingPathComponent("missing-model-\(UUID().uuidString)", isDirectory: true)
+        #expect(OnDeviceModel.kind(configuredPath: missing.path) == .stub(.notDownloaded))
+        let name = "tests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
         let client = OnDeviceModel.client(environment: [OnDeviceModel.environmentKey: missing.path], defaults: defaults)
-        #expect(client is LocalStubModel)
+        #expect(client.active is LocalStubModel)
     }
 
     @Test func absolutePathSelectsMLX() throws {
         let folder = try modelFolder()
         defer { remove(folder) }
-        let defaults = try freshDefaults()
-        let kind = OnDeviceModel.kind(environment: [OnDeviceModel.environmentKey: folder.path], defaults: defaults)
-        let client = OnDeviceModel.client(environment: [OnDeviceModel.environmentKey: folder.path], defaults: defaults)
+        let name = "tests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let environment = [OnDeviceModel.environmentKey: folder.path]
+        let kind = OnDeviceModel.kind(environment: environment, defaults: defaults, availableMemory: plentyOfMemory)
+        let client = OnDeviceModel.client(environment: environment, defaults: defaults, availableMemory: plentyOfMemory)
         expectMLX(kind, directory: folder)
-        #expect(client is MLXChatModel)
+        #expect(client.active is MLXChatModel)
     }
 
     @Test func fileURLSelectsTheSameDirectory() throws {
         let folder = try modelFolder()
         defer { remove(folder) }
-        expectMLX(OnDeviceModel.kind(configuredPath: folder.absoluteString), directory: folder)
+        expectMLX(OnDeviceModel.kind(configuredPath: folder.absoluteString, availableMemory: plentyOfMemory),
+                  directory: folder)
     }
 
     @Test func fileURLWithAHostUsesTheStub() throws {
         let folder = try modelFolder()
         defer { remove(folder) }
-        #expect(OnDeviceModel.kind(configuredPath: "file://localhost\(folder.path)") == .stub)
+        #expect(OnDeviceModel.kind(configuredPath: "file://localhost\(folder.path)").isStub)
     }
 
     @Test func tildePathSelectsTheExpandedFolder() throws {
-        let name = "pebble-model-\(UUID().uuidString)"
+        let name = "model-\(UUID().uuidString)"
         let folder = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(name, isDirectory: true)
             .resolvingSymlinksInPath()
         try writeModelFiles(in: folder, weightBytes: 16)
         defer { remove(folder) }
         let resolved = folder.resolvingSymlinksInPath()
-        expectMLX(OnDeviceModel.kind(configuredPath: "~/\(name)"), directory: resolved)
+        expectMLX(OnDeviceModel.kind(configuredPath: "~/\(name)", availableMemory: plentyOfMemory), directory: resolved)
     }
 
     @Test func unknownHomeShortcutUsesTheStub() {
-        let path = "~nosuchuserpebble\(UUID().uuidString)/model"
-        #expect(OnDeviceModel.kind(configuredPath: path) == .stub)
+        let path = "~nosuchuser\(UUID().uuidString)/model"
+        #expect(OnDeviceModel.kind(configuredPath: path).isStub)
     }
 
     @Test func symlinkSelectsTheResolvedFolder() throws {
         let folder = try modelFolder()
         defer { remove(folder) }
         let link = FileManager.default.temporaryDirectory
-            .appendingPathComponent("pebble-link-\(UUID().uuidString)")
+            .appendingPathComponent("model-link-\(UUID().uuidString)")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: folder)
         defer { remove(link) }
-        expectMLX(OnDeviceModel.kind(configuredPath: link.path), directory: folder)
+        expectMLX(OnDeviceModel.kind(configuredPath: link.path, availableMemory: plentyOfMemory), directory: folder)
     }
 
-    @Test func oversizedWeightsUseTheStub() throws {
+    @Test func weightsThatLeaveTooLittleHeadroomUseTheStub() throws {
         let folder = try modelFolder(weightBytes: 100)
         defer { remove(folder) }
-        #expect(OnDeviceModel.kind(configuredPath: folder.path, weightBudget: 99) == .stub)
-        expectMLX(OnDeviceModel.kind(configuredPath: folder.path, weightBudget: 100), directory: folder)
+        let tight = 100 + OnDeviceModel.headroomBytes - 1
+        #expect(OnDeviceModel.kind(configuredPath: folder.path, availableMemory: tight) == .stub(.needsMoreMemory))
+        expectMLX(OnDeviceModel.kind(configuredPath: folder.path, availableMemory: tight + 1), directory: folder)
+        #expect(OnDeviceModel.kind(configuredPath: folder.path, availableMemory: 99) == .stub(.needsMoreMemory))
+    }
+
+    /// The pinned weights must fit iPhone 17e, where they run at about 26
+    /// tokens a second. 3.5 GB stands for what that 8 GB phone leaves the
+    /// app; the real figure is a manual check before release (AGENTS.md).
+    /// The half-of-available rule this replaced turned the model away
+    /// there, and the new rule still fits a Mac and still turns away the
+    /// 5.1 GB Gemma 4 E4B file.
+    @Test func thePinnedModelFitsWhereTheHalfRuleTurnedItAway() throws {
+        let weights = try #require(PinnedModel.default.files.first { $0.name.hasSuffix(".safetensors") }).bytes
+        let phone: UInt64 = 3_500_000_000
+        #expect(UInt64(weights) > phone / 2)
+        #expect(OnDeviceModel.fits(weightBytes: UInt64(weights), available: phone))
+        #expect(OnDeviceModel.fits(weightBytes: UInt64(weights), available: 16 << 30))
+        #expect(!OnDeviceModel.fits(weightBytes: UInt64(weights), available: UInt64(weights)))
+        #expect(!OnDeviceModel.fits(weightBytes: 5_146_800_534, available: phone))
     }
 
     @Test func environmentWinsOverDefaults() throws {
@@ -95,11 +127,14 @@ struct OnDeviceModelTests {
             remove(fromEnvironment)
             remove(fromDefaults)
         }
-        let defaults = try freshDefaults()
+        let name = "tests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
         defaults.set(fromDefaults.path, forKey: OnDeviceModel.defaultsKey)
         let kind = OnDeviceModel.kind(
             environment: [OnDeviceModel.environmentKey: fromEnvironment.path],
-            defaults: defaults
+            defaults: defaults,
+            availableMemory: plentyOfMemory
         )
         expectMLX(kind, directory: fromEnvironment)
     }
@@ -107,24 +142,130 @@ struct OnDeviceModelTests {
     @Test func unusableEnvironmentDoesNotFallThroughToDefaults() throws {
         let fromDefaults = try modelFolder()
         defer { remove(fromDefaults) }
-        let defaults = try freshDefaults()
+        let name = "tests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
         defaults.set(fromDefaults.path, forKey: OnDeviceModel.defaultsKey)
         let missing = FileManager.default.temporaryDirectory
-            .appendingPathComponent("pebble-missing-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("missing-model-\(UUID().uuidString)", isDirectory: true)
         let kind = OnDeviceModel.kind(
             environment: [OnDeviceModel.environmentKey: missing.path],
-            defaults: defaults
+            defaults: defaults,
+            availableMemory: plentyOfMemory
         )
-        #expect(kind == .stub)
+        #expect(kind.isStub)
     }
 
     @Test func defaultsSelectMLXWhenTheEnvironmentIsUnset() throws {
         let folder = try modelFolder()
         defer { remove(folder) }
-        let defaults = try freshDefaults()
+        let name = "tests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
         defaults.set(folder.path, forKey: OnDeviceModel.defaultsKey)
-        expectMLX(OnDeviceModel.kind(environment: [:], defaults: defaults), directory: folder)
+        expectMLX(OnDeviceModel.kind(environment: [:], defaults: defaults, availableMemory: plentyOfMemory),
+                  directory: folder)
     }
+
+    // MARK: The downloaded folder
+
+    /// The cause of the canned replies: nothing ever put a model where the
+    /// app looked. Now the folder the download fills is used with no
+    /// environment variable and no defaults key.
+    @Test func aDownloadedModelIsUsedWithNothingElseSet() throws {
+        let place = try TestPin.place()
+        defer { place.remove() }
+        try place.writeReady()
+        let name = "tests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let client = OnDeviceModel.client(environment: [:], defaults: defaults, folders: place.folders,
+                                          pin: place.pin, availableMemory: plentyOfMemory)
+        let mlx = try #require(client.active as? MLXChatModel)
+        #expect(mlx.folder.resolvingSymlinksInPath().path == place.ready.resolvingSymlinksInPath().path)
+    }
+
+    @Test func nothingDownloadedSaysSo() throws {
+        let place = try TestPin.place()
+        defer { place.remove() }
+        #expect(OnDeviceModel.kind(environment: [:], defaults: .standard, folders: place.folders, pin: place.pin,
+                                   availableMemory: plentyOfMemory) == .stub(.notDownloaded))
+    }
+
+    @Test func aFolderMissingAFileIsIncomplete() throws {
+        let place = try TestPin.place()
+        defer { place.remove() }
+        try place.writeReady()
+        try FileManager.default.removeItem(at: place.ready.appendingPathComponent("tokenizer.json"))
+        #expect(OnDeviceModel.kind(downloaded: place.ready, pin: place.pin, availableMemory: plentyOfMemory)
+            == .stub(.incomplete))
+    }
+
+    @Test func aFileOfTheWrongSizeIsIncomplete() throws {
+        let place = try TestPin.place()
+        defer { place.remove() }
+        try place.writeReady()
+        try Data("short".utf8).write(to: place.ready.appendingPathComponent("weights.safetensors"))
+        #expect(OnDeviceModel.kind(downloaded: place.ready, pin: place.pin, availableMemory: plentyOfMemory)
+            == .stub(.incomplete))
+    }
+
+    /// Files still under their temporary folder are never a model, however whole.
+    @Test func aDownloadStillInItsTemporaryFolderIsNotReady() throws {
+        let place = try TestPin.place()
+        defer { place.remove() }
+        let partial = place.folders.root.appendingPathComponent(".partial-\(UUID().uuidString)", isDirectory: true)
+        try place.writeFiles(in: partial)
+        #expect(OnDeviceModel.kind(environment: [:], defaults: .standard, folders: place.folders, pin: place.pin,
+                                   availableMemory: plentyOfMemory) == .stub(.notDownloaded))
+    }
+
+    // MARK: The placeholder is honest
+
+    @Test func thePlaceholderSaysTheModelIsNotReadyInsteadOfAnswering() async throws {
+        let turns = [ChatTurn(id: UUID(), speaker: .person, text: "What should I cook tonight?")]
+        for reason in OnDeviceModelNotReady.allCases {
+            let reply = try await LocalStubModel(notReady: reason).reply(to: turns)
+            #expect(reply == OnDeviceModelWords.notReadyReply(reason))
+            #expect(reply != LocalStubModel.fallback)
+            #expect(reply.hasPrefix("Sorry, I can't really answer that"))
+        }
+        let notDownloaded = OnDeviceModelWords.notReadyReply(.notDownloaded)
+        #expect(notDownloaded.contains("open \(MemoryWords.title) and choose Download on-device model."))
+        #expect(OnDeviceModelWords.notReadyReply(.incomplete).contains("Open \(MemoryWords.title) to download it again."))
+    }
+
+    // MARK: The one client
+
+    /// The on-device model must say it runs here, or every on-device chat
+    /// refuses it as leaving the device.
+    @Test func anOnDeviceChatReachesTheModel() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("empty-model-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { remove(folder) }
+        let model = MLXChatModel(directory: folder)
+        #expect(model.runsOnDevice)
+        let chat = OnDeviceChat(model)
+        let opening = Conversation.firstRun(named: "Pip", place: chat.privacyPlace)
+        #expect(opening.place.staysOnDevice)
+        await #expect(throws: MLXChatModelError.unavailable) {
+            _ = try await opening.sending("Hi.", with: chat)
+        }
+    }
+
+    @Test func theClientMovesToTheModelAndRefusesOneThatLeavesTheDevice() async throws {
+        let chat = OnDeviceChat(LocalStubModel(notReady: .notDownloaded))
+        let turns = [ChatTurn(id: UUID(), speaker: .person, text: "Hello there.")]
+        #expect(try await chat.reply(to: turns) == OnDeviceModelWords.notReadyReply(.notDownloaded))
+        #expect(!chat.use(LeavesDevice()))
+        #expect(chat.active is LocalStubModel)
+        #expect(chat.use(LocalStubModel()))
+        #expect(try await chat.reply(to: turns) == LocalStubModel.fallback)
+        #expect(chat.runsOnDevice)
+    }
+
+    // MARK: The transcript
 
     @Test func transcriptStartsWithTheOnDeviceInstruction() {
         let lines = OnDeviceTranscript.lines(for: [
@@ -153,7 +294,7 @@ struct OnDeviceModelTests {
     }
 
     @Test func emptyTranscriptDoesNotNeedWeights() async {
-        let model = MLXChatModel(directory: URL(fileURLWithPath: "/tmp/pebble-no-such-model", isDirectory: true))
+        let model = MLXChatModel(directory: URL(fileURLWithPath: "/tmp/no-such-model", isDirectory: true))
         await #expect(throws: ModelClientError.noPersonTurn) {
             try await model.reply(to: [])
         }
@@ -161,7 +302,7 @@ struct OnDeviceModelTests {
 
     @Test func emptyFolderThrowsAndTheNextReplyDoesNotReload() async throws {
         let folder = FileManager.default.temporaryDirectory
-            .appendingPathComponent("pebble-empty-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("empty-model-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { remove(folder) }
         let model = MLXChatModel(directory: folder)
@@ -176,7 +317,7 @@ struct OnDeviceModelTests {
 
     @Test func invalidConfigThrowsAndTheNextReplyDoesNotReload() async throws {
         let folder = FileManager.default.temporaryDirectory
-            .appendingPathComponent("pebble-bad-config-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("bad-config-\(UUID().uuidString)", isDirectory: true)
         try writeModelFiles(in: folder, weightBytes: 16)
         try Data("not json".utf8).write(to: folder.appendingPathComponent("config.json"))
         defer { remove(folder) }
@@ -210,7 +351,7 @@ struct OnDeviceModelTests {
 
     private func modelFolder(weightBytes: Int = 16) throws -> URL {
         let folder = FileManager.default.temporaryDirectory
-            .appendingPathComponent("pebble-model-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("model-\(UUID().uuidString)", isDirectory: true)
         try writeModelFiles(in: folder, weightBytes: weightBytes)
         // Resolve after the directory exists so the URL matches kind(), including the directory slash.
         return folder.resolvingSymlinksInPath()
@@ -226,12 +367,9 @@ struct OnDeviceModelTests {
     private func remove(_ url: URL) {
         try? FileManager.default.removeItem(at: url)
     }
+}
 
-    private func freshDefaults() throws -> UserDefaults {
-        let name = "pebble.tests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: name))
-        defaults.removePersistentDomain(forName: name)
-        return defaults
-    }
-
+/// A model that says its words leave the device.
+private struct LeavesDevice: ModelClient {
+    func reply(to transcript: [ChatTurn]) async throws -> String { "remote" }
 }
