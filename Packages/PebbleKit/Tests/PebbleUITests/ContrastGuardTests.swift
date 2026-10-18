@@ -1,6 +1,5 @@
 #if canImport(SwiftUI)
 import Foundation
-import GuardScan
 import SwiftUI
 import Testing
 @testable import PebbleUI
@@ -9,8 +8,10 @@ import SourceScan
 /// Words stay readable: every pair in `Theme.textPairs` clears its minimum
 /// (4.5 to 1 for words, 3 to 1 for a field's edge) in light and dark, and no
 /// screen colors words in a way the pairs don't cover. A new color for words
-/// means a new pair, or this fails. The scan's rules are `ContrastLint` in
-/// GuardScan, and what each must catch is in `GuardWrongCaseTests`.
+/// means a new pair, or this fails. The scan of every screen reads Swift, so
+/// it lives in Tools/GuardKit: its rules are `ContrastLint` in GuardScan,
+/// the sweep is `ContrastSweepTests`, and what each rule must catch is in
+/// `GuardWrongCaseTests`.
 struct ContrastGuardTests {
     @Test(arguments: [ColorScheme.light, .dark])
     func everyThemePairIsReadable(scheme: ColorScheme) {
@@ -75,18 +76,6 @@ struct ContrastGuardTests {
         return try sources().map { ("PebbleUI/\($0.name)", $0.text) } + app.map { ("App/\($0.name)", $0.text) }
     }
 
-    /// PERMANENT GUARD. Both rule sets, contrast and accent, on every screen.
-    @Test func noScreenColorsWordsOutsideThePairs() throws {
-        let files = try Self.screenSources()
-        #expect(files.count > 5)
-        #expect(files.contains { $0.name.hasPrefix("App/") }, "the app's own sources are scanned too")
-        for file in files {
-            for problem in ContrastLint.problems(in: SyntaxSource.shared(file.text), file: file.name) {
-                Issue.record(Comment(rawValue: problem.report(in: file.name)))
-            }
-        }
-    }
-
     /// The scan wants `.sharedBackgroundVisibility(.hidden)` right after the
     /// item, with no `if #available` around it. That API is iOS 26 and
     /// macOS 26, so it holds only while both minimums are 26 or later.
@@ -99,25 +88,15 @@ struct ContrastGuardTests {
                               options: .regularExpression) != nil)
     }
 
-    /// The scan reports the line the call's name is on, even when its
-    /// arguments run over several lines.
-    @Test func theScanPointsAtTheCall() {
-        let text = "let a = 1\n// .tint(.orange)\nText(\"x\")\n    .foregroundStyle(\n        Theme.accent)\n"
-        #expect(ContrastLint.problems(in: text).map(\.line) == [4])
-        #expect(ContrastLint.problems(in: text).map(\.column) == [6])
-    }
-
     /// Lines still count after a `\` joins two lines of a multi-line
     /// string, and a paren in a string inside an interpolation never
-    /// throws the count off.
+    /// throws the count off. GuardKit's `ContrastSweepTests` checks the
+    /// same for the guards' own reading.
     @Test func theScanCountsLinesThroughEveryKindOfString() {
         let joined = "let a = \"\"\"\n    one \\\n    two\n    \"\"\"\nText(\"x\")\n"
         #expect(SwiftSource(joined).literals.map(\.line) == [1, 5])
-        #expect(SyntaxSource(joined).literals.map(\.line) == [1, 5])
         let paren = "let a = \"\\(f(\"(\"))\"\nText(\"x\")\n    .foregroundStyle(Theme.accent)\n"
         #expect(SwiftSource(paren).literals.map(\.line) == [1, 2])
-        #expect(SyntaxSource(paren).literals.map(\.line) == [1, 1, 2])
-        #expect(ContrastLint.problems(in: paren).map(\.line) == [3])
     }
 
     /// Names come out right when the folder is reached through a symlink,

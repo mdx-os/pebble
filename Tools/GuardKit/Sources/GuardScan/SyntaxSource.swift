@@ -250,17 +250,24 @@ public struct SyntaxSource: @unchecked Sendable {
 
     // MARK: Code
 
-    /// The tokens of `node` with no trivia between them, so
-    /// `Theme . accent /* x */` reads `Theme.accent`.
+    /// A token as the compiler names it: an identifier without its
+    /// backticks, so `` `onDevice` `` is `onDevice`, and any other token as
+    /// written. Every rule compares names through this, never `text`.
+    public static func name(_ token: TokenSyntax) -> String {
+        token.identifier?.name ?? token.text
+    }
+
+    /// The tokens of `node` with no trivia between them, each by `name`, so
+    /// `Theme . accent /* x */` and `` `Theme`.`accent` `` read `Theme.accent`.
     public static func code(_ node: some SyntaxProtocol) -> String {
-        node.tokens(viewMode: .sourceAccurate).map(\.text).joined()
+        node.tokens(viewMode: .sourceAccurate).map(name).joined()
     }
 
     /// The name a call is made to: `f` in `f(x)` and `a.b.f(x)`, and `init`
     /// in `T.init(x)`.
     public static func calledName(_ call: FunctionCallExprSyntax) -> String? {
-        if let reference = call.calledExpression.as(DeclReferenceExprSyntax.self) { return reference.baseName.text }
-        if let member = call.calledExpression.as(MemberAccessExprSyntax.self) { return member.declName.baseName.text }
+        if let reference = call.calledExpression.as(DeclReferenceExprSyntax.self) { return name(reference.baseName) }
+        if let member = call.calledExpression.as(MemberAccessExprSyntax.self) { return name(member.declName.baseName) }
         return nil
     }
 
@@ -318,10 +325,10 @@ public struct SyntaxSource: @unchecked Sendable {
                 }
                 context.condition = .and(holds, context.condition)
             }
-            if let macro = parent.as(MacroExpansionDeclSyntax.self), macro.macroName.text == "Preview" {
+            if let macro = parent.as(MacroExpansionDeclSyntax.self), Self.name(macro.macroName) == "Preview" {
                 context.inPreview = true
             }
-            if let macro = parent.as(MacroExpansionExprSyntax.self), macro.macroName.text == "Preview" {
+            if let macro = parent.as(MacroExpansionExprSyntax.self), Self.name(macro.macroName) == "Preview" {
                 context.inPreview = true
             }
             if let scope = Self.typeScope(parent) { context.types.append(scope) }
@@ -336,19 +343,19 @@ public struct SyntaxSource: @unchecked Sendable {
             list.compactMap { $0.as(AttributeSyntax.self).map { code($0.attributeName) } }
         }
         if let decl = node.as(StructDeclSyntax.self) {
-            return TypeScope(kind: "struct", name: decl.name.text, attributes: attributes(decl.attributes))
+            return TypeScope(kind: "struct", name: name(decl.name), attributes: attributes(decl.attributes))
         }
         if let decl = node.as(ClassDeclSyntax.self) {
-            return TypeScope(kind: "class", name: decl.name.text, attributes: attributes(decl.attributes))
+            return TypeScope(kind: "class", name: name(decl.name), attributes: attributes(decl.attributes))
         }
         if let decl = node.as(EnumDeclSyntax.self) {
-            return TypeScope(kind: "enum", name: decl.name.text, attributes: attributes(decl.attributes))
+            return TypeScope(kind: "enum", name: name(decl.name), attributes: attributes(decl.attributes))
         }
         if let decl = node.as(ActorDeclSyntax.self) {
-            return TypeScope(kind: "actor", name: decl.name.text, attributes: attributes(decl.attributes))
+            return TypeScope(kind: "actor", name: name(decl.name), attributes: attributes(decl.attributes))
         }
         if let decl = node.as(ProtocolDeclSyntax.self) {
-            return TypeScope(kind: "protocol", name: decl.name.text, attributes: attributes(decl.attributes))
+            return TypeScope(kind: "protocol", name: name(decl.name), attributes: attributes(decl.attributes))
         }
         if let decl = node.as(ExtensionDeclSyntax.self) {
             return TypeScope(kind: "extension", name: code(decl.extendedType), attributes: attributes(decl.attributes))
@@ -356,9 +363,9 @@ public struct SyntaxSource: @unchecked Sendable {
         return nil
     }
 
-    /// The first token spelled `text`, outside comments and strings.
+    /// The first token named `text`, outside comments and strings.
     public func firstToken(_ text: String) -> TokenSyntax? {
-        tokens.first { $0.text == text }
+        tokens.first { Self.name($0) == text }
     }
 
     /// The context of the first token spelled `text`.
@@ -436,10 +443,10 @@ public indirect enum Condition: Equatable, CustomStringConvertible {
         } else if let sequence = inner.as(SequenceExprSyntax.self) {
             self = Condition(sequence: Array(sequence.elements))
         } else if let call = inner.as(FunctionCallExprSyntax.self),
-                  let name = call.calledExpression.as(DeclReferenceExprSyntax.self)?.baseName.text {
+                  let name = call.calledExpression.as(DeclReferenceExprSyntax.self).map({ SyntaxSource.name($0.baseName) }) {
             self = .test(name, SyntaxSource.code(call.arguments))
         } else if let reference = inner.as(DeclReferenceExprSyntax.self) {
-            self = .flag(reference.baseName.text)
+            self = .flag(SyntaxSource.name(reference.baseName))
         } else {
             self = .flag("?" + SyntaxSource.code(inner))
         }
@@ -488,9 +495,10 @@ public indirect enum Condition: Equatable, CustomStringConvertible {
             Platform(name: "iOS", os: "iOS", environments: [], modules: apple.union(["UIKit"])),
             Platform(name: "iOS Simulator", os: "iOS", environments: ["simulator"], modules: apple.union(["UIKit"])),
             // Mac Catalyst runs UIKit apps. AppKit can be imported there, but
-            // most of it is unavailable, so it is never a Mac gate.
+            // most of it is unavailable, so it is never a Mac gate. Cocoa
+            // brings AppKit with it, so it is no Mac gate either.
             Platform(name: "Mac Catalyst", os: "iOS", environments: ["macCatalyst"],
-                     modules: apple.union(["UIKit", "AppKit"])),
+                     modules: apple.union(["UIKit", "AppKit", "Cocoa"])),
             Platform(name: "tvOS", os: "tvOS", environments: [], modules: apple.union(["UIKit"])),
             Platform(name: "watchOS", os: "watchOS", environments: [], modules: apple.union(["WatchKit"])),
             Platform(name: "visionOS", os: "visionOS", environments: [], modules: apple.union(["UIKit"])),

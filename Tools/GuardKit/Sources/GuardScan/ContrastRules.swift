@@ -59,6 +59,20 @@ public enum ContrastLint {
         (node.as(MemberAccessExprSyntax.self).map { [$0] } ?? []) + node.descendants(MemberAccessExprSyntax.self)
     }
 
+    /// The name read: `accent` in `Theme.accent` and `` Theme.`accent` ``.
+    static func name(_ member: MemberAccessExprSyntax) -> String { SyntaxSource.name(member.declName.baseName) }
+
+    static func name(_ reference: DeclReferenceExprSyntax) -> String { SyntaxSource.name(reference.baseName) }
+
+    /// A member of `Theme` itself, qualified or not: `Theme.accent` and
+    /// `PebbleUI.Theme.accent` alike.
+    static func isTheme(_ member: MemberAccessExprSyntax, _ wanted: String) -> Bool {
+        guard name(member) == wanted, let base = member.base else { return false }
+        if let reference = base.as(DeclReferenceExprSyntax.self) { return name(reference) == "Theme" }
+        if let qualified = base.as(MemberAccessExprSyntax.self) { return name(qualified) == "Theme" }
+        return false
+    }
+
     /// A member read off the system: `.gray`, `Color.gray`, or off a value
     /// that doesn't end in a name, such as `f().gray`. Never `Theme.gray`.
     static func isSystem(_ member: MemberAccessExprSyntax) -> Bool {
@@ -90,31 +104,31 @@ public enum ContrastLint {
     @Sendable static func rawAccent(_ source: SyntaxSource, _ file: String) -> [Finding] {
         wordRule("contrast.rawAccent",
                  "the raw accent is too faint for words; use Theme.accentText, or Theme.accentSymbol on an Image", source) {
-            $0.declName.baseName.text == "accent" && $0.base.map(SyntaxSource.code) == "Theme"
+            isTheme($0, "accent")
         }
     }
 
     @Sendable static func systemGray(_ source: SyntaxSource, _ file: String) -> [Finding] {
         wordRule("contrast.systemGray", "the system gray is about 3.5 to 1 on white; use Theme.secondaryText", source) {
-            ["secondary", "tertiary", "quaternary"].contains($0.declName.baseName.text)
+            ["secondary", "tertiary", "quaternary"].contains(name($0))
         }
     }
 
     @Sendable static func gray(_ source: SyntaxSource, _ file: String) -> [Finding] {
         wordRule("contrast.gray", "the system gray is too faint for words; use Theme.secondaryText", source) {
-            $0.declName.baseName.text == "gray" && isSystem($0)
+            name($0) == "gray" && isSystem($0)
         }
     }
 
     @Sendable static func red(_ source: SyntaxSource, _ file: String) -> [Finding] {
         wordRule("contrast.red", "the system red is too faint on a card; use Theme.dangerText", source) {
-            $0.declName.baseName.text == "red" && isSystem($0)
+            name($0) == "red" && isSystem($0)
         }
     }
 
     @Sendable static func fadedWhite(_ source: SyntaxSource, _ file: String) -> [Finding] {
         wordRule("contrast.fadedWhite", "faded white is too faint for words; use Theme.onAccent or the primary ink", source) {
-            $0.declName.baseName.text == "opacity" && $0.base?.as(MemberAccessExprSyntax.self)?.declName.baseName.text == "white"
+            name($0) == "opacity" && $0.base?.as(MemberAccessExprSyntax.self).map(name) == "white"
         }
     }
 
@@ -122,9 +136,9 @@ public enum ContrastLint {
     /// Faded white has its own rule.
     @Sendable static func white(_ source: SyntaxSource, _ file: String) -> [Finding] {
         wordRule("contrast.white", "white is too faint on the accent; use Theme.onAccent", source) { member in
-            guard member.declName.baseName.text == "white", isSystem(member) else { return false }
+            guard name(member) == "white", isSystem(member) else { return false }
             let faded = member.parent?.as(MemberAccessExprSyntax.self).map {
-                $0.base?.id == member.id && $0.declName.baseName.text == "opacity"
+                $0.base?.id == member.id && name($0) == "opacity"
             } ?? false
             return !faded
         }
@@ -140,7 +154,7 @@ public enum ContrastLint {
                     expression = base
                     continue
                 }
-                return next.calledExpression.as(DeclReferenceExprSyntax.self)?.baseName.text
+                return next.calledExpression.as(DeclReferenceExprSyntax.self).map(name)
             }
             if let member = expression.as(MemberAccessExprSyntax.self), let base = member.base {
                 expression = base
@@ -154,9 +168,7 @@ public enum ContrastLint {
     /// must be a modifier on an `Image(...)`.
     @Sendable static func accentSymbol(_ source: SyntaxSource, _ file: String) -> [Finding] {
         wordMembers(source).compactMap { call, members in
-            guard members.contains(where: { $0.declName.baseName.text == "accentSymbol"
-                    && $0.base.map(SyntaxSource.code) == "Theme" }),
-                  chainRoot(of: call) != "Image" else { return nil }
+            guard members.contains(where: { isTheme($0, "accentSymbol") }), chainRoot(of: call) != "Image" else { return nil }
             return Finding("contrast.accentSymbol", at: nameToken(call), in: source, "Theme.accentSymbol is only for an Image")
         }
     }
@@ -165,7 +177,7 @@ public enum ContrastLint {
     /// `Theme.textPairs`.
     @Sendable static func surface(_ source: SyntaxSource, _ file: String) -> [Finding] {
         source.calls(named: ["fill", "background"]).compactMap { call in
-            members(in: call.arguments).contains { ["gray", "red"].contains($0.declName.baseName.text) && isSystem($0) }
+            members(in: call.arguments).contains { ["gray", "red"].contains(name($0)) && isSystem($0) }
                 ? Finding("contrast.surface", at: nameToken(call), in: source,
                           "a system color surface is not in Theme.textPairs; use a Theme surface")
                 : nil
@@ -183,7 +195,7 @@ public enum ContrastLint {
     /// Anywhere in code: the brand color comes from Theme.
     @Sendable static func orange(_ source: SyntaxSource, _ file: String) -> [Finding] {
         source.nodes(MemberAccessExprSyntax.self).compactMap { member in
-            member.declName.baseName.text == "orange"
+            name(member) == "orange"
                 ? Finding("contrast.orange", at: member.declName, in: source,
                           "the brand color comes from Theme, never the system orange")
                 : nil
@@ -195,7 +207,7 @@ public enum ContrastLint {
             guard let argument = call.arguments.first?.expression else { return nil }
             let inner = SyntaxSource.unparenthesized(argument)
             let implicit = inner.as(MemberAccessExprSyntax.self).map {
-                $0.base == nil && $0.declName.baseName.text.hasPrefix("bordered")
+                $0.base == nil && name($0).hasPrefix("bordered")
             } ?? false
             let named = inner.as(FunctionCallExprSyntax.self).flatMap(SyntaxSource.calledName)?.hasPrefix("Bordered") ?? false
             return implicit || named
@@ -210,14 +222,14 @@ public enum ContrastLint {
     /// line as a new expression, so no rule above would see its argument.
     @Sendable static func splitCall(_ source: SyntaxSource, _ file: String) -> [Finding] {
         source.nodes(MemberAccessExprSyntax.self).compactMap { member in
-            let name = member.declName.baseName
-            guard readModifiers.contains(name.text),
+            let token = member.declName.baseName
+            guard readModifiers.contains(name(member)),
                   member.parent?.as(FunctionCallExprSyntax.self)?.calledExpression.id != member.id,
-                  let next = name.nextToken(viewMode: .sourceAccurate), next.tokenKind == .leftParen,
-                  (name.trailingTrivia.pieces + next.leadingTrivia.pieces).contains(where: \.isNewline)
+                  let next = token.nextToken(viewMode: .sourceAccurate), next.tokenKind == .leftParen,
+                  (token.trailingTrivia.pieces + next.leadingTrivia.pieces).contains(where: \.isNewline)
             else { return nil }
             return Finding("contrast.splitCall", at: member.declName, in: source,
-                           ".\(member.declName.baseName.text) is not called here; put its ( on the same line")
+                           ".\(name(member)) is not called here; put its ( on the same line")
         }
     }
 
@@ -232,7 +244,7 @@ public enum ContrastLint {
         if source.isInside("HomeSplit", call),
            let list = call.calledExpression.as(MemberAccessExprSyntax.self)?.base?.as(FunctionCallExprSyntax.self),
            SyntaxSource.calledName(list) == "List", list.calledExpression.is(DeclReferenceExprSyntax.self),
-           list.arguments.first?.label?.text == "selection", list.trailingClosure != nil {
+           list.arguments.first?.label.map(SyntaxSource.name) == "selection", list.trailingClosure != nil {
             return true
         }
         return source.isInside("DoneButton", call)
@@ -240,7 +252,9 @@ public enum ContrastLint {
 
     @Sendable static func tintFillTint(_ source: SyntaxSource, _ file: String) -> [Finding] {
         source.calls(named: ["tint"]).compactMap { call in
-            guard SyntaxSource.code(call.arguments) == "Theme.tintFill", !tintsAFill(call, in: source) else { return nil }
+            guard call.arguments.count == 1,
+                  let member = call.arguments.first.flatMap({ SyntaxSource.unparenthesized($0.expression).as(MemberAccessExprSyntax.self) }),
+                  isTheme(member, "tintFill"), !tintsAFill(call, in: source) else { return nil }
             return Finding("accent.tintFillTint", at: nameToken(call), in: source,
                            "Theme.tintFill is only for the sidebar's List(selection:) in HomeSplit and DoneButton, "
                             + "where it is a fill")
@@ -250,7 +264,7 @@ public enum ContrastLint {
     /// Anything else in `tintFill` is drawn in it, words or icons.
     @Sendable static func tintFillWords(_ source: SyntaxSource, _ file: String) -> [Finding] {
         wordRule("accent.tintFillWords", "Theme.tintFill is a fill, never words", source) {
-            $0.declName.baseName.text == "tintFill" && $0.base.map(SyntaxSource.code) == "Theme"
+            isTheme($0, "tintFill")
         }
     }
 
@@ -266,14 +280,14 @@ public enum ContrastLint {
               let block = SyntaxSource.enclosingBraces(of: node)?.as(CodeBlockSyntax.self),
               let branch = block.parent?.as(IfExprSyntax.self), branch.body.id == block.id,
               branch.conditions.count == 1,
-              branch.conditions.first?.condition.as(ExprSyntax.self)?.as(DeclReferenceExprSyntax.self)?.baseName.text == "chosen"
+              branch.conditions.first?.condition.as(ExprSyntax.self)?.as(DeclReferenceExprSyntax.self).map(name) == "chosen"
         else { return false }
         return chosenIsTied(at: branch, in: source)
     }
 
     @Sendable static func onTintFill(_ source: SyntaxSource, _ file: String) -> [Finding] {
         source.nodes(DeclReferenceExprSyntax.self).compactMap { reference in
-            guard reference.baseName.text == "onTintFill", !onTheFill(reference, in: source) else { return nil }
+            guard name(reference) == "onTintFill", !onTheFill(reference, in: source) else { return nil }
             return Finding("accent.onTintFill", at: reference, in: source,
                            "Theme.onTintFill is only for words on tintFill: FillButtonStyle and HomeSplit's chosen row")
         }
@@ -300,7 +314,10 @@ public enum ContrastLint {
     }
 
     /// The declaration of `chosen` that `start` sees, found going out from
-    /// it scope by scope.
+    /// it scope by scope. Every form that binds a name counts: `let` and
+    /// `var`, `if`, `guard` and `while` conditions, a `for` pattern, a
+    /// `case .x(let chosen)`, a `catch let chosen`, and a closure's
+    /// parameters.
     static func nearestChosen(above start: Syntax) -> Chosen? {
         var child = start
         var current = start.parent
@@ -311,11 +328,13 @@ public enum ContrastLint {
                 for item in before.reversed() {
                     if let variable = item.item.as(VariableDeclSyntax.self) {
                         for binding in variable.bindings.reversed()
-                        where binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text == "chosen" {
+                        where binding.pattern.as(IdentifierPatternSyntax.self).map({ SyntaxSource.name($0.identifier) })
+                            == "chosen" {
                             // Only a `let` stays what it was set to.
                             let kept = variable.bindingSpecifier.text == "let" && binding.accessorBlock == nil
                             return kept ? .binding(value: binding.initializer?.value) : .other
                         }
+                        if variable.bindings.contains(where: { mentionsChosen($0.pattern) }) { return .other }
                     }
                     if let guardStatement = item.item.as(GuardStmtSyntax.self), binds(guardStatement.conditions) {
                         return .other
@@ -323,12 +342,18 @@ public enum ContrastLint {
                 }
             }
             if let branch = parent.as(IfExprSyntax.self), branch.body.id == child.id, binds(branch.conditions) { return .other }
-            if let loop = parent.as(ForStmtSyntax.self), loop.body.id == child.id,
-               loop.pattern.tokens(viewMode: .sourceAccurate).contains(where: { $0.text == "chosen" }) {
+            if let loop = parent.as(WhileStmtSyntax.self), loop.body.id == child.id, binds(loop.conditions) { return .other }
+            if let loop = parent.as(ForStmtSyntax.self), loop.body.id == child.id, mentionsChosen(loop.pattern) {
                 return .other
             }
-            if let closure = parent.as(ClosureExprSyntax.self), let signature = closure.signature,
-               signature.tokens(viewMode: .sourceAccurate).contains(where: { $0.text == "chosen" }) {
+            if let switchCase = parent.as(SwitchCaseSyntax.self), switchCase.statements.id == child.id,
+               mentionsChosen(switchCase.label) {
+                return .other
+            }
+            if let clause = parent.as(CatchClauseSyntax.self), clause.body.id == child.id, mentionsChosen(clause.catchItems) {
+                return .other
+            }
+            if let closure = parent.as(ClosureExprSyntax.self), let signature = closure.signature, mentionsChosen(signature) {
                 return .other
             }
             if let function = parent.as(FunctionDeclSyntax.self) {
@@ -349,18 +374,21 @@ public enum ContrastLint {
     /// The function's own `chosen` parameter, or `other` when it has none:
     /// a `chosen` outside it is no parameter of this function.
     static func parameter(in clause: FunctionParameterClauseSyntax) -> Chosen {
-        for parameter in clause.parameters where (parameter.secondName ?? parameter.firstName).text == "chosen" {
+        for parameter in clause.parameters where SyntaxSource.name(parameter.secondName ?? parameter.firstName) == "chosen" {
             return .parameter(type: SyntaxSource.code(parameter.type))
         }
         return .other
     }
 
+    /// True when a name in `node` is `chosen`, backticks aside.
+    static func mentionsChosen(_ node: some SyntaxProtocol) -> Bool {
+        node.tokens(viewMode: .sourceAccurate).contains { $0.identifier != nil && SyntaxSource.name($0) == "chosen" }
+    }
+
     static func binds(_ conditions: ConditionElementListSyntax) -> Bool {
         conditions.contains { element in
-            element.condition.as(OptionalBindingConditionSyntax.self)?.pattern.as(IdentifierPatternSyntax.self)?
-                .identifier.text == "chosen"
-                || element.condition.as(MatchingPatternConditionSyntax.self)?.pattern
-                    .tokens(viewMode: .sourceAccurate).contains { $0.text == "chosen" } == true
+            element.condition.as(OptionalBindingConditionSyntax.self).map { mentionsChosen($0.pattern) } == true
+                || element.condition.as(MatchingPatternConditionSyntax.self).map { mentionsChosen($0.pattern) } == true
         }
     }
 
@@ -387,9 +415,9 @@ public enum ContrastLint {
     @Sendable static func ink(_ source: SyntaxSource, _ file: String) -> [Finding] {
         source.calls(named: ["ink"]).compactMap { call in
             guard source.isInside("HomeSplit", call) else { return nil }
-            if call.arguments.count == 1, let argument = call.arguments.first, argument.label?.text == "chosen" {
+            if call.arguments.count == 1, let argument = call.arguments.first, argument.label.map(SyntaxSource.name) == "chosen" {
                 if isChoiceCall(argument.expression) { return nil }
-                if argument.expression.as(DeclReferenceExprSyntax.self)?.baseName.text == "chosen",
+                if argument.expression.as(DeclReferenceExprSyntax.self).map(name) == "chosen",
                    chosenIsTied(at: call, in: source) {
                     return nil
                 }
@@ -407,7 +435,7 @@ public enum ContrastLint {
     }
 
     static func mentionsDone(_ node: some SyntaxProtocol) -> Bool {
-        node.descendants(DeclReferenceExprSyntax.self).contains { $0.baseName.text == "DoneButton" }
+        node.descendants(DeclReferenceExprSyntax.self).contains { name($0) == "DoneButton" }
     }
 
     /// Done is checked only inside a `ToolbarItem`'s own closure. In a
@@ -415,12 +443,12 @@ public enum ContrastLint {
     /// for itself, or anywhere else, neither Done rule would see it.
     @Sendable static func doneInItem(_ source: SyntaxSource, _ file: String) -> [Finding] {
         source.nodes(DeclReferenceExprSyntax.self).compactMap { reference in
-            guard reference.baseName.text == "DoneButton" else { return nil }
+            guard name(reference) == "DoneButton" else { return nil }
             var current = reference.parent
             while let parent = current {
                 if let closure = parent.as(ClosureExprSyntax.self),
                    let call = closure.parent?.as(FunctionCallExprSyntax.self), call.trailingClosure?.id == closure.id,
-                   call.calledExpression.as(DeclReferenceExprSyntax.self)?.baseName.text == "ToolbarItem" {
+                   call.calledExpression.as(DeclReferenceExprSyntax.self).map(name) == "ToolbarItem" {
                     return nil
                 }
                 current = parent.parent
@@ -435,14 +463,14 @@ public enum ContrastLint {
     /// those words readable, and no other button.
     @Sendable static func confirmation(_ source: SyntaxSource, _ file: String) -> [Finding] {
         toolbarItems(source).compactMap { item in
-            guard members(in: item.arguments).contains(where: { $0.declName.baseName.text == "confirmationAction" }) else {
+            guard members(in: item.arguments).contains(where: { name($0) == "confirmationAction" }) else {
                 return nil
             }
             let content = item.trailingClosure
             let done = content.map(mentionsDone) ?? false
             let button = content.map { closure in
                 closure.descendants(FunctionCallExprSyntax.self).contains {
-                    $0.calledExpression.as(DeclReferenceExprSyntax.self)?.baseName.text == "Button"
+                    $0.calledExpression.as(DeclReferenceExprSyntax.self).map(name) == "Button"
                 }
             } ?? false
             return !done || button
@@ -461,7 +489,7 @@ public enum ContrastLint {
             guard let content = item.trailingClosure, mentionsDone(content) else { return nil }
             let modifier = SyntaxSource.climbParens(Syntax(item)).parent?.as(MemberAccessExprSyntax.self)
             let call = modifier?.parent?.as(FunctionCallExprSyntax.self)
-            let hides = modifier?.declName.baseName.text == "sharedBackgroundVisibility"
+            let hides = modifier.map(name) == "sharedBackgroundVisibility"
                 && call?.calledExpression.id == modifier?.id
                 && call.map { SyntaxSource.code($0.arguments) } == ".hidden"
             return hides ? nil

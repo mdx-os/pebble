@@ -53,7 +53,7 @@ public enum PlatformGate {
 
     static func identifiers(_ source: SyntaxSource, _ wanted: (String) -> Bool) -> [TokenSyntax] {
         source.tokens.filter { token in
-            guard case .identifier(let name) = token.tokenKind, wanted(name), !inCondition(token) else { return false }
+            guard token.identifier != nil, wanted(SyntaxSource.name(token)), !inCondition(token) else { return false }
             return !source.context(of: token).isMacOnly
         }
     }
@@ -79,7 +79,7 @@ public enum PlatformGate {
     /// `import AppKit`, in any of its forms, outside a Mac-only branch.
     @Sendable static func macOnlyImport(_ source: SyntaxSource, _ file: String) -> [Finding] {
         source.nodes(ImportDeclSyntax.self).compactMap { decl in
-            guard let module = decl.path.first?.name.text, macOnlyModules.contains(module),
+            guard let module = decl.path.first.map({ SyntaxSource.name($0.name) }), macOnlyModules.contains(module),
                   !source.context(of: decl).isMacOnly else { return nil }
             return Finding("platform.macOnlyImport", at: decl, in: source,
                            "import \(module) builds only on the Mac; put it behind #if os(macOS)")

@@ -16,7 +16,8 @@ in lint, a skill, or CI.
 ## Commands
 
 - `make verify`: everything CI runs (brand check, tests, builds, screenshots)
-- `make test`: package unit tests (Swift Testing)
+- `make test`: package unit tests (Swift Testing), PebbleKit's and then the source guards' in `Tools/GuardKit`
+- `make graph-check`: fail if swift-syntax can reach PebbleKit or the app project, named or through a dependency (part of verify). `make graph-check-test` is its self-test
 - `make build-release`: Release builds for macOS and the iOS Simulator (part of verify). Anything behind `#if DEBUG`, like the showcase, must only be used behind it too
 - `make pulse`: fetch the competitor watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
 - `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`, plus dark shots of the
@@ -43,11 +44,18 @@ in lint, a skill, or CI.
 - New code goes in a package, not in `App/`. New layers get added to
   `Package.swift` with their place in the order written down.
 - The source guards (privacy promise, contrast, accent, platform gate) read
-  Swift through `Tests/GuardScan`, one SwiftSyntax parse per file, never a
-  regex over the text. A new rule goes there with a name, a wrong case in
+  Swift through GuardScan, one SwiftSyntax parse per file, never a regex
+  over the text. They live in `Tools/GuardKit`, a test-only package that
+  reads PebbleKit by path, so swift-syntax never enters the app's package
+  graph: PebbleKit and `project.yml` never name it (`make graph-check`).
+  A new rule goes in its guard's rule list with a name, a wrong case in
   `GuardWrongCaseTests` that names it, and a `scripts/mutation-manifest.txt`
-  entry that turns it off. swift-syntax is pinned to an exact version and
-  only GuardScan uses it.
+  entry that turns it off. Rules compare names through `SyntaxSource.name`,
+  never a token's `text`, so a name in backticks is still the name.
+  swift-syntax is pinned to an exact version and only GuardScan uses it.
+- `PromiseWords` (the device promise phrases and the allow list) and
+  `SourceScan` are PebbleKit products only so GuardKit can read them. The
+  app never links them.
 
 ## Background work
 

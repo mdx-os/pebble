@@ -1,5 +1,6 @@
 import Foundation
 import GuardScan
+import PromiseWords
 import Testing
 
 /// One snippet a guard must flag, the file it is read as, and the rule
@@ -120,6 +121,9 @@ struct GuardWrongCaseTests {
         promise("staysOnDeviceDeclared", "let (name, staysOnDevice) = pair"),
         promise("staysOnDeviceDeclared", "let place: PrivacyPlace = .init(staysOnDevice: true)"),
         promise("staysOnDeviceDeclared", "public var staysOnDevice: Bool { self == .onDevice }", file: "PebbleCore/Other.swift"),
+        // In backticks, a name is the same name.
+        promise("staysOnDeviceDeclared", "struct Identity { var `staysOnDevice`: Bool }"),
+        promise("staysOnDeviceDeclared", "func `staysOnDevice`() -> Bool { true }"),
         // A type that answers any member could answer staysOnDevice unseen.
         promise("dynamicLookup", "@dynamicMemberLookup\nstruct Settings {\n"
                 + "    subscript(dynamicMember name: String) -> Bool { true }\n}\nlet line = settings.staysOnDevice"),
@@ -129,6 +133,7 @@ struct GuardWrongCaseTests {
         promise("placeMade", "let place: PrivacyPlace = .init(staysOnDevice: true)"),
         promise("placeMade", "let place = PrivacyPlace.init(staysOnDevice: true)"),
         promise("placeMade", "let place = PebbleCore.PrivacyPlace(staysOnDevice: true)"),
+        promise("placeMade", "let place = `PrivacyPlace`(`staysOnDevice`: true)"),
         promise("placeMade", "var privacyPlace: PrivacyPlace { PrivacyPlace(staysOnDevice: runsOnDevice) }",
                 file: "PebbleUI/Other.swift"),
         // A Bool called onDevice, kept, computed, passed or set.
@@ -146,6 +151,8 @@ struct GuardWrongCaseTests {
         promise("onDeviceBool", "onDevice = !place.staysOnDevice"),
         promise("onDeviceBool", "self.onDevice = flag"),
         promise("onDeviceBool", "let pair = (name: \"a\", onDevice: true)"),
+        promise("onDeviceBool", "let `onDevice` = !place.staysOnDevice"),
+        promise("onDeviceBool", "f(`onDevice`: true)"),
         // The place written out, rather than taken from the model.
         promise("placeWritten", "let place: PrivacyPlace = .onDevice"),
         promise("placeWritten", "let place = PrivacyPlace.onDevice"),
@@ -160,6 +167,9 @@ struct GuardWrongCaseTests {
         promise("placeWritten", "let kind = PrivacyPlace.self\nlet place = kind.onDevice"),
         promise("placeWritten", "public static let place = PrivacyPlace.mayLeaveDevice", file: "PebbleUI/Other.swift"),
         promise("placeWritten", "public static let place = PrivacyPlace.onDevice", file: "PebbleModel/CloudModel.swift"),
+        promise("placeWritten", "let place: PrivacyPlace = .`onDevice`"),
+        promise("placeWritten", "let place = `PrivacyPlace`.`onDevice`"),
+        promise("placeWritten", "if case .`onDevice` = place { return }"),
         // The place under another name.
         promise("placeAlias", "typealias Place = PrivacyPlace\nlet place = Place.onDevice"),
         promise("placeAlias", "typealias Place = PebbleCore.PrivacyPlace"),
@@ -179,6 +189,22 @@ struct GuardWrongCaseTests {
         // A preview's scope ends at its own closing brace, whatever opens after it.
         promise("stubMade", "#Preview { Text(\"a\") }\nstruct Screen: View {\n    var body: some View {\n"
                 + "        Text(LocalStubModel().privacyPlace.staysOnDevice ? \"a\" : \"b\")\n    }\n}"),
+        // Named as a type, its metatype taken, qualified, in backticks, or
+        // extended, it can be made with no call to its name.
+        promise("stubMade", "let model: LocalStubModel = .init()"),
+        promise("stubMade", "let models: [LocalStubModel] = [.init()]"),
+        promise("stubMade", "let made = Maker<LocalStubModel>().make()"),
+        promise("stubMade", "func screen(model: LocalStubModel) {}"),
+        promise("stubMade", "typealias Stand = LocalStubModel"),
+        promise("stubMade", "let model = LocalStubModel.self.init()"),
+        promise("stubMade", "let kind = LocalStubModel.self"),
+        promise("stubMade", "let kind: LocalStubModel.Type = type(of: other)"),
+        promise("stubMade", "let model = PebbleModel.LocalStubModel()"),
+        promise("stubMade", "let model: PebbleModel.LocalStubModel = .init()"),
+        promise("stubMade", "let model = `LocalStubModel`()"),
+        promise("stubMade", "extension LocalStubModel { static let shared = Self() }"),
+        promise("stubMade", "extension PebbleModel.LocalStubModel {}"),
+        promise("stubMade", "#Preview { Text(\"a\") }\nextension LocalStubModel { static let shared = Self() }"),
 
         // A model made anywhere but the model layer.
         promise("modelMade", "struct Here: ModelClient { var runsOnDevice: Bool { true } }"),
@@ -189,6 +215,7 @@ struct GuardWrongCaseTests {
         promise("modelMade", "protocol Local: ModelClient {}"),
         promise("modelMade", "extension ModelClient { var runsOnDevice: Bool { true } }"),
         promise("modelMade", "struct Here: Sendable & ModelClient {}"),
+        promise("modelMade", "struct Here: `ModelClient` {}"),
         // The model under another name, alone or in a composition.
         promise("modelAlias", "typealias Local = Sendable & ModelClient\nstruct Here: Local { var runsOnDevice: Bool { true } }"),
         promise("modelAlias", "typealias Local = ModelClient"),
@@ -212,6 +239,7 @@ struct GuardWrongCaseTests {
         promise("placeExtension", "extension PrivacyPlace { static var here: PrivacyPlace { onDevice } }",
                 file: "PebbleCore/PrivacyPlace.swift"),
         promise("placeExtension", "extension PrivacyPlace: CaseIterable {}", file: "PebbleCore/PrivacyPlace.swift"),
+        promise("placeExtension", "extension `PrivacyPlace` {}"),
     ] + placeMinted.map { promise("placeMember", placeOpen + $0, file: "PebbleCore/PrivacyPlace.swift") }
 
     static let placeOpen = "public enum PrivacyPlace: Sendable, Hashable {\n    case onDevice\n    case mayLeaveDevice\n"
@@ -277,6 +305,8 @@ struct GuardWrongCaseTests {
         fine("let store = try CloudHelpFileStore.onDevice()"),
         fine("#Preview {\n    ChatView(brand: brand, model: LocalStubModel())\n}"),
         fine("#Preview { Text(\"a\") }\n#Preview(\"Chat\") {\n    VStack {\n        ChatView(brand: brand, model: LocalStubModel())\n    }\n}"),
+        fine("#Preview {\n    let model: LocalStubModel = .init()\n    ChatView(brand: brand, model: model)\n}"),
+        fine("let line = LocalStubModel.fallback"),
         // Each exemption holds in its own file.
         fine("var privacyPlace: PrivacyPlace { PrivacyPlace(staysOnDevice: runsOnDevice) }", file: "PebbleModel/ModelClient.swift"),
         fine("public static let place = PrivacyPlace.mayLeaveDevice", file: "PebbleModel/CloudModel.swift"),
@@ -307,14 +337,27 @@ struct GuardWrongCaseTests {
              only: ["promise.makerKind"]),
         fine("extension PrivacyPlaceTests {}"),
         fine("// extension PrivacyPlace {}"),
-    ] + PromiseRules.stubMakers.map { fine("HomeView(brand: brand, model: LocalStubModel())", file: $0) }
+        // The stub's own makers, written out here rather than read from
+        // `stubMakers`, so a file added there is a change this suite sees.
+        fine("HomeView(brand: brand, model: LocalStubModel())", file: "App/Sources/PebbleApp.swift"),
+        fine("HomeView(brand: brand, model: LocalStubModel())", file: "PebbleUI/ShowcaseScene.swift"),
+        fine("HomeView(brand: brand, model: LocalStubModel())", file: "PebbleModel/LocalStubModel.swift"),
+        fine("let model: LocalStubModel = .init()", file: "App/Sources/PebbleApp.swift"),
+        fine("extension LocalStubModel { static let shared = Self() }", file: "PebbleModel/LocalStubModel.swift"),
+    ]
+
+    /// The files exempt from the stub rule, exactly. A file added to the
+    /// exemption fails here until it is written into this list too.
+    static let expectedStubMakers: Set<String> = [
+        "App/Sources/PebbleApp.swift",
+        "PebbleUI/ShowcaseScene.swift",
+        "PebbleModel/LocalStubModel.swift",
+    ]
 
     @Test func thePromiseGuardCatchesEveryWrongCase() {
-        check(Self.promiseWrong, Self.promiseRight, rules: Self.promiseRules) { DevicePromise.findings(in: $0, file: $1) }
+        #expect(PromiseRules.stubMakers == Self.expectedStubMakers)
+        check(Self.promiseWrong, Self.promiseRight, rules: PromiseRules.allRuleNames) { DevicePromise.findings(in: $0, file: $1) }
     }
-
-    static let promiseRules = ["promise.phrase", "promise.makerKind", "promise.placeExtension", "promise.placeMember"]
-        + (PromiseRules.placeRules + PromiseRules.modelRules).map(\.name)
 
     // MARK: The contrast guard
 
@@ -363,6 +406,16 @@ struct GuardWrongCaseTests {
         // is still caught.
         contrast("splitCall", "Text(\"Open\")\n    .foregroundStyle\n    (Theme.accent)"),
         contrast("splitCall", ".tint\n(.orange)"),
+        // In backticks, a name is the same name.
+        contrast("gray", #".foregroundStyle(.`gray`)"#),
+        contrast("rawAccent", #".foregroundStyle(Theme.`accent`)"#),
+        contrast("rawAccent", #".`foregroundStyle`(`Theme`.accent)"#),
+        contrast("white", #".foregroundStyle(Color.`white`)"#),
+        contrast("orange", #"let warm = Color.`orange`"#),
+        contrast("bordered", #".buttonStyle(.`bordered`)"#),
+        // Theme qualified by its module is still Theme.
+        contrast("rawAccent", #".foregroundStyle(PebbleUI.Theme.accent)"#),
+        contrast("accentSymbol", "Text(\"Hi\").foregroundStyle(PebbleUI.Theme.accentSymbol)"),
     ]
 
     static let contrastRight: [RightCase] = [
@@ -385,10 +438,14 @@ struct GuardWrongCaseTests {
         // Art, not words: the character's highlights.
         fine(#".fill(.white.opacity(0.35))"#),
         fine(#".foregroundStyle(Theme.white)"#),
+        fine(#".foregroundStyle(PebbleUI.Theme.accentText)"#),
+        fine(#".foregroundStyle(Theme.`secondaryText`)"#),
     ]
 
+    /// Each right case here passes every rule, the accent rules too.
     @Test func theContrastGuardCatchesEveryWrongCase() {
-        check(Self.contrastWrong, Self.contrastRight, rules: ContrastLint.contrastRules.map(\.name)) {
+        check(Self.contrastWrong, Self.contrastRight, rules: ContrastLint.contrastRules.map(\.name),
+              quiet: ContrastLint.rules.map(\.name)) {
             ContrastLint.problems(in: $0, file: $1)
         }
     }
@@ -500,6 +557,36 @@ struct GuardWrongCaseTests {
         accent("ink", split("    var body: some View {\n        Self.ink(chosen: flag) { Text(\"a\") }\n    }")),
         accent("ink", split("    let chosen = true\n    var body: some View {\n        Self.ink(chosen: chosen) { Text(\"a\") }\n    }")),
         accent("ink", "extension HomeSplit {\n    var row: some View { Self.ink(chosen: flag) { Text(\"a\") } }\n}"),
+        // A `chosen` a case, a while or a catch binds is not the parameter.
+        accent("onTintFill", split("    static func ink(chosen: Bool, row: () -> some View) -> some View {\n"
+               + "        switch state {\n        case .picked(let chosen):\n            if chosen {\n"
+               + "                row().foregroundStyle(Theme.onTintFill)\n            }\n        default:\n            row()\n"
+               + "        }\n    }")),
+        accent("onTintFill", split("    static func ink(chosen: Bool, row: () -> some View) -> some View {\n"
+               + "        switch state {\n        case let .picked(chosen):\n            if chosen {\n"
+               + "                row().foregroundStyle(Theme.onTintFill)\n            }\n        default:\n            row()\n"
+               + "        }\n    }")),
+        accent("onTintFill", split("    static func ink(chosen: Bool, row: () -> some View) -> some View {\n"
+               + "        while let chosen = next() {\n            if chosen {\n"
+               + "                row().foregroundStyle(Theme.onTintFill)\n            }\n        }\n    }")),
+        accent("onTintFill", split("    static func ink(chosen: Bool, row: () -> some View) -> some View {\n"
+               + "        do {\n            try work()\n        } catch let chosen {\n            if chosen {\n"
+               + "                row().foregroundStyle(Theme.onTintFill)\n            }\n        }\n    }")),
+        accent("ink", split("    static func ink(chosen: Bool, row: () -> some View) -> some View { row() }\n"
+               + "    static func rows(chosen: Bool) -> some View {\n        switch state {\n"
+               + "        case .picked(let chosen):\n            Self.ink(chosen: chosen) { Text(\"a\") }\n"
+               + "        default:\n            Text(\"b\")\n        }\n    }")),
+        accent("ink", split("    static func ink(chosen: Bool, row: () -> some View) -> some View { row() }\n"
+               + "    static func rows(chosen: Bool) -> some View {\n        do {\n            try work()\n"
+               + "        } catch let chosen as Flag {\n            Self.ink(chosen: chosen) { Text(\"a\") }\n        }\n    }")),
+        // In backticks, a name is the same name.
+        accent("tintFillWords", #"Text("Open").foregroundStyle(Theme.`tintFill`)"#),
+        accent("tintFillTint", #"Text("Open").tint(Theme.`tintFill`)"#),
+        accent("onTintFill", #"Text("Open").foregroundStyle(Theme.`onTintFill`)"#),
+        accent("doneRing", "`ToolbarItem`(placement: .primaryAction) {\n    `DoneButton` { dismiss() }\n}"),
+        // Theme qualified by its module is still Theme.
+        accent("tintFillWords", #"Text("Open").foregroundStyle(PebbleUI.Theme.tintFill)"#),
+        accent("tintFillTint", #"Text("Open").tint(PebbleUI.Theme.tintFill)"#),
     ]
 
     static let accentRight: [RightCase] = [
@@ -595,6 +682,15 @@ struct GuardWrongCaseTests {
         gate("macOnlyName", "#if os(iOS)\n#else\nlet task = Process()\n#endif"),
         gate("macOnlyName", "func run(_ process: Process) {}"),
         gate("macOnlyName", "DistributedNotificationCenter.default().post(name: name, object: nil)"),
+        // In backticks, a name is the same name.
+        gate("nsName", "let window = `NSWindow`()"),
+        gate("macOnlyImport", "import `AppKit`"),
+        gate("macOnlyImport", "import `Cocoa`"),
+        gate("macOnlyName", "let process = `Process`()"),
+        // Cocoa brings AppKit, and imports on Mac Catalyst as AppKit does.
+        gate("nsName", "#if canImport(Cocoa)\nlet image = NSImage()\n#endif"),
+        gate("macOnlyImport", "#if canImport(Cocoa)\nimport AppKit\n#endif"),
+        gate("nsName", "#if canImport(`Cocoa`)\nlet image = NSImage()\n#endif"),
     ]
 
     static func fineTest(_ text: String) -> RightCase { fine(text, file: "PebbleCoreTests/Right.swift") }
@@ -604,6 +700,8 @@ struct GuardWrongCaseTests {
         fineTest("#if canImport(SwiftUI)\n#if os(macOS)\nlet host = NSHostingView(rootView: Text(\"\"))\n#endif\n#endif"),
         fineTest("#if os(iOS)\nlet a = 1\n#elseif os(macOS)\nlet host = NSHostingView(rootView: Text(\"\"))\n#endif"),
         fineTest("#if canImport(AppKit) && !targetEnvironment(macCatalyst)\nlet image = NSImage()\n#endif"),
+        fineTest("#if canImport(Cocoa) && !targetEnvironment(macCatalyst)\nlet image = NSImage()\n#endif"),
+        fineTest("#if os(macOS)\nimport `Cocoa`\n#endif"),
         fineTest("#if (os(macOS))\nlet image = NSImage()\n#endif"),
         fineTest("#if(os(macOS))\nlet image = NSImage()\n#endif"),
         fineTest("#if os(iOS)\nlet a = 1\n#elseif(os(macOS))\nlet image = NSImage()\n#endif"),
@@ -634,7 +732,7 @@ struct GuardWrongCaseTests {
     /// added, or stop working, unseen.
     @Test func everyRuleHasAWrongCase() {
         let all = Self.promiseWrong + Self.contrastWrong + Self.accentWrong + Self.platformWrong
-        let rules = Self.promiseRules + ContrastLint.rules.map(\.name) + PlatformGate.rules.map(\.name)
+        let rules = PromiseRules.allRuleNames + ContrastLint.rules.map(\.name) + PlatformGate.rules.map(\.name)
         #expect(Set(rules).count == rules.count, "each rule has its own name")
         for rule in rules {
             #expect(all.contains { $0.rule == rule }, "no wrong case for \(rule)")
@@ -669,6 +767,14 @@ struct GuardWrongCaseTests {
 
 /// The scanner the guards share reads Swift as the compiler does.
 struct GuardScanTests {
+    /// A name in backticks is the same name, and code reads without them.
+    @Test func namesAreReadWithoutBackticks() {
+        let source = SyntaxSource("let `place` = `PrivacyPlace`.`onDevice`")
+        #expect(SyntaxSource.code(source.tree) == "letplace=PrivacyPlace.onDevice")
+        #expect(source.firstToken("onDevice").map(SyntaxSource.name) == "onDevice")
+        #expect(source.firstToken("`onDevice`") == nil, "found by its name, not as written")
+    }
+
     @Test func literalsAreReadAsTheProgramSeesThem() throws {
         func value(_ text: String) throws -> String { try #require(SyntaxSource(text).literals.first).value }
         #expect(try value(#"let x = "a\u{0020}b\tc""#) == "a b\tc")
@@ -702,6 +808,8 @@ struct GuardScanTests {
         #expect(!macOnly("!os(macOS)"))
         #expect(!macOnly("os(macOS) || os(iOS)"))
         #expect(!macOnly("canImport(AppKit)"))
+        #expect(!macOnly("canImport(Cocoa)"))
+        #expect(macOnly("canImport(Cocoa) && !targetEnvironment(macCatalyst)"))
         #expect(!macOnly("targetEnvironment(macCatalyst)"))
         #expect(!macOnly("DEBUG"))
         #expect(!macOnly("os(macOS) || swift(>=6.0)"))

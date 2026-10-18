@@ -1,3 +1,4 @@
+import PromiseWords
 import SwiftSyntax
 
 /// The privacy promise guard's rules. No word a person sees promises the
@@ -7,7 +8,30 @@ public enum PromiseRules {
     /// Whether a literal chain that promises the device is allowed by a
     /// written reason: its words exactly as written, its file, and the first
     /// literal in it.
-    public typealias Allows = (_ written: String, _ file: String, _ first: SyntaxSource.Literal, _ source: SyntaxSource) -> Bool
+    public typealias Allows = @Sendable (_ written: String, _ file: String, _ first: SyntaxSource.Literal,
+                                         _ source: SyntaxSource) -> Bool
+
+    /// Every promise rule, the words and the place alike, in one list. It
+    /// is what `findings` runs, so a rule that isn't here never runs, and
+    /// `allRuleNames` is read from it, so a rule that is here can't miss
+    /// its wrong case.
+    public static func rules(allows: @escaping Allows) -> [Rule] {
+        [Rule("promise.phrase") { ungated(in: $0, file: $1, allows: allows) }]
+            + placeRules + modelRules
+            + [
+                Rule("promise.makerKind") { modelMakers.contains($1) ? makerKindProblems(in: $0, file: $1) : [] },
+                Rule("promise.placeExtension") { placeExtensionProblems(in: $0, file: $1) },
+                Rule("promise.placeMember") { placeMemberProblems(in: $0, file: $1) },
+            ]
+    }
+
+    /// The name of every rule in `rules`.
+    public static var allRuleNames: [String] { rules { _, _, _, _ in false }.map(\.name) }
+
+    /// Every promise rule on one file.
+    public static func findings(in source: SyntaxSource, file: String, allows: @escaping Allows) -> [Finding] {
+        rules(allows: allows).flatMap { $0.check(source, file) }
+    }
 
     /// The only receivers the gate reads `.staysOnDevice` from.
     public static let receivers: Set<String> = ["place", "self.place", "privacyPlace", "model.privacyPlace"]
@@ -58,7 +82,7 @@ public enum PromiseRules {
     public static func isGated(_ literal: SyntaxSource.Literal, in source: SyntaxSource) -> Bool {
         guard let ternary = source.ternary(showing: literal) else { return false }
         let condition = SyntaxSource.unparenthesized(ternary.condition)
-        guard let member = condition.as(MemberAccessExprSyntax.self), member.declName.baseName.text == "staysOnDevice",
+        guard let member = condition.as(MemberAccessExprSyntax.self), SyntaxSource.name(member.declName.baseName) == "staysOnDevice",
               member.declName.argumentNames == nil, let base = member.base else { return false }
         return receivers.contains(SyntaxSource.code(base))
     }
@@ -88,7 +112,7 @@ public enum PromiseRules {
               let array = element.parent?.parent?.as(ArrayExprSyntax.self),
               let binding = array.parent?.as(InitializerClauseSyntax.self)?.parent?.as(PatternBindingSyntax.self),
               let name = binding.pattern.as(IdentifierPatternSyntax.self) else { return nil }
-        return name.identifier.text
+        return SyntaxSource.name(name.identifier)
     }
 
     // MARK: The place
@@ -117,7 +141,7 @@ public enum PromiseRules {
     @Sendable static func staysOnDeviceDeclared(_ source: SyntaxSource, _ file: String) -> [Finding] {
         guard file != placeFile else { return [] }
         return source.tokens.compactMap { token -> Finding? in
-            guard case .identifier("staysOnDevice") = token.tokenKind else { return nil }
+            guard token.identifier != nil, SyntaxSource.name(token) == "staysOnDevice" else { return nil }
             if let reference = token.parent?.as(DeclReferenceExprSyntax.self) {
                 if let member = reference.parent?.as(MemberAccessExprSyntax.self), member.declName.id == reference.id {
                     return nil
@@ -126,8 +150,7 @@ public enum PromiseRules {
             }
             if let argument = token.parent?.as(LabeledExprSyntax.self), argument.label?.id == token.id,
                let call = argument.parent?.parent?.as(FunctionCallExprSyntax.self),
-               call.calledExpression.as(DeclReferenceExprSyntax.self)?.baseName.text == "PrivacyPlace"
-                || call.calledExpression.as(MemberAccessExprSyntax.self)?.declName.baseName.text == "PrivacyPlace" {
+               SyntaxSource.calledName(call) == "PrivacyPlace" {
                 return nil
             }
             return Finding("promise.staysOnDeviceDeclared", at: token, in: source,
@@ -145,7 +168,7 @@ public enum PromiseRules {
     @Sendable static func placeWritten(_ source: SyntaxSource, _ file: String) -> [Finding] {
         guard file != placeFile, file != modelFile else { return [] }
         return source.nodes(MemberAccessExprSyntax.self).compactMap { member -> Finding? in
-            let name = member.declName.baseName.text
+            let name = SyntaxSource.name(member.declName.baseName)
             guard name == "onDevice" || name == "mayLeaveDevice" else { return nil }
             if let call = member.parent?.as(FunctionCallExprSyntax.self), call.calledExpression.id == member.id { return nil }
             if name == "mayLeaveDevice" {
@@ -181,7 +204,8 @@ public enum PromiseRules {
     /// behind it. Its signature needs one place; this keeps it so.
     @Sendable static func emptyAll(_ source: SyntaxSource, _ file: String) -> [Finding] {
         source.nodes(FunctionCallExprSyntax.self).compactMap { call in
-            guard let member = call.calledExpression.as(MemberAccessExprSyntax.self), member.declName.baseName.text == "all",
+            guard let member = call.calledExpression.as(MemberAccessExprSyntax.self),
+                  SyntaxSource.name(member.declName.baseName) == "all",
                   call.arguments.isEmpty, call.trailingClosure == nil else { return nil }
             let base = member.base.map(SyntaxSource.code)
             guard base == nil || ["PrivacyPlace", "PebbleCore.PrivacyPlace", "Self"].contains(base!) else { return nil }
@@ -198,7 +222,9 @@ public enum PromiseRules {
             let called = SyntaxSource.code(call.calledExpression)
             let makesPlace = called == "PrivacyPlace" || called.hasSuffix(".PrivacyPlace")
                 || called == "PrivacyPlace.init" || called.hasSuffix(".PrivacyPlace.init") || called == ".init"
-            guard makesPlace, call.arguments.contains(where: { $0.label?.text == "staysOnDevice" }) else { return nil }
+            guard makesPlace, call.arguments.contains(where: { $0.label.map(SyntaxSource.name) == "staysOnDevice" }) else {
+                return nil
+            }
             let arguments = SyntaxSource.code(call.arguments)
             if file == modelFile, called == "PrivacyPlace", arguments == "staysOnDevice:runsOnDevice" { return nil }
             return Finding("promise.placeMade", at: call, in: source,
@@ -210,19 +236,39 @@ public enum PromiseRules {
     /// `.onDevice` with no real model behind it, so a screen could make the
     /// device promise from `LocalStubModel().privacyPlace`. It is made only
     /// by `stubMakers` and inside a `#Preview`'s own braces, which no person
-    /// sees.
+    /// sees. Named as a type anywhere else, in a binding, a parameter, an
+    /// alias or an extension, it could be made with `.init()` or `Self()`,
+    /// so that is flagged too, and so is its metatype, `LocalStubModel.self`.
+    /// Its static members, such as `LocalStubModel.fallback`, make nothing.
     @Sendable static func stubMade(_ source: SyntaxSource, _ file: String) -> [Finding] {
         guard !stubMakers.contains(file) else { return [] }
-        return source.nodes(DeclReferenceExprSyntax.self).compactMap { reference in
-            guard reference.baseName.text == "LocalStubModel" else { return nil }
-            let called = reference.parent?.as(FunctionCallExprSyntax.self)?.calledExpression.id == reference.id
-            let member = reference.parent?.as(MemberAccessExprSyntax.self)
-            let initialized = member?.base?.id == reference.id && member?.declName.baseName.text == "init"
-            guard called || initialized, !source.context(of: reference).inPreview else { return nil }
-            return Finding("promise.stubMade", at: reference, in: source,
-                           "LocalStubModel() is made only by the app's wiring and the showcase, "
-                            + "so no screen takes its place without the real model")
+        let stub = "LocalStubModel"
+        let made = "LocalStubModel() is made only by the app's wiring and the showcase, "
+            + "so no screen takes its place without the real model"
+        var found: [Finding] = []
+        for reference in source.nodes(DeclReferenceExprSyntax.self) where SyntaxSource.name(reference.baseName) == stub {
+            // `LocalStubModel`, or `PebbleModel.LocalStubModel` as a whole.
+            var named = ExprSyntax(reference)
+            if let qualified = reference.parent?.as(MemberAccessExprSyntax.self), qualified.declName.id == reference.id {
+                named = ExprSyntax(qualified)
+            }
+            let called = named.parent?.as(FunctionCallExprSyntax.self)?.calledExpression.id == named.id
+            let member = named.parent?.as(MemberAccessExprSyntax.self)
+            let reached = member?.base?.id == named.id
+                && ["init", "self"].contains(member.map { SyntaxSource.name($0.declName.baseName) } ?? "")
+            guard called || reached, !source.context(of: reference).inPreview else { continue }
+            found.append(Finding("promise.stubMade", at: reference, in: source, made))
         }
+        let types: [(node: Syntax, name: TokenSyntax)] =
+            source.nodes(IdentifierTypeSyntax.self).map { (Syntax($0), $0.name) }
+            + source.nodes(MemberTypeSyntax.self).map { (Syntax($0), $0.name) }
+        for type in types where SyntaxSource.name(type.name) == stub && !source.context(of: type.node).inPreview {
+            let extended = type.node.parent?.as(ExtensionDeclSyntax.self)?.extendedType.id == type.node.id
+            found.append(Finding("promise.stubMade", at: type.node, in: source,
+                                 extended ? "an extension of LocalStubModel could make one anywhere, as Self(); " + made
+                                    : "LocalStubModel named as a type could be made with .init(); " + made))
+        }
+        return found.sorted { ($0.line, $0.column) < ($1.line, $1.column) }
     }
 
     /// A Bool called `onDevice`, kept, computed, passed or set, must come
@@ -236,7 +282,9 @@ public enum PromiseRules {
                                  "onDevice gets \"\(value)\", not .staysOnDevice straight from a PrivacyPlace"))
         }
         for binding in source.nodes(PatternBindingSyntax.self) {
-            guard binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text == "onDevice" else { continue }
+            guard binding.pattern.as(IdentifierPatternSyntax.self).map({ SyntaxSource.name($0.identifier) }) == "onDevice" else {
+                continue
+            }
             if let value = binding.initializer?.value {
                 if !isStraight(value) { flag(binding, SyntaxSource.code(value)) }
             } else if let accessors = binding.accessorBlock {
@@ -245,7 +293,7 @@ public enum PromiseRules {
                 flag(binding, "nothing yet")
             }
         }
-        for function in source.nodes(FunctionDeclSyntax.self) where function.name.text == "onDevice" {
+        for function in source.nodes(FunctionDeclSyntax.self) where SyntaxSource.name(function.name) == "onDevice" {
             guard let returns = function.signature.returnClause.map({ SyntaxSource.code($0.type) }), returns == "Bool" else {
                 continue
             }
@@ -255,10 +303,10 @@ public enum PromiseRules {
             }
         }
         for parameter in source.nodes(FunctionParameterSyntax.self)
-        where parameter.firstName.text == "onDevice" || parameter.secondName?.text == "onDevice" {
+        where SyntaxSource.name(parameter.firstName) == "onDevice" || parameter.secondName.map(SyntaxSource.name) == "onDevice" {
             flag(parameter, SyntaxSource.code(parameter.type) + (parameter.defaultValue.map { " " + SyntaxSource.code($0) } ?? ""))
         }
-        for argument in source.nodes(LabeledExprSyntax.self) where argument.label?.text == "onDevice" {
+        for argument in source.nodes(LabeledExprSyntax.self) where argument.label.map(SyntaxSource.name) == "onDevice" {
             if !isStraight(argument.expression) { flag(argument, SyntaxSource.code(argument.expression)) }
         }
         for infix in source.nodes(InfixOperatorExprSyntax.self) where infix.operator.is(AssignmentExprSyntax.self) {
@@ -287,8 +335,8 @@ public enum PromiseRules {
     /// read straight through names, grouping parens aside.
     static func isStraight(_ expression: ExprSyntax) -> Bool {
         let inner = SyntaxSource.unparenthesized(expression)
-        if let reference = inner.as(DeclReferenceExprSyntax.self) { return reference.baseName.text == "staysOnDevice" }
-        guard let member = inner.as(MemberAccessExprSyntax.self), member.declName.baseName.text == "staysOnDevice",
+        if let reference = inner.as(DeclReferenceExprSyntax.self) { return SyntaxSource.name(reference.baseName) == "staysOnDevice" }
+        guard let member = inner.as(MemberAccessExprSyntax.self), SyntaxSource.name(member.declName.baseName) == "staysOnDevice",
               var base = member.base else { return false }
         while true {
             if base.is(DeclReferenceExprSyntax.self) { return true }
@@ -318,7 +366,7 @@ public enum PromiseRules {
     /// True when `node` names `type`, alone or as part of a tuple,
     /// composition, array, optional or qualified name.
     static func names(_ node: some SyntaxProtocol, _ type: String) -> Bool {
-        node.tokens(viewMode: .sourceAccurate).contains { $0.tokenKind == .identifier(type) }
+        node.tokens(viewMode: .sourceAccurate).contains { $0.identifier != nil && SyntaxSource.name($0) == type }
     }
 
     // MARK: The model
@@ -333,19 +381,19 @@ public enum PromiseRules {
             found.append((Syntax(node), kind, name, modifiers.map { $0.name.text }))
         }
         for decl in source.nodes(StructDeclSyntax.self) {
-            add(decl, "struct", decl.name.text, decl.inheritanceClause, decl.modifiers)
+            add(decl, "struct", SyntaxSource.name(decl.name), decl.inheritanceClause, decl.modifiers)
         }
         for decl in source.nodes(ClassDeclSyntax.self) {
-            add(decl, "class", decl.name.text, decl.inheritanceClause, decl.modifiers)
+            add(decl, "class", SyntaxSource.name(decl.name), decl.inheritanceClause, decl.modifiers)
         }
         for decl in source.nodes(ActorDeclSyntax.self) {
-            add(decl, "actor", decl.name.text, decl.inheritanceClause, decl.modifiers)
+            add(decl, "actor", SyntaxSource.name(decl.name), decl.inheritanceClause, decl.modifiers)
         }
         for decl in source.nodes(EnumDeclSyntax.self) {
-            add(decl, "enum", decl.name.text, decl.inheritanceClause, decl.modifiers)
+            add(decl, "enum", SyntaxSource.name(decl.name), decl.inheritanceClause, decl.modifiers)
         }
         for decl in source.nodes(ProtocolDeclSyntax.self) {
-            add(decl, "protocol", decl.name.text, decl.inheritanceClause, decl.modifiers)
+            add(decl, "protocol", SyntaxSource.name(decl.name), decl.inheritanceClause, decl.modifiers)
         }
         for decl in source.nodes(ExtensionDeclSyntax.self) {
             add(decl, "extension", SyntaxSource.code(decl.extendedType), decl.inheritanceClause, decl.modifiers)
@@ -435,7 +483,7 @@ public enum PromiseRules {
     /// What `PrivacyPlace` is declared to conform to, in order, or nil when
     /// its declaration isn't found.
     public static func placeConformances(in source: SyntaxSource) -> [String]? {
-        guard let decl = source.nodes(EnumDeclSyntax.self).first(where: { $0.name.text == "PrivacyPlace" }) else {
+        guard let decl = source.nodes(EnumDeclSyntax.self).first(where: { SyntaxSource.name($0.name) == "PrivacyPlace" }) else {
             return nil
         }
         return decl.inheritanceClause?.inheritedTypes.map { SyntaxSource.code($0.type) } ?? []
@@ -447,18 +495,18 @@ public enum PromiseRules {
     /// it binds, and any other declaration by its keyword and name.
     public static func declarations(in source: SyntaxSource) -> [(node: Syntax, name: String)] {
         func labels(_ clause: FunctionParameterClauseSyntax) -> String {
-            clause.parameters.map { $0.firstName.text + ":" }.joined()
+            clause.parameters.map { SyntaxSource.name($0.firstName) + ":" }.joined()
         }
         var found: [(Syntax, String)] = []
         for decl in source.nodes(DeclSyntax.self) {
             let node = Syntax(decl)
             if let cases = decl.as(EnumCaseDeclSyntax.self) {
-                for element in cases.elements { found.append((node, "case " + element.name.text)) }
+                for element in cases.elements { found.append((node, "case " + SyntaxSource.name(element.name))) }
             } else if let initializer = decl.as(InitializerDeclSyntax.self) {
                 let mark = initializer.optionalMark?.text ?? ""
                 found.append((node, "init\(mark)(\(labels(initializer.signature.parameterClause)))"))
             } else if let function = decl.as(FunctionDeclSyntax.self) {
-                found.append((node, "func \(function.name.text)(\(labels(function.signature.parameterClause)))"))
+                found.append((node, "func \(SyntaxSource.name(function.name))(\(labels(function.signature.parameterClause)))"))
             } else if let subscriptDecl = decl.as(SubscriptDeclSyntax.self) {
                 found.append((node, "subscript(\(labels(subscriptDecl.parameterClause)))"))
             } else if let variable = decl.as(VariableDeclSyntax.self) {
@@ -468,11 +516,11 @@ public enum PromiseRules {
             } else if let scope = SyntaxSource.typeScope(node) {
                 found.append((node, scope.kind + " " + scope.name))
             } else if let alias = decl.as(TypeAliasDeclSyntax.self) {
-                found.append((node, "typealias " + alias.name.text))
+                found.append((node, "typealias " + SyntaxSource.name(alias.name)))
             } else if let associated = decl.as(AssociatedTypeDeclSyntax.self) {
-                found.append((node, "associatedtype " + associated.name.text))
+                found.append((node, "associatedtype " + SyntaxSource.name(associated.name)))
             } else if let macro = decl.as(MacroDeclSyntax.self) {
-                found.append((node, "macro " + macro.name.text))
+                found.append((node, "macro " + SyntaxSource.name(macro.name)))
             } else if decl.is(ImportDeclSyntax.self) || decl.is(IfConfigDeclSyntax.self) {
                 continue
             } else {
