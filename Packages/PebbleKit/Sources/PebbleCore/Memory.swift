@@ -129,9 +129,15 @@ public enum MemoryWords {
     // engine on this device, whatever the model is, so this is true even
     // with a cloud model. It makes no promise about the chat. Don't gate it
     // like the lines above. Forget everything forgets tasks too, so it says
-    // running ones stop, and it turns background work off and erases its
-    // summaries, kept in the same folder as the notes.
-    public static let forgetEverythingDetail = "This removes every note, every task and every morning summary from this device, stops any task still going, and turns off work while you're away. It can't be undone."
+    // running ones stop. With `background`, the screen has the switch for
+    // work while away, and it says that turns off and its summaries, kept
+    // in the same folder as the notes, are erased. Without, it never names
+    // a switch that isn't there.
+    public static func forgetEverythingDetail(background: Bool) -> String {
+        background
+            ? "This removes every note, every task and every morning summary from this device, stops any task still going, and turns off work while you're away. It can't be undone."
+            : "This removes every note and every task from this device, and stops any task still going. It can't be undone."
+    }
     /// See the note above `empty`.
     public static func privacyNote(_ place: PrivacyPlace) -> String {
         place.staysOnDevice ? "Kept only on this device. Removing a note erases it." : "Removing a note erases it."

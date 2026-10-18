@@ -110,6 +110,10 @@ public final class BackgroundService {
             time.timeIsUp()
         }
         runner.runDue(now: Date(), conditions: Self.conditions(budget: 20), time: time)
+        // And again now the run moved the job on, before the app can be
+        // suspended: the watch's own ask waits for a later turn of the main
+        // actor, which may not come until the next launch.
+        plan()
         task.setTaskCompleted(success: true)
     }
     #endif

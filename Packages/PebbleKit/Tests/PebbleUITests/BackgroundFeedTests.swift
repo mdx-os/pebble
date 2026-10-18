@@ -2,6 +2,7 @@
 import Foundation
 import PebbleCore
 import PebbleModel
+import SourceScan
 import SwiftUI
 import Testing
 @testable import PebbleUI
@@ -21,19 +22,39 @@ struct BackgroundFeedTests {
         return calendar.date(byAdding: .day, value: days, to: base)!
     }
 
-    private func runner(on: Bool, needsYou: NeedsYou? = nil,
-                        store: BackgroundStore = BackgroundStore(fileURL: FileManager.default.temporaryDirectory
-                            .appendingPathComponent("background-ui-\(UUID().uuidString).json"))) -> BackgroundRunner {
-        let runner = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(), needsYou: needsYou,
-                                      watchingSince: .distantPast, calendar: Self.calendar)
+    static let note = ProposedAction(kind: .send,
+                                     recipient: Recipient(id: "c:1", displayName: "Sam", handle: "sam@example.com"),
+                                     details: "See you at 4")
+
+    /// Needs you with one question open, so a summary has something to
+    /// say: a quiet morning leaves no card.
+    static func oneWaiting() -> NeedsYou {
+        let asks = NeedsYou(rule: .isolated())
+        asks.ask(note, at: at(6, 50))
+        return asks
+    }
+
+    private func scratchStore() -> BackgroundStore {
+        BackgroundStore(fileURL: FileManager.default.temporaryDirectory
+            .appendingPathComponent("background-ui-\(UUID().uuidString).json"))
+    }
+
+    private func runner(on: Bool, needsYou: NeedsYou? = BackgroundFeedTests.oneWaiting(),
+                        store: BackgroundStore? = nil) -> BackgroundRunner {
+        let runner = BackgroundRunner(store: store ?? scratchStore(), toggle: InMemoryBackgroundSwitch(),
+                                      needsYou: needsYou, watchingSince: .distantPast, calendar: Self.calendar)
         if on { runner.turnOn(now: Self.at(6)) }
         return runner
     }
 
+    /// Today's model, in front unless a test says otherwise, as the scene
+    /// tells it once it is active.
     private func model(_ runner: BackgroundRunner, needsYou: NeedsYou = NeedsYou(rule: .isolated()),
-                       now: @escaping () -> Date) -> FeedModel {
-        FeedModel(sources: [EmptyFeedSource()], needsYou: needsYou, place: .onDevice, background: runner,
-                  calendar: Self.calendar, now: now)
+                       inFront: Bool = true, now: @escaping () -> Date) -> FeedModel {
+        let model = FeedModel(sources: [EmptyFeedSource()], needsYou: needsYou, place: .onDevice, background: runner,
+                              calendar: Self.calendar, now: now)
+        model.inFront = inFront
+        return model
     }
 
     private func scratchMemory() -> MemoryStore {
@@ -54,20 +75,28 @@ struct BackgroundFeedTests {
         model.refresh()
         let card = try #require(model.feed.groups.first?.items.first)
         #expect(card.title == BackgroundWords.summaryTitle)
-        #expect(card.kind == .did)
+        #expect(card.kind == .ready)
         #expect(!model.isSample(card))
     }
 
     /// Away from the screen, Today's refresh leaves background work to the
-    /// platform's own run, which knows if the device is locked.
-    @Test func todayRunsNothingWhileTheAppIsAway() {
+    /// platform's own run, which knows if the device is locked. A fresh
+    /// model counts as away until the scene says it is active, since a
+    /// scene may be built during a launch in the background.
+    @Test func todayRunsNothingUntilTheSceneIsActive() async {
         let runner = runner(on: true)
-        let model = model(runner) { Self.at(8) }
-        model.inFront = false
-        model.refresh()
+        let fresh = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: .isolated()), place: .onDevice,
+                              background: runner, calendar: Self.calendar, now: { Self.at(8) })
+        #expect(!fresh.inFront)
+        fresh.refresh()
+        // The loop that keeps Today fresh refreshes at once, and runs nothing either.
+        let loop = Task { await fresh.keepFresh(sleep: { _ in throw CancellationError() }) }
+        await loop.value
         #expect(runner.results.isEmpty)
-        model.inFront = true
-        model.refresh()
+        #expect(runner.queue.first?.held == nil, "nothing claimed as held for a run it never tried")
+
+        fresh.inFront = true
+        fresh.refresh()
         #expect(runner.results.count == 1)
     }
 
@@ -86,10 +115,7 @@ struct BackgroundFeedTests {
 
     /// A summary with something in it opens to read, in the usual reader.
     @Test func aSummaryWithSomethingInItOpensToRead() throws {
-        let asks = NeedsYou(rule: .isolated())
-        asks.ask(ProposedAction(kind: .send,
-                                recipient: Recipient(id: "c:1", displayName: "Sam", handle: "sam@example.com"),
-                                details: "See you at 4"), at: Self.at(6, 50))
+        let asks = Self.oneWaiting()
         let runner = runner(on: true, needsYou: asks)
         let model = model(runner, needsYou: asks) { Self.at(7, 5) }
         model.refresh()
@@ -150,7 +176,10 @@ struct BackgroundFeedTests {
 
     /// If the summaries' file can't be erased, the line says so rather
     /// than read as done, and Forget everything stays to try again.
-    @Test func aSummaryFileThatCantBeErasedIsSaid() throws {
+    /// Root ignores file permissions, so the file would be erased and the
+    /// test would pass without showing anything.
+    @Test(.enabled(if: geteuid() != 0, "file permissions don't hold for root"))
+    func aSummaryFileThatCantBeErasedIsSaid() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("background-ro-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer {
@@ -174,10 +203,13 @@ struct BackgroundFeedTests {
         #expect(!memory.hasSomethingToForget)
     }
 
-    /// Off until the person turns it on. On, it says when the next is due.
+    /// Off until the person turns it on. On, it says when the next is due,
+    /// and VoiceOver hears it, since that line appears away from the switch.
     @Test func theSwitchIsOffUntilTurnedOnAndSaysWhenTheNextIsDue() {
         let runner = runner(on: false)
         let memory = MemoryModel(store: scratchMemory(), place: .onDevice, background: runner, now: { Self.at(9) })
+        var heard: [String] = []
+        memory.announce = { heard.append($0) }
         #expect(!memory.backgroundOn)
         #expect(memory.backgroundNext == nil)
 
@@ -185,12 +217,63 @@ struct BackgroundFeedTests {
         #expect(runner.isOn)
         #expect(memory.backgroundOn)
         #expect(runner.queue.first?.due == Self.at(7, days: 1))
-        #expect(memory.backgroundNext == BackgroundWords.nextDue(Self.at(7, days: 1), now: Self.at(9)))
+        let next = BackgroundWords.nextDue(Self.at(7, days: 1), now: Self.at(9))
+        #expect(memory.backgroundNext == next)
+        #expect(heard == [next])
 
         memory.setBackground(false)
         #expect(!runner.isOn)
         #expect(runner.queue.isEmpty)
         #expect(memory.backgroundNext == nil)
+        #expect(heard == [next], "nothing more to say when it turns off")
+    }
+
+    /// The app wires no task engine yet, so the line under the switch, read
+    /// as the person turns it on, doesn't promise what finished. With an
+    /// engine, it does.
+    @Test func theSwitchPromisesWhatFinishedOnlyWithTasksToCount() throws {
+        let app = try String(contentsOf: SwiftSource.repositoryRoot(from: #filePath)
+            .appendingPathComponent("App/Sources/PebbleApp.swift"), encoding: .utf8)
+        #expect(app.contains("private let tasks: (any TaskEngine)? = nil"), "the app wires no engine yet")
+        #expect(app.contains("BackgroundRunner.onDevice(needsYou: asks, tasks: tasks)"))
+
+        let store = scratchStore()
+        defer { try? store.forget() }
+        let wired = try #require(BackgroundRunner.onDevice(needsYou: NeedsYou(rule: .isolated()), tasks: nil,
+                                                           store: { store }, toggle: InMemoryBackgroundSwitch()))
+        let asTheAppHasIt = MemoryModel(store: scratchMemory(), place: .onDevice, background: wired)
+        #expect(!asTheAppHasIt.backgroundDetail.contains("finished"))
+        #expect(asTheAppHasIt.backgroundDetail
+            == BackgroundWords.settingDetail(whileClosed: BackgroundRow.runsWhileClosed, countsTasks: false))
+
+        let rule = AskFirst.isolated()
+        let withTasks = BackgroundRunner(store: scratchStore(), toggle: InMemoryBackgroundSwitch(),
+                                         needsYou: NeedsYou(rule: rule), tasks: LocalFakeEngine(rule: rule))
+        let counting = MemoryModel(store: scratchMemory(), place: .onDevice, background: withTasks)
+        #expect(counting.backgroundDetail.contains("what finished overnight"))
+    }
+
+    /// The memory screen follows the runner: turned on in another window,
+    /// or a card made in Today, it shows here without waiting to come back.
+    @Test func theMemoryScreenFollowsTheRunner() async {
+        let runner = runner(on: false)
+        let memory = MemoryModel(store: scratchMemory(), place: .onDevice, background: runner, now: { Self.at(9) })
+        #expect(!memory.backgroundOn)
+        #expect(!memory.hasSomethingToForget)
+
+        // Another window turns it on and Today makes a card.
+        runner.turnOn(now: Self.at(6))
+        runner.runDue(now: Self.at(7), conditions: .foreground)
+        for _ in 0..<100 where !memory.hasSomethingToForget { await Task.yield() }
+        #expect(memory.backgroundOn)
+        #expect(memory.backgroundNext != nil)
+        #expect(memory.hasSomethingToForget)
+    }
+
+    /// Forget everything names work while away only where there is a switch for it.
+    @Test func forgetEverythingNamesBackgroundWorkOnlyWhenThereIsSome() {
+        #expect(MemoryWords.forgetEverythingDetail(background: true).contains("work while you're away"))
+        #expect(!MemoryWords.forgetEverythingDetail(background: false).contains("away"))
     }
 
     /// No runner, no switch: the memory screen is as it was.

@@ -168,8 +168,10 @@ final class HomeLayoutUITests: XCTestCase {
     /// Background work is off until the person turns it on, and then the
     /// screen says when the next summary is due. The whole row is the
     /// target, at the usual text size and the largest, so the switch turns
-    /// on through its element, not a point at its edge. What it promises
-    /// is its own element, so VoiceOver reads it with hints off.
+    /// on through its element; a tap right on the knob at its trailing
+    /// edge turns it over exactly once too. What it promises is its own
+    /// element, so VoiceOver reads it with hints off, and with no tasks to
+    /// count, as in the app today, it doesn't promise what finished.
     func testBackgroundWorkIsOffUntilTurnedOn() throws {
         for textSize in [nil, "UICTContentSizeCategoryAccessibilityXXXL"] {
             let app = launch("memory", textSize: textSize)
@@ -183,12 +185,22 @@ final class HomeLayoutUITests: XCTestCase {
             let detail = app.staticTexts["backgroundDetail"]
             XCTAssertTrue(detail.exists)
             XCTAssertTrue(detail.label.contains("without asking you first"))
+            XCTAssertFalse(detail.label.contains("finished"), "no tasks to count, so no promise about them")
             toggle.tap()
             XCTAssertTrue(app.staticTexts["backgroundNext"].waitForExistence(timeout: 5))
             XCTAssertEqual(toggle.value as? String, "1", "one tap, turned on once")
             toggle.tap()
             XCTAssertTrue(app.staticTexts["backgroundNext"].waitForNonExistence(timeout: 5))
             XCTAssertEqual(toggle.value as? String, "0")
+            // Right on the knob, where a switch and a row gesture could both fire.
+            let knob = toggle.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5))
+                .withOffset(CGVector(dx: -20, dy: 0))
+            knob.tap()
+            XCTAssertTrue(app.staticTexts["backgroundNext"].waitForExistence(timeout: 5))
+            XCTAssertEqual(toggle.value as? String, "1", "one tap on the knob, turned on once")
+            knob.tap()
+            XCTAssertTrue(app.staticTexts["backgroundNext"].waitForNonExistence(timeout: 5))
+            XCTAssertEqual(toggle.value as? String, "0", "and off once")
             app.terminate()
         }
     }

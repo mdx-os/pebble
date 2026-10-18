@@ -214,10 +214,14 @@ public struct MorningSummary: Codable, Sendable, Equatable {
     /// in `questions` too. Nil `questions` means Needs you couldn't be
     /// seen, so nothing waiting is counted; nil `tasks` means there were
     /// no tasks to see, so nothing finished is counted.
+    ///
+    /// What is waiting is open now, so it is known whenever it can be seen.
+    /// What finished is about the whole window, so it is known only if
+    /// the tasks were watched for all of it: `watchedWindow`.
     public static func count(questions: [FeedItem]?, tasks: [AgentTask]?, since: Date, now: Date,
-                             late: BackgroundHold?) -> MorningSummary {
+                             late: BackgroundHold?, watchedWindow: Bool = true) -> MorningSummary {
         let window = since...now
-        let ended = tasks?.filter { !$0.isActive && window.contains($0.updatedAt) }
+        let ended = watchedWindow ? tasks?.filter { !$0.isActive && window.contains($0.updatedAt) } : nil
         let waitingTasks = tasks?.filter { $0.state == .waitingOnYou }
         let taskQuestions = Set((waitingTasks ?? []).compactMap { $0.question?.id })
         let asks = questions?.filter { item in
@@ -265,6 +269,7 @@ public struct BackgroundResult: Codable, Sendable, Equatable, Identifiable {
         switch content {
         case .morningSummary(let summary):
             let body = BackgroundWords.summaryBody(summary, now: madeAt, calendar: calendar, locale: locale)
+            // The runner no longer leaves quiet ones; a file from before may hold one.
             guard !summary.isQuiet else {
                 return FeedItem(id: id, kind: .did, time: madeAt, title: BackgroundWords.summaryTitle, body: body)
             }
@@ -303,15 +308,23 @@ public struct BackgroundState: Codable, Sendable, Equatable {
 }
 
 /// Whether background work is on. Off until the person turns it on.
+///
+/// It also keeps when the next job is due: only a time, nothing of the
+/// person's, so it can live where a launch while locked can read it and
+/// ask the system for the right time rather than guess.
 public protocol BackgroundSwitch: Sendable {
     var isOn: Bool { get }
     func set(_ on: Bool)
+    /// The soonest job's due time, as last known. Nil with nothing queued.
+    var nextDue: Date? { get }
+    func setNextDue(_ due: Date?)
 }
 
 /// The switch, saved in `UserDefaults`. Readable while the device is
 /// locked, so a run in the night knows whether it may go ahead.
 public struct UserDefaultsBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
     public static let key = "backgroundWork.on"
+    public static let nextDueKey = "backgroundWork.nextDue"
     private let defaults: UserDefaults
 
     public init(defaults: UserDefaults = .standard) {
@@ -320,15 +333,22 @@ public struct UserDefaultsBackgroundSwitch: BackgroundSwitch, @unchecked Sendabl
 
     public var isOn: Bool { defaults.bool(forKey: Self.key) }
     public func set(_ on: Bool) { defaults.set(on, forKey: Self.key) }
+
+    public var nextDue: Date? { defaults.object(forKey: Self.nextDueKey) as? Date }
+    public func setNextDue(_ due: Date?) {
+        if let due { defaults.set(due, forKey: Self.nextDueKey) } else { defaults.removeObject(forKey: Self.nextDueKey) }
+    }
 }
 
 /// A switch held in memory, for tests and screenshots.
 public final class InMemoryBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
     private let lock = NSLock()
     private var on: Bool
+    private var due: Date?
 
-    public init(on: Bool = false) {
+    public init(on: Bool = false, nextDue: Date? = nil) {
         self.on = on
+        due = nextDue
     }
 
     public var isOn: Bool {
@@ -339,6 +359,17 @@ public final class InMemoryBackgroundSwitch: BackgroundSwitch, @unchecked Sendab
     public func set(_ on: Bool) {
         lock.lock()
         self.on = on
+        lock.unlock()
+    }
+
+    public var nextDue: Date? {
+        lock.lock(); defer { lock.unlock() }
+        return due
+    }
+
+    public func setNextDue(_ due: Date?) {
+        lock.lock()
+        self.due = due
         lock.unlock()
     }
 }
@@ -499,9 +530,10 @@ public final class BackgroundRunner: @unchecked Sendable {
     private var loaded = false
     /// Changes not yet written, as while the device was locked.
     private var unsaved = false
-    /// Holds made before the file could be read, by job kind, so the card
-    /// can still say why once it can.
-    private var heldBeforeLoad: [BackgroundJobKind: BackgroundHold] = [:]
+    /// Holds made before the file could be read, by job kind, with when,
+    /// so the card can still say why once it can. A hold from before the
+    /// job was due held nothing back, and is never said.
+    private var heldBeforeLoad: [BackgroundJobKind: (hold: BackgroundHold, at: Date)] = [:]
     /// Turned on or off before the file could be read. The queue saved in
     /// the file then follows this, so an old queue never comes back.
     private var switchedBeforeLoad: Bool?
@@ -583,10 +615,15 @@ public final class BackgroundRunner: @unchecked Sendable {
     }
 
     /// Turns it off. The queue goes, so nothing more runs, and any question
-    /// it asked is withdrawn. Cards already made stay until they are forgotten.
+    /// it asked is withdrawn. Cards already made stay until they are
+    /// forgotten. The next summary after turning on again counts from the
+    /// evening before it, never across the days it was off.
     public func turnOff() {
         toggle.set(false)
-        change(switching: false) { $0.queue.removeAll() }
+        change(switching: false) { state in
+            state.queue.removeAll()
+            state.lastSummary = nil
+        }
         withdrawProposals()
     }
 
@@ -608,8 +645,9 @@ public final class BackgroundRunner: @unchecked Sendable {
 
     /// When the platform should give the runner time next. Nil while off
     /// or with nothing queued. While on with a file that can't be read
-    /// yet, as on a launch while locked, a little later: the queue is
-    /// still in the file, so the ask must not be cancelled.
+    /// yet, as on a launch while locked, the queue is still in the file,
+    /// so the ask must not be cancelled: it asks for the due time the
+    /// switch keeps, or a little later if that has come or isn't known.
     public func nextWake(now: Date) -> Date? {
         guard isOn else { return nil }
         lock.lock()
@@ -617,7 +655,10 @@ public final class BackgroundRunner: @unchecked Sendable {
         let isLoaded = loaded
         let queue = state.queue
         lock.unlock()
-        guard isLoaded else { return now + BackgroundPlan.retryAfterHold }
+        guard isLoaded else {
+            if let due = toggle.nextDue, due > now { return due }
+            return now + BackgroundPlan.retryAfterHold
+        }
         return BackgroundPlan.nextWake(for: queue, now: now)
     }
 
@@ -646,7 +687,7 @@ public final class BackgroundRunner: @unchecked Sendable {
             // The file can't be opened, so neither can anything be written.
             // Remember why, for the card that comes later.
             if conditions.locked || conditions.moment == .background {
-                for kind in BackgroundJobKind.allCases { heldBeforeLoad[kind] = .locked }
+                for kind in BackgroundJobKind.allCases { heldBeforeLoad[kind] = (.locked, now) }
             }
             lock.unlock()
             return []
@@ -655,7 +696,7 @@ public final class BackgroundRunner: @unchecked Sendable {
         var changed = false
         for index in state.queue.indices {
             var job = state.queue[index]
-            if job.held == nil, let held = heldBeforeLoad[job.kind], job.due <= now { job.held = held }
+            if job.held == nil, let held = heldBeforeLoad[job.kind], held.at >= job.due { job.held = held.hold }
             // At most twice: a missed job moves to this morning and may run now.
             for _ in 0..<2 {
                 var decision = BackgroundPlan.decide(job, now: now, conditions: conditions, calendar: calendar)
@@ -674,7 +715,7 @@ public final class BackgroundRunner: @unchecked Sendable {
                     changed = true
                     continue
                 case .run:
-                    made.append(run(job, now: now, questions: questions, tasks: taskList))
+                    if let result = run(job, now: now, questions: questions, tasks: taskList) { made.append(result) }
                     job.due = BackgroundPlan.nextMorning(after: now, calendar: calendar)
                     job.held = nil
                     changed = true
@@ -692,25 +733,27 @@ public final class BackgroundRunner: @unchecked Sendable {
         if pruned != state.results { state.results = pruned; changed = true }
         if changed { unsaved = true }
         saveIfNeeded()
+        syncNextDue()
         lock.unlock()
         if changed { didChange() }
         return made
     }
 
     /// One job's run, with the lock held. Nil `questions` or `tasks` has
-    /// nothing to count from.
-    private func run(_ job: BackgroundJob, now: Date, questions: [FeedItem]?, tasks: [AgentTask]?) -> BackgroundResult {
+    /// nothing to count from. Nil back on a quiet morning: nothing was
+    /// waiting and nothing finished, so there is no card to leave.
+    private func run(_ job: BackgroundJob, now: Date, questions: [FeedItem]?, tasks: [AgentTask]?) -> BackgroundResult? {
         switch job.kind {
         case .morningSummary:
             // Since the last summary, or the evening before this one was due.
             let since = state.lastSummary ?? job.due - 12 * 60 * 60
-            // What lives in memory saw the whole window only if it was
-            // watching from its start. If not, its counts are unknown.
-            let watched = watchingSince <= since
-            let summary = MorningSummary.count(questions: watched ? questions : nil,
-                                               tasks: watched ? tasks : nil, since: since, now: now,
-                                               late: job.held)
+            // What is waiting is open now, so it counts whenever it can be
+            // seen. What finished lives in memory, so it is known only if
+            // it was watched from the window's start.
+            let summary = MorningSummary.count(questions: questions, tasks: tasks, since: since, now: now,
+                                               late: job.held, watchedWindow: watchingSince <= since)
             state.lastSummary = now
+            guard !summary.isQuiet else { return nil }
             return BackgroundResult(madeAt: now, content: .morningSummary(summary))
         }
     }
@@ -786,6 +829,7 @@ public final class BackgroundRunner: @unchecked Sendable {
     /// was in memory is gone either way.
     public func forget() throws {
         toggle.set(false)
+        toggle.setNextDue(nil)
         withdrawProposals()
         lock.lock()
         state = .empty
@@ -821,8 +865,26 @@ public final class BackgroundRunner: @unchecked Sendable {
         }
         if changed { unsaved = true }
         saveIfNeeded()
+        syncNextDue()
         lock.unlock()
         if changed { didChange() }
+    }
+
+    /// With the lock held. Keeps the soonest due time beside the switch,
+    /// so a launch that can't read the file still asks for the right time.
+    /// Before the file is read, turning on keeps the sooner of the two:
+    /// the file's job keeps its time once it can be read.
+    private func syncNextDue() {
+        let soonest = state.queue.map(\.due).min()
+        let due: Date?
+        if !toggle.isOn {
+            due = nil
+        } else if loaded {
+            due = soonest
+        } else {
+            due = [toggle.nextDue, soonest].compactMap { $0 }.min()
+        }
+        if toggle.nextDue != due { toggle.setNextDue(due) }
     }
 
     /// With the lock held. A file that can't be opened yet is left for
@@ -840,7 +902,9 @@ public final class BackgroundRunner: @unchecked Sendable {
                 state.results = saved.results.filter { !ids.contains($0.id) } + state.results
                 state.lastSummary = [state.lastSummary, saved.lastSummary].compactMap { $0 }.max()
                 switch switchedBeforeLoad {
-                case false?: state.queue = []
+                case false?:
+                    state.queue = []
+                    state.lastSummary = nil
                 case true?:
                     if saved.queue.contains(where: { $0.kind == .morningSummary }) { state.queue = saved.queue }
                 case nil: state.queue = saved.queue
@@ -853,6 +917,7 @@ public final class BackgroundRunner: @unchecked Sendable {
             // What waited for the file goes into it now, so the next launch
             // reads it too.
             saveIfNeeded()
+            syncNextDue()
         } catch {
             // Locked. Try again next time.
         }
@@ -1045,20 +1110,32 @@ public enum BackgroundWords {
     /// What the switch does, true for where it runs. The system decides
     /// when an iPhone or iPad app gets time while closed, so the line says
     /// "when I can" and names the catch up that always happens.
-    public static func settingDetail(whileClosed: Bool) -> String {
-        whileClosed
-            ? "Each morning I'll put a short summary in Today of what's waiting for you and what finished overnight. I make it in the background when I can, or as soon as you open the app. I never send, buy or share anything without asking you first."
-            : "Each morning I'll put a short summary in Today of what's waiting for you and what finished overnight. I make it while the app is open, even with no window showing, or as soon as you come back. I never send, buy or share anything without asking you first."
+    ///
+    /// It names what finished only when `countsTasks`: the runner has tasks
+    /// to count. Without them no summary could ever say it, so the line
+    /// the person reads as they turn it on doesn't promise it. A quiet
+    /// morning leaves no card, so it says "when there's something".
+    public static func settingDetail(whileClosed: Bool, countsTasks: Bool) -> String {
+        let what = countsTasks
+            ? "When there's something to tell you in the morning, I'll put a short summary in Today of what's waiting for you and what finished overnight."
+            : "When there's something to tell you in the morning, I'll put a short summary in Today of what's waiting for you."
+        let when = whileClosed
+            ? "I make it in the background when I can, or as soon as you open the app."
+            : "I make it while the app is open, even with no window showing, or as soon as you come back."
+        return [what, when, askFirst].joined(separator: " ")
     }
 
-    /// Under the switch while it is on: "The next one is due at 7:00 AM tomorrow."
+    static let askFirst = "I never send, buy or share anything without asking you first."
+
+    /// Under the switch while it is on: "I'll look next at 7:00 AM tomorrow."
+    /// It says when it looks, not that a card comes: a quiet morning leaves none.
     public static func nextDue(_ due: Date, now: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
         let time = clock(due, calendar: calendar, locale: locale)
-        if due <= now { return "The next one is due now." }
-        if calendar.isDate(due, inSameDayAs: now) { return "The next one is due at \(time) today." }
+        if due <= now { return "I'll look as soon as I can." }
+        if calendar.isDate(due, inSameDayAs: now) { return "I'll look next at \(time) today." }
         if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(due, inSameDayAs: tomorrow) {
-            return "The next one is due at \(time) tomorrow."
+            return "I'll look next at \(time) tomorrow."
         }
-        return "The next one is due \(weekday(due, calendar: calendar, locale: locale)) at \(time)."
+        return "I'll look next on \(weekday(due, calendar: calendar, locale: locale)) at \(time)."
     }
 }

@@ -218,7 +218,9 @@ struct HomeScreen: View {
         // Questions time out on their own. Looked after here, above Today,
         // so the count beside Today stays true from any place.
         .task { await feed.keepFresh() }
-        .onChange(of: scenePhase) { _, phase in
+        // From the first phase too, so a scene built during a launch in the
+        // background never counts as the person being here.
+        .onChange(of: scenePhase, initial: true) { _, phase in
             feed.inFront = phase == .active
             if phase == .active { feed.refresh() }
         }

@@ -74,7 +74,7 @@ public struct MemoryView: View {
                     }
                     if model.background != nil {
                         BackgroundRow(isOn: Binding(get: { model.backgroundOn }, set: { model.setBackground($0) }),
-                                      nextDue: model.backgroundNext)
+                                      detail: model.backgroundDetail, nextDue: model.backgroundNext)
                             .padding(.top, 8)
                     }
                     if model.hasSomethingToForget {
@@ -111,7 +111,7 @@ public struct MemoryView: View {
             Button(MemoryWords.forgetEverythingTitle, role: .destructive) { model.forgetEverything() }
             Button(MemoryWords.cancelTitle, role: .cancel) {}
         } message: {
-            Text(MemoryWords.forgetEverythingDetail)
+            Text(MemoryWords.forgetEverythingDetail(background: model.background != nil))
         }
         .confirmationDialog(
             MemoryWords.forgetOneQuestion,
@@ -264,6 +264,8 @@ struct MemoryUnavailableView: View {
 /// the next summary is due while it is on.
 struct BackgroundRow: View {
     @Binding var isOn: Bool
+    /// What the switch does, from `MemoryModel.backgroundDetail`.
+    let detail: String
     let nextDue: String?
     @Environment(\.colorScheme) private var scheme
 
@@ -279,21 +281,34 @@ struct BackgroundRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Toggle(isOn: $isOn) {
-                Text(BackgroundWords.settingTitle)
-                    .font(.body.weight(.medium))
+            // One control for the whole row, so the target stays large at
+            // any text size and a tap anywhere, the knob included, turns it
+            // over exactly once. The switch inside only shows the state.
+            Button { isOn.toggle() } label: {
+                HStack(spacing: 12) {
+                    Text(BackgroundWords.settingTitle)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Toggle(BackgroundWords.settingTitle, isOn: .constant(isOn))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        // The brand's warmth, as everywhere else, wherever this screen is shown.
+                        .tint(Theme.accentText)
+                        .allowsHitTesting(false)
+                }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
             }
-            // The brand's warmth, as everywhere else, wherever this screen is shown.
-            .tint(Theme.accentText)
-            // The whole row turns it on and off, not just the switch at
-            // its end, so the target stays large at any text size.
-            .frame(minHeight: 44)
-            .contentShape(Rectangle())
-            .onTapGesture { isOn.toggle() }
+            .buttonStyle(.plain)
+            // Read as the switch it looks like, with its title and state.
+            .accessibilityRepresentation {
+                Toggle(BackgroundWords.settingTitle, isOn: $isOn)
+            }
             .accessibilityIdentifier("backgroundSwitch")
             // Its own element, read right after the switch, so VoiceOver
             // users hear that it asks first even with hints turned off.
-            Text(BackgroundWords.settingDetail(whileClosed: Self.runsWhileClosed))
+            Text(detail)
                 .font(.footnote)
                 .foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -445,15 +460,27 @@ final class MemoryModel: ObservableObject {
     /// Background work, whose switch sits on this screen. Nil hides it.
     let background: BackgroundRunner?
     @Published private(set) var backgroundOn = false
-    /// "The next one is due at 7:00 AM tomorrow." while it is on.
+    /// "I'll look next at 7:00 AM tomorrow." while it is on.
     @Published private(set) var backgroundNext: String?
     /// True while background work has a file or cards, so Forget everything
     /// shows even with no notes, and the summaries can always be removed.
     @Published private(set) var hasBackgroundToForget = false
     private let now: () -> Date
+    /// This model's watch on `background`, so a card made in Today, or the
+    /// switch turned in another window, shows here at once.
+    private var backgroundWatch: BackgroundRunner.Observation?
+    /// Speaks a line to VoiceOver. Tests listen in.
+    var announce: @MainActor (String) -> Void = { AccessibilityNotification.Announcement($0).post() }
 
     /// Forget everything shows while there is anything for it to remove.
     var hasSomethingToForget: Bool { hasStoredFile || hasBackgroundToForget }
+
+    /// What the switch does, true for where it runs and for what the runner
+    /// counts: what finished is named only when it has tasks to count.
+    var backgroundDetail: String {
+        BackgroundWords.settingDetail(whileClosed: BackgroundRow.runsWhileClosed,
+                                      countsTasks: background?.tasks != nil)
+    }
 
     init(store: MemoryStore, place: PrivacyPlace, background: BackgroundRunner? = nil,
          now: @escaping () -> Date = { Date() },
@@ -464,13 +491,23 @@ final class MemoryModel: ObservableObject {
         self.now = now
         self.onForgetEverything = onForgetEverything
         refresh()
+        backgroundWatch = background?.observe { [weak self] in
+            Task { @MainActor in self?.refreshBackground() }
+        }
     }
 
-    /// Turns background work on or off. On, the summary is due the next morning.
+    deinit {
+        if let backgroundWatch { background?.stopObserving(backgroundWatch) }
+    }
+
+    /// Turns background work on or off. On, the summary is due the next
+    /// morning, and VoiceOver hears when, since the line saying so appears
+    /// away from the switch it just turned.
     func setBackground(_ on: Bool) {
         guard let background else { return }
         if on { background.turnOn(now: now()) } else { background.turnOff() }
         refreshBackground()
+        if on, let next = backgroundNext { announce(next) }
     }
 
     func refreshBackground() {

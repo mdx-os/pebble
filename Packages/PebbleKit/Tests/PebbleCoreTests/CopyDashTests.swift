@@ -30,7 +30,8 @@ struct CopyDashTests {
         MemoryWords.forgetTitle, MemoryWords.forgetEverythingTitle, MemoryWords.forgotten,
         MemoryWords.needsWords, MemoryWords.tooLong, MemoryWords.editTitle, MemoryWords.saveTitle,
         MemoryWords.cancelTitle, MemoryWords.doneTitle, MemoryWords.addPlaceholder, MemoryWords.addTitle,
-        MemoryWords.forgetEverythingQuestion, MemoryWords.forgetEverythingDetail,
+        MemoryWords.forgetEverythingQuestion, MemoryWords.forgetEverythingDetail(background: true),
+        MemoryWords.forgetEverythingDetail(background: false),
         MemoryWords.unreadable, MemoryWords.unavailable, MemoryWords.couldNotOpen, MemoryWords.tryAgainTitle,
         MemoryWords.forgetOneQuestion, MemoryWords.editPlaceholder, MemoryWords.couldNotForget,
         MemoryWords.couldNotForgetNotes,
@@ -98,10 +99,15 @@ struct CopyDashTests {
         #expect(MemoryWords.forgotten == "Gone. I no longer have it.")
         // Forget everything says it stops tasks, and the tasks-only fallback
         // says the notes are left alone.
-        #expect(MemoryWords.forgetEverythingDetail.contains("every task"))
-        #expect(MemoryWords.forgetEverythingDetail.contains("stops any task still going"))
-        // And it says background work stops too, as `BackgroundRunner.forget` does.
-        #expect(MemoryWords.forgetEverythingDetail.contains("turns off work while you're away"))
+        for background in [true, false] {
+            #expect(MemoryWords.forgetEverythingDetail(background: background).contains("every task"))
+            #expect(MemoryWords.forgetEverythingDetail(background: background).contains("stops any task still going"))
+        }
+        // And it says background work stops too, as `BackgroundRunner.forget`
+        // does, only where there is background work to stop.
+        #expect(MemoryWords.forgetEverythingDetail(background: true).contains("turns off work while you're away"))
+        #expect(!MemoryWords.forgetEverythingDetail(background: false).contains("away"))
+        #expect(!MemoryWords.forgetEverythingDetail(background: false).contains("summary"))
         #expect(TaskWords.forgetTasksDetail.contains("stops any task still going"))
         #expect(TaskWords.forgetTasksDetail.hasSuffix("Your notes aren't touched."))
         #expect(CareCheck.reply.contains("988"))

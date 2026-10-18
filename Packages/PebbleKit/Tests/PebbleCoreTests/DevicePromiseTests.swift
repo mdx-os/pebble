@@ -45,6 +45,10 @@ enum DevicePromise {
                     + "the chat goes. Notes live only in MemoryStore's local file, tasks only in the engine in this "
                     + "process, and summaries only in BackgroundStore's file beside the notes, whatever the model is, "
                     + "so it is true with a cloud model too."),
+        Allowed(file: "PebbleCore/Memory.swift",
+                literal: "This removes every note and every task from this device, and stops any task still going. It can't be undone.",
+                reason: "MemoryWords.forgetEverythingDetail with no background work: where the notes and tasks are, "
+                    + "not where the chat goes, so it is true with a cloud model too."),
         Allowed(file: "PebbleCore/Tasks.swift",
                 literal: "This stops any task still going, and removes every task and what you told me for it from this device. It can't be undone. Your notes aren't touched.",
                 reason: "TaskWords.forgetTasksDetail names where the tasks are erased from, not that nothing left. "
@@ -80,7 +84,8 @@ enum DevicePromise {
     /// Lines the copy lists hold that the guard lets by, each with its
     /// entry in `allowed` for the reason.
     static let allowedLines: [String] = [
-        MemoryWords.forgetEverythingDetail,
+        MemoryWords.forgetEverythingDetail(background: true),
+        MemoryWords.forgetEverythingDetail(background: false),
         TaskWords.forgetTasksDetail,
         FeedWords.sampleNote(.mayLeaveDevice),
     ]

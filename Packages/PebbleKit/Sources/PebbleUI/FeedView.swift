@@ -201,8 +201,10 @@ final class FeedModel: ObservableObject {
     /// True while the app is active, so the person is here and the device
     /// unlocked. `keepFresh` may tick once more as the app leaves the
     /// screen, perhaps as it locks; background work then waits for the
-    /// platform's own run, which knows whether it is locked.
-    var inFront = true
+    /// platform's own run, which knows whether it is locked. False until
+    /// the scene says it is active, since a scene may be built during a
+    /// launch in the background, while locked.
+    var inFront = false
 
     private func rebuild() {
         let next = Feed.build(from: sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
