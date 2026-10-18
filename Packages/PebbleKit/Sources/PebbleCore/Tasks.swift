@@ -228,6 +228,9 @@ public enum TaskApproval: Sendable, Equatable {
     /// Not for this task's open question, already used, or not the question
     /// that was asked. Nothing was done.
     case refused
+    /// `AskFirst` honored it, so it is spent, but what it was for couldn't
+    /// be done and nothing was kept. The task ended, and its card says why.
+    case notKept
 }
 
 /// Does long work for the person and reports each step.
@@ -637,6 +640,9 @@ public enum TaskWords {
     public static let yesNotUsed = "That yes didn't go through, so I didn't act on it."
     /// Approve tapped after the question timed out on screen. Nothing was done.
     public static let questionTimedOut = "That question timed out, so I didn't act on it."
+    /// Kept on Today when a task couldn't start, as while what tasks keep
+    /// still won't open. Nothing was started or kept.
+    public static let couldNotStart = "Sorry, I couldn't start that just now, so nothing was started. Please try again in a moment."
 
     /// Forgetting tasks when the notes can't be opened, so Forget everything
     /// isn't there. Honest that the notes stay.

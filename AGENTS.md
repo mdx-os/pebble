@@ -146,6 +146,9 @@ Things no test here can reach. Check each on a real iPhone before a release.
   the app as a notification opens. `NeedsYouFlowModelTests` guards this.
 - `onReceive` of a `@Published` publisher replays its value each time the
   body runs. To react to a change, observe the object and use `onChange`.
+- `DeviceTaskEngine` follows the notes whatever the model. Gate only
+  starting a task on `place.staysOnDevice`, never making the engine, or a
+  forgotten note's line stays in a kept digest after a model switch.
 
 ## Never
 

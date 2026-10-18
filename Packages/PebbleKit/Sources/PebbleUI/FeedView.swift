@@ -89,6 +89,9 @@ final class FeedModel: ObservableObject {
     /// Kept on Today after a file that couldn't be read was cleared, until
     /// the person has read it.
     @Published private(set) var clearedUnreadable: String?
+    /// Kept on Today when the engine couldn't start a task from its offer,
+    /// until the person has read it or a task starts.
+    @Published private(set) var couldNotStart: String?
     private let clock: () -> ContinuousClock.Instant
     /// Says a line to VoiceOver. Tests replace it to hear what would be said.
     var announce: @MainActor (TaskAnnouncer.Line) -> Void = FeedModel.post
@@ -339,13 +342,24 @@ final class FeedModel: ObservableObject {
     /// Starts one of the engine's own tasks from its offer on Today. The
     /// offer goes once its task is going, taking VoiceOver's place with it,
     /// so the task's first step is said at once.
+    /// The engine reads what it keeps first, if it hasn't yet. One that
+    /// still couldn't start it leaves a line here, never silence.
     func start(_ request: TaskRequest) {
         guard let tasks, tasks.builtIns.contains(request) else { return }
         let id = tasks.start(request)
         refresh()
-        if let task = tasks.tasks.first(where: { $0.id == id }), let line = announcer.started(task, at: clock()) {
-            announce(line)
+        guard let task = tasks.tasks.first(where: { $0.id == id }) else {
+            couldNotStart = TaskWords.couldNotStart
+            announce(TaskAnnouncer.Line(text: TaskWords.couldNotStart, urgent: true))
+            return
         }
+        couldNotStart = nil
+        if let line = announcer.started(task, at: clock()) { announce(line) }
+    }
+
+    /// The person has read that a task couldn't start.
+    func dismissCouldNotStart() {
+        couldNotStart = nil
     }
 
     /// Asks the tasks whether a forgotten or changed note's words stayed in
@@ -652,6 +666,11 @@ final class FeedModel: ObservableObject {
                 // between, the step is known to be under way and is never
                 // asked about or run again.
                 if let flow, let keeper = tasks as? any KeepsTasks { flow.store.keep(keeper, now: now()) }
+            case .notKept:
+                // Spent, so a second tap is quiet too. The card says why
+                // nothing was kept.
+                usedYes.insert(approval.id)
+                if let flow, let keeper = tasks as? any KeepsTasks { flow.store.keep(keeper, now: now()) }
             case .refused: refusedBy = id
             case .timedOut: break
             }
@@ -798,6 +817,11 @@ struct FeedView: View {
                     if let line = model.clearedUnreadable {
                         ForgotUnderwayNotice(line: line, onDismiss: model.dismissClearedUnreadable,
                                              identifier: "clearedUnreadable")
+                            .transition(Motion.arrival(reduceMotion: reduceMotion))
+                    }
+                    if let line = model.couldNotStart {
+                        ForgotUnderwayNotice(line: line, onDismiss: model.dismissCouldNotStart,
+                                             identifier: "couldNotStart")
                             .transition(Motion.arrival(reduceMotion: reduceMotion))
                     }
                     if model.feed.isEmpty {
@@ -1178,8 +1202,9 @@ struct FocusScroller: View {
 }
 
 /// What stays on Today after Forget everything, while a step the person
-/// said yes to may have happened, or after a file that couldn't be read
-/// was cleared. One plain line and a way to put it away.
+/// said yes to may have happened, after a file that couldn't be read was
+/// cleared, or when a task couldn't start. One plain line and a way to put
+/// it away.
 struct ForgotUnderwayNotice: View {
     let line: String
     let onDismiss: () -> Void

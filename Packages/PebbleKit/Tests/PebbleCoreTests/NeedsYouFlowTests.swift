@@ -578,7 +578,9 @@ struct NeedsYouFlowTests {
         let text = try String(contentsOf: root.appendingPathComponent("Packages/PebbleKit/Sources/PebbleCore/TaskStore.swift"),
                               encoding: .utf8)
         let writes = SwiftSource(text).calls(named: ["write"]).filter { $0.arguments.hasPrefix("to:") }
-        #expect(writes.count == 3, "\(writes.map(\.arguments))")
+        // The file, the probe that finds a locked device before there is a
+        // file, the nudge choice and the marker.
+        #expect(writes.count == 4, "\(writes.map(\.arguments))")
         for call in writes {
             #expect(["Self.fileWriting()", "Self.choiceWriting()", "Self.markerWriting()"].contains { call.arguments.contains($0) },
                     "\(call.arguments)")

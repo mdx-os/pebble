@@ -59,8 +59,8 @@ struct DeviceTaskEngineTests {
     /// The engine as the app makes it, with steps left to the test. Each
     /// opens the task store afresh, as a relaunch would.
     func engine() throws -> DeviceTaskEngine {
-        try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: openStore(), rule: rule,
-                                          pace: nil, clock: clock.now))
+        OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: openStore(), rule: rule,
+                             pace: nil, clock: clock.now)
     }
 
     /// The app's one task store, over the file in this test's folder.
@@ -88,10 +88,41 @@ struct DeviceTaskEngineTests {
 
     // MARK: On device only
 
-    @Test func aModelThatMayLeaveTheDeviceGetsNoEngine() {
-        #expect(OnDeviceTasks.engine(model: LeavesTheDevice(), notes: notes, store: openStore()) == nil)
-        let engine = OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: openStore(), rule: rule, pace: nil)
-        #expect(engine?.place == LocalStubModel().privacyPlace)
+    /// With a model that may send words away nothing is offered, and a
+    /// start fails at once: no note is read, nothing is asked or kept.
+    @Test func aModelThatMayLeaveTheDeviceStartsNoTask() throws {
+        let away = OnDeviceTasks.engine(model: LeavesTheDevice(), notes: notes, store: openStore(), rule: rule, pace: nil)
+        #expect(!away.place.staysOnDevice)
+        #expect(away.builtIns.isEmpty)
+        let before = notes.notes()
+        let id = away.start(DigestTask.request)
+        for _ in 0..<3 { away.runPending() }
+        let task = try #require(away.tasks.first { $0.id == id })
+        #expect(task.state == .failed)
+        #expect(task.question == nil)
+        #expect(task.step == TaskWords.failed)
+        #expect(task.history.isEmpty, "no note was read")
+        #expect(notes.notes() == before)
+        let here = OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: openStore(), rule: rule, pace: nil)
+        #expect(here.place == LocalStubModel().privacyPlace)
+        #expect(here.builtIns == [DigestTask.request])
+    }
+
+    /// A kept digest still loses a forgotten note's line after the model
+    /// is switched to one that may send words away: following the notes
+    /// never waits on the model.
+    @Test func aForgottenNoteLeavesTheDigestWhateverTheModel() throws {
+        let kept: MemoryNote = try {
+            let (_, _, kept) = try keepDigest()
+            return kept
+        }()
+        let away = OnDeviceTasks.engine(model: LeavesTheDevice(), notes: notes, store: openStore(), rule: rule,
+                                        pace: nil, clock: clock.now)
+        let sam = try #require(notes.notes().first { $0.text.hasPrefix("Sam's") })
+        #expect(try notes.forget(sam.id))
+        #expect(away.forgetQuotes(of: sam) == .forgotten)
+        #expect(notes.notes().first { $0.id == kept.id }?.text == DigestWords.heading + ".\n• Dentist on Thursday at 3 (From Calendar)")
+        #expect(!notes.notes().contains { $0.text.contains("lemon cake") })
     }
 
     /// The place is never written by hand. The engine is made only from an
@@ -100,10 +131,11 @@ struct DeviceTaskEngineTests {
     /// there is: its place is the model's, every time.
     @Test func theFactoryTakesThePlaceFromTheModel() throws {
         let first = try engine()
-        let second = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: openStore(),
-                                                       rule: rule, pace: nil))
+        let second = OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: openStore(), rule: rule, pace: nil)
+        let away = OnDeviceTasks.engine(model: LeavesTheDevice(), notes: notes, store: openStore(), rule: rule, pace: nil)
         #expect(first.place == LocalStubModel().privacyPlace)
         #expect(second.place == LocalStubModel().privacyPlace)
+        #expect(away.place == LeavesTheDevice().privacyPlace)
         #expect(first.place.staysOnDevice)
     }
 
@@ -629,14 +661,15 @@ struct DeviceTaskEngineTests {
 
     /// Keeps a digest, lets its task go with a task file that can't be
     /// read, and forgets a note it quoted on the memory screen's path.
-    /// Which line is whose isn't known then, so the words are only looked
-    /// for, and found, and never called gone.
-    func forgetAfterLettingGo(_ how: LetGo) throws {
+    /// Which line is whose isn't known then, so a line goes only word for
+    /// word, and the words are never called gone. Returns the digest note
+    /// as it was kept, and the note as it is now.
+    func forgetAfterLettingGo(_ how: LetGo) throws -> (kept: MemoryNote, now: MemoryNote?) {
         let (left, _, kept) = try letGo(how)
         let sam = try #require(notes.notes().first { $0.text.hasPrefix("Sam's") })
         #expect(try notes.forget(sam.id))
-        #expect(left.forgetQuotes(of: sam) == .stayed)
-        #expect(notes.notes().first { $0.id == kept.id } == kept)
+        #expect(left.forgetQuotes(of: sam) == .mayHaveStayed)
+        return (kept, notes.notes().first { $0.id == kept.id })
     }
 
     /// A digest whose first line the person changed, then put away, is
@@ -667,18 +700,41 @@ struct DeviceTaskEngineTests {
         #expect(engine.forgetQuotes(of: old) == .notQuoted)
     }
 
+    /// A task file that won't open, as while the device is locked: no look
+    /// can be made, so nothing changes and nothing is called gone.
     @Test(.fileModesHoldOrCI, .failsAsRoot)
     func aDigestFromATaskFileLeftUnreadIsNeverCalledClean() throws {
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: tasksFile.path) }
         let file = tasksFile
-        try forgetAfterLettingGo(.relaunch {
+        let (kept, now) = try forgetAfterLettingGo(.relaunch {
             try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
         })
+        #expect(now == kept)
     }
 
-    @Test func aDigestFromATaskFileThatCantBeReadIsNeverCalledClean() throws {
+    /// A task file that can't be understood: the forgotten note's line,
+    /// word for word, leaves the plain digest, and the rest stays.
+    @Test func aDigestFromATaskFileThatCantBeReadLosesTheLine() throws {
         let file = tasksFile
-        try forgetAfterLettingGo(.relaunch { try Data("not tasks".utf8).write(to: file) })
+        let (_, now) = try forgetAfterLettingGo(.relaunch { try Data("not tasks".utf8).write(to: file) })
+        #expect(now?.text == DigestWords.heading + ".\n• Dentist on Thursday at 3 (From Calendar)")
+        #expect(!notes.notes().contains { $0.text.contains("lemon cake") })
+    }
+
+    /// A digest no task knows of loses a note's line even when another
+    /// writer forgets the note and only the look that change brings sees
+    /// it, and goes once no line is left. One the person changed is theirs.
+    @Test func aPlainDigestNoTaskKnowsOfLosesALineWhoeverForgetsTheNote() throws {
+        let (engine, _, kept) = try keepDigest()
+        engine.clear()
+        let sam = try #require(notes.notes().first { $0.text.hasPrefix("Sam's") })
+        // Another writer, whose change the engine hears only from the store.
+        _ = try MemoryStore(fileURL: notes.fileURL).forget(sam.id)
+        engine.refresh()
+        #expect(notes.notes().first { $0.id == kept.id }?.text == DigestWords.heading + ".\n• Dentist on Thursday at 3 (From Calendar)")
+        let dentist = try #require(notes.notes().first { $0.text.hasPrefix("Dentist") })
+        #expect(try notes.forget(dentist.id))
+        #expect(!notes.notes().contains { $0.id == kept.id })
     }
 
     /// A digest a task file that couldn't be read may have known of, and
@@ -707,19 +763,44 @@ struct DeviceTaskEngineTests {
         #expect(engine.forgetQuotes(of: plumber) == .notQuoted)
     }
 
-    /// Forgetting every task while a kept digest stays in the notes keeps
-    /// its words from being called gone: no task knows its lines then.
+    /// Forgetting every task while a kept digest stays in the notes: a
+    /// forgotten note's line still leaves it, word for word, but its words
+    /// are never called gone, since no task knows its lines then.
     @Test func forgettingEveryTaskButNotTheNotesKeepsTheDigestLookedIn() throws {
         let (engine, _, kept) = try keepDigest()
         engine.clear()
         let sam = try #require(notes.notes().first { $0.text.hasPrefix("Sam's") })
         #expect(try notes.forget(sam.id))
-        #expect(engine.forgetQuotes(of: sam) == .stayed)
-        #expect(notes.notes().first { $0.id == kept.id } == kept)
+        #expect(engine.forgetQuotes(of: sam) == .mayHaveStayed)
+        #expect(notes.notes().first { $0.id == kept.id }?.text == DigestWords.heading + ".\n• Dentist on Thursday at 3 (From Calendar)")
     }
 
-    /// Notes that can't be read when a note's earlier words are named: it
-    /// says they stay, and takes them out at the next look that can read.
+    /// The same after a relaunch, when nothing in memory says the tasks
+    /// were forgotten: the digest no task knows of still loses the line.
+    @Test func aDigestLeftWhenEveryTaskWasForgottenLosesTheLineAfterARelaunch() throws {
+        let kept: MemoryNote = try {
+            let (engine, _, kept) = try keepDigest()
+            engine.clear()
+            return kept
+        }()
+        let again = try engine()
+        #expect(again.tasks.isEmpty)
+        let sam = try #require(notes.notes().first { $0.text.hasPrefix("Sam's") })
+        #expect(try notes.forget(sam.id))
+        #expect(again.forgetQuotes(of: sam) == .forgotten)
+        #expect(notes.notes().first { $0.id == kept.id }?.text == DigestWords.heading + ".\n• Dentist on Thursday at 3 (From Calendar)")
+        #expect(!notes.notes().contains { $0.text.contains("lemon cake") })
+        // And on the memory screen's path alone, with the words given.
+        let third = try engine()
+        let dentist = try #require(notes.notes().first { $0.text.hasPrefix("Dentist") })
+        _ = try MemoryStore(fileURL: notes.fileURL).forget(dentist.id)
+        #expect(third.forgetQuotes(of: dentist) == .forgotten)
+        #expect(!notes.notes().contains { $0.id == kept.id })
+    }
+
+    /// Notes that can't be read when a note's earlier words are named: no
+    /// look can be made, so it says they may stay, never that they went,
+    /// and takes them out at the next look that can read.
     @Test(.fileModesHoldOrCI, .failsAsRoot)
     func earlierWordsNamedWhileTheNotesAreLockedGoOnceTheyOpen() throws {
         let kept = try keepDigest().2
@@ -730,7 +811,7 @@ struct DeviceTaskEngineTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: notes.fileURL.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: notes.fileURL.path) }
         let engine = try engine()
-        #expect(engine.forgetQuotes(of: sam) == .stayed)
+        #expect(engine.forgetQuotes(of: sam) == .mayHaveStayed)
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: notes.fileURL.path)
         engine.refresh()
         #expect(notes.notes().first { $0.id == kept.id }?.text == DigestWords.heading + ".\n• Dentist on Thursday at 3 (From Calendar)")
@@ -1076,8 +1157,8 @@ struct DeviceTaskEngineTests {
 
     @Test func aWeekWithNoNotesEndsWithoutAsking() throws {
         let empty = MemoryStore(fileURL: folder.appendingPathComponent("empty.json"))
-        let engine = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: empty, store: openStore(),
-                                                       rule: rule, pace: nil, clock: clock.now))
+        let engine = OnDeviceTasks.engine(model: LocalStubModel(), notes: empty, store: openStore(),
+                                          rule: rule, pace: nil, clock: clock.now)
         engine.start(DigestTask.request)
         for _ in 0..<3 { engine.runPending() }
         let task = try #require(engine.tasks.first)
@@ -1093,5 +1174,86 @@ struct DeviceTaskEngineTests {
         engine.start(TaskRequest(title: "Book a table"))
         #expect(engine.tasks.first?.state == .failed)
         #expect(engine.tasks.first?.step == DigestWords.cantDoThatYet)
+    }
+
+    /// A line with nothing between the mark and its bracket is never taken
+    /// for a note's line, and a digest holding one is left as it is.
+    @Test(arguments: ["• (You told me)", "• ()", "• (", "•  (Inferred)"])
+    func aLineWithNoWordsIsNeverANotesLine(_ line: String) {
+        #expect(!DigestTask.couldBeLine(line))
+        let gone = UUID()
+        let written = DigestTask.Written(text: "", quoted: [gone], more: [])
+        #expect(DigestTask.dropping([gone], from: DigestWords.heading + ".\n" + line, as: written, lines: [:]) == .cantTell)
+        #expect(DigestTask.stripping(["• Dentist (You told me)"], from: DigestWords.heading + ".\n" + line) == .cantTell)
+    }
+
+    /// Only a plain digest loses lines by their words, only whole lines
+    /// go, the count stays, and one with no note's line left goes.
+    @Test func aPlainDigestLosesOnlyWholeLines() {
+        let one = "• Dentist on Thursday at 3 (You told me)", two = "• Call Sam (From Calendar)"
+        let digest = [DigestWords.heading + ".", one, two, DigestWords.andMore(2)].joined(separator: "\n")
+        #expect(DigestTask.isPlain(digest))
+        #expect(DigestTask.stripping([one], from: digest)
+            == .edited([DigestWords.heading + ".", two, DigestWords.andMore(2)].joined(separator: "\n")))
+        #expect(DigestTask.stripping([one, two], from: digest) == .emptied)
+        #expect(DigestTask.stripping(["• Dentist on Thursday (You told me)"], from: digest) == .notThere)
+        #expect(DigestTask.stripping([one], from: digest + " Busy week.") == .cantTell)
+        #expect(DigestTask.stripping([one], from: "My week\n" + one) == .cantTell)
+    }
+
+    /// A yes that couldn't be used to keep anything is spent, and the
+    /// engine says nothing was kept, never that it went on.
+    @Test func aSaveThatFailsSaysNothingWasKept() throws {
+        final class Failing: @unchecked Sendable {
+            let lock = NSLock()
+            var on = false
+        }
+        let failing = Failing()
+        let breakable = MemoryStore(fileURL: notes.fileURL, writer: ProtectedWriter { data, url, protection in
+            if failing.lock.withLock({ failing.on }) { throw CocoaError(.fileWriteNoPermission) }
+            try ProtectedWriter.disk.write(data, url, protection)
+        })
+        let engine = OnDeviceTasks.engine(model: LocalStubModel(), notes: breakable, store: openStore(), rule: rule,
+                                          pace: nil, clock: clock.now)
+        let (task, question) = try runToQuestion(engine)
+        guard case .approved(let approval) = rule.sayYes(to: question) else { throw ApprovalMissing() }
+        let before = notes.notes()
+        failing.lock.withLock { failing.on = true }
+        #expect(engine.resume(task.id, with: approval) == .notKept)
+        #expect(notes.notes() == before)
+        let ended = try #require(engine.tasks.first { $0.id == task.id })
+        #expect(ended.state == .failed)
+        #expect(ended.step == DigestWords.couldNotSave)
+        // The same yes again does nothing.
+        #expect(engine.resume(task.id, with: approval) == .refused)
+    }
+
+    /// Once the notes are forgotten, as by Forget everything after the
+    /// tasks, the engine holds none of their words in memory, though the
+    /// probe reaches what it does hold.
+    @Test(arguments: [false, true])
+    func forgettingTheNotesLeavesNoneOfTheirWordsInTheEngine(tasksFirst: Bool) throws {
+        let (engine, _, kept) = try keepDigest()
+        let held = StoredWords(in: engine)
+        #expect(held.contains("Dentist on Thursday at 3"), "the probe reaches the words the engine holds")
+        #expect(held.ids.contains(kept.id))
+        if tasksFirst { engine.clear() }
+        try notes.forgetEverything()
+        let after = StoredWords(in: engine)
+        for words in Self.draftWords where words != "• " {
+            #expect(!after.contains(words), "\(words) in the engine")
+        }
+        // With the card still there, the probe reaches it after too.
+        if !tasksFirst { #expect(after.contains(DigestTask.title), "the probe reaches the cards") }
+    }
+
+    /// The place the digest goes is named inside a sentence, so it reads
+    /// as plain words, not as a title.
+    @Test func theDigestsPlaceReadsInsideASentence() {
+        let name = DigestTask.notes.displayName
+        #expect(name == "your notes")
+        #expect(ReceiptWords.title(.save, name) == "Kept in your notes")
+        #expect(ReceiptWords.clearLabel(.save, name) == "Clear what was kept in your notes")
+        #expect(ReceiptWords.cleared(.save, name) == "Cleared what was kept in your notes.")
     }
 }

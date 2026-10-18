@@ -140,10 +140,60 @@ public enum DigestTask {
         guard line.hasPrefix("• "), line.hasSuffix(")"), let open = line.range(of: " (", options: .backwards) else {
             return false
         }
+        // The bracket may sit right after the mark, with no words between.
+        let start = line.index(line.startIndex, offsetBy: 2)
+        guard open.lowerBound >= start else { return false }
         let label = String(line[open.upperBound..<line.index(before: line.endIndex)])
-        let body = String(line[line.index(line.startIndex, offsetBy: 2)..<open.lowerBound])
+        let body = String(line[start..<open.lowerBound])
         let fits = body.count <= lineLimit || (body.count == lineLimit + 3 && body.hasSuffix("..."))
         return isLabel(label) && fits && !body.isEmpty && body == tidy(body)
+    }
+
+    /// True when `text` is a digest as `write` gives it: the heading, then
+    /// only lines with the shape every note's line has, and at most a last
+    /// line counting the notes left out. It holds no words but its notes'
+    /// lines, so a line can be found in it by its words alone.
+    package static func isPlain(_ text: String) -> Bool {
+        var lines = text.components(separatedBy: "\n")
+        guard lines.first == DigestWords.heading + "." else { return false }
+        lines.removeFirst()
+        if let last = lines.last, isCount(last) { lines.removeLast() }
+        return lines.allSatisfy(couldBeLine)
+    }
+
+    /// True for a line `DigestWords.andMore` can give.
+    static func isCount(_ line: String) -> Bool {
+        guard let count = Int(line.filter(\.isNumber)), count > 0 else { return false }
+        return line == DigestWords.andMore(count)
+    }
+
+    /// What taking lines out of a digest no task knows of leaves.
+    package enum Stripped: Equatable, Sendable {
+        /// The digest without those lines. Never longer than it was.
+        case edited(String)
+        /// No note's line would be left, so the digest goes too.
+        case emptied
+        /// None of those lines is in it.
+        case notThere
+        /// It isn't a plain digest, as when the person changed it, so
+        /// nothing is taken out: it is theirs.
+        case cantTell
+    }
+
+    /// Takes each line in `gone` out of `text`, a digest whose lines
+    /// aren't known, as one kept by tasks that were forgotten or whose
+    /// file couldn't be read. Only a plain digest is changed, and only by
+    /// whole lines word for word the same as a gone note's line. Nothing
+    /// new is added, and the count of notes left out stays as it is.
+    package static func stripping(_ gone: Set<String>, from text: String) -> Stripped {
+        guard isPlain(text) else { return .cantTell }
+        var lines = text.components(separatedBy: "\n")
+        let before = lines.count
+        // The heading and the count never have a note's line shape.
+        lines.removeAll { $0.hasPrefix("• ") && gone.contains($0) }
+        guard lines.count != before else { return .notThere }
+        guard lines.contains(where: { $0.hasPrefix("• ") }) else { return .emptied }
+        return .edited(lines.joined(separator: "\n"))
     }
 
     /// True for any label `MemorySource.label` can give.
@@ -245,8 +295,9 @@ public enum DigestWords {
     public static let cantDoThatYet = "Sorry, I can't do that one yet."
     /// A task that was going when the app closed. It is never called done.
     public static let stoppedWhenClosed = "I stopped when the app closed, so I didn't finish this."
-    /// Who the question names as the place the digest goes.
-    public static let yourNotes = "Your notes"
+    /// Who the question names as the place the digest goes. Said inside a
+    /// sentence, as in "Kept in your notes".
+    public static let yourNotes = "your notes"
     /// The digest's first line, also how an earlier digest is told apart.
     public static let heading = "This week in your notes"
     public static func andMore(_ count: Int) -> String {

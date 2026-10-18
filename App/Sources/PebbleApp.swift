@@ -14,8 +14,9 @@ struct PebbleApp: App {
     private let model = LocalStubModel()
     /// The real task engine: on this device only, reading the same notes,
     /// its tasks kept in `kept`, the one task store. Shared by Today and the
-    /// background runner, so the summary counts the tasks Today shows. None
-    /// when the notes can't be opened.
+    /// background runner, so the summary counts the tasks Today shows. It
+    /// follows the notes whatever the model, and starts tasks only with one
+    /// that keeps every word here. None when the notes can't be opened.
     private let tasks: DeviceTaskEngine?
     /// Off until the person turns it on, and unavailable while
     /// Config/Cloud.local.xcconfig has no address. Its settings and private
@@ -49,7 +50,7 @@ struct PebbleApp: App {
         let kept = (try? TaskStore.onDevice()) ?? TaskStore.forgetOnly()
         self.kept = kept
         let model = self.model
-        let tasks = memory.flatMap { OnDeviceTasks.engine(model: model, notes: $0, store: kept) }
+        let tasks = memory.map { OnDeviceTasks.engine(model: model, notes: $0, store: kept) }
         self.tasks = tasks
         let endpoint = CloudEndpoint.url(infoDictionary: Bundle.main.infoDictionary)
         // The setting is kept next to the notes. If either can't be opened,

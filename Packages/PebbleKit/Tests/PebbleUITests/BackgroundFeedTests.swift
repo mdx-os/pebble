@@ -614,8 +614,7 @@ struct BackgroundFeedTests {
 
         let notes = scratchMemory()
         let kept = TaskStore(fileURL: Scratch.url("tasks-ui"), forgetMarker: Scratch.url("tasks-forgotten-ui"))
-        let engine = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: kept,
-                                                       rule: asks.rule, pace: nil))
+        let engine = OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: kept, rule: asks.rule, pace: nil)
         let wiring = BackgroundWiring.app(needsYou: asks, tasks: engine, store: { store },
                                           toggle: { InMemoryBackgroundSwitch() })
         #expect(wiring.tasks === engine)

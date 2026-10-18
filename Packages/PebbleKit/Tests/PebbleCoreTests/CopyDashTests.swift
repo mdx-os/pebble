@@ -72,7 +72,8 @@ struct CopyDashTests {
                      TaskWords.tookAnotherWay("x"), TaskWords.youSaid("x"), TaskWords.stillWorking,
                      TaskWords.percentDone(40), TaskWords.finishingApproved, TaskWords.mayBeDone("x"),
                      TaskWords.yesNotUsed, TaskWords.forgetTasksDetail, TaskWords.questionTimedOut,
-                     TaskWords.tasksForgotten, TaskWords.forgotUnderway(1), TaskWords.forgotUnderway(3)] {
+                     TaskWords.tasksForgotten, TaskWords.forgotUnderway(1), TaskWords.forgotUnderway(3),
+                     TaskWords.couldNotStart] {
             #expect(all.contains(line), "unchecked: \(line)")
         }
         #expect(Set(TaskState.allCases.map(\.label)).isSubset(of: Set(all)))
@@ -173,7 +174,7 @@ extension TaskWords {
         [workingHeading, workingDetail, runningLabel, stalledLabel, retryingLabel, stoppedLabel, failedLabel,
          stalled, retrying, stuck, waitingForYes, redirected, stopped, interrupted, failed, keptNothing, stillWorking,
          approveTitle, redirectTitle, redirectPlaceholder, redirectSendTitle, redirectCancelTitle, stopTitle,
-         tryAgainTitle, dismissTitle, youSaidYes, finishingApproved, yesNotUsed,
+         tryAgainTitle, dismissTitle, youSaidYes, finishingApproved, yesNotUsed, couldNotStart,
          forgetTasksTitle, forgetTasksQuestion, forgetTasksDetail, questionTimedOut, tasksForgotten,
          forgotUnderway(1), forgotUnderway(2), forgotUnderwayDismissTitle, couldNotEraseTasks, tasksStayed, forgotNotesNotTasks,
          youSaid("x"), tookAnotherWay("x"), declined("x"), changedCourse("x"), timedOut("x"), couldNotAsk("x"),

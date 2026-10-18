@@ -1,9 +1,9 @@
 import Foundation
 import PebbleCore
 
-/// The app's real task engine. It runs only with a model on this device,
-/// reads and writes nothing but the person's notes and its own part of the
-/// app's one `TaskStore`, and never reaches the network.
+/// The app's real task engine. It starts tasks only with a model on this
+/// device, reads and writes nothing but the person's notes and its own part
+/// of the app's one `TaskStore`, and never reaches the network.
 ///
 /// It does one built-in task, `DigestTask`: it reads the notes from the
 /// past week, writes a short digest, and asks through `AskFirst` before it
@@ -28,8 +28,16 @@ import PebbleCore
 /// anywhere, or one forgotten just before the app closed, leaves no words
 /// behind. A digest's ids outlive its card, put away or let go, in the
 /// same file, until the digest note goes or Forget everything; the ids of
-/// notes that went leave the file once nothing is left to take out. A digest not yet kept whose notes change is stopped, and its
-/// question withdrawn, since a yes would be for other words.
+/// notes that went leave the file once nothing is left to take out. A
+/// digest no task knows of, as after every task was forgotten with the
+/// notes left, or with a task file that couldn't be read, still loses a
+/// gone note's line when it is plain, as `write` made it, and has that
+/// line word for word; one the person changed is theirs. A digest not yet
+/// kept whose notes change is stopped, and its question withdrawn, since a
+/// yes would be for other words.
+///
+/// The notes are followed whatever the model: only starting a task waits
+/// on one that keeps every word here.
 /// `forgetQuotes(of:)` says whether any of a note's words stayed.
 ///
 /// Made only by `OnDeviceTasks.engine(model:notes:)`, from an
@@ -135,8 +143,9 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     }
 
     public let rule: AskFirst
-    /// From the model, through `OnDeviceTasks.Key`. The engine does nothing
-    /// unless it says every word stays here.
+    /// From the model, through `OnDeviceTasks.Key`. The engine starts no
+    /// task unless it says every word stays here. Following the notes, so
+    /// a forgotten note leaves every kept digest, never waits on it.
     public let place: PrivacyPlace
     /// The notes it reads, and the only place it ever writes a note.
     public let notes: MemoryStore
@@ -167,10 +176,19 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     /// the agent kept, a forgotten note may still be quoted somewhere.
     private var tasksLost = false
     /// In memory only: the line each quoted note had when the notes were
-    /// last looked at, so a line is known to be its note's once the note
-    /// is gone or changed. Only words still in the notes at that look, and
+    /// last looked at, and each note whose line was in a plain digest no
+    /// task knows of, so a line is known to be its note's once the note is
+    /// gone or changed. Only words still in the notes at that look, and
     /// replaced at each one.
     private var lastLines: [UUID: String] = [:]
+    /// True once a look has read the notes, so the lines of every digest
+    /// are known before a note goes.
+    private var looked = false
+    /// True while the last look found a plain digest the agent kept that
+    /// no task here knows of, as after every task was forgotten with the
+    /// notes left or a task file that couldn't be read, so each change to
+    /// the notes is looked at for its lines.
+    private var strays = false
     /// Notes forgotten or changed while the notes couldn't be read, looked
     /// for again at the next look. Ids only.
     private var pendingForgotten: Set<UUID> = []
@@ -233,8 +251,9 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         sweep()
     }
 
-    /// What this engine can do, for Today to offer.
-    public var builtIns: [TaskRequest] { [DigestTask.request] }
+    /// What this engine can do, for Today to offer. Nothing with a model
+    /// that may send words away.
+    public var builtIns: [TaskRequest] { place.staysOnDevice ? [DigestTask.request] : [] }
 
     public var tasks: [AgentTask] {
         lock.lock(); defer { lock.unlock() }
@@ -248,13 +267,15 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     /// Every task that ended, from the task store: those on cards and
     /// those whose cards went in the past week. Locked while the store
     /// hasn't been read and can't be now, so nothing is counted as zero.
+    /// A late read here is a change like any other: written, told to
+    /// observers, and its tasks' questions from before withdrawn.
     public var endings: TaskEndings {
-        lock.lock()
-        let settled = !loaded && loadFile()
-        if settled { saveFile() }
-        let ends = loaded ? runs.filter { !$0.task.isActive }.map { TaskEnd(state: $0.task.state, at: $0.task.updatedAt) }
-            + pastEnds : nil
-        lock.unlock()
+        let ends: [TaskEnd]? = mutate {
+            if !loaded { loadFile() }
+            guard loaded else { return nil }
+            return runs.filter { !$0.task.isActive }.map { TaskEnd(state: $0.task.state, at: $0.task.updatedAt) }
+                + pastEnds
+        }
         return ends.map(TaskEndings.kept) ?? .locked
     }
 
@@ -401,7 +422,9 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
             letGo = []
             pastEnds = []
             seen = .unread
-            lastLines = [:]
+            // `lastLines` stays: only words still in the notes, and how a
+            // digest no task knows of now loses a note's line once it goes.
+            // The look after the notes go replaces it.
             pendingForgotten = []
             cleanedOf = []
             mayHold = [:]
@@ -490,7 +513,8 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         }
         // A note forgotten while the digest was being saved goes from it now.
         if lookAgain { sweep() }
-        return .proceeding
+        // The yes is spent either way, but only a kept digest went on.
+        return saved.kept == nil ? .notKept : .proceeding
     }
 
     /// Says whether a forgotten note's words, or a changed note's earlier
@@ -503,7 +527,9 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     /// drew from the note without them found in it may have kept them
     /// reworded. It never calls words gone that may still be there.
     public func forgetQuotes(of note: MemoryNote) -> QuotesForgotten {
-        guard let all = sweep([note.id: DigestTask.line(for: note)]) else { return .stayed }
+        // No look could be made, as while the notes or the task store
+        // won't open: nothing is known either way.
+        guard let all = sweep([note.id: DigestTask.line(for: note)]) else { return .mayHaveStayed }
         let byID = Dictionary(all.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let line = DigestTask.line(for: note)
         lock.lock()
@@ -623,7 +649,7 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
             lock.unlock()
             return nil
         }
-        let anything = read || !pendingForgotten.isEmpty || !letGo.isEmpty || tasksLost
+        let anything = read || !looked || strays || !pendingForgotten.isEmpty || !letGo.isEmpty || tasksLost
             || runs.contains { $0.kept != nil || $0.task.isActive }
         lock.unlock()
         // Nothing to look for: no read, and the cards as they are.
@@ -642,7 +668,15 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
 
         lock.lock()
         let before = lastLines
-        lastLines = Self.lines(of: runs, letGo, in: byID)
+        // Plain digests the agent kept that no task here knows of, leaving
+        // out one being kept right now: its task points at it next.
+        let known = Set(holders().map(\.note))
+        let saving = Set(runs.compactMap { $0.stage == .saving ? $0.digest : nil })
+        let unknown = all.filter { note in
+            note.source == .inferred && !known.contains(note.id) && !saving.contains(note.text)
+                && DigestTask.isPlain(note.text)
+        }
+        lastLines = Self.lines(of: runs, letGo, in: byID).merging(Self.lines(in: unknown, of: all)) { first, _ in first }
         let pending = pendingForgotten
         var plans: [UUID: Plan] = [:]
         // Each digest note once, though two tasks may point at it.
@@ -680,6 +714,14 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
                                    gone: gone, lines: lines)
             }
         }
+        // For those, which line is whose isn't known, so a line goes only
+        // when it is word for word the line of a note gone or changed,
+        // and no note there now has the same line.
+        let present = Set(all.map(DigestTask.line(for:)))
+        var goneLines: [String: Set<UUID>] = [:]
+        for (id, line) in Array(asked) + Array(before) where !present.contains(line) {
+            goneLines[line, default: []].insert(id)
+        }
         lock.unlock()
 
         // Written outside this engine's lock, since each write tells it the
@@ -704,8 +746,28 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
                 theirs.insert(plan.kept)
             }
         }
+        // A line that can't be taken out now stays where `forgetQuotes(of:)`
+        // finds it, so it is said to stay.
+        var strayCleaned: Set<UUID> = []
+        for digest in goneLines.isEmpty ? [] : unknown {
+            let lines = Set(digest.text.components(separatedBy: "\n"))
+            let hit = goneLines.filter { lines.contains($0.key) }
+            guard !hit.isEmpty else { continue }
+            let ids = hit.values.reduce(into: Set<UUID>()) { $0.formUnion($1) }
+            switch DigestTask.stripping(Set(hit.keys), from: digest.text) {
+            case .edited(let next):
+                if case .saved? = try? notes.edit(digest.id, to: next) { strayCleaned.formUnion(ids) }
+            case .emptied:
+                if (try? notes.forget(digest.id)) == true { strayCleaned.formUnion(ids) }
+            case .notThere, .cantTell:
+                break
+            }
+        }
 
         mutate {
+            looked = true
+            strays = !unknown.isEmpty
+            cleanedOf.formUnion(strayCleaned)
             for index in runs.indices {
                 guard let kept = runs[index].kept else { continue }
                 // The digest note went: the person's doing, or this look's
@@ -801,6 +863,19 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
             for id in quoted ?? [] {
                 if let note = byID[id] { out[id] = DigestTask.line(for: note) }
             }
+        }
+        return out
+    }
+
+    /// The line each note has now that is word for word in one of
+    /// `digests`, plain digests no task knows of.
+    private static func lines(in digests: [MemoryNote], of all: [MemoryNote]) -> [UUID: String] {
+        guard !digests.isEmpty else { return [:] }
+        let held = Set(digests.flatMap { $0.text.components(separatedBy: "\n") })
+        var out: [UUID: String] = [:]
+        for note in all {
+            let line = DigestTask.line(for: note)
+            if held.contains(line) { out[note.id] = line }
         }
         return out
     }

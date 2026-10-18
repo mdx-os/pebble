@@ -248,14 +248,23 @@ public protocol QuestionNotifying: AnyObject, Sendable {
 package final class TaskStoreFaults: @unchecked Sendable {
     private let lock = NSLock()
     private var isShut: Bool
+    private var kept: FileProtectionType?
 
-    package init(shut: Bool = false) {
+    package init(shut: Bool = false, protection: FileProtectionType? = nil) {
         isShut = shut
+        kept = protection
     }
 
     package var shut: Bool {
         get { lock.withLock { isShut } }
         set { lock.withLock { isShut = newValue } }
+    }
+
+    /// Stands in for the file's protection, where the system keeps none,
+    /// as on a Mac. Nil leaves it to the file.
+    package var protection: FileProtectionType? {
+        get { lock.withLock { kept } }
+        set { lock.withLock { kept = newValue } }
     }
 }
 
@@ -295,8 +304,10 @@ public final class TaskStore: @unchecked Sendable {
         public var receipts: [Receipt] = []
         public var nudges: NudgeChoice = .notAsked
         /// What the on-device task engine keeps: its tasks and the kept
-        /// digests it still looks after. Ids and card lines only, never a
-        /// note's words. Absent when it keeps nothing.
+        /// digests it still looks after. Ids, card lines, and in each
+        /// task's history the words the person typed to steer it, kept
+        /// until its card is put away or Forget everything. Never a note's
+        /// words. Absent when it keeps nothing.
         package var device: StoredFile?
 
         public init(tasks: [SavedTask] = [], receipts: [Receipt] = [], nudges: NudgeChoice = .notAsked) {
@@ -625,16 +636,46 @@ public final class TaskStore: @unchecked Sendable {
         return opensNot()
     }
 
-    /// With the lock held. True while the file is there and won't open.
+    /// With the lock held. True while the file won't open. With no file
+    /// yet, true while a file with its protection can't be opened beside
+    /// it, as while the device is locked, so the first change waits too.
     private func opensNot() -> Bool {
-        guard let fileURL, !mustDelete, FileManager.default.fileExists(atPath: fileURL.path) else { return false }
+        guard let fileURL, !mustDelete else { return false }
         if faults?.shut == true { return true }
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return !Self.protectedOpens(beside: fileURL) }
         let descriptor = open(fileURL.path, O_RDONLY)
         guard descriptor < 0 else {
             close(descriptor)
             return false
         }
         return true
+    }
+
+    /// True when an empty file can be made beside `url`, written as the
+    /// task store's file is. A file with full protection can't be made
+    /// while the device is locked. It is taken away again at once.
+    private static func protectedOpens(beside url: URL) -> Bool {
+        let manager = FileManager.default
+        let probe = sibling(of: url, ".probe")
+        try? manager.removeItem(at: probe)
+        try? manager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let made = (try? Data().write(to: probe, options: Self.fileWriting())) != nil
+        try? manager.removeItem(at: probe)
+        return made
+    }
+
+    /// After a read: a file from before that was kept with less than full
+    /// protection gets it, so it too opens only while the device is unlocked.
+    private func protectFully(_ url: URL) {
+        if let faults, let protection = faults.protection {
+            if protection != .complete { faults.protection = .complete }
+            return
+        }
+        guard Self.protectsFiles else { return }
+        let manager = FileManager.default
+        let now = (try? manager.attributesOfItem(atPath: url.path))?[.protectionKey] as? FileProtectionType
+        guard now != .complete else { return }
+        try? manager.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: url.path)
     }
 
     /// Forget everything: every saved task and every receipt. Only the nudge
@@ -768,6 +809,7 @@ public final class TaskStore: @unchecked Sendable {
             return
         }
         loaded = true
+        protectFully(fileURL)
         let decoded = saved
         // A receipt changed into one no question could have shown never
         // reaches a card that says "You said yes".

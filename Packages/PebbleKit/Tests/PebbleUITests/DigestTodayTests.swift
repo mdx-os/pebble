@@ -25,8 +25,7 @@ struct DigestTodayTests {
         notes = MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
         try notes.remember("Dentist on Thursday at 3", at: Date() - 3_600, source: .toldMe)
         store = Self.openStore(in: folder)
-        engine = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: store, rule: rule,
-                                                   pace: nil))
+        engine = OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: store, rule: rule, pace: nil)
         feed = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: rule), tasks: engine, place: .onDevice)
     }
 
@@ -326,31 +325,36 @@ struct DigestTodayTests {
         #expect(digestNote(memory)?.text == DigestWords.heading + ".\n• Dentist on Thursday at 3 (You told me)")
     }
 
-    /// With a task file that can't be read, the memory screen never says
-    /// a note is gone while a digest may hold it: found, it says the words
-    /// are still there; not found in a digest changed past finding, that
-    /// they may be.
-    @Test func aDigestFromATaskFileThatCantBeReadIsSaidToHoldTheWords() throws {
+    /// With a task file that can't be read, a forgotten note's line still
+    /// leaves a plain digest, matched word for word. The memory screen
+    /// never says a note is gone while a digest may hold it: with no task
+    /// knowing the digest's lines, it says the words may be there; found
+    /// in a digest changed past matching, that they are.
+    @Test func aDigestFromATaskFileThatCantBeReadLosesTheLine() throws {
         try notes.remember("Sam's birthday is May 14", at: Date() - 7_200, source: .toldMe)
         // Kept by an engine before this one, whose file can't be read now.
         let week = DigestTask.thisWeek(notes.notes(), now: Date())
         try notes.remember(DigestTask.write(week, now: Date()).text, source: .inferred)
         try Data("not tasks".utf8).write(to: tasksFile)
-        let engine = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes,
-                                                       store: Self.openStore(in: folder), rule: rule, pace: nil))
+        let engine = OnDeviceTasks.engine(model: LocalStubModel(), notes: notes,
+                                          store: Self.openStore(in: folder), rule: rule, pace: nil)
         let feed = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: rule), tasks: engine, place: .onDevice)
         let memory = HomeView.memoryModel(store: notes, place: .onDevice, onNotesChanged: { feed.notesChanged() },
                                           forgetQuotes: { feed.forgetQuotes(of: $0) })
         let sam = try #require(memory.notes.first { $0.text.hasPrefix("Sam's") })
         memory.forget(sam)
-        #expect(memory.status == DigestWords.stillInDigest)
+        #expect(memory.status == DigestWords.mayStillBeInDigest)
+        #expect(digestNote(memory)?.text == DigestWords.heading + ".\n• Dentist on Thursday at 3 (You told me)")
+        #expect(!notes.notes().contains { $0.text.contains("Sam's birthday") })
+        // Changed by the person, it is theirs: nothing is taken out.
         let digest = try #require(digestNote(memory))
         memory.beginEdit(digest)
-        memory.editDraft = "My week was busy."
+        memory.editDraft = "My week: Dentist on Thursday at 3."
         memory.saveEdit()
         let dentist = try #require(memory.notes.first { $0.text.hasPrefix("Dentist") })
         memory.forget(dentist)
-        #expect(memory.status == DigestWords.mayStillBeInDigest)
+        #expect(memory.status == DigestWords.stillInDigest)
+        #expect(notes.notes().contains { $0.text == "My week: Dentist on Thursday at 3." })
     }
 
     /// A digest the person changed that no longer has a note's line: the
@@ -542,8 +546,7 @@ struct DigestTodayTests {
         try JSONEncoder().encode(TaskStore.State(tasks: [ask], receipts: [receipt])).write(to: file)
 
         let store = Self.openStore(in: folder)
-        let engine = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: store,
-                                                       rule: rule, pace: nil))
+        let engine = OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: store, rule: rule, pace: nil)
         let flow = NeedsYouFlow(store: store, notifier: DigestNotifier(), agentName: { "Pip" })
         let feed = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: rule), tasks: engine,
                              place: .onDevice, flow: flow)
@@ -582,8 +585,7 @@ struct DigestTodayTests {
         let reopened = Self.openStore(in: folder)
         #expect(reopened.tasks.isEmpty)
         #expect(reopened.receipts.isEmpty)
-        let again = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: reopened,
-                                                      rule: rule, pace: nil))
+        let again = OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: reopened, rule: rule, pace: nil)
         #expect(again.tasks.isEmpty)
         #expect(!again.hasStoredFile)
     }

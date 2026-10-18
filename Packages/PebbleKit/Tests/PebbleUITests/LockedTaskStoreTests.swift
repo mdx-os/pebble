@@ -66,8 +66,8 @@ struct LockedTaskStoreTests {
     func launch(faults: TaskStoreFaults? = nil) throws -> (TaskStore, DeviceTaskEngine, BackgroundRunner) {
         let store = TaskStore(fileURL: tasksFile, forgetMarker: folder.appendingPathComponent("pending/tasks-forgotten"),
                               faults: faults)
-        let engine = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: store, rule: rule,
-                                                       pace: nil, clock: clock.now))
+        let engine = OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: store, rule: rule,
+                                          pace: nil, clock: clock.now)
         let wiring = BackgroundWiring.app(
             needsYou: NeedsYou(rule: rule), tasks: engine,
             store: { BackgroundStore(fileURL: self.folder.appendingPathComponent("background.json")) },
@@ -151,9 +151,11 @@ struct LockedTaskStoreTests {
 
         let after = try files()
         #expect(after["tasks.json"] == before["tasks.json"], "no write to the task store")
-        #expect(after.keys.filter { $0.hasPrefix(".") || $0.contains("tasks") } == before.keys.filter {
-            $0.hasPrefix(".") || $0.contains("tasks")
-        }, "no staged copy, no other task file")
+        // A hidden file or one about tasks, in any folder.
+        let taskish = { (path: String) in
+            path.split(separator: "/").contains { $0.hasPrefix(".") } || path.contains("tasks")
+        }
+        #expect(Set(after.keys.filter(taskish)) == Set(before.keys.filter(taskish)), "no staged copy, no other task file")
         #expect(Set(after.keys).subtracting(before.keys).isSubset(of: ["background.json"]))
         for (name, data) in after where name != "tasks.json" && name != "memory.json" {
             let text = String(decoding: data, as: UTF8.self)
@@ -319,8 +321,8 @@ struct LockedTaskStoreTests {
 
         // This launch, as the app wires it.
         let reopened = TaskStore(fileURL: tasksFile, forgetMarker: marker)
-        let fresh = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: reopened,
-                                                      rule: rule, pace: nil, clock: clock.now))
+        let fresh = OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: reopened,
+                                         rule: rule, pace: nil, clock: clock.now)
         let summaries = BackgroundStoreFaults(eraseFails: failing)
         let background = BackgroundRunner(
             store: BackgroundStore(fileURL: folder.appendingPathComponent("background.json"), faults: summaries),
@@ -354,6 +356,17 @@ struct LockedTaskStoreTests {
             #expect(status.components(separatedBy: "again in a moment").count == 2, "asked once: \(status)")
             #expect(status.contains("couldn't erase your morning summaries"), "\(status)")
             #expect(!status.hasPrefix(MemoryWords.forgotten), "\(status)")
+            // Once the folder lets go again, a fresh launch finds nothing
+            // that went, or still offers Forget everything for what stayed.
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            let next = TaskStore(fileURL: tasksFile, forgetMarker: marker)
+            let again = OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: next, rule: rule,
+                                             pace: nil, clock: clock.now)
+            let nothingBack = next.tasks.isEmpty && next.receipts.isEmpty && next.deviceTasks()?.file == nil
+                && again.tasks.isEmpty
+            let feedAgain = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: rule), tasks: again,
+                                      place: .onDevice, flow: NeedsYouFlow(store: next, notifier: nil, agentName: { "Pip" }))
+            #expect(nothingBack || feedAgain.tasksStored, "what stayed came back with no Forget everything for it")
         } else {
             #expect(status == MemoryWords.forgotten)
             #expect(notes.notes().isEmpty)
@@ -363,5 +376,121 @@ struct LockedTaskStoreTests {
             #expect(next.tasks.isEmpty && next.receipts.isEmpty && next.deviceTasks()?.file == nil)
         }
     }
+
+    // MARK: Before the first read
+
+    /// PERMANENT GUARD. With no task file yet, a locked device still takes
+    /// no change: the first task waits for the unlock like any other.
+    @Test func withNoFileYetALockedDeviceTakesNoChange() throws {
+        let faults = TaskStoreFaults(shut: true)
+        let (store, engine, _) = try launch(faults: faults)
+        #expect(!FileManager.default.fileExists(atPath: tasksFile.path))
+        #expect(store.isShut)
+        #expect(engine.start(DigestTask.request).isEmpty)
+        #expect(engine.tasks.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: tasksFile.path), "nothing written while locked")
+        faults.shut = false
+        #expect(!store.isShut)
+        #expect(!engine.start(DigestTask.request).isEmpty)
+        #expect(FileManager.default.fileExists(atPath: tasksFile.path))
+    }
+
+    /// The same found by trying, with no stand in: a file with the task
+    /// store's protection that can't be made beside it means shut.
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
+    func withNoFileYetAFolderThatTakesNoFileIsShut() throws {
+        let store = TaskStore(fileURL: tasksFile, forgetMarker: folder.appendingPathComponent("pending/tasks-forgotten"))
+        #expect(!store.isShut)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+        #expect(store.isShut)
+        let names = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+        #expect(!names.contains { $0.hasPrefix(".") }, "no probe left: \(names)")
+    }
+
+    /// A file an earlier version kept with less than full protection gets
+    /// full protection once it is read. One that won't open is left alone.
+    @Test func aFileWithLessProtectionGetsFullProtectionOnceRead() throws {
+        try earlierLaunchKeptADigestAndASummary()
+        let marker = folder.appendingPathComponent("pending/tasks-forgotten")
+        let faults = TaskStoreFaults(shut: true, protection: .completeUntilFirstUserAuthentication)
+        let store = TaskStore(fileURL: tasksFile, forgetMarker: marker, faults: faults)
+        #expect(store.deviceTasks() == nil)
+        #expect(faults.protection == .completeUntilFirstUserAuthentication)
+        faults.shut = false
+        #expect(store.deviceTasks()?.file?.tasks.count == 1)
+        #expect(faults.protection == .complete)
+    }
+
+    /// A start tapped after the unlock, before anything else read the
+    /// store, reads it first and starts. One the store still refuses says
+    /// so on Today rather than vanish.
+    @Test func aStartBeforeTheLateReadReadsFirstOrSaysItCouldNot() throws {
+        try earlierLaunchKeptADigestAndASummary()
+        let faults = TaskStoreFaults(shut: true)
+        let (_, engine, _) = try launch(faults: faults)
+        let feed = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: rule), tasks: engine,
+                             place: .onDevice)
+        var heard: [TaskAnnouncer.Line] = []
+        feed.announce = { heard.append($0) }
+        feed.start(DigestTask.request)
+        #expect(engine.tasks.isEmpty)
+        #expect(feed.couldNotStart == TaskWords.couldNotStart)
+        #expect(heard.map(\.text) == [TaskWords.couldNotStart])
+        faults.shut = false
+        feed.start(DigestTask.request)
+        #expect(feed.couldNotStart == nil)
+        #expect(engine.tasks.contains { $0.isActive && $0.title == DigestTask.title })
+        #expect(engine.tasks.contains { $0.state == .done }, "the earlier launch's digest came back too")
+    }
+
+    /// Counting the endings may be the first read after an unlock. It is
+    /// a change like any other: observers hear the tasks that came back,
+    /// and a question an earlier engine left open for them is withdrawn.
+    @Test func countingTheEndingsAfterAnUnlockIsAChangeLikeAnyOther() throws {
+        let (_, first, _) = try launch()
+        let (id, question) = try ask(first)
+        let faults = TaskStoreFaults(shut: true)
+        let (_, second, _) = try launch(faults: faults)
+        #expect(second.tasks.isEmpty)
+        let heard = Snapshots()
+        let watch = second.observe { heard.add($0) }
+        defer { watch.cancel() }
+        faults.shut = false
+        guard case .kept = second.endings else {
+            Issue.record("not counted")
+            return
+        }
+        #expect(rule.isClosed(question))
+        #expect(heard.last?.tasks.first { $0.id == id }?.state == .stopped)
+        #expect(try onDisk()[id] == TaskState.stopped.rawValue)
+        _ = first
+    }
+
+    /// A note forgotten while the task store is shut can't be looked for,
+    /// so it is never called gone. Its line goes once the store opens.
+    @Test func aNoteForgottenWhileTheStoreIsShutIsNeverCalledGone() throws {
+        let faults = TaskStoreFaults()
+        let (_, engine, _) = try launch(faults: faults)
+        try keep(engine)
+        faults.shut = true
+        let sam = try #require(notes.notes().first { $0.text.hasPrefix("Sam's") })
+        #expect(try notes.forget(sam.id))
+        #expect(engine.forgetQuotes(of: sam) == .mayHaveStayed)
+        #expect(notes.notes().contains { $0.text.contains("Sam's birthday") })
+        faults.shut = false
+        engine.refresh()
+        #expect(!notes.notes().contains { $0.text.contains("Sam's birthday") })
+        #expect(notes.notes().contains { $0.text == DigestWords.heading + ".\n• Dentist on Thursday at 3 (You told me)" })
+    }
+}
+
+/// Every snapshot an observer was told, from any thread.
+private final class Snapshots: @unchecked Sendable {
+    private let lock = NSLock()
+    private var all: [TaskSnapshot] = []
+
+    func add(_ snapshot: TaskSnapshot) { lock.withLock { all.append(snapshot) } }
+    var last: TaskSnapshot? { lock.withLock { all.last } }
 }
 #endif
