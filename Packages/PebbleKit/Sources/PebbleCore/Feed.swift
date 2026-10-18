@@ -198,13 +198,55 @@ public final class NeedsYou: FeedSource, @unchecked Sendable {
     }
 
     public let rule: AskFirst
+    /// True for the showcase's sample questions, so the cards and the sheet
+    /// say they are examples. The rule asks and answers them as always.
+    public let isSample: Bool
     private let lock = NSLock()
     private var waiting: [Waiting] = []
+    private var observers: [Observation: @Sendable () -> Void] = [:]
     private let locale: Locale
 
-    public init(rule: AskFirst = .shared, locale: Locale = .current) {
+    public init(rule: AskFirst = .shared, isSample: Bool = false, locale: Locale = .current) {
         self.rule = rule
+        self.isSample = isSample
         self.locale = locale
+    }
+
+    /// One watcher of the questions, kept so it can stop watching.
+    public struct Observation: Hashable, Sendable {
+        fileprivate let id = UUID()
+    }
+
+    /// Calls `hook` after a question is asked, answered with a yes, or
+    /// dismissed, so whatever shows the count can update at once. Several
+    /// can watch at once, such as one Today per window on iPad, and each
+    /// hears every change. Hooks are never called with the lock held.
+    public func observe(_ hook: @escaping @Sendable () -> Void) -> Observation {
+        let observation = Observation()
+        lock.lock()
+        observers[observation] = hook
+        lock.unlock()
+        return observation
+    }
+
+    /// Stops calling the hook `observe` returned this for.
+    public func stopObserving(_ observation: Observation) {
+        lock.lock()
+        observers[observation] = nil
+        lock.unlock()
+    }
+
+    /// How many are watching, for tests.
+    package var observerCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return observers.count
+    }
+
+    private func didChange() {
+        lock.lock()
+        let hooks = Array(observers.values)
+        lock.unlock()
+        for hook in hooks { hook() }
     }
 
     /// Ask the person about `action`. Nil, and nothing on the feed, when
@@ -218,10 +260,14 @@ public final class NeedsYou: FeedSource, @unchecked Sendable {
     public func ask(_ action: ProposedAction, at time: Date = Date(),
                     onApprove: (@Sendable (Approval) -> Void)? = nil) -> ConfirmationRequest? {
         lock.lock()
-        defer { lock.unlock() }
         // Asked and recorded under one lock, so the list keeps the rule's order.
-        guard let request = rule.ask(action) else { return nil }
+        guard let request = rule.ask(action) else {
+            lock.unlock()
+            return nil
+        }
         waiting.append(Waiting(request: request, askedAt: time, onApprove: onApprove))
+        lock.unlock()
+        didChange()
         return request
     }
 
@@ -243,14 +289,18 @@ public final class NeedsYou: FeedSource, @unchecked Sendable {
         let answered = waiting.remove(at: index)
         lock.unlock()
         answered.onApprove?(approval)
+        didChange()
     }
 
     /// The sheet closed without a yes. The sheet has already withdrawn the
     /// question; this takes the card away.
     public func dismissed(_ request: ConfirmationRequest) {
         lock.lock()
+        let before = waiting.count
         waiting.removeAll { $0.request.id == request.id }
+        let removed = waiting.count != before
         lock.unlock()
+        if removed { didChange() }
     }
 
     /// Only questions `AskFirst` still holds open, the one that times out
@@ -420,14 +470,25 @@ public enum FeedWords {
     public static let talkHint = "Opens the chat with a line ready. Nothing is sent."
     public static let reviewHint = "Opens the question."
     public static let emptyTitle = "A quiet start"
-    public static let empty = "When I finish something for you, it will show up here. I'll only ask when a choice is yours to make."
-    public static let emptyActionTitle = "Say hello"
-    public static let sampleNote = "These are examples for now. They were made on this device, and nothing was sent or bought."
+    /// Only what is true today: the chat is right below. Nothing here says
+    /// the agent works in the background until a real feed source does.
+    public static let empty = "It's just us for now. Write to me below, and we'll start a chat."
+    /// VoiceOver's hint on Today's composer, which shares the chat's
+    /// placeholder, so the person knows where the words go.
+    public static let composerHint = "Sends to the chat and opens it."
+    /// Said first on an example card, so VoiceOver never takes it for real
+    /// work. A live task card that is an example, such as a scripted task,
+    /// also shows it as a tag, since its buttons look like real work.
+    public static let exampleMarker = "Example"
+    /// Over the example cards. The device promise is made only when `place`
+    /// says every word stays here, as with `MemoryWords`.
+    public static func sampleNote(_ place: PrivacyPlace) -> String {
+        place.staysOnDevice
+            ? "These are examples for now. They were made on this device, and nothing was sent or bought."
+            : "These are examples for now. Nothing was sent or bought."
+    }
     /// Over an example opened to read.
     public static let sampleLabel = "This is an example. Nothing here was really done."
-    /// On a live card that is an example, such as a scripted task, which has
-    /// buttons that look like real work.
-    public static let exampleTag = "Example"
     public static let doneTitle = "Done"
 
     /// The chat button on a narrow screen, such as "Chat with Pip".

@@ -79,6 +79,10 @@ final class ConfirmationState: ObservableObject {
         }
     }
 
+    /// Whether moving to `screen` earns the light tap: only on the way into
+    /// answered, by Yes or Not now, never on the way out or on a timeout.
+    nonisolated static func tapsOnChange(to screen: Screen) -> Bool { screen == .answered }
+
     /// Called every second while the sheet is open.
     func tick() {
         if screen == .asking, rule.isClosed(request) { timeOut() }
@@ -122,6 +126,9 @@ final class ConfirmationState: ObservableObject {
 /// is on screen, once.
 public struct ConfirmationSheet: View {
     let look: AgentLook
+    /// True for a sample question, so the sheet says it is an example.
+    /// Only what is shown changes; the rule asks and answers as always.
+    let isExample: Bool
     @StateObject private var state: ConfirmationState
     @Environment(\.colorScheme) private var scheme
     @AccessibilityFocusState private var footnoteFocused: Bool
@@ -130,10 +137,12 @@ public struct ConfirmationSheet: View {
         request: ConfirmationRequest,
         look: AgentLook = .startingPoint,
         rule: AskFirst = .shared,
+        isExample: Bool = false,
         onApprove: @escaping (Approval) -> Void,
         onDecline: @escaping () -> Void
     ) {
         self.look = look
+        self.isExample = isExample
         _state = StateObject(wrappedValue: ConfirmationState(
             request: request, rule: rule, onApprove: onApprove, onDecline: onDecline
         ))
@@ -168,7 +177,7 @@ public struct ConfirmationSheet: View {
         }
         // One light tap when the person answers, yes or not now.
         // Only on the way into answered, never on the way out.
-        .haptic(.answered, trigger: state.screen, when: { $0 == .answered })
+        .haptic(.answered, trigger: state.screen, when: ConfirmationState.tapsOnChange(to:))
         .onChange(of: state.spoken) { _, line in
             // Move VoiceOver to the timeout words so they are read first,
             // before the person meets the Close button. Moving focus reads
@@ -189,11 +198,14 @@ public struct ConfirmationSheet: View {
 
     private var content: some View {
         VStack(spacing: 20) {
+            if isExample {
+                ExampleLabel()
+            }
             ZStack(alignment: .bottomTrailing) {
                 CharacterView(look: look, size: 64)
                 Image(systemName: symbol)
                     .font(.footnote.weight(.bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.onAccent)
                     .frame(width: 30, height: 30)
                     .background(Theme.accent, in: Circle())
                     .overlay(Circle().stroke(Theme.card(scheme), lineWidth: 3))
@@ -203,7 +215,7 @@ public struct ConfirmationSheet: View {
             VStack(spacing: 6) {
                 Text(ConfirmationWords.heading)
                     .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.secondaryText)
                 Text(action.question)
                     .font(.system(.title2, design: .rounded).weight(.bold))
                     .multilineTextAlignment(.center)
@@ -226,7 +238,7 @@ public struct ConfirmationSheet: View {
             .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
             Text(state.footnote)
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 .multilineTextAlignment(.center)
                 .accessibilityFocused($footnoteFocused)
             VStack(spacing: 6) {
@@ -255,7 +267,7 @@ public struct ConfirmationSheet: View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(label)
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 .frame(width: 56, alignment: .leading)
             Text(value)
                 .font(.body.weight(.medium))

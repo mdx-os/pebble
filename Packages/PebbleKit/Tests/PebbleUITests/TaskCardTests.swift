@@ -20,13 +20,13 @@ private final class Clock: @unchecked Sendable {
 struct TaskCardTests {
     private func model(_ engine: LocalFakeEngine, clock: Clock = Clock()) -> FeedModel {
         FeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: engine.rule), tasks: engine,
-                  now: { ShowcaseScene.morning }, clock: clock.now)
+                  place: .onDevice, now: { ShowcaseScene.morning }, clock: clock.now)
     }
 
     private func render(_ model: FeedModel, size: CGSize, scheme: ColorScheme = .light,
                         text: DynamicTypeSize = .large) throws -> CGImage {
         let view = NavigationStack {
-            FeedView(model: model, look: .startingPoint, onTalk: { _ in }, onChat: {})
+            FeedView(model: model, look: .startingPoint, onTalk: { _ in })
         }
         let renderer = ImageRenderer(content: view
             .environment(\.colorScheme, scheme)
@@ -120,7 +120,7 @@ struct TaskCardTests {
         let id = engine.start(SampleTasks.dentist)
         engine.advance(by: 45)
         let model = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: engine,
-                              now: { ShowcaseScene.morning })
+                              place: .onDevice, now: { ShowcaseScene.morning })
         let item = try #require(model.feed.working.first { $0.id == id })
         let task = try #require(item.task)
         #expect(task.waitsForApproval)
@@ -292,7 +292,7 @@ struct TaskCardTests {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("tasks-forget-\(UUID().uuidString).json")
         let store = MemoryStore(fileURL: url)
         defer { try? store.forgetEverything() }
-        let memory = MemoryModel(store: store, onForgetEverything: { model.forgetTasks() })
+        let memory = MemoryModel(store: store, place: .onDevice, onForgetEverything: { model.forgetTasks() })
         memory.newNote = "Prefers mornings"
         memory.add()
         memory.forgetEverything()
@@ -510,7 +510,7 @@ struct TaskCardTests {
         let note = ProposedAction(kind: .send, recipient: Recipient(id: "c:1", displayName: "Sam", handle: "416 555 0101"),
                                   details: "Running late")
         let noteQuestion = try #require(asks.ask(note))
-        let model = FeedModel(sources: [], needsYou: asks, tasks: engine, now: { ShowcaseScene.morning })
+        let model = FeedModel(sources: [], needsYou: asks, tasks: engine, place: .onDevice, now: { ShowcaseScene.morning })
         model.review(try #require(engine.task(id)))
         let request = try #require(model.reviewing)
         let sheet = ConfirmationState(request: request, rule: model.rule,
@@ -645,7 +645,7 @@ struct TaskCardTests {
         let note = ProposedAction(kind: .send, recipient: Recipient(id: "c:1", displayName: "Sam", handle: "416 555 0101"),
                                   details: "Running late")
         _ = try #require(asks.ask(note))
-        let model = FeedModel(sources: [], needsYou: asks, tasks: engine, now: { ShowcaseScene.morning })
+        let model = FeedModel(sources: [], needsYou: asks, tasks: engine, place: .onDevice, now: { ShowcaseScene.morning })
         let task = try #require(engine.task(id))
         #expect(task.waitsForApproval)
         #expect(!model.feed.needsYou.contains { $0.id == id })
@@ -671,7 +671,7 @@ struct TaskCardTests {
         }
         let posing = TaskFeed.item(try #require(engine.tasks.first))
         let model = FeedModel(sources: [Posing(item: posing)], needsYou: NeedsYou(rule: rule),
-                              now: { ShowcaseScene.morning })
+                              place: .onDevice, now: { ShowcaseScene.morning })
         #expect(model.feed.isEmpty)
         model.perform(posing, talk: { _ in })
         model.review(try #require(posing.task))
@@ -685,13 +685,14 @@ struct TaskCardTests {
         let id = engine.start(SampleTasks.plan)
         engine.advance(by: 30)
         let model = FeedModel(sources: [], needsYou: NeedsYou(rule: engine.rule), tasks: engine,
-                              now: { ShowcaseScene.morning })
+                              place: .onDevice, now: { ShowcaseScene.morning })
         #expect(model.isSample)
         model.open(try #require(engine.task(id)))
         let reading = try #require(model.reading)
         #expect(model.isSample(reading))
         // Real cards beside them never get the label.
-        let plain = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), now: { ShowcaseScene.morning })
+        let plain = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), place: .onDevice,
+                              now: { ShowcaseScene.morning })
         #expect(!plain.isSample)
         #expect(!plain.isSample(reading))
     }
@@ -707,11 +708,11 @@ struct TaskCardTests {
             let task = try #require(item.task)
             #expect(model.isSample(item))
             let card = TaskCard(task: task, time: "9:40 AM", isSample: model.isSample(item))
-            #expect(card.spoken.hasPrefix("\(FeedWords.exampleTag). "))
+            #expect(card.spoken.hasPrefix("\(FeedWords.exampleMarker). "))
         }
         // A real task card never says it.
         let plain = TaskCard(task: try #require(engine.tasks.first), time: "9:40 AM")
-        #expect(!plain.spoken.contains(FeedWords.exampleTag))
+        #expect(!plain.spoken.contains(FeedWords.exampleMarker))
         _ = try render(model, size: CGSize(width: 393, height: 852))
     }
 
@@ -744,7 +745,7 @@ struct TaskCardTests {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("tasks-underway-\(UUID().uuidString).json")
         let store = MemoryStore(fileURL: url)
         defer { try? store.forgetEverything() }
-        let memory = MemoryModel(store: store, onForgetEverything: { model.forgetTasks() })
+        let memory = MemoryModel(store: store, place: .onDevice, onForgetEverything: { model.forgetTasks() })
         memory.newNote = "Prefers mornings"
         memory.add()
         memory.forgetEverything()
@@ -788,12 +789,12 @@ struct TaskCardTests {
         let engine = LocalFakeEngine(rule: .isolated())
         engine.start(SampleTasks.plan)
         let model = model(engine)
-        let memory = MemoryModel(store: store, onForgetEverything: { model.forgetTasks() })
+        let memory = MemoryModel(store: store, place: .onDevice, onForgetEverything: { model.forgetTasks() })
         memory.forgetEverything()
         #expect(engine.tasks.isEmpty)
         #expect(memory.status == MemoryWords.couldNotForgetNotes)
         // With no tasks to forget, the plain words.
-        let none = MemoryModel(store: store)
+        let none = MemoryModel(store: store, place: .onDevice)
         none.forgetEverything()
         #expect(none.status == MemoryWords.couldNotForget)
     }
@@ -835,7 +836,7 @@ struct TaskCardTests {
         let engine = LocalFakeEngine(rule: rule)
         let id = engine.start(SampleTasks.dentist)
         engine.advance(by: 45)
-        let model = FeedModel(sources: [], needsYou: asks, tasks: engine, now: { ShowcaseScene.morning })
+        let model = FeedModel(sources: [], needsYou: asks, tasks: engine, place: .onDevice, now: { ShowcaseScene.morning })
         let task = try #require(engine.task(id))
         model.review(task)
         let request = try #require(model.reviewing)
@@ -899,9 +900,111 @@ struct TaskCardTests {
         #expect(Motion.progress(reduceMotion: false) != nil)
     }
 
+    // MARK: With Today's shared pieces
+
+    /// A purchase asked through `NeedsYou`, beside the tasks.
+    private static let bakery = ProposedAction(
+        kind: .purchase,
+        recipient: Recipient(id: "merchant:sample-bakery", displayName: "Rise Bakery", handle: "risebakery.example"),
+        details: "Sourdough loaf, pickup at 9",
+        price: Price(minorUnits: 650, currency: "CAD")
+    )
+
+    /// A task's question that closes with nothing else changing leaves Needs
+    /// you on the loop the home screen runs, so the count beside Today drops
+    /// even with Today off screen.
+    @Test func aTaskQuestionLeavesTheCountOnTheHomeLoop() async throws {
+        let engine = LocalFakeEngine(rule: .isolated())
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        let model = model(engine)
+        let question = try #require(model.feed.needsYou.first { $0.id == id }?.task?.question)
+        engine.rule.withdraw(question)
+        // Nothing has looked again yet, so the count still holds it.
+        #expect(model.feed.needsYou.contains { $0.id == id })
+        var naps = 0
+        await model.keepFresh { _ in
+            naps += 1
+            throw CancellationError()
+        }
+        #expect(naps == 1)
+        #expect(!model.feed.needsYou.contains { $0.id == id })
+        #expect(engine.task(id)?.waitsForApproval == false)
+    }
+
+    /// `NeedsYou`'s change hook rebuilds the feed with the tasks still in
+    /// it: a new question sits beside a pinned task at once, questions
+    /// first, and a dismissal leaves the task where it was. A model that
+    /// goes stops watching.
+    @Test func aNeedsYouChangeKeepsTaskCardsInPlace() throws {
+        let engine = LocalFakeEngine(rule: .isolated())
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        let asks = NeedsYou(rule: engine.rule)
+        var model: FeedModel? = FeedModel(sources: [], needsYou: asks, tasks: engine, place: .onDevice,
+                                          now: { ShowcaseScene.morning })
+        #expect(model?.feed.needsYou.map(\.id) == [id])
+        let asked = try #require(asks.ask(Self.bakery))
+        #expect(model?.feed.needsYou.count == 2)
+        #expect(model?.feed.needsYou.first?.request?.id == asked.id)
+        #expect(model?.feed.needsYou.last?.id == id)
+        asks.dismissed(asked)
+        #expect(model?.feed.needsYou.map(\.id) == [id])
+        #expect(asks.observerCount == 1)
+        model = nil
+        #expect(asks.observerCount == 0)
+    }
+
+    /// A task's question in the sheet covers the chat like any question,
+    /// so neither composer sends from the keyboard behind it.
+    @Test func aTaskQuestionCoversTheChat() throws {
+        let engine = LocalFakeEngine(rule: .isolated())
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        let model = model(engine)
+        model.review(try #require(engine.task(id)))
+        #expect(model.reviewing != nil)
+        for usesSidebar in [false, true] {
+            let cover = HomeCover(usesSidebar: usesSidebar, section: .today, showsShortcuts: false,
+                                  readerOpen: false, questionOpen: model.reviewing != nil)
+            #expect(cover.chatIsCovered)
+            #expect(!cover.chatSendsFromKeyboard)
+            #expect(!cover.todayInFront)
+        }
+    }
+
+    /// A scripted task's question says it is an example in the sheet too,
+    /// and a real question asked beside it does not.
+    @Test func aScriptedTasksQuestionIsAnExampleInTheSheet() throws {
+        let engine = LocalFakeEngine(rule: .isolated())
+        let id = engine.start(SampleTasks.dentist)
+        engine.advance(by: 45)
+        let asks = NeedsYou(rule: engine.rule)
+        let model = FeedModel(sources: [], needsYou: asks, tasks: engine, place: .onDevice,
+                              now: { ShowcaseScene.morning })
+        let real = try #require(asks.ask(Self.bakery))
+        model.review(try #require(engine.task(id)))
+        let question = try #require(model.reviewing)
+        #expect(model.isSample(question))
+        #expect(!model.isSample(real))
+    }
+
+    /// The task card's Send, before there are words, is gray words on a
+    /// neutral fill over the card, and that pair is checked.
+    @Test(arguments: [ColorScheme.light, .dark])
+    func theDisabledCardButtonIsAReadablePair(scheme: ColorScheme) throws {
+        let pairs = Theme.textPairs(scheme).filter { $0.background.hasPrefix("disabled button on the card on ") }
+        #expect(pairs.count == 3 * 4)
+        for pair in pairs { #expect(pair.contrast >= 4.5, "\(pair.text) on \(pair.background)") }
+        let source = try #require(ContrastGuardTests.sources().first { $0.name == "TaskCard.swift" }?.text)
+        #expect(source.contains("Theme.accentText"))
+        #expect(source.contains("Theme.secondaryText"))
+    }
+
     @Test func theLiveShowcasePlaysInRealTime() {
         let engine = ShowcaseScene.liveTasks(rule: .isolated())
-        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: engine.rule), tasks: engine, drivesTasks: true)
+        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: engine.rule), tasks: engine, drivesTasks: true,
+                              place: .onDevice)
         #expect(model.drivesTasks)
         model.tick(7)
         #expect(engine.now == 7)

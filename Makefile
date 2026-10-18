@@ -1,6 +1,6 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test build screenshots ui-screenshots device-screenshots ui-test brand-check secrets-check pulse clean
+.PHONY: verify generate test repeat-test build screenshots ui-screenshots device-screenshots ui-test brand-check secrets-check pulse clean
 
 ## verify: everything CI runs. Run this before every PR.
 verify: brand-check test build screenshots
@@ -12,6 +12,11 @@ generate:
 ## test: unit tests for the shared packages
 test:
 	swift test --package-path Packages/PebbleKit --quiet
+
+## repeat-test: run the package tests N times (default 30) to catch a flaky
+## test. FILTER= narrows the run; without it the whole suite runs each time.
+repeat-test:
+	sh scripts/repeat-test.sh $(or $(N),30) "$(FILTER)"
 
 ## pulse: fetch the competitor watch and write a digest of real changes.
 ## When something changed, also write build/pulse/notify.md and build/pulse/summary.json.

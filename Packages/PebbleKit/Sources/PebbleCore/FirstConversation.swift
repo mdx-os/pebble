@@ -23,12 +23,22 @@ public struct StarterJob: Identifiable, Sendable, Equatable {
 public enum FirstConversation {
     public static let openingID = UUID(uuidString: "A1000000-0000-4000-8000-000000000001")!
 
-    public static let presence = "Here with you, on this device."
+    /// Under the name. Says "on this device" only when `place` makes it true.
+    public static func presence(_ place: PrivacyPlace) -> String {
+        place.staysOnDevice ? "Here with you, on this device." : "Here with you."
+    }
     public static let composerPlaceholder = "Say what's on your mind"
     public static let sendTitle = "Send"
     /// Read out once by VoiceOver while a reply is on its way.
     public static let thinking = "Thinking it over."
+    /// When the words were put back in the composer. Shown right above a
+    /// composer, in the chat or on Today, which share one draft, so "here"
+    /// is true in both.
     public static let couldNotAnswer = "Sorry, I couldn't finish a reply just now. What you wrote is still here, so you can send it again when you're ready."
+    /// When the person had already started a new draft, so the words were
+    /// left in the chat instead of replacing it. It may show on Today too,
+    /// so it says "in the chat", never "above".
+    public static let couldNotAnswerKeptDraft = "Sorry, I couldn't finish a reply just now. What you sent is still in the chat, so you can send it again when you're ready."
     /// Above the starter choices in a new chat.
     public static let startersHeading = "A few places to start"
 
@@ -42,6 +52,8 @@ public enum FirstConversation {
     public static let nameTooLong = "That's a little long. Try a name of \(AgentName.maxLength) letters or fewer."
 
     /// Only promise that words stay here when the model really runs here.
+    /// `onDevice` comes from the same `PrivacyPlace` as every other device
+    /// line; `Conversation` keeps it so a saved opening can be checked.
     public static func opening(named name: String, onDevice: Bool = false) -> String {
         onDevice
             ? "Hi, I'm \(name). I'm glad you're here. I run on this device, so what you tell me stays here. Pick a place to start, or tell me what's on your mind."

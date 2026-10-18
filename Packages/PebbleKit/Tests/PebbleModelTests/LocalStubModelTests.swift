@@ -204,6 +204,24 @@ struct LocalStubModelTests {
         #expect(renamed.turns.first?.text == FirstConversation.opening(named: "Pip", onDevice: true))
     }
 
+    /// The one source for every device line is the model itself.
+    @Test func thePrivacyPlaceComesFromTheModel() {
+        struct Remote: ModelClient {
+            func reply(to transcript: [ChatTurn]) async throws -> String { "" }
+        }
+        struct Local: ModelClient {
+            var runsOnDevice: Bool { true }
+            func reply(to transcript: [ChatTurn]) async throws -> String { "" }
+        }
+        #expect(LocalStubModel().privacyPlace == .onDevice)
+        #expect(Local().privacyPlace == .onDevice)
+        // A new adapter that says nothing makes no promise.
+        #expect(Remote().privacyPlace == .mayLeaveDevice)
+        // The device lines in the stub's own replies are only said by a model
+        // that runs here.
+        #expect(LocalStubModel.fallback.contains("this device") && LocalStubModel().runsOnDevice)
+    }
+
     @Test func aStarterJobRoundTripUsesTheModel() async throws {
         let job = try #require(FirstConversation.jobs.first { $0.id == "remember" })
         let next = try await Conversation.firstRun(named: "Nova").sending(job.prompt, with: model)
