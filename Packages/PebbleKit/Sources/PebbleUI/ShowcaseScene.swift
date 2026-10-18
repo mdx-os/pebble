@@ -264,16 +264,16 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         )
     }
 
-    /// A runner on a scratch file of its own, marked as an example, so
-    /// nothing here touches the person's own. `played` runs it through
-    /// two mornings: yesterday's held back by Low Power Mode until its day
-    /// ended, and today's held back while locked, then made at `morning`.
+    /// A runner that keeps nothing on disk, marked as an example, so
+    /// nothing here touches the person's own and no launch leaves a file
+    /// behind. It plays as if the app had been running all along.
+    /// `played` runs it through two mornings: yesterday's held back by Low
+    /// Power Mode until its day ended, and today's held back while locked,
+    /// then made at `morning`.
     static func sampleBackground(on: Bool, needsYou: NeedsYou? = nil, played: Bool = false,
                                  at morning: Date) -> BackgroundRunner {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("showcase-background-\(UUID().uuidString).json")
-        let runner = BackgroundRunner(store: BackgroundStore(fileURL: url), toggle: InMemoryBackgroundSwitch(),
-                                      needsYou: needsYou, sample: true)
+        let runner = BackgroundRunner(store: .memoryOnly(), toggle: InMemoryBackgroundSwitch(),
+                                      needsYou: needsYou, watchingSince: .distantPast, sample: true)
         guard on else { return runner }
         let calendar = Calendar.current
         let today = BackgroundPlan.morning(of: morning, calendar: calendar)

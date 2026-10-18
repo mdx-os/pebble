@@ -21,11 +21,11 @@ struct BackgroundFeedTests {
         return calendar.date(byAdding: .day, value: days, to: base)!
     }
 
-    private func runner(on: Bool, needsYou: NeedsYou? = nil) -> BackgroundRunner {
-        let store = BackgroundStore(fileURL: FileManager.default.temporaryDirectory
-            .appendingPathComponent("background-ui-\(UUID().uuidString).json"))
+    private func runner(on: Bool, needsYou: NeedsYou? = nil,
+                        store: BackgroundStore = BackgroundStore(fileURL: FileManager.default.temporaryDirectory
+                            .appendingPathComponent("background-ui-\(UUID().uuidString).json"))) -> BackgroundRunner {
         let runner = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(), needsYou: needsYou,
-                                      calendar: Self.calendar)
+                                      watchingSince: .distantPast, calendar: Self.calendar)
         if on { runner.turnOn(now: Self.at(6)) }
         return runner
     }
@@ -122,6 +122,56 @@ struct BackgroundFeedTests {
         // Today refreshing later never makes another.
         model.refresh()
         #expect(model.feed.isEmpty)
+    }
+
+    /// With no notes at all, morning summaries can still be removed: Forget
+    /// everything shows while background work has a file or cards, and
+    /// goes once they are gone.
+    @Test func forgetEverythingShowsForSummariesWithoutNotes() throws {
+        let runner = runner(on: false)
+        let memory = MemoryModel(store: scratchMemory(), place: .onDevice, background: runner, now: { Self.at(9) })
+        #expect(!memory.hasStoredFile)
+        #expect(!memory.hasSomethingToForget, "nothing here yet")
+
+        memory.setBackground(true)
+        runner.runDue(now: Self.at(7, days: 1), conditions: .foreground)
+        memory.setBackground(false)
+        memory.refresh()
+        #expect(!runner.results.isEmpty, "turning off keeps the cards")
+        #expect(!memory.hasStoredFile)
+        #expect(memory.hasSomethingToForget)
+
+        memory.forgetEverything()
+        #expect(runner.results.isEmpty)
+        #expect(!runner.store.hasStoredFile)
+        #expect(!memory.hasSomethingToForget)
+        #expect(memory.status == MemoryWords.forgotten)
+    }
+
+    /// If the summaries' file can't be erased, the line says so rather
+    /// than read as done, and Forget everything stays to try again.
+    @Test func aSummaryFileThatCantBeErasedIsSaid() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("background-ro-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let runner = runner(on: true, store: BackgroundStore(fileURL: folder.appendingPathComponent("background.json")))
+        #expect(runner.store.hasStoredFile)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+
+        let memory = MemoryModel(store: scratchMemory(), place: .onDevice, background: runner, now: { Self.at(9) })
+        #expect(memory.hasSomethingToForget)
+        memory.forgetEverything()
+        #expect(!runner.isOn, "off even so")
+        #expect(memory.status == MemoryWords.couldNotForgetSummaries)
+        #expect(memory.hasSomethingToForget, "still there, so it can be tried again")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+        memory.forgetEverything()
+        #expect(memory.status == MemoryWords.forgotten)
+        #expect(!memory.hasSomethingToForget)
     }
 
     /// Off until the person turns it on. On, it says when the next is due.

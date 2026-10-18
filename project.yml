@@ -48,11 +48,9 @@ targets:
         # Background work on iPhone and iPad, off until the person turns it
         # on. Must match BackgroundIdentifiers in PebbleCore; BackgroundTests checks.
         BGTaskSchedulerPermittedIdentifiers:
-          - com.mdxos.pebble.background.refresh
-          - com.mdxos.pebble.background.processing
+          - $(PRODUCT_BUNDLE_IDENTIFIER).background.refresh
         UIBackgroundModes:
           - fetch
-          - processing
     scheme:
       testTargets: [PebbleAppUITests]
     settings:

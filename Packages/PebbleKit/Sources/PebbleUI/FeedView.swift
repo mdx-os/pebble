@@ -388,15 +388,12 @@ final class FeedModel: ObservableObject {
     }
 
     /// Forget everything, from the memory screen: every task goes, as in
-    /// `forgetTasks`, and background work turns off, with its queue and
-    /// its cards. What the runner held in memory goes even if its file
-    /// can't be erased just now; the file holds only counts and times.
+    /// `forgetTasks`. The memory screen forgets the background work first,
+    /// so it can say if its file couldn't be erased; here a summary still
+    /// open to read closes, and Today shows the cards gone.
     @discardableResult
     func forgetEverything() -> ClearedTasks {
-        if let background {
-            try? background.forget()
-            if let reading, reading.id.hasPrefix("background:") { self.reading = nil }
-        }
+        if let reading, reading.id.hasPrefix("background:") { self.reading = nil }
         let cleared = forgetTasks()
         rebuild()
         return cleared

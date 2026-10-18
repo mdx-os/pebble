@@ -11,9 +11,10 @@ final class HomeLayoutUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
     }
 
-    private func launch(_ screen: String) -> XCUIApplication {
+    private func launch(_ screen: String, textSize: String? = nil) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-pebbleScreen", screen]
+        if let textSize { app.launchArguments += ["-UIPreferredContentSizeCategoryName", textSize] }
         app.launch()
         return app
     }
@@ -165,18 +166,31 @@ final class HomeLayoutUITests: XCTestCase {
     }
 
     /// Background work is off until the person turns it on, and then the
-    /// screen says when the next summary is due.
+    /// screen says when the next summary is due. The whole row is the
+    /// target, at the usual text size and the largest, so the switch turns
+    /// on through its element, not a point at its edge. What it promises
+    /// is its own element, so VoiceOver reads it with hints off.
     func testBackgroundWorkIsOffUntilTurnedOn() throws {
-        let app = launch("memory")
-        let toggle = app.switches["backgroundSwitch"]
-        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
-        for _ in 0..<3 where !toggle.isHittable { app.swipeUp() }
-        XCTAssertEqual(toggle.value as? String, "0")
-        XCTAssertFalse(app.staticTexts["backgroundNext"].exists)
-        // The switch itself sits at the trailing end of the row.
-        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
-        XCTAssertTrue(app.staticTexts["backgroundNext"].waitForExistence(timeout: 5))
-        XCTAssertEqual(toggle.value as? String, "1")
+        for textSize in [nil, "UICTContentSizeCategoryAccessibilityXXXL"] {
+            let app = launch("memory", textSize: textSize)
+            let toggle = app.switches["backgroundSwitch"]
+            XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+            for _ in 0..<8 where !toggle.isHittable { app.swipeUp() }
+            XCTAssertTrue(toggle.isHittable)
+            XCTAssertGreaterThanOrEqual(toggle.frame.height, 44, "a comfortable target at \(textSize ?? "default")")
+            XCTAssertEqual(toggle.value as? String, "0")
+            XCTAssertFalse(app.staticTexts["backgroundNext"].exists)
+            let detail = app.staticTexts["backgroundDetail"]
+            XCTAssertTrue(detail.exists)
+            XCTAssertTrue(detail.label.contains("without asking you first"))
+            toggle.tap()
+            XCTAssertTrue(app.staticTexts["backgroundNext"].waitForExistence(timeout: 5))
+            XCTAssertEqual(toggle.value as? String, "1", "one tap, turned on once")
+            toggle.tap()
+            XCTAssertTrue(app.staticTexts["backgroundNext"].waitForNonExistence(timeout: 5))
+            XCTAssertEqual(toggle.value as? String, "0")
+            app.terminate()
+        }
     }
 
     /// Typing on Today and pressing Command 2 still goes to the chat, and

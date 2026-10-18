@@ -8,16 +8,25 @@ import Foundation
 // already here. Anything consequential is asked through `AskFirst` and
 // waits in Needs you (`BackgroundRunner.propose`).
 
-/// The identifiers the system knows the background tasks by. The app's
-/// Info.plist lists the first two, from project.yml, or the system refuses
-/// them. `BackgroundTests` checks they match.
+/// The identifiers the system knows the background tasks by, each the
+/// app's bundle identifier plus a suffix, so no name is spelled here. The
+/// app's Info.plist lists the refresh one, from project.yml as
+/// `$(PRODUCT_BUNDLE_IDENTIFIER).background.refresh`, or the system
+/// refuses it. `BackgroundTests` checks they match.
 public enum BackgroundIdentifiers {
-    /// A short run in the morning, as `BGAppRefreshTask`.
-    public static let refresh = "com.mdxos.pebble.background.refresh"
-    /// A longer run the system may give overnight, as `BGProcessingTask`.
-    public static let processing = "com.mdxos.pebble.background.processing"
+    public static let refreshSuffix = ".background.refresh"
+    public static let macSuffix = ".background.mac"
+
+    /// A short run in the morning, as `BGAppRefreshTask`. A two second
+    /// count needs nothing longer.
+    public static func refresh(bundleIdentifier: String? = Bundle.main.bundleIdentifier) -> String {
+        (bundleIdentifier ?? "") + refreshSuffix
+    }
+
     /// The Mac's `NSBackgroundActivityScheduler`. Needs no listing.
-    public static let mac = "com.mdxos.pebble.background.mac"
+    public static func mac(bundleIdentifier: String? = Bundle.main.bundleIdentifier) -> String {
+        (bundleIdentifier ?? "") + macSuffix
+    }
 }
 
 /// One kind of work the runner can do.
@@ -160,24 +169,38 @@ public enum BackgroundPlan {
     static func afterMissing(now: Date, calendar: Calendar) -> Date {
         morning(of: now, calendar: calendar)
     }
+
+    /// The morning of the last day a missed job went without, when that
+    /// is a later day than the one it was due: every day before today was
+    /// missed. Nil when only its own day was.
+    public static func lastMissedDay(_ job: BackgroundJob, now: Date, calendar: Calendar) -> Date? {
+        guard let yesterday = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: now)),
+              calendar.startOfDay(for: job.due) < yesterday else { return nil }
+        return morning(of: yesterday, calendar: calendar)
+    }
 }
 
 /// What a morning summary found. Only counts and times, so nothing a task
 /// held or a question asked is kept here, and forgetting tasks leaves no
 /// words of theirs behind in a summary.
+///
+/// A count is nil when it couldn't be known: there was nothing to count it
+/// from, or what it comes from lives only in memory and the app wasn't
+/// running for the whole time it covers. Its line is left out then, never
+/// said as zero.
 public struct MorningSummary: Codable, Sendable, Equatable {
     /// Questions open in Needs you and tasks waiting on the person.
-    public let waiting: Int
+    public let waiting: Int?
     /// Tasks that finished since `since`.
-    public let finished: Int
+    public let finished: Int?
     /// Tasks that couldn't finish since `since`.
-    public let couldNotFinish: Int
+    public let couldNotFinish: Int?
     /// Counted from here: the summary before, or the evening before.
     public let since: Date
     /// Why it was made later than it was due, if it was held back.
     public let late: BackgroundHold?
 
-    public init(waiting: Int, finished: Int, couldNotFinish: Int, since: Date, late: BackgroundHold?) {
+    public init(waiting: Int?, finished: Int?, couldNotFinish: Int?, since: Date, late: BackgroundHold?) {
         self.waiting = waiting
         self.finished = finished
         self.couldNotFinish = couldNotFinish
@@ -185,28 +208,44 @@ public struct MorningSummary: Codable, Sendable, Equatable {
         self.late = late
     }
 
-    /// Counts what is really here: the open questions, and the tasks.
-    /// A task counts as finished only if it ended between `since` and `now`.
-    public static func count(questions: [FeedItem], tasks: [AgentTask], since: Date, now: Date,
+    /// Counts what is really here: the open questions, and the tasks. A
+    /// task counts as finished only if it ended between `since` and `now`.
+    /// A task waiting on the person counts once, even if its question is
+    /// in `questions` too. Nil `questions` means Needs you couldn't be
+    /// seen, so nothing waiting is counted; nil `tasks` means there were
+    /// no tasks to see, so nothing finished is counted.
+    public static func count(questions: [FeedItem]?, tasks: [AgentTask]?, since: Date, now: Date,
                              late: BackgroundHold?) -> MorningSummary {
         let window = since...now
-        let ended = tasks.filter { !$0.isActive && window.contains($0.updatedAt) }
+        let ended = tasks?.filter { !$0.isActive && window.contains($0.updatedAt) }
+        let waitingTasks = tasks?.filter { $0.state == .waitingOnYou }
+        let taskQuestions = Set((waitingTasks ?? []).compactMap { $0.question?.id })
+        let asks = questions?.filter { item in
+            guard item.kind == .needsYou else { return false }
+            if case .review(let request) = item.action, taskQuestions.contains(request.id) { return false }
+            return true
+        }
         return MorningSummary(
-            waiting: questions.filter { $0.kind == .needsYou }.count + tasks.filter { $0.state == .waitingOnYou }.count,
-            finished: ended.filter { $0.state == .done }.count,
-            couldNotFinish: ended.filter { $0.state == .failed }.count,
+            waiting: asks.map { $0.count + (waitingTasks?.count ?? 0) },
+            finished: ended?.filter { $0.state == .done }.count,
+            couldNotFinish: ended?.filter { $0.state == .failed }.count,
             since: since, late: late)
     }
 
-    public var isQuiet: Bool { waiting == 0 && finished == 0 && couldNotFinish == 0 }
+    /// Nothing to report: every count that could be known is zero.
+    public var isQuiet: Bool { (waiting ?? 0) == 0 && (finished ?? 0) == 0 && (couldNotFinish ?? 0) == 0 }
+
+    /// Nothing could be counted at all.
+    public var countedNothing: Bool { waiting == nil && finished == nil && couldNotFinish == nil }
 }
 
 /// Something a run left for Today.
 public struct BackgroundResult: Codable, Sendable, Equatable, Identifiable {
     public enum Content: Codable, Sendable, Equatable {
         case morningSummary(MorningSummary)
-        /// A job whose day ended before it could run.
-        case missed(kind: BackgroundJobKind, due: Date, held: BackgroundHold?)
+        /// A job whose day ended before it could run. `through` is the last
+        /// day missed when more than one went by, so the card names them all.
+        case missed(kind: BackgroundJobKind, due: Date, held: BackgroundHold?, through: Date? = nil)
     }
 
     public let id: UUID
@@ -225,17 +264,23 @@ public struct BackgroundResult: Codable, Sendable, Equatable, Identifiable {
         let id = "background:\(id.uuidString)"
         switch content {
         case .morningSummary(let summary):
-            let body = BackgroundWords.summaryBody(summary)
+            let body = BackgroundWords.summaryBody(summary, now: madeAt, calendar: calendar, locale: locale)
             guard !summary.isQuiet else {
                 return FeedItem(id: id, kind: .did, time: madeAt, title: BackgroundWords.summaryTitle, body: body)
             }
             return FeedItem(id: id, kind: .ready, time: madeAt, title: BackgroundWords.summaryTitle, body: body,
                             action: .open(BackgroundWords.summaryDetail(summary, now: madeAt, calendar: calendar,
                                                                         locale: locale)))
-        case .missed(_, let due, let held):
+        case .missed(_, let due, let held, let through):
+            guard let through else {
+                return FeedItem(id: id, kind: .noticed, time: madeAt,
+                                title: BackgroundWords.missedTitle(due, calendar: calendar, locale: locale),
+                                body: BackgroundWords.missed(held))
+            }
             return FeedItem(id: id, kind: .noticed, time: madeAt,
-                            title: BackgroundWords.missedTitle(due, calendar: calendar, locale: locale),
-                            body: BackgroundWords.missed(held))
+                            title: BackgroundWords.missedTitle(from: due, through: through, calendar: calendar,
+                                                               locale: locale),
+                            body: BackgroundWords.missedSeveral)
         }
     }
 }
@@ -266,7 +311,7 @@ public protocol BackgroundSwitch: Sendable {
 /// The switch, saved in `UserDefaults`. Readable while the device is
 /// locked, so a run in the night knows whether it may go ahead.
 public struct UserDefaultsBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
-    public static let key = "pebble.background.on"
+    public static let key = "backgroundWork.on"
     private let defaults: UserDefaults
 
     public init(defaults: UserDefaults = .standard) {
@@ -307,12 +352,27 @@ public final class BackgroundStore: @unchecked Sendable {
     public struct Unavailable: Error, Equatable {}
 
     public let fileURL: URL
+    /// True for a store that keeps nothing on disk, for the showcase.
+    private let diskless: Bool
     private let lock = NSLock()
 
-    /// Package access: the app uses `onDevice()`. Tests and screenshots
-    /// point a store at a scratch file.
+    /// Package access: the app uses `onDevice()`. Tests point a store at a
+    /// scratch file.
     package init(fileURL: URL) {
         self.fileURL = fileURL
+        diskless = false
+    }
+
+    private init(diskless: Void) {
+        fileURL = URL(fileURLWithPath: "/dev/null")
+        self.diskless = true
+    }
+
+    /// A store that writes nothing anywhere, so the showcase leaves no file
+    /// behind however often it launches. What its runner makes lives only
+    /// in memory.
+    package static func memoryOnly() -> BackgroundStore {
+        BackgroundStore(diskless: ())
     }
 
     var stagingURL: URL {
@@ -334,7 +394,8 @@ public final class BackgroundStore: @unchecked Sendable {
     }
 
     public var hasStoredFile: Bool {
-        FileManager.default.fileExists(atPath: fileURL.path)
+        guard !diskless else { return false }
+        return FileManager.default.fileExists(atPath: fileURL.path)
             || FileManager.default.fileExists(atPath: stagingURL.path)
     }
 
@@ -344,7 +405,7 @@ public final class BackgroundStore: @unchecked Sendable {
     public func load() throws -> BackgroundState {
         lock.lock()
         defer { lock.unlock() }
-        guard FileManager.default.fileExists(atPath: fileURL.path) else { return .empty }
+        guard !diskless, FileManager.default.fileExists(atPath: fileURL.path) else { return .empty }
         guard let data = try? Data(contentsOf: fileURL) else { throw Unavailable() }
         return (try? JSONDecoder().decode(BackgroundState.self, from: data)) ?? .empty
     }
@@ -352,6 +413,7 @@ public final class BackgroundStore: @unchecked Sendable {
     public func save(_ state: BackgroundState) throws {
         lock.lock()
         defer { lock.unlock() }
+        guard !diskless else { return }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(state)
@@ -371,6 +433,7 @@ public final class BackgroundStore: @unchecked Sendable {
     public func forget() throws {
         lock.lock()
         defer { lock.unlock() }
+        guard !diskless else { return }
         try removeStaged()
         if FileManager.default.fileExists(atPath: fileURL.path) {
             try FileManager.default.removeItem(at: fileURL)
@@ -381,6 +444,28 @@ public final class BackgroundStore: @unchecked Sendable {
         if FileManager.default.fileExists(atPath: stagingURL.path) {
             try FileManager.default.removeItem(at: stagingURL)
         }
+    }
+}
+
+/// One stretch of time the system gave for a run. When the system takes it
+/// back, only this run hears it, so a late call can't hold back the next.
+public final class BackgroundTime: @unchecked Sendable {
+    private let lock = NSLock()
+    private var up = false
+
+    public init() {}
+
+    /// The system is taking its time back. Whatever hasn't run in this
+    /// run waits for the next chance, and its card will say it ran out of time.
+    public func timeIsUp() {
+        lock.lock()
+        up = true
+        lock.unlock()
+    }
+
+    public var isUp: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return up
     }
 }
 
@@ -399,6 +484,10 @@ public final class BackgroundRunner: @unchecked Sendable {
     public let store: BackgroundStore
     public let needsYou: NeedsYou?
     public let tasks: (any TaskEngine)?
+    /// Since when `needsYou` and `tasks` have been watching: this launch
+    /// of the app. They live in memory only, so a summary whose window
+    /// began earlier can't count from them, and leaves those lines out.
+    public let watchingSince: Date
     private let toggle: any BackgroundSwitch
     private let calendar: Calendar
     private let sample: Bool
@@ -413,20 +502,38 @@ public final class BackgroundRunner: @unchecked Sendable {
     /// Holds made before the file could be read, by job kind, so the card
     /// can still say why once it can.
     private var heldBeforeLoad: [BackgroundJobKind: BackgroundHold] = [:]
-    /// Set when the system takes its time back. Anything not yet run waits.
-    private var timeUp = false
+    /// Turned on or off before the file could be read. The queue saved in
+    /// the file then follows this, so an old queue never comes back.
+    private var switchedBeforeLoad: Bool?
+    /// Questions `propose` asked and not yet answered, so turning off or
+    /// forgetting can withdraw them.
+    private var proposals: [ConfirmationRequest] = []
     private var observers: [Observation: @Sendable () -> Void] = [:]
 
     /// `sample` marks the cards as examples, for the showcase. A runner
     /// reading scripted tasks or sample questions is an example too.
     public init(store: BackgroundStore, toggle: any BackgroundSwitch, needsYou: NeedsYou? = nil,
-                tasks: (any TaskEngine)? = nil, calendar: Calendar = .current, sample: Bool = false) {
+                tasks: (any TaskEngine)? = nil, watchingSince: Date = Date(), calendar: Calendar = .current,
+                sample: Bool = false) {
         self.store = store
         self.toggle = toggle
         self.needsYou = needsYou
         self.tasks = tasks
+        self.watchingSince = watchingSince
         self.calendar = calendar
         self.sample = sample
+    }
+
+    /// The app's runner, on the device's store with the saved switch. It
+    /// reads the same `needsYou` and `tasks` as Today, which have been
+    /// watching since `launchedAt`. Nil if the store's folder can't be made.
+    public static func onDevice(needsYou: NeedsYou, tasks: (any TaskEngine)?, launchedAt: Date = Date(),
+                                store: () throws -> BackgroundStore = { try BackgroundStore.onDevice() },
+                                toggle: any BackgroundSwitch = UserDefaultsBackgroundSwitch(),
+                                calendar: Calendar = .current) -> BackgroundRunner? {
+        guard let store = try? store() else { return nil }
+        return BackgroundRunner(store: store, toggle: toggle, needsYou: needsYou, tasks: tasks,
+                                watchingSince: launchedAt, calendar: calendar)
     }
 
     /// True when the cards are examples, so Today labels them.
@@ -468,18 +575,19 @@ public final class BackgroundRunner: @unchecked Sendable {
     /// morning. Turning it on again changes nothing.
     public func turnOn(now: Date) {
         toggle.set(true)
-        change { state in
+        change(switching: true) { state in
             guard !state.queue.contains(where: { $0.kind == .morningSummary }) else { return }
             state.queue.append(BackgroundJob(kind: .morningSummary,
                                              due: BackgroundPlan.nextMorning(after: now, calendar: calendar)))
         }
     }
 
-    /// Turns it off. The queue goes, so nothing more runs. Cards already
-    /// made stay until they are forgotten.
+    /// Turns it off. The queue goes, so nothing more runs, and any question
+    /// it asked is withdrawn. Cards already made stay until they are forgotten.
     public func turnOff() {
         toggle.set(false)
-        change { $0.queue.removeAll() }
+        change(switching: false) { $0.queue.removeAll() }
+        withdrawProposals()
     }
 
     // MARK: Reading
@@ -499,9 +607,17 @@ public final class BackgroundRunner: @unchecked Sendable {
     }
 
     /// When the platform should give the runner time next. Nil while off
-    /// or with nothing queued.
+    /// or with nothing queued. While on with a file that can't be read
+    /// yet, as on a launch while locked, a little later: the queue is
+    /// still in the file, so the ask must not be cancelled.
     public func nextWake(now: Date) -> Date? {
         guard isOn else { return nil }
+        lock.lock()
+        loadIfNeeded()
+        let isLoaded = loaded
+        let queue = state.queue
+        lock.unlock()
+        guard isLoaded else { return now + BackgroundPlan.retryAfterHold }
         return BackgroundPlan.nextWake(for: queue, now: now)
     }
 
@@ -510,34 +626,21 @@ public final class BackgroundRunner: @unchecked Sendable {
 
     // MARK: Running
 
-    /// The system is taking its time back. Whatever hasn't run waits for
-    /// the next chance, and its card will say it ran out of time.
-    public func timeIsUp() {
-        lock.lock()
-        timeUp = true
-        lock.unlock()
-    }
-
     /// Runs every job that is due and may run now. Returns the cards made.
     ///
-    /// Called by the platform with the moment it reports, and by Today
-    /// whenever it refreshes, so a summary the system never woke the app
-    /// for is made as soon as the person opens it.
+    /// Called by the platform with the moment it reports and the `time` it
+    /// gave, and by Today whenever it refreshes, so a summary the system
+    /// never woke the app for is made as soon as the person opens it.
     @discardableResult
-    public func runDue(now: Date, conditions: BackgroundConditions) -> [BackgroundResult] {
+    public func runDue(now: Date, conditions: BackgroundConditions,
+                       time: BackgroundTime? = nil) -> [BackgroundResult] {
         guard isOn else { return [] }
         // Read outside the runner's lock: `NeedsYou` and the engine take
         // their own, and may call back.
-        let questions = needsYou?.items(now: now) ?? []
-        let taskList = tasks?.tasks ?? []
+        let questions = needsYou?.items(now: now)
+        let taskList = tasks?.tasks
 
         lock.lock()
-        // The time this run was given ends with it. A later run starts fresh.
-        defer {
-            lock.lock()
-            timeUp = false
-            lock.unlock()
-        }
         loadIfNeeded()
         guard loaded else {
             // The file can't be opened, so neither can anything be written.
@@ -556,14 +659,16 @@ public final class BackgroundRunner: @unchecked Sendable {
             // At most twice: a missed job moves to this morning and may run now.
             for _ in 0..<2 {
                 var decision = BackgroundPlan.decide(job, now: now, conditions: conditions, calendar: calendar)
-                if decision == .run, timeUp { decision = .hold(.outOfTime) }
+                if decision == .run, time?.isUp == true { decision = .hold(.outOfTime) }
                 switch decision {
                 case .notYet:
                     break
                 case .hold(let reason):
                     if job.held != reason { job.held = reason; changed = true }
                 case .missed:
-                    made.append(BackgroundResult(madeAt: now, content: .missed(kind: job.kind, due: job.due, held: job.held)))
+                    made.append(BackgroundResult(madeAt: now, content: .missed(
+                        kind: job.kind, due: job.due, held: job.held,
+                        through: BackgroundPlan.lastMissedDay(job, now: now, calendar: calendar))))
                     job.due = BackgroundPlan.afterMissing(now: now, calendar: calendar)
                     job.held = nil
                     changed = true
@@ -592,13 +697,18 @@ public final class BackgroundRunner: @unchecked Sendable {
         return made
     }
 
-    /// One job's run, with the lock held.
-    private func run(_ job: BackgroundJob, now: Date, questions: [FeedItem], tasks: [AgentTask]) -> BackgroundResult {
+    /// One job's run, with the lock held. Nil `questions` or `tasks` has
+    /// nothing to count from.
+    private func run(_ job: BackgroundJob, now: Date, questions: [FeedItem]?, tasks: [AgentTask]?) -> BackgroundResult {
         switch job.kind {
         case .morningSummary:
-            // Overnight: since the last summary, or the evening before this one was due.
+            // Since the last summary, or the evening before this one was due.
             let since = state.lastSummary ?? job.due - 12 * 60 * 60
-            let summary = MorningSummary.count(questions: questions, tasks: tasks, since: since, now: now,
+            // What lives in memory saw the whole window only if it was
+            // watching from its start. If not, its counts are unknown.
+            let watched = watchingSince <= since
+            let summary = MorningSummary.count(questions: watched ? questions : nil,
+                                               tasks: watched ? tasks : nil, since: since, now: now,
                                                late: job.held)
             state.lastSummary = now
             return BackgroundResult(madeAt: now, content: .morningSummary(summary))
@@ -625,30 +735,65 @@ public final class BackgroundRunner: @unchecked Sendable {
     /// Only while the person is here: a question stays open for
     /// `AskFirst.defaultWindow`, so one asked in the night would time out
     /// before anyone saw it. In the background this asks nothing.
+    ///
+    /// Turning background work off, or Forget everything, withdraws the
+    /// question. A yes that still arrives does nothing while it is off.
     @discardableResult
     public func propose(_ action: ProposedAction, conditions: BackgroundConditions, at time: Date,
                         act: @escaping @Sendable () -> Void) -> ConfirmationRequest? {
         guard conditions.moment == .foreground, isOn, let needsYou else { return nil }
         let rule = needsYou.rule
-        return needsYou.ask(action, at: time) { approval in
-            guard rule.decide(action, approval: approval) == .proceed else { return }
+        let asked = needsYou.ask(action, at: time) { [weak self] approval in
+            guard let self else { return }
+            self.answered(approval.id)
+            // Checked again here: it may have been turned off since it asked.
+            guard self.isOn, rule.decide(action, approval: approval) == .proceed else { return }
             act()
+        }
+        guard let asked else { return nil }
+        lock.lock()
+        proposals.removeAll { rule.isClosed($0) }
+        proposals.append(asked)
+        lock.unlock()
+        return asked
+    }
+
+    private func answered(_ id: UUID) {
+        lock.lock()
+        proposals.removeAll { $0.id == id }
+        lock.unlock()
+    }
+
+    /// Withdraws every question `propose` asked, through the rule, so none
+    /// can be approved later, and takes them out of Needs you.
+    private func withdrawProposals() {
+        lock.lock()
+        let open = proposals
+        proposals = []
+        lock.unlock()
+        guard let needsYou else { return }
+        for request in open {
+            needsYou.rule.withdraw(request)
+            needsYou.dismissed(request)
         }
     }
 
     // MARK: Forgetting
 
-    /// Forget everything: background work turns off, the queue and every
-    /// card go, and the file is erased. Nothing is left to run. Throws if
-    /// the file couldn't be erased; what was in memory is gone either way.
+    /// Forget everything: background work turns off, any question it asked
+    /// is withdrawn, the queue and every card go, and the file is erased.
+    /// Nothing is left to run. Throws if the file couldn't be erased; what
+    /// was in memory is gone either way.
     public func forget() throws {
         toggle.set(false)
+        withdrawProposals()
         lock.lock()
         state = .empty
         // Nothing to read back: the file is about to go.
         loaded = true
         unsaved = false
         heldBeforeLoad = [:]
+        switchedBeforeLoad = nil
         lock.unlock()
         defer { didChange() }
         try store.forget()
@@ -661,12 +806,19 @@ public final class BackgroundRunner: @unchecked Sendable {
 
     // MARK: Storage
 
-    private func change(_ body: (inout BackgroundState) -> Void) {
+    /// `switching` is set when the switch was turned on or off. If the
+    /// file can't be read yet, that is remembered and wins over the queue
+    /// in the file once it can.
+    private func change(switching: Bool? = nil, _ body: (inout BackgroundState) -> Void) {
         lock.lock()
         loadIfNeeded()
         let before = state
         body(&state)
-        let changed = state != before
+        var changed = state != before
+        if !loaded, let switching {
+            switchedBeforeLoad = switching
+            changed = true
+        }
         if changed { unsaved = true }
         saveIfNeeded()
         lock.unlock()
@@ -681,14 +833,26 @@ public final class BackgroundRunner: @unchecked Sendable {
             let saved = try store.load()
             if unsaved {
                 // Changes made before the file could be read win, since
-                // they are newer. Cards from both are kept.
+                // they are newer. Cards from both are kept. Turned off
+                // meanwhile, the saved queue goes; turned on, a saved job
+                // keeps its time and why it was held.
                 let ids = Set(state.results.map(\.id))
                 state.results = saved.results.filter { !ids.contains($0.id) } + state.results
                 state.lastSummary = [state.lastSummary, saved.lastSummary].compactMap { $0 }.max()
+                switch switchedBeforeLoad {
+                case false?: state.queue = []
+                case true?:
+                    if saved.queue.contains(where: { $0.kind == .morningSummary }) { state.queue = saved.queue }
+                case nil: state.queue = saved.queue
+                }
             } else {
                 state = saved
             }
+            switchedBeforeLoad = nil
             loaded = true
+            // What waited for the file goes into it now, so the next launch
+            // reads it too.
+            saveIfNeeded()
         } catch {
             // Locked. Try again next time.
         }
@@ -731,10 +895,17 @@ public struct BackgroundFeed: FeedSource {
 public enum BackgroundWords {
     public static let summaryTitle = "Your morning summary"
 
-    /// "One thing was waiting for you. Two tasks finished overnight."
-    public static func summaryBody(_ summary: MorningSummary) -> String {
-        var lines = [waiting(summary.waiting), finished(summary.finished)]
-        if summary.couldNotFinish > 0 { lines.append(couldNotFinish(summary.couldNotFinish)) }
+    /// "One thing was waiting for you. Two tasks finished overnight." A
+    /// count that couldn't be known is left out, never said as zero.
+    public static func summaryBody(_ summary: MorningSummary, now: Date, calendar: Calendar = .current,
+                                   locale: Locale = .current) -> String {
+        var lines: [String] = []
+        if let count = summary.waiting { lines.append(waiting(count)) }
+        if let count = summary.finished {
+            lines.append(finished(count, since: summary.since, now: now, calendar: calendar, locale: locale))
+        }
+        if let count = summary.couldNotFinish, count > 0 { lines.append(couldNotFinish(count)) }
+        if summary.countedNothing { lines.append(countedNothing) }
         if let hold = summary.late { lines.append(late(hold)) }
         return lines.joined(separator: " ")
     }
@@ -743,14 +914,24 @@ public enum BackgroundWords {
     /// and from when it counted.
     public static func summaryDetail(_ summary: MorningSummary, now: Date, calendar: Calendar,
                                      locale: Locale) -> String {
-        var lines = [waiting(summary.waiting)]
-        if summary.waiting > 0 { lines.append(whereWaiting) }
-        lines.append(finished(summary.finished))
-        if summary.couldNotFinish > 0 { lines.append(couldNotFinish(summary.couldNotFinish)) }
+        var lines: [String] = []
+        if let count = summary.waiting {
+            lines.append(waiting(count))
+            if count > 0 { lines.append(whereWaiting) }
+        }
+        if let count = summary.finished {
+            lines.append(finished(count, since: summary.since, now: now, calendar: calendar, locale: locale))
+        }
+        if let count = summary.couldNotFinish, count > 0 { lines.append(couldNotFinish(count)) }
+        if summary.countedNothing { lines.append(countedNothing) }
         lines.append(countedSince(summary.since, now: now, calendar: calendar, locale: locale))
         if let hold = summary.late { lines.append(late(hold)) }
         return lines.joined(separator: "\n\n")
     }
+
+    /// When nothing could be counted: the app wasn't running for the whole
+    /// time, and what it would count lives only while it runs.
+    public static let countedNothing = "The app was closed for part of this time, so I couldn't count what happened."
 
     static func waiting(_ count: Int) -> String {
         switch count {
@@ -760,12 +941,25 @@ public enum BackgroundWords {
         }
     }
 
-    static func finished(_ count: Int) -> String {
-        switch count {
-        case 0: "Nothing finished overnight."
-        case 1: "One task finished overnight."
-        default: "\(count) tasks finished overnight."
+    /// "overnight" only when it counted from yesterday afternoon or later.
+    /// Longer, it names from when: "since yesterday", "since Tuesday".
+    static func finished(_ count: Int, since: Date, now: Date, calendar: Calendar, locale: Locale) -> String {
+        let span = period(since: since, now: now, calendar: calendar, locale: locale)
+        return switch count {
+        case 0: "Nothing finished \(span)."
+        case 1: "One task finished \(span)."
+        default: "\(count) tasks finished \(span)."
         }
+    }
+
+    static func period(since: Date, now: Date, calendar: Calendar, locale: Locale) -> String {
+        let today = calendar.startOfDay(for: now)
+        guard let yesterday = calendar.date(byAdding: .day, value: -1, to: today) else { return "overnight" }
+        let afternoon = calendar.date(byAdding: .hour, value: 12, to: yesterday) ?? yesterday
+        if since >= today { return "since \(clock(since, calendar: calendar, locale: locale))" }
+        if since >= afternoon { return "overnight" }
+        if since >= yesterday { return "since yesterday" }
+        return "since \(weekday(since, calendar: calendar, locale: locale))"
     }
 
     static func couldNotFinish(_ count: Int) -> String {
@@ -806,10 +1000,34 @@ public enum BackgroundWords {
         }
     }
 
-    /// "I couldn't make Thursday's summary"
+    /// "I couldn't make Thursday's summary". A format string, so a
+    /// translation can place the day where its language puts it.
     public static func missedTitle(_ due: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
-        "I couldn't make \(weekday(due, calendar: calendar, locale: locale))'s summary"
+        let day = weekday(due, calendar: calendar, locale: locale)
+        return String(localized: "I couldn't make \(day)'s summary", locale: locale,
+                      comment: "A card title. The argument is a weekday, such as Thursday.")
     }
+
+    /// "I couldn't make the summaries from Thursday to Saturday", or for
+    /// a week or more, "I couldn't make the last 9 summaries", since day
+    /// names would repeat.
+    public static func missedTitle(from first: Date, through last: Date, calendar: Calendar = .current,
+                                   locale: Locale = .current) -> String {
+        let days = (calendar.dateComponents([.day], from: calendar.startOfDay(for: first),
+                                            to: calendar.startOfDay(for: last)).day ?? 0) + 1
+        guard days < 7 else {
+            return String(localized: "I couldn't make the last \(days) summaries", locale: locale,
+                          comment: "A card title. The argument is how many mornings were missed, 7 or more.")
+        }
+        let from = weekday(first, calendar: calendar, locale: locale)
+        let to = weekday(last, calendar: calendar, locale: locale)
+        return String(localized: "I couldn't make the summaries from \(from) to \(to)", locale: locale,
+                      comment: "A card title. The arguments are the first and last weekday missed.")
+    }
+
+    /// Why several days went by: only the first day's reason is known, so
+    /// it says what is true of them all.
+    public static let missedSeveral = "I didn't get a chance to make them while the app was closed."
 
     /// Why a summary's day ended before it could be made.
     public static func missed(_ hold: BackgroundHold?) -> String {

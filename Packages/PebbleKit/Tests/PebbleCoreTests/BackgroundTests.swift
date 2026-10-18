@@ -59,10 +59,30 @@ private func scratchStore() -> BackgroundStore {
         .appendingPathComponent("background-\(UUID().uuidString).json"))
 }
 
+/// A file that is there but can't be opened, as while the device is locked:
+/// a folder where the file should be. `saved` is what the file held.
+private func lockedStore(saved: BackgroundState? = nil) throws -> (BackgroundStore, unlock: () throws -> Void) {
+    let store = scratchStore()
+    var data: Data?
+    if let saved {
+        try store.save(saved)
+        data = try Data(contentsOf: store.fileURL)
+        try FileManager.default.removeItem(at: store.fileURL)
+    }
+    try FileManager.default.createDirectory(at: store.fileURL, withIntermediateDirectories: true)
+    return (store, {
+        try FileManager.default.removeItem(at: store.fileURL)
+        if let data { try data.write(to: store.fileURL) }
+    })
+}
+
+/// Watching since long ago, as if the app had been running all along, so
+/// the counts are known unless a test says otherwise.
 private func runner(store: BackgroundStore = scratchStore(), on: Bool = true, needsYou: NeedsYou? = nil,
-                    tasks: (any TaskEngine)? = nil, now: Date = at(6)) -> BackgroundRunner {
+                    tasks: (any TaskEngine)? = nil, watchingSince: Date = .distantPast,
+                    now: Date = at(6)) -> BackgroundRunner {
     let runner = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(), needsYou: needsYou,
-                                  tasks: tasks, calendar: calendar)
+                                  tasks: tasks, watchingSince: watchingSince, calendar: calendar)
     if on { runner.turnOn(now: now) }
     return runner
 }
@@ -153,7 +173,7 @@ struct BackgroundRunnerTests {
     }
 
     @Test func aQuietMorningSaysSoAndComesBackTomorrow() throws {
-        let runner = runner()
+        let runner = runner(needsYou: NeedsYou(rule: .isolated()), tasks: FixedTasks([]))
         #expect(runner.runDue(now: at(6, 59), conditions: background).isEmpty)
         let made = runner.runDue(now: at(7, 2), conditions: background)
         #expect(made.count == 1)
@@ -211,6 +231,96 @@ struct BackgroundRunnerTests {
         guard case .morningSummary(let summary) = made.content else { Issue.record("not a summary"); return }
         #expect(summary.since == at(7))
         #expect(summary.finished == 1)
+    }
+
+    // MARK: Only what it can know
+
+    /// The app's own wiring: the same Needs you and task engine as Today,
+    /// and no engine yet. Launched in the night, it didn't see the evening,
+    /// so it states no count at all; the next morning it saw all of, it
+    /// counts what was waiting and says nothing about tasks.
+    @Test func theAppsRunnerStatesNoCountItCantKnow() throws {
+        let asks = NeedsYou(rule: .isolated())
+        let store = scratchStore()
+        defer { try? store.forget() }
+        let toggle = InMemoryBackgroundSwitch()
+        let made = BackgroundRunner.onDevice(needsYou: asks, tasks: nil, launchedAt: at(3), store: { store },
+                                             toggle: toggle, calendar: calendar)
+        let runner = try #require(made)
+        #expect(runner.needsYou === asks)
+        #expect(runner.tasks == nil)
+        #expect(runner.watchingSince == at(3))
+        runner.turnOn(now: at(3))
+
+        let first = try #require(runner.runDue(now: at(7), conditions: background).first)
+        guard case .morningSummary(let unknown) = first.content else { Issue.record("not a summary"); return }
+        #expect(unknown.waiting == nil && unknown.finished == nil && unknown.couldNotFinish == nil)
+        let firstCard = first.item(calendar: calendar)
+        #expect(firstCard.body == BackgroundWords.countedNothing)
+        #expect(!firstCard.body.contains("Nothing"))
+        #expect(!firstCard.body.contains("finished"))
+
+        let second = try #require(runner.runDue(now: at(7, days: 1), conditions: background).first)
+        let secondCard = second.item(calendar: calendar)
+        #expect(secondCard.body == "Nothing was waiting for you.")
+        #expect(!(secondCard.action.map { "\($0)" } ?? "").contains("finished"))
+
+        #expect(BackgroundRunner.onDevice(needsYou: asks, tasks: nil,
+                                          store: { throw BackgroundStore.Unavailable() }) == nil)
+    }
+
+    /// Needs you lives in memory only. A launch after the window began
+    /// can't say nothing was waiting, so it leaves that line out, and so
+    /// for tasks.
+    @Test func aLaunchAfterTheWindowBeganLeavesTheCountsOut() throws {
+        let asks = NeedsYou(rule: .isolated())
+        let tasks = FixedTasks([])
+        let late = runner(needsYou: asks, tasks: tasks, watchingSince: at(2))
+        let made = try #require(late.runDue(now: at(7), conditions: background).first)
+        guard case .morningSummary(let summary) = made.content else { Issue.record("not a summary"); return }
+        #expect(summary.waiting == nil)
+        #expect(summary.finished == nil)
+        #expect(made.item(calendar: calendar).kind == .did)
+
+        let early = runner(needsYou: asks, tasks: tasks, watchingSince: at(18, days: -1))
+        let counted = try #require(early.runDue(now: at(7), conditions: background).first)
+        #expect(counted.item(calendar: calendar).body == "Nothing was waiting for you. Nothing finished overnight.")
+    }
+
+    /// A task waiting on a yes whose question also sits in Needs you is
+    /// one thing waiting, not two.
+    @Test func aTasksQuestionIsCountedOnce() throws {
+        let rule = AskFirst.isolated()
+        let asks = NeedsYou(rule: rule)
+        let request = try #require(asks.ask(note, at: at(6, 50)))
+        let tasks = FixedTasks([
+            AgentTask(id: "d", title: "Book a table", step: "Waiting", state: .waitingOnYou, question: request,
+                      startedAt: at(5)),
+        ], rule: rule)
+        let runner = runner(needsYou: asks, tasks: tasks)
+        let made = try #require(runner.runDue(now: at(7), conditions: background).first)
+        guard case .morningSummary(let summary) = made.content else { Issue.record("not a summary"); return }
+        #expect(summary.waiting == 1)
+    }
+
+    /// After a missed day the window is longer than a night, and the words
+    /// say from when rather than "overnight".
+    @Test func aLongerWindowNamesTheDayRatherThanOvernight() {
+        let en = Locale(identifier: "en_US")
+        func line(since: Date) -> String {
+            BackgroundWords.finished(2, since: since, now: at(7, days: 3), calendar: calendar, locale: en)
+        }
+        #expect(line(since: at(19, days: 2)) == "2 tasks finished overnight.")
+        #expect(line(since: at(7, days: 2)) == "2 tasks finished since yesterday.")
+        #expect(line(since: at(7)) == "2 tasks finished since Thursday.")
+
+        let runner = runner(needsYou: NeedsYou(rule: .isolated()), tasks: FixedTasks([]))
+        runner.runDue(now: at(7), conditions: background)
+        let made = runner.runDue(now: at(9, days: 3), conditions: .foreground)
+        let summary = made.first { if case .morningSummary = $0.content { true } else { false } }
+        let body = summary?.item(calendar: calendar, locale: en).body ?? ""
+        #expect(body.contains("since Thursday"))
+        #expect(!body.contains("overnight"))
     }
 
     @Test func whatItKeepsSurvivesARestartAndHoldsNoWordsOfTheTasks() throws {
@@ -344,12 +454,85 @@ struct BackgroundRunnerTests {
         #expect(runner.queue.first?.held == .outOfTime)
 
         // The system took its time back before the run.
-        runner.timeIsUp()
-        #expect(runner.runDue(now: at(7, 20), conditions: background).isEmpty)
+        let time = BackgroundTime()
+        time.timeIsUp()
+        #expect(runner.runDue(now: at(7, 20), conditions: background, time: time).isEmpty)
         #expect(runner.queue.first?.held == .outOfTime)
 
-        let made = try #require(runner.runDue(now: at(7, 40), conditions: background).first)
+        let made = try #require(runner.runDue(now: at(7, 40), conditions: background, time: BackgroundTime()).first)
         #expect(made.item(calendar: calendar).body.hasSuffix(BackgroundWords.late(.outOfTime)))
+    }
+
+    /// The system may say time is up after a run has already ended. That
+    /// belongs to the run that ended, so the next one, such as the catch
+    /// up when the app opens, runs and never claims it ran out of time.
+    @Test func aLateTimeUpNeverReachesTheNextRun() throws {
+        let runner = runner()
+        let first = BackgroundTime()
+        #expect(runner.runDue(now: at(6, 30), conditions: background, time: first).isEmpty)
+        first.timeIsUp()
+        let made = try #require(runner.runDue(now: at(7, 5), conditions: .foreground).first)
+        guard case .morningSummary(let summary) = made.content else { Issue.record("not a summary"); return }
+        #expect(summary.late == nil)
+    }
+
+    /// iOS launches the app for its morning task while the phone is still
+    /// locked. The file can't be read, but its queue is still there, so the
+    /// runner asks to be woken again soon rather than cancel every ask.
+    @Test func aColdLaunchWhileLockedKeepsAskingForTime() throws {
+        let saved = BackgroundState(queue: [BackgroundJob(kind: .morningSummary, due: at(7))])
+        let (store, unlock) = try lockedStore(saved: saved)
+        defer { try? FileManager.default.removeItem(at: store.fileURL) }
+        let runner = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(on: true),
+                                      watchingSince: .distantPast, calendar: calendar)
+        #expect(runner.nextWake(now: at(7, 1)) == at(7, 1) + BackgroundPlan.retryAfterHold)
+        #expect(runner.runDue(now: at(7, 1), conditions: BackgroundConditions(moment: .background, locked: true))
+            .isEmpty)
+        #expect(runner.nextWake(now: at(7, 1)) == at(7, 1) + BackgroundPlan.retryAfterHold)
+
+        // Off stays off, locked or not.
+        let off = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(), calendar: calendar)
+        #expect(off.nextWake(now: at(7, 1)) == nil)
+
+        try unlock()
+        #expect(runner.nextWake(now: at(7, 20)) == at(7, 20) + BackgroundPlan.retryAfterHold, "due and held, so soon")
+        #expect(runner.runDue(now: at(7, 20), conditions: background).count == 1)
+        #expect(runner.nextWake(now: at(7, 21)) == at(7, days: 1))
+    }
+
+    /// Turned off while the file can't be read, it stays off once it can:
+    /// the queue saved in the file doesn't come back, and turning on later
+    /// starts fresh, with no stale "couldn't make" card.
+    @Test func turningOffWhileLockedSticks() throws {
+        let saved = BackgroundState(queue: [BackgroundJob(kind: .morningSummary, due: at(7, days: -2))])
+        let (store, unlock) = try lockedStore(saved: saved)
+        defer { try? store.forget() }
+        let toggle = InMemoryBackgroundSwitch(on: true)
+        let runner = BackgroundRunner(store: store, toggle: toggle, calendar: calendar)
+        runner.turnOff()
+        #expect(runner.hasUnsavedChanges)
+
+        try unlock()
+        #expect(runner.queue.isEmpty)
+        #expect(!runner.hasUnsavedChanges)
+        let again = BackgroundRunner(store: store, toggle: toggle, calendar: calendar)
+        #expect(again.queue.isEmpty, "written over once it could be")
+
+        runner.turnOn(now: at(9))
+        #expect(runner.queue.map(\.due) == [at(7, days: 1)])
+        #expect(runner.runDue(now: at(9, 30), conditions: .foreground).isEmpty)
+        #expect(runner.results.isEmpty)
+    }
+
+    /// Turned on while locked, a job already in the file keeps its time.
+    @Test func turningOnWhileLockedKeepsTheSavedJob() throws {
+        let saved = BackgroundState(queue: [BackgroundJob(kind: .morningSummary, due: at(7), held: .lowPower)])
+        let (store, unlock) = try lockedStore(saved: saved)
+        defer { try? store.forget() }
+        let runner = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(), calendar: calendar)
+        runner.turnOn(now: at(7, 30))
+        try unlock()
+        #expect(runner.queue == saved.queue)
     }
 
     @Test func aDayThatEndedSaysItCouldntAndTodayStillRuns() throws {
@@ -370,10 +553,26 @@ struct BackgroundRunnerTests {
 
     @Test func aMissedDayBeforeTheMorningWaitsForTheMorning() {
         let runner = runner()
-        let made = runner.runDue(now: at(5, days: 2), conditions: background)
+        let made = runner.runDue(now: at(5, days: 1), conditions: background)
         #expect(made.count == 1)
         #expect(made.first?.item(calendar: calendar).body == BackgroundWords.missed(nil))
-        #expect(runner.queue.first?.due == at(7, days: 2))
+        #expect(runner.queue.first?.due == at(7, days: 1))
+    }
+
+    /// Several days went by: one card names them all, and says only what
+    /// is true of every one of them.
+    @Test func severalMissedDaysAreNamedHonestly() throws {
+        let en = Locale(identifier: "en_US")
+        let runner = runner()
+        let made = runner.runDue(now: at(5, days: 3), conditions: background)
+        #expect(made.count == 1)
+        let card = try #require(made.first?.item(calendar: calendar, locale: en))
+        #expect(card.title == "I couldn't make the summaries from Thursday to Saturday")
+        #expect(card.body == BackgroundWords.missedSeveral)
+        #expect(runner.queue.first?.due == at(7, days: 3))
+
+        let long = BackgroundWords.missedTitle(from: at(7), through: at(7, days: 8), calendar: calendar, locale: en)
+        #expect(long == "I couldn't make the last 9 summaries")
     }
 
     @Test func oldCardsGo() {
@@ -438,6 +637,42 @@ struct BackgroundRunnerTests {
         #expect(asks.items(now: at(9)).isEmpty)
     }
 
+    /// Turning it off withdraws what it asked, so a yes on a sheet still
+    /// open does nothing, and so does Forget everything.
+    @Test func turningOffOrForgettingWithdrawsWhatItAsked() throws {
+        for forget in [false, true] {
+            let rule = AskFirst.isolated()
+            let asks = NeedsYou(rule: rule)
+            let runner = runner(needsYou: asks)
+            let acted = Counter()
+            let asked = runner.propose(note, conditions: .foreground, at: at(9), act: { acted.add() })
+            let request = try #require(asked)
+            if forget { try runner.forget() } else { runner.turnOff() }
+            #expect(asks.items(now: at(9)).isEmpty)
+            #expect(rule.isClosed(request))
+            #expect(rule.wasWithdrawn(request))
+            #expect(rule.sayYes(to: request) == .timedOut)
+            #expect(acted.value == 0)
+        }
+    }
+
+    /// Even a yes already given does nothing once it is off.
+    @Test func aYesAfterTurningOffNeverActs() throws {
+        let rule = AskFirst.isolated()
+        let asks = NeedsYou(rule: rule)
+        let toggle = InMemoryBackgroundSwitch()
+        let runner = BackgroundRunner(store: scratchStore(), toggle: toggle, needsYou: asks, calendar: calendar)
+        runner.turnOn(now: at(6))
+        let acted = Counter()
+        let asked = runner.propose(note, conditions: .foreground, at: at(9), act: { acted.add() })
+        let request = try #require(asked)
+        guard case .approved(let yes) = rule.sayYes(to: request) else { Issue.record("yes refused"); return }
+        // Switched off another way, as from another window, before the yes lands.
+        toggle.set(false)
+        asks.approved(yes)
+        #expect(acted.value == 0)
+    }
+
     // MARK: Today
 
     @Test func resultsBecomeCardsInToday() throws {
@@ -482,10 +717,18 @@ struct BackgroundWordsTests {
     static var all: [String] {
         let quiet = MorningSummary(waiting: 0, finished: 0, couldNotFinish: 0, since: at(19, days: -1), late: nil)
         let busy = MorningSummary(waiting: 3, finished: 1, couldNotFinish: 2, since: at(19, days: -1), late: .locked)
+        let unknown = MorningSummary(waiting: nil, finished: nil, couldNotFinish: nil, since: at(7, days: -3), late: nil)
+        let en = Locale(identifier: "en_US")
         return [BackgroundWords.summaryTitle, BackgroundWords.whereWaiting,
-                BackgroundWords.summaryBody(quiet), BackgroundWords.summaryBody(busy),
-                BackgroundWords.summaryDetail(busy, now: at(7), calendar: calendar, locale: Locale(identifier: "en_US")),
+                BackgroundWords.summaryBody(quiet, now: at(7), calendar: calendar),
+                BackgroundWords.summaryBody(busy, now: at(7), calendar: calendar),
+                BackgroundWords.summaryBody(unknown, now: at(7), calendar: calendar),
+                BackgroundWords.summaryDetail(busy, now: at(7), calendar: calendar, locale: en),
+                BackgroundWords.summaryDetail(unknown, now: at(7), calendar: calendar, locale: en),
                 BackgroundWords.missedTitle(at(7)), BackgroundWords.settingTitle,
+                BackgroundWords.missedTitle(from: at(7), through: at(7, days: 2), calendar: calendar, locale: en),
+                BackgroundWords.missedTitle(from: at(7), through: at(7, days: 9), calendar: calendar, locale: en),
+                BackgroundWords.missedSeveral, BackgroundWords.countedNothing,
                 BackgroundWords.settingDetail(whileClosed: true), BackgroundWords.settingDetail(whileClosed: false),
                 BackgroundWords.nextDue(at(7, days: 1), now: at(9), calendar: calendar),
                 BackgroundWords.nextDue(at(7), now: at(6), calendar: calendar),
@@ -519,16 +762,28 @@ struct BackgroundWordsTests {
     }
 
     /// The system refuses identifiers its Info.plist doesn't list, and the
-    /// plist comes from project.yml.
+    /// plist comes from project.yml, where the bundle identifier fills in.
     @Test func theIdentifiersAreListedForTheSystem() throws {
         let root = SwiftSource.repositoryRoot(from: #filePath)
         let project = try String(contentsOf: root.appendingPathComponent("project.yml"), encoding: .utf8)
-        for id in [BackgroundIdentifiers.refresh, BackgroundIdentifiers.processing] {
-            #expect(project.contains("- \(id)"), "project.yml doesn't list \(id)")
-        }
+        #expect(project.contains("- $(PRODUCT_BUNDLE_IDENTIFIER)\(BackgroundIdentifiers.refreshSuffix)"))
         #expect(project.contains("BGTaskSchedulerPermittedIdentifiers:"))
         #expect(project.contains("UIBackgroundModes:"))
         #expect(project.contains("- fetch"))
-        #expect(project.contains("- processing"))
+        #expect(!project.contains("- processing"), "one refresh task is enough for a short count")
+        #expect(BackgroundIdentifiers.refresh(bundleIdentifier: "org.example.app") == "org.example.app.background.refresh")
+        #expect(BackgroundIdentifiers.mac(bundleIdentifier: "org.example.app") == "org.example.app.background.mac")
+    }
+
+    /// The showcase's store keeps nothing anywhere, so no launch leaves a file.
+    @Test func theShowcaseStoreWritesNothing() throws {
+        let store = BackgroundStore.memoryOnly()
+        let runner = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(), calendar: calendar)
+        runner.turnOn(now: at(6))
+        runner.runDue(now: at(7), conditions: .foreground)
+        #expect(runner.results.count == 1)
+        #expect(!store.hasStoredFile)
+        #expect(!FileManager.default.fileExists(atPath: store.stagingURL.path))
+        #expect(try store.load() == .empty)
     }
 }

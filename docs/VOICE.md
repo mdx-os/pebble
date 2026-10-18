@@ -186,8 +186,12 @@ past tense ("One thing was waiting for you."), since a question may have
 timed out by the time it is read. Opened, it says where to look ("at the top
 of Today, under Needs you") and from when it counted. A summary made late
 says why, once: "I waited until you unlocked, so this came later than
-planned." A morning that never ran gets its own card that names the day and
-the reason, and promises nothing about the next one. None of these lines
+planned." A count it couldn't know, because nothing could be counted or the
+app wasn't running for the whole time, is left out, never said as zero. It
+says "overnight" only for one night, and "since Tuesday" for longer. A
+morning that never ran gets its own card that names the day and the reason,
+and promises nothing about the next one; several missed in a row share one
+card that names them all and says only what is true of each. None of these lines
 mention the device: they are about time and power, not where words go.
 The words live in `BackgroundWords`.
 

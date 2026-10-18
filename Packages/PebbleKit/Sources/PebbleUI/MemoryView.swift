@@ -77,7 +77,7 @@ public struct MemoryView: View {
                                       nextDue: model.backgroundNext)
                             .padding(.top, 8)
                     }
-                    if model.hasStoredFile {
+                    if model.hasSomethingToForget {
                         Button(role: .destructive) { model.askForgetEverything = true } label: {
                             Text(MemoryWords.forgetEverythingTitle)
                                 .font(.subheadline.weight(.semibold))
@@ -285,14 +285,19 @@ struct BackgroundRow: View {
             }
             // The brand's warmth, as everywhere else, wherever this screen is shown.
             .tint(Theme.accentText)
+            // The whole row turns it on and off, not just the switch at
+            // its end, so the target stays large at any text size.
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+            .onTapGesture { isOn.toggle() }
             .accessibilityIdentifier("backgroundSwitch")
-            .accessibilityHint(BackgroundWords.settingDetail(whileClosed: Self.runsWhileClosed))
+            // Its own element, read right after the switch, so VoiceOver
+            // users hear that it asks first even with hints turned off.
             Text(BackgroundWords.settingDetail(whileClosed: Self.runsWhileClosed))
                 .font(.footnote)
                 .foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
-                // Read as the switch's hint, so not twice.
-                .accessibilityHidden(true)
+                .accessibilityIdentifier("backgroundDetail")
             if let nextDue {
                 Text(nextDue)
                     .font(.footnote.weight(.medium))
@@ -442,7 +447,13 @@ final class MemoryModel: ObservableObject {
     @Published private(set) var backgroundOn = false
     /// "The next one is due at 7:00 AM tomorrow." while it is on.
     @Published private(set) var backgroundNext: String?
+    /// True while background work has a file or cards, so Forget everything
+    /// shows even with no notes, and the summaries can always be removed.
+    @Published private(set) var hasBackgroundToForget = false
     private let now: () -> Date
+
+    /// Forget everything shows while there is anything for it to remove.
+    var hasSomethingToForget: Bool { hasStoredFile || hasBackgroundToForget }
 
     init(store: MemoryStore, place: PrivacyPlace, background: BackgroundRunner? = nil,
          now: @escaping () -> Date = { Date() },
@@ -469,6 +480,8 @@ final class MemoryModel: ObservableObject {
         let now = now()
         let next = on ? background.queue.map(\.due).min().map { BackgroundWords.nextDue($0, now: now) } : nil
         if backgroundNext != next { backgroundNext = next }
+        let stored = background.store.hasStoredFile || !background.results.isEmpty
+        if hasBackgroundToForget != stored { hasBackgroundToForget = stored }
     }
 
     func refresh() {
@@ -534,18 +547,24 @@ final class MemoryModel: ObservableObject {
 
     func forgetEverything() {
         cancelEdit()
-        // First, and even if the file can't be erased: the person asked to
-        // forget, and nothing here depends on the file.
+        // First, and even if a file can't be erased: the person asked to
+        // forget, and nothing here depends on the files. Background work
+        // turns off and its cards go from memory either way.
+        var summariesErased = true
+        if let background {
+            do { try background.forget() } catch { summariesErased = false }
+        }
         let tasks = onForgetEverything()
         // A step said yes to may have happened, so the line says so here too.
         let underway = tasks.underwayLine.map { " " + $0 } ?? ""
         do {
             try store.forgetEverything()
-            status = MemoryWords.forgotten + underway
-            forgottenCount += 1
+            status = (summariesErased ? MemoryWords.forgotten : MemoryWords.couldNotForgetSummaries) + underway
+            if summariesErased { forgottenCount += 1 }
         } catch {
             // The tasks went even so; the words say which part didn't.
-            status = (tasks.forgotten > 0 ? MemoryWords.couldNotForgetNotes : MemoryWords.couldNotForget) + underway
+            let notesOnly = tasks.forgotten > 0 && summariesErased
+            status = (notesOnly ? MemoryWords.couldNotForgetNotes : MemoryWords.couldNotForget) + underway
         }
         refresh()
     }

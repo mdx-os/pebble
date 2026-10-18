@@ -148,6 +148,9 @@ public enum MemoryWords {
     public static let couldNotForget = "Sorry, I couldn't erase that just now. Please try again in a moment."
     /// Forget everything when the tasks went but the notes couldn't be erased.
     public static let couldNotForgetNotes = "I forgot your tasks, but I couldn't erase your notes just now. Please try again in a moment."
+    /// Forget everything when the rest went but the morning summaries'
+    /// file couldn't be erased. Work while you're away is off either way.
+    public static let couldNotForgetSummaries = "I forgot the rest and turned off work while you're away, but I couldn't erase your morning summaries just now. Please try again in a moment."
 }
 
 /// Notes the agent keeps, stored only on this device.
