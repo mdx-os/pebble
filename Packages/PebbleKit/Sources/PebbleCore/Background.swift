@@ -264,8 +264,12 @@ public struct MorningSummary: Codable, Sendable, Equatable {
     /// What is waiting is open now, so it is known whenever it can be seen.
     /// What finished is about the whole window, so it is known only if
     /// the tasks were watched for all of it: `watchedWindow`.
+    ///
+    /// A `since` after `now`, as from a file whose last summary is later
+    /// than the clock, as after the clock was set back, counts from `now`.
     public static func count(questions: [FeedItem]?, tasks: [AgentTask]?, since: Date, now: Date,
                              late: BackgroundHold?, watchedWindow: Bool = true) -> MorningSummary {
+        let since = min(since, now)
         let window = since...now
         let ended = watchedWindow ? tasks?.filter { !$0.isActive && window.contains($0.updatedAt) } : nil
         let waitingTasks = tasks?.filter { $0.state == .waitingOnYou }
@@ -284,9 +288,6 @@ public struct MorningSummary: Codable, Sendable, Equatable {
 
     /// Nothing to report: every count that could be known is zero.
     public var isQuiet: Bool { (waiting ?? 0) == 0 && (finished ?? 0) == 0 && (couldNotFinish ?? 0) == 0 }
-
-    /// Nothing could be counted at all.
-    public var countedNothing: Bool { waiting == nil && finished == nil && couldNotFinish == nil }
 }
 
 /// Something a run left for Today.
@@ -943,9 +944,9 @@ public final class BackgroundStore: @unchecked Sendable {
     /// With the lock held. Why the file won't open, or nil if it opens or
     /// isn't there.
     private func openError() -> Int32? {
-        guard !diskless, FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+        guard !diskless, let url = readURL else { return nil }
         if let error = faults?.openError { return error }
-        let descriptor = open(fileURL.path, O_RDONLY)
+        let descriptor = open(url.path, O_RDONLY)
         guard descriptor < 0 else {
             close(descriptor)
             return nil
@@ -953,16 +954,31 @@ public final class BackgroundStore: @unchecked Sendable {
         return errno
     }
 
+    /// With the lock held. The file a load reads: the file, or with none,
+    /// the staged copy a save cut between its write and its rename left.
+    /// Nil with neither.
+    private var readURL: URL? {
+        if FileManager.default.fileExists(atPath: fileURL.path) { return fileURL }
+        if FileManager.default.fileExists(atPath: stagingURL.path) { return stagingURL }
+        return nil
+    }
+
     /// What was kept. Empty with no file. A file that can't be decoded,
     /// as from a newer version, starts over: it holds only counts and
     /// times the runner made, nothing of the person's own.
+    ///
+    /// With no file but a staged copy, as when a save was cut between its
+    /// write and its rename, the copy is what was last saved: it is read,
+    /// and renamed into place once it decodes.
     public func load() throws -> BackgroundState {
         lock.lock()
         defer { lock.unlock() }
         if diskless { return held ?? .empty }
-        guard FileManager.default.fileExists(atPath: fileURL.path) else { return .empty }
-        guard faults?.openError == nil, let data = try? Data(contentsOf: fileURL) else { throw Unavailable() }
-        return (try? JSONDecoder().decode(BackgroundState.self, from: data)) ?? .empty
+        guard let url = readURL else { return .empty }
+        guard faults?.openError == nil, let data = try? Data(contentsOf: url) else { throw Unavailable() }
+        guard let state = try? JSONDecoder().decode(BackgroundState.self, from: data) else { return .empty }
+        if url == stagingURL { _ = rename(stagingURL.path, fileURL.path) }
+        return state
     }
 
     public func save(_ state: BackgroundState) throws {
@@ -1673,7 +1689,6 @@ public enum BackgroundWords {
         if let count = summary.waiting { lines.append(waiting(count)) }
         if let line = finishedLine(summary, now: now, calendar: calendar, locale: locale) { lines.append(line) }
         if let count = summary.couldNotFinish, count > 0 { lines.append(couldNotFinish(count)) }
-        if summary.countedNothing { lines.append(countedNothing) }
         if let hold = summary.late { lines.append(late(hold)) }
         return lines.joined(separator: " ")
     }
@@ -1697,15 +1712,10 @@ public enum BackgroundWords {
         }
         if let line = finishedLine(summary, now: now, calendar: calendar, locale: locale) { lines.append(line) }
         if let count = summary.couldNotFinish, count > 0 { lines.append(couldNotFinish(count)) }
-        if summary.countedNothing { lines.append(countedNothing) }
         lines.append(countedSince(summary.since, now: now, calendar: calendar, locale: locale))
         if let hold = summary.late { lines.append(late(hold)) }
         return lines.joined(separator: "\n\n")
     }
-
-    /// When nothing could be counted: the app wasn't running for the whole
-    /// time, and what it would count lives only while it runs.
-    public static let countedNothing = "The app was closed for part of this time, so I couldn't count what happened."
 
     static func waiting(_ count: Int) -> String {
         switch count {
@@ -1850,5 +1860,13 @@ public enum BackgroundWords {
             return "I'll look next at \(time) tomorrow."
         }
         return "I'll look next on \(weekday(due, calendar: calendar, locale: locale)) at \(time)."
+    }
+
+    /// When `nextDue`'s words for `due` next change: at the due time, when
+    /// "today" becomes "as soon as I can", and at midnight, when "tomorrow"
+    /// becomes "today". Whichever comes first.
+    public static func nextDueChanges(_ due: Date, now: Date, calendar: Calendar = .current) -> Date {
+        let midnight = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) ?? now + 86_400
+        return due > now ? min(due, midnight) : midnight
     }
 }

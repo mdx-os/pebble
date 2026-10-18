@@ -988,6 +988,20 @@ struct CloudHelpTests {
             }
         }
         #expect(allWent == 4, "both tasks cases, with and without the private words")
+        // With nothing to say of the summaries, the underway line follows
+        // the whole line, its advice to try again included, as it did
+        // before there was background work.
+        let underway = TaskWords.forgotUnderway(1)
+        for notes in [false, true] {
+            for rest in everyRest {
+                #expect(MemoryModel.forgotLine(notesGone: notes, rest: rest, tasksGone: true, underway: underway)
+                        == line(notes, rest, true) + " " + underway)
+            }
+        }
+        #expect(MemoryModel.forgotLine(notesGone: false, rest: nil, tasksGone: true, underway: underway)
+                == MemoryWords.couldNotForgetNotes + " " + underway)
+        #expect(MemoryWords.retryAdvice.contains { MemoryWords.couldNotForgetNotes.hasSuffix(" " + $0) },
+                "a line with advice, so the order shows")
         // Where every part went, nothing says to try again, and the
         // underway line simply follows.
         #expect(MemoryModel.forgotLine(notesGone: true, rest: nil, tasksGone: true, summaries: .erased,
