@@ -184,8 +184,9 @@ func selfTest() -> Never {
     let white: (UInt8, UInt8, UInt8) = (255, 255, 255)
     let gray: (UInt8, UInt8, UInt8) = (110, 110, 110)
     var problems: [String] = []
-    func expect(_ name: String, _ pixels: Pixels, _ box: [Double] = [0, 0, 1, 1], passes: Bool, because: String? = nil) {
-        let result = check(pixels, box, badge: false)
+    func expect(_ name: String, _ pixels: Pixels, _ box: [Double] = [0, 0, 1, 1], badge: Bool = false, passes: Bool,
+                because: String? = nil) {
+        let result = check(pixels, box, badge: badge)
         switch result {
         case .success where !passes:
             problems.append("\(name): passed, expected it to fail")
@@ -229,7 +230,16 @@ func selfTest() -> Never {
     light.paint(0, 0, 200, 100, white)
     light.paint(10, 30, 60, 70, orange)
     light.paint(140, 30, 190, 70, orange)
-    expect("white background between two patches", light, passes: false)
+    expect("white background between two patches", light, passes: false, because: "aren't white")
+    // The end of a row with its count: a small patch of fill with a small
+    // white number, about 2 percent of the region and 0.05 of it white.
+    // Enough for --badge, too little for a whole button.
+    var count = Pixels(width: 400, height: 200)
+    count.paint(0, 0, 400, 200, (30, 30, 30))
+    count.paint(340, 80, 380, 120, orange)
+    count.paint(357, 97, 363, 103, white)
+    expect("a count at the end of a row", count, badge: true, passes: true)
+    expect("a count is too small for a button", count, passes: false, because: "no orange fill")
     // Bad regions fail with a reason rather than a crash.
     expect("right before left", done, [0.8, 0, 0.2, 1], passes: false)
     expect("bottom before top", done, [0, 0.9, 1, 0.1], passes: false)

@@ -77,6 +77,27 @@ struct HomeLayoutTests {
         }
     }
 
+    /// PERMANENT GUARD. ShowcaseScene exists only in Debug, so a line of
+    /// the app or the package that names it outside `#if DEBUG` breaks the
+    /// Release build. `make build-release` proves it builds; this says
+    /// where it would break, without building.
+    @Test func theShowcaseIsReadOnlyInDebug() throws {
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        let app = try SwiftSource.files(under: root.appendingPathComponent("App")).map { ("App/\($0.name)", $0.text) }
+        let package = try SwiftSource.files(under: root.appendingPathComponent("Packages/PebbleKit/Sources"))
+        let files = (app + package).filter { $0.0 != "PebbleUI/ShowcaseScene.swift" }
+        var readers: [String] = []
+        for (name, text) in files where text.contains("ShowcaseScene") {
+            readers.append(name)
+            for line in Self.codeOutsideDebug(in: text) where line.contains("ShowcaseScene") {
+                Issue.record(Comment(rawValue: "\(name): \(line) names ShowcaseScene outside #if DEBUG, so Release can't build"))
+            }
+        }
+        #expect(readers.sorted() == ["App/Sources/PebbleApp.swift", "App/Sources/SnapshotMode.swift"], "the reads this checks are still there")
+        let wrong = "#if DEBUG\nlet a = 1\n#endif\nlet scene = ShowcaseScene.launchKey"
+        #expect(Self.codeOutsideDebug(in: wrong).contains { $0.contains("ShowcaseScene") })
+    }
+
     /// The launch arguments the screenshot scripts pass are the keys the
     /// app reads, kept beside `launchKey`, so the two can never drift.
     @Test func theScreenshotScriptsPassTheKeysTheAppReads() throws {

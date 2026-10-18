@@ -779,6 +779,7 @@ struct WarmthTests {
         await settle(controller)
         #expect(controller.unheardReply != nil, "heard as usual after a new send")
         ChatView.left(controller)
+        await controller.leaving?.value
         #expect(ChatView.arrival(for: controller, covered: false) == .nothing)
         // Left while waiting, but back before the reply lands: it lands in
         // front of them, so it is heard, as it is seen.
@@ -879,6 +880,53 @@ struct WarmthTests {
         await settle(controller)
         #expect(controller.conversation.turns.last?.text == "Here's a plan", "kept in the chat")
         #expect(ChatView.replyLanded(in: controller, covered: false) == nil, "landed while away: not read")
+    }
+
+    /// A reply landed under a sheet and nobody has heard it. Then a size
+    /// change swaps the chat screen, and SwiftUI may run the new screen's
+    /// appear first or the old one's disappear first. Either way the chat
+    /// never left the person, so the reply is still read, once.
+    @Test("Swap the chat screen with a reply unheard, in either order: still read once", arguments: [false, true])
+    func swappingTheChatScreenKeepsAnUnheardReply(oldGoesFirst: Bool) async throws {
+        let controller = ChatController(brand: brand, model: LocalStubModel(),
+                                        names: InMemoryAgentNameStore(stored: "Pip"), replyBeat: .zero)
+        ChatView.cameBack(controller)
+        controller.submit("Help me plan my morning.")
+        await settle(controller)
+        let reply = try #require(controller.conversation.turns.last?.text)
+        #expect(ChatView.replyLanded(in: controller, covered: true) == nil, "landed under a sheet")
+        if oldGoesFirst {
+            ChatView.left(controller)
+            #expect(controller.visibleChats == 0)
+            ChatView.cameBack(controller)
+        } else {
+            ChatView.cameBack(controller)
+            ChatView.left(controller)
+        }
+        #expect(controller.visibleChats == 1)
+        await controller.leaving?.value
+        await Task.yield()
+        #expect(controller.unheardReply == reply, "kept across the swap")
+        #expect(ChatView.arrival(for: controller, covered: false) == .reply(reply))
+        #expect(ChatView.arrival(for: controller, covered: false) == .nothing, "once")
+    }
+
+    /// The last chat screen goes and none comes back by the next pass: the
+    /// person has left, so the reply nobody heard is dropped.
+    @Test("Leave with a reply unheard and nothing back: dropped")
+    func leavingForGoodDropsAnUnheardReply() async throws {
+        let controller = ChatController(brand: brand, model: LocalStubModel(),
+                                        names: InMemoryAgentNameStore(stored: "Pip"), replyBeat: .zero)
+        ChatView.cameBack(controller)
+        controller.submit("Help me plan my morning.")
+        await settle(controller)
+        #expect(ChatView.replyLanded(in: controller, covered: true) == nil)
+        ChatView.left(controller)
+        #expect(controller.unheardReply != nil, "not before the next pass")
+        await controller.leaving?.value
+        #expect(controller.unheardReply == nil)
+        ChatView.cameBack(controller)
+        #expect(ChatView.arrival(for: controller, covered: false) == .nothing)
     }
 
     /// Left the chat for Today, then a line sent from Today: a new send, so

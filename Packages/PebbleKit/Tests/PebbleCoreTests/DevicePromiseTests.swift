@@ -69,6 +69,10 @@ enum DevicePromise {
         /// to an allowed line later need a reason of their own.
         let literal: String
         let reason: String
+        /// When set, the code just before the literal must end with this,
+        /// white space aside, so a short word is allowed only where it is
+        /// written for its reason and not as a `Text` elsewhere in the file.
+        var after: String? = nil
     }
 
     static let allowed: [Allowed] = [
@@ -244,7 +248,8 @@ enum DevicePromise {
         Allowed(file: "PebbleUI/CloudHelpView.swift", literal: "cloud.fill",
                 reason: "An SF Symbol name for the setting's icon. VoiceOver never reads it and nobody sees the word."),
         Allowed(file: "PebbleUI/CloudHelpView.swift", literal: "cloud",
-                reason: "An SF Symbol name in the list the cloud question's icons are checked against. Never shown."),
+                reason: "An SF Symbol name in the list the cloud question's icons are checked against. Never shown.",
+                after: "private static let symbols = ["),
         Allowed(file: "PebbleUI/ShowcaseScene.swift", literal: "https://cloud.example.com",
                 reason: "The showcase's made up cloud address on a domain kept for examples. Its transport refuses every "
                     + "request, and the showcase is Debug only."),
@@ -269,9 +274,13 @@ enum DevicePromise {
     /// The words the competitor watch's fit score looks for.
     static let ideaFitKeywords = ["upload", "cloud data storage", "on our servers", "requires cloud", "cloud only"]
 
-    /// True when `text` in `file` is an allowed line, word for word.
-    static func isAllowed(_ text: String, in file: String) -> Bool {
-        allowed.contains { $0.file == file && $0.literal == text }
+    /// True when `text` in `file` is an allowed line, word for word, with
+    /// `before`, the code ahead of it, ending as the entry asks.
+    static func isAllowed(_ text: String, in file: String, before: String) -> Bool {
+        let lead = before.trimmingCharacters(in: .whitespacesAndNewlines)
+        return allowed.contains { entry in
+            entry.file == file && entry.literal == text && entry.after.map { lead.hasSuffix($0) } ?? true
+        }
     }
 
     /// The literals in `source`, with those written one after another with
@@ -364,17 +373,29 @@ enum DevicePromise {
     ///
     /// The flag must be all of the condition, so nothing but an opening
     /// paren may come between it and what starts the expression: `=`,
-    /// `return`, `(`, `[`, `{`, `,`, `:` or the start of the file. A
-    /// negated flag (`!place.staysOnDevice ?`) or one inside a compound
-    /// condition (`isRemote || place.staysOnDevice ?`) is not gated.
+    /// `return`, a call's `(` right after its name, `[`, `{`, `,`, `:` or
+    /// the start of the file. A negated flag (`!place.staysOnDevice ?`,
+    /// `!(place.staysOnDevice) ?`) or one inside a compound condition
+    /// (`isRemote || (place.staysOnDevice) ?`) is not gated, since a
+    /// grouping paren after `!`, `||` or `&&` starts nothing. Each `)`
+    /// after the flag must close one of the grouping parens before it, so
+    /// `f(place.staysOnDevice) ?` is a call's result and never gates.
     static func isGated(_ literal: SwiftSource.Literal, in source: SwiftSource) -> Bool {
         // All the code before it, so a condition that starts many lines up
         // is still seen whole.
         let before = String(source.code[..<literal.offset])
         let receiver = #"(?:self\s*\.\s*place|place|model\s*\.\s*privacyPlace|privacyPlace)"#
-        let pattern = #"(?:\A|[(\[{,:]|(?<![=!<>])=|\breturn)\s*(?:\(\s*)*"# + receiver
-            + #"\s*\.\s*staysOnDevice\s*(?:\)\s*)*\?\s*\z"#
-        return before.range(of: pattern, options: .regularExpression) != nil
+        let pattern = #"(?:\A|(?<=\w)\(|[\[{,:]|(?<![=!<>])=|\breturn)\s*((?:\(\s*)*)"# + receiver
+            + #"\s*\.\s*staysOnDevice\s*((?:\)\s*)*)\?\s*\z"#
+        let regex = try! NSRegularExpression(pattern: pattern)
+        let ns = before as NSString
+        guard let match = regex.firstMatch(in: before, range: NSRange(location: 0, length: ns.length)) else {
+            return false
+        }
+        func parens(_ index: Int) -> Int {
+            ns.substring(with: match.range(at: index)).filter { $0 == "(" || $0 == ")" }.count
+        }
+        return parens(2) <= parens(1)
     }
 
     /// What would let the gate trust something other than the flag, in
@@ -632,21 +653,90 @@ enum DevicePromise {
             .map { ns.substring(with: $0.range(at: 1)) }
     }
 
-    /// Each `extension PrivacyPlace` in `source`, with or without a colon.
-    /// Outside `PrivacyPlace.swift`, even a plain extension could make a
-    /// place with no model behind it, as in `static var here: PrivacyPlace
-    /// { onDevice }`, where the case needs no dot. A conformance added
-    /// anywhere, its own file too, could build one from a raw value, a list
-    /// or a decoder.
+    /// Each `extension PrivacyPlace` in `source`, with or without a colon,
+    /// in any file, its own too. Even a plain extension could make a place
+    /// with no model behind it, as in `static var here: PrivacyPlace {
+    /// onDevice }`, where the case needs no dot, and the reads of `.here`
+    /// elsewhere would never name a case. A conformance could build one
+    /// from a raw value, a list or a decoder.
     static func placeExtensionProblems(in source: SwiftSource, file: String) -> [String] {
         let code = String(source.code)
         let ns = code as NSString
         let regex = try! NSRegularExpression(pattern: #"\bextension\s+(?:PebbleCore\s*\.\s*)?PrivacyPlace\b(\s*:)?"#)
-        return regex.matches(in: code, range: NSRange(location: 0, length: ns.length)).compactMap { match in
+        return regex.matches(in: code, range: NSRange(location: 0, length: ns.length)).map { match in
             let conforms = match.range(at: 1).location != NSNotFound
-            if file == "PebbleCore/PrivacyPlace.swift", !conforms { return nil }
             return "\(file):\(source.line(at: match.range.location)): "
-                + (conforms ? "adds a conformance to PrivacyPlace" : "extends PrivacyPlace outside PrivacyPlace.swift")
+                + (conforms ? "adds a conformance to PrivacyPlace" : "extends PrivacyPlace, whose members are pinned")
+        }
+    }
+
+    /// Everything `PrivacyPlace.swift` may declare. The file is exempt from
+    /// the `.onDevice` reads above, so any other member there, a static,
+    /// an init, a factory or a nested type's, could hand out a place with
+    /// no model behind it under a name nothing else checks. A new one is
+    /// added here on purpose, once the guard has learned its form.
+    static let placeMembers: Set<String> = [
+        "enum PrivacyPlace",
+        "case onDevice",
+        "case mayLeaveDevice",
+        "init(staysOnDevice:)",
+        "var staysOnDevice",
+        "func all(_:_:)",
+    ]
+
+    /// Each declaration in `source`, written as in `placeMembers`: a
+    /// `case` by name (`case a, b` is two), an `init` or `func` by its
+    /// labels, and any other declaration by its keyword and name.
+    static func declarations(in source: SwiftSource) -> [(offset: Int, name: String)] {
+        let code = String(source.code)
+        let ns = code as NSString
+        let keyword = #"\b(case|init|func|var|let|subscript|typealias|associatedtype|struct|class|enum|actor|protocol|extension|macro)\b"#
+        let regex = try! NSRegularExpression(pattern: keyword)
+        func labels(_ list: String) -> String {
+            list.split(separator: ",").map { parameter in
+                let label = parameter.trimmingCharacters(in: .whitespacesAndNewlines).prefix { $0.isLetter || $0.isNumber || $0 == "_" }
+                return label + ":"
+            }.joined()
+        }
+        var found: [(Int, String)] = []
+        for match in regex.matches(in: code, range: NSRange(location: 0, length: ns.length)) {
+            let kind = ns.substring(with: match.range)
+            let rest = ns.substring(from: match.range.location + match.range.length)
+            switch kind {
+            case "case":
+                let line = rest.prefix { $0 != "\n" && $0 != "{" && $0 != "=" }
+                let names = String(line).replacingOccurrences(of: #"\([^)]*\)"#, with: "", options: .regularExpression)
+                for name in names.split(separator: ",") {
+                    found.append((match.range.location, "case " + name.trimmingCharacters(in: .whitespaces)))
+                }
+            case "init", "func", "subscript":
+                let head = rest.range(of: #"^\s*([^\s(<]*)\s*(?:<[^>]*>)?\s*\(([^)]*)\)"#, options: .regularExpression)
+                    .map { String(rest[$0]) } ?? rest
+                let name = head.range(of: #"^\s*[^\s(<]*"#, options: .regularExpression)
+                    .map { head[$0].trimmingCharacters(in: .whitespaces) } ?? ""
+                let list = head.range(of: #"\(([^)]*)\)"#, options: .regularExpression)
+                    .map { String(head[$0].dropFirst().dropLast()) } ?? ""
+                let prefix = kind == "func" ? "func \(name)" : kind + name
+                found.append((match.range.location, "\(prefix)(\(labels(list)))"))
+            default:
+                let name = rest.range(of: #"^\s*[\w.]+"#, options: .regularExpression)
+                    .map { rest[$0].trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
+                found.append((match.range.location, kind + " " + name))
+            }
+        }
+        return found
+    }
+
+    /// Each declaration in `PrivacyPlace.swift` that isn't in
+    /// `placeMembers`, so the only ways to a place are its cases, which the
+    /// guard above keeps to the model, and `init(staysOnDevice:)`, made only
+    /// by `ModelClient`.
+    static func placeMemberProblems(in source: SwiftSource, file: String) -> [String] {
+        guard file == "PebbleCore/PrivacyPlace.swift" else { return [] }
+        return declarations(in: source).compactMap { declaration in
+            placeMembers.contains(declaration.name) ? nil
+                : "\(file):\(source.line(at: declaration.offset)): \(declaration.name) is not one of PrivacyPlace's "
+                    + "pinned members, so it could hand out a place with no model behind it"
         }
     }
 }
@@ -676,7 +766,7 @@ struct DevicePromiseTests {
                 let text = chain.map(\.text).joined()
                 guard !DevicePromise.found(in: text).isEmpty, let first = chain.first else { continue }
                 if DevicePromise.isGated(first, in: source) { continue }
-                if DevicePromise.isAllowed(text, in: file.name) { continue }
+                if DevicePromise.isAllowed(text, in: file.name, before: String(source.code[..<first.offset])) { continue }
                 problems.append("\(file.name):\(first.line): \"\(text)\" promises "
                                 + "\(DevicePromise.found(in: text)) without PrivacyPlace")
             }
@@ -769,7 +859,11 @@ struct DevicePromiseTests {
             // The flag turned around, or only part of the condition.
             #"let line = !place.staysOnDevice ? "It stays on this device." : "Hi.""#,
             #"let line = (!place.staysOnDevice) ? "It stays on this device." : "Hi.""#,
+            #"let line = !(place.staysOnDevice) ? "It stays on this device." : "Hi.""#,
+            #"let line = isRemote || (place.staysOnDevice) ? "It stays on this device." : "Hi.""#,
+            #"let line = isRemote && (place.staysOnDevice) ? "It stays on this device." : "Hi.""#,
             #"let line = isRemote && place.staysOnDevice ? "It stays on this device." : "Hi.""#,
+            #"let line = flipped(place.staysOnDevice) ? "It stays on this device." : "Hi.""#,
             #"let line = wasLocal == place.staysOnDevice ? "It stays on this device." : "Hi.""#,
             "let line = isRemote ||\n    place.staysOnDevice\n    ? \"It stays on this device.\"\n    : \"Hi.\"",
             // A Bool of its own never gates, whatever it is called, since
@@ -821,6 +915,8 @@ struct DevicePromiseTests {
             #"return model.privacyPlace.staysOnDevice ? "I run on this device." : "Hi.""#,
             #"return privacyPlace.staysOnDevice ? "I run on this device." : "Hi.""#,
             #"Text(place.staysOnDevice ? "Kept only on this device." : "Kept.")"#,
+            #"Text((place.staysOnDevice) ? "Kept only on this device." : "Kept.")"#,
+            #"let line = ((place.staysOnDevice) ? "I run on this device." : "Hi.")"#,
             "func f() -> String {\n    self.place.staysOnDevice\n        ? \"It stays on this device.\"\n        : \"Hi.\"\n}",
             #"// Says "on this device" only when the flag says so."#,
             "/* \"stays on this device\" */",
@@ -1039,7 +1135,8 @@ struct DevicePromiseTests {
     /// `decode(PrivacyPlace.self, ...)`. It conforms to none of those, so
     /// none of those forms compile. This fails the day one is added, here
     /// or in an extension anywhere, and the guard above must then learn
-    /// those forms first.
+    /// those forms first. Nothing extends it, and its own file declares
+    /// only `placeMembers`, so no other name hands out a place.
     @Test func aPlaceCanOnlyBeMadeByTheModel() throws {
         let files = try Self.sources()
         let file = try #require(files.first { $0.name == "PebbleCore/PrivacyPlace.swift" })
@@ -1060,10 +1157,40 @@ struct DevicePromiseTests {
             #expect(!DevicePromise.placeExtensionProblems(in: SwiftSource(text), file: "PebbleUI/Wrong.swift").isEmpty,
                     "missed: \(text)")
         }
-        #expect(DevicePromise.placeExtensionProblems(in: SwiftSource(extensions[0]), file: "PebbleCore/PrivacyPlace.swift").isEmpty,
-                "its own file may extend it")
+        #expect(!DevicePromise.placeExtensionProblems(in: SwiftSource(extensions[0]), file: "PebbleCore/PrivacyPlace.swift").isEmpty,
+                "not even its own file may extend it")
         #expect(!DevicePromise.placeExtensionProblems(in: SwiftSource(extensions[2]), file: "PebbleCore/PrivacyPlace.swift").isEmpty,
-                "but adds no conformance even there")
+                "nor add a conformance there")
+        // Its own file declares only the pinned members.
+        let own = "PebbleCore/PrivacyPlace.swift"
+        for problem in DevicePromise.placeMemberProblems(in: SwiftSource(file.text), file: own) {
+            Issue.record(Comment(rawValue: problem))
+        }
+        #expect(Set(DevicePromise.declarations(in: SwiftSource(file.text)).map(\.name)) == DevicePromise.placeMembers,
+                "every pinned member is still there")
+        let enumOpen = "public enum PrivacyPlace: Sendable, Hashable {\n    case onDevice\n    case mayLeaveDevice\n"
+        let minted = [
+            "    public static var here: PrivacyPlace { .onDevice }\n}",
+            "    public static let here = onDevice\n}",
+            "    public static func make() -> Self { .onDevice }\n}",
+            "    public init() { self = .onDevice }\n}",
+            "    public init?(_ text: String) { self = .onDevice }\n}",
+            "    public init(staysOnDevice: Bool, really: Bool) { self = .onDevice }\n}",
+            "    case here\n}",
+            "    case here, there\n}",
+            "    public subscript(_ index: Int) -> PrivacyPlace { .onDevice }\n}",
+            "}\npublic enum Places { public static let here = PrivacyPlace.onDevice }",
+            "}\nextension PrivacyPlace { static var here: PrivacyPlace { onDevice } }",
+        ]
+        for tail in minted {
+            #expect(!DevicePromise.placeMemberProblems(in: SwiftSource(enumOpen + tail), file: own).isEmpty, "missed: \(tail)")
+        }
+        let pinned = enumOpen + "    public init(staysOnDevice: Bool) { self = staysOnDevice ? .onDevice : .mayLeaveDevice }\n"
+            + "    public var staysOnDevice: Bool { self == .onDevice }\n"
+            + "    public static func all(_ first: PrivacyPlace, _ rest: PrivacyPlace...) -> PrivacyPlace { first }\n}"
+        #expect(DevicePromise.placeMemberProblems(in: SwiftSource(pinned), file: own).isEmpty)
+        #expect(DevicePromise.placeMemberProblems(in: SwiftSource(enumOpen + minted[0]), file: "PebbleCore/Other.swift").isEmpty,
+                "pinned in its own file; elsewhere the reads above see .onDevice")
         for text in ["extension PrivacyPlaceTests {}", "// extension PrivacyPlace {}", "let place: PrivacyPlace"] {
             #expect(DevicePromise.placeExtensionProblems(in: SwiftSource(text), file: "PebbleUI/Right.swift").isEmpty,
                     "flagged: \(text)")
@@ -1086,6 +1213,10 @@ struct DevicePromiseTests {
         let shorter = "static let x = \"Nothing was sent or bought.\""
         #expect(!Self.ungated(in: [(entry.file, shorter)]).isEmpty, "part of an allowed line passed")
         #expect(!Self.ungated(in: [("PebbleCore/Other.swift", exact)]).isEmpty, "allowed in one file only")
+        // A short word is allowed only where its reason says it is written.
+        let view = "PebbleUI/CloudHelpView.swift"
+        #expect(Self.ungated(in: [(view, #"private static let symbols = ["cloud", "eye"]"#)]).isEmpty)
+        #expect(!Self.ungated(in: [(view, #"Text("cloud")"#)]).isEmpty, "the symbol's word shown as words")
     }
 
     // MARK: Words outside Swift

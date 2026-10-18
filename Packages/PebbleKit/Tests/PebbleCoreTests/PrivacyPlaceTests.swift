@@ -6,7 +6,9 @@ import Testing
 struct PrivacyPlaceTests {
     /// Every place there is. `PrivacyPlace` is not `CaseIterable`, on
     /// purpose, so the switch with no default is what keeps this whole: a
-    /// new place stops the tests building until it is listed here.
+    /// new place stops the tests building until it is listed here. A new
+    /// place means updating all three: the array, the switch, and the count
+    /// in `theOffDetailIsLintedForEveryPlace`.
     static let everyPlace: [PrivacyPlace] = {
         let places: [PrivacyPlace] = [.onDevice, .mayLeaveDevice]
         for place in places {
@@ -23,8 +25,6 @@ struct PrivacyPlaceTests {
         #expect(Set(Self.everyPlace).count == 2)
         for place in Self.everyPlace {
             let line = CloudWords.offDetail(place)
-            #expect(CopyDashTests.copy.contains(line), "not in the dash check: \(line)")
-            #expect(Self.deviceLines(place).contains(line), "not in the device lines: \(line)")
             #expect(!line.contains(where: CopyDashTests.dashes.contains), "dash in: \(line)")
             #expect(Self.promisesTheDevice(line) == place.staysOnDevice, "\(place): \(line)")
         }

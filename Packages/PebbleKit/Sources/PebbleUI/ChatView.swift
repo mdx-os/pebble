@@ -433,8 +433,9 @@ final class ChatController: ObservableObject {
             }
         }
     }
-    /// The words the last failed send put back in the composer.
-    private var returnedWords: String?
+    /// The words the last failed send put back in the composer, until its
+    /// line goes.
+    private(set) var returnedWords: String?
     @Published var isReplying = false
     /// The reply on its way. Tests await it so ordering never rests on timing.
     private(set) var replyTask: Task<Void, Never>?
@@ -446,6 +447,9 @@ final class ChatController: ObservableObject {
             // A new line is waiting to be heard; a line that went was never
             // heard and now never will be.
             if failure != oldValue { unheardFailure = failure }
+            // With no line, no words are held to it, so a later line is
+            // never judged against stale ones.
+            if failure == nil { returnedWords = nil }
         }
     }
     /// The newest reply, until it has been read aloud. A line sent from
@@ -654,12 +658,18 @@ final class ChatController: ObservableObject {
             .contains(failure)
     }
 
-    /// True while the draft still starts with the words given back, so a
-    /// line that says they are still here is true.
+    /// True while the draft still starts with the words given back, whole,
+    /// so a line that says they are still here is true. "Plan my week"
+    /// still holds in "Plan my week, please" but not in "Plan my weekend".
+    /// With no words given back, nothing holds.
     nonisolated static func stillHolds(_ words: String?, draft: String) -> Bool {
-        guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
-        guard let words else { return true }
-        return draft.hasPrefix(words)
+        guard let words, !words.isEmpty, draft.hasPrefix(words) else { return false }
+        guard let next = draft.dropFirst(words.count).first, let last = words.last else { return true }
+        return !(isWordCharacter(next) && isWordCharacter(last))
+    }
+
+    private nonisolated static func isWordCharacter(_ character: Character) -> Bool {
+        character.isLetter || character.isNumber
     }
 
     /// The words that weren't sent, back in the composer. Anything typed
@@ -716,25 +726,37 @@ final class ChatController: ObservableObject {
     }
 
     /// A chat screen went off screen. Two can show this one controller at
-    /// once, as when a size change swaps the layout and the new screen
-    /// appears before the old one goes, so the person has left only when
-    /// the last one goes. Then the reply nobody heard is dropped, and one
-    /// still coming lands quietly unless they come back first. A reply that
-    /// lands while they are away stays in the chat but isn't read aloud
-    /// later. A new send is heard as usual. Failures stay, since Today reads
-    /// them above its own composer.
+    /// once, as when a size change swaps the layout, so the person has left
+    /// only when the last one goes. The new screen may appear before the old
+    /// one goes or just after, so the reply nobody heard is dropped only if
+    /// no chat screen is back by the next pass of the main actor. One still
+    /// coming lands quietly unless they come back first. A reply that lands
+    /// while they are away stays in the chat but isn't read aloud later. A
+    /// new send is heard as usual. Failures stay, since Today reads them
+    /// above its own composer.
     func leftChat() {
         visibleChats = max(0, visibleChats - 1)
         guard visibleChats == 0 else { return }
-        unheardReply = nil
         if isReplying { leftGeneration = replyGeneration }
+        leaving?.cancel()
+        // A send in between is new, and heard as usual.
+        let generation = replyGeneration
+        leaving = Task { @MainActor [weak self] in
+            guard let self, !Task.isCancelled, visibleChats == 0, generation == replyGeneration else { return }
+            unheardReply = nil
+        }
     }
+
+    /// The check `leftChat` leaves for the next pass. Tests await it.
+    private(set) var leaving: Task<Void, Never>?
 
     /// A chat screen is on screen again. A reply still coming is theirs to
     /// hear once more: it lands in front of them, so it is read like any other.
     func cameBack() {
         visibleChats += 1
         leftGeneration = nil
+        leaving?.cancel()
+        leaving = nil
     }
 
     /// The failure line nobody has heard yet, handed over once.

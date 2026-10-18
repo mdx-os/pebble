@@ -355,6 +355,8 @@ struct FillButtonStyle: ButtonStyle {
         FocusRing {
             configuration.label
                 .font(.body.weight(.semibold))
+                // Not ready yet, the same look as the other buttons: its
+                // words and fill are the "disabled button" pairs in textPairs.
                 .foregroundStyle(isEnabled ? AnyShapeStyle(Theme.onTintFill) : AnyShapeStyle(Theme.secondaryText))
                 .padding(.horizontal, 16)
                 .frame(minHeight: 44)

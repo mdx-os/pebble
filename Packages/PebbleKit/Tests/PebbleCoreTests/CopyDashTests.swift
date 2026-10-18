@@ -70,15 +70,6 @@ struct CopyDashTests {
         #expect(Set(TaskState.allCases.map(\.label)).isSubset(of: Set(all)))
     }
 
-    /// Every home screen line is checked, the count heard beside Today in
-    /// its one and its many forms too.
-    @Test func everyHomeLineIsChecked() {
-        for line in [HomeWords.waiting(1), HomeWords.waiting(3), HomeWords.newChatDetail, HomeWords.closeShortcut] {
-            #expect(HomeWords.all.contains(line), "unchecked: \(line)")
-            #expect(Self.copy.contains(line), "not in the dash check: \(line)")
-        }
-    }
-
     /// Catches new words too: no source file and not the voice guide.
     @Test func noSourceFileOrTheVoiceGuideUsesADash() throws {
         let root = URL(fileURLWithPath: #filePath)

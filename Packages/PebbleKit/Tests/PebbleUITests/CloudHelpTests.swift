@@ -595,6 +595,85 @@ struct CloudHelpTests {
         #expect(!ChatController.stillHolds("Plan my week", draft: "Plan my"))
         #expect(ChatController.stillHolds("Plan my week", draft: "Plan my week!"))
         #expect(!ChatController.stillHolds(nil, draft: " \n"))
+        // The words given back hold whole, as a person reads them.
+        #expect(!ChatController.stillHolds("Plan my week", draft: "Plan my weekend"))
+        #expect(ChatController.stillHolds("Plan my week", draft: "Plan my week, please"))
+        #expect(ChatController.stillHolds("Plan my week!", draft: "Plan my week!!"))
+        // With no words given back, nothing holds.
+        #expect(!ChatController.stillHolds(nil, draft: "Plan my week"))
+        // Given back ahead of what was typed since, they hold.
+        let given = ChatController.draft(givingBack: "Plan my week", to: "and the weekend")
+        #expect(ChatController.stillHolds("Plan my week", draft: given))
+        #expect(!ChatController.stillHolds("Plan my week", draft: "and the weekend"))
+    }
+
+    /// Words typed while the reply was coming, then the words given back
+    /// ahead of them: the line holds while the given words stay whole, and
+    /// once the line goes, no words are held to it any more.
+    @Test func typedTextAndTheWordsGivenBackHoldTogether() async throws {
+        let cloud = help(CloudHelpSettings(isOn: true), endpoint: endpoint, maker: TransportMaker())
+        let controller = chat(cloud)
+        cloud.setOn(false)
+        controller.submit("Plan my week")
+        controller.draft = "and the weekend"
+        await controller.settled()
+        #expect(controller.failure == CloudWords.turnedOff)
+        #expect(controller.returnedWords == "Plan my week")
+        controller.draft = "Plan my week\nand the whole weekend"
+        #expect(controller.failure == CloudWords.turnedOff, "the typed part changed, the given words are whole")
+        controller.draft = "Plan my weekend\nand the whole weekend"
+        #expect(controller.failure == nil, "the given words changed")
+        #expect(controller.returnedWords == nil, "no line, so no words held to it")
+    }
+
+    /// Holds a reply until the test lets it fail with its error.
+    private actor Latch {
+        private var waiting: CheckedContinuation<Void, Never>?
+        private var open = false
+        func wait() async {
+            if open { return }
+            await withCheckedContinuation { waiting = $0 }
+        }
+        func release() {
+            open = true
+            waiting?.resume()
+            waiting = nil
+        }
+    }
+
+    private struct FailingModel: ModelClient {
+        let latch: Latch
+        let error: CloudModelError?
+        func reply(to transcript: [ChatTurn]) async throws -> String {
+            await latch.wait()
+            if let error { throw error }
+            throw URLError(.timedOut)
+        }
+    }
+
+    /// Every line that says the words are still here comes with words given
+    /// back that the draft starts with, whatever the error and whatever was
+    /// typed while the reply came. A kept newer draft gets the line that
+    /// points at the bubble instead.
+    @Test(arguments: [CloudModelError.off, .notSent, .staysHere, .notesUnreadable, .unreadableReply, nil])
+    func aStillHereLineAlwaysComesWithTheWordsGivenBack(error: CloudModelError?) async throws {
+        for typed in ["", "and the weekend"] {
+            let latch = Latch()
+            let controller = ChatController(brand: brand, model: FailingModel(latch: latch, error: error),
+                                            names: InMemoryAgentNameStore(), replyBeat: .zero)
+            controller.submit("Plan my week")
+            controller.draft = typed
+            await latch.release()
+            await controller.settled()
+            let failure = try #require(controller.failure, "\(String(describing: error)), typed \"\(typed)\"")
+            if ChatController.pointsAtTheDraft(failure) {
+                let words = try #require(controller.returnedWords, "\(failure) without words given back")
+                #expect(ChatController.stillHolds(words, draft: controller.draft), "\(failure): \(controller.draft)")
+            } else {
+                #expect(failure == CloudWords.staysHere || failure == FirstConversation.couldNotAnswerKeptDraft, "\(failure)")
+            }
+            if failure == CloudWords.turnedOff { #expect(controller.returnedWords != nil) }
+        }
     }
 
     @Test func stoppingAReplyClosesThePreviewAndSendsNothing() async throws {
