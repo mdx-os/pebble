@@ -15,6 +15,9 @@ struct ReconCard: View {
     let gathered: String
     /// Read from example sources, so the card says so, as a scripted task's does.
     var isSample = false
+    /// False when its points can't go in the notes, as for an example, so
+    /// the card offers no Remember. See `ReconRunner.keepsPoints`.
+    var canRemember = true
     var onOpenSources: () -> Void = {}
     var onFollowUp: () -> Void = {}
     var onRemember: () -> Void = {}
@@ -137,9 +140,10 @@ struct ReconCard: View {
     }
 
     /// What VoiceOver reads for the footer: when it was gathered, then how
-    /// it was made, such as worded in the cloud, not sent, or withdrawn.
+    /// it was made, such as worded in the cloud, not sent, or withdrawn. A
+    /// full stop between them, so VoiceOver pauses.
     var footerSpoken: String {
-        [gathered, summary.note].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " ")
+        [gathered, summary.note].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ". ")
     }
 
     private var footer: some View {
@@ -158,11 +162,13 @@ struct ReconCard: View {
 
     enum Action: Hashable { case sources, followUp, remember, dismiss }
 
-    /// Remember shows only when there is a point to keep. Dismiss is always
-    /// last, as on every ended task card.
+    /// Remember shows only when there is a point to keep, and never on an
+    /// example: made up news must never reach the notes as if it were real.
+    /// Dismiss is always last, as on every ended task card.
     var actions: [Action] {
         guard !summary.sources.isEmpty else { return [.followUp, .dismiss] }
-        return summary.points.isEmpty ? [.sources, .followUp, .dismiss] : [.sources, .followUp, .remember, .dismiss]
+        let keeps = !summary.points.isEmpty && canRemember && !isSample
+        return keeps ? [.sources, .followUp, .remember, .dismiss] : [.sources, .followUp, .dismiss]
     }
 
     @ViewBuilder

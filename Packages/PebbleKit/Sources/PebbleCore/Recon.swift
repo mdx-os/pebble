@@ -116,10 +116,13 @@ public struct ReconSummary: Identifiable, Sendable, Equatable {
         // An overview that names sources must name real ones. One put into
         // words in the cloud is never used at all: the card shows no source
         // numbers beside it, so it would sit on top as a claim no one made.
-        // The plain one stands in, which only says what was read.
+        // The plain one stands in, which only says what was read. For the
+        // cloud's points it doesn't count which have more than one source:
+        // those numbers are the cloud's own, not something read here.
         if !madeOnDevice || (!overviewSourceIDs.isEmpty && overviewIDs.isEmpty) {
+            let backedTwice = madeOnDevice ? self.points.filter { $0.sourceIDs.count > 1 && $0.disagreement == nil }.count : 0
             self.overview = ReconWords.overview(topic: topic, sources: sources.count,
-                                                backedTwice: self.points.filter { $0.sourceIDs.count > 1 && $0.disagreement == nil }.count,
+                                                backedTwice: backedTwice,
                                                 disagreements: self.points.filter { $0.disagreement != nil }.count,
                                                 old: sources.filter { $0.isOld(at: gatheredAt) }.count)
             self.overviewSourceIDs = []
@@ -424,6 +427,9 @@ public enum ReconWords {
     }
     public static let offerYes = "Look into it"
     public static let offerNo = "Not now"
+    /// What VoiceOver says each choice does.
+    public static let offerYesHint = "Starts looking into it. It shows up in Today when it's ready."
+    public static let offerNoHint = "Nothing starts."
     public static let started = "I'm on it. You'll find it in Today when it's ready."
     public static let offerDeclined = "Okay, I'll leave it. Just ask if you change your mind."
     public static let couldNotStart = "Sorry, I couldn't start that just now. You can ask me again in a moment."
@@ -540,8 +546,8 @@ public enum ReconWords {
     /// they delete it or forget everything.
     public static func rememberDetail(_ place: PrivacyPlace) -> String {
         place.staysOnDevice
-            ? "I'll keep it in your notes with where it came from. It's still there after this card goes, until you delete it. Notes stay on this device."
-            : "I'll keep it in your notes with where it came from. It's still there after this card goes, until you delete it."
+            ? "I'll keep it in your notes with where it came from. It's still there after this card goes, until you delete it or forget everything. Notes stay on this device."
+            : "I'll keep it in your notes with where it came from. It's still there after this card goes, until you delete it or forget everything."
     }
     public static let rememberThis = "Remember this"
     public static let remembered = "Remembered"
@@ -585,7 +591,8 @@ public enum ReconWords {
     /// Every fixed line, for the dash and tone checks.
     public static var all: [String] {
         [offer("the pool"), offer("the pool", examples: true, place: .onDevice),
-         offer("the pool", examples: true, place: .mayLeaveDevice), offerYes, offerNo, started, offerDeclined,
+         offer("the pool", examples: true, place: .mayLeaveDevice), offerYes, offerNo, offerYesHint, offerNoHint,
+         started, offerDeclined,
          couldNotStart, title("the pool"),
          planning, looking, reading(1), reading(4), checkingDates, puttingTogether, doneLine, nothingFoundLine,
          couldNotRead, wordedInCloud, forgotWhileInCloud,

@@ -1,8 +1,10 @@
 #if canImport(SwiftUI)
+import Combine
 import Foundation
 import PebbleCore
 import PebbleModel
 import ReconTestSupport
+import SourceScan
 import SwiftUI
 import Testing
 @testable import PebbleUI
@@ -106,7 +108,7 @@ struct ReconFeedTests {
     @Test func theHomeScreensTodayAsksThroughItsOwnGate() async throws {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
-        defer { try? notes.forgetEverything() }
+        defer { discard(notes) }
         let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let model = HomeView.reconFeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: nil,
@@ -172,7 +174,7 @@ struct ReconFeedTests {
     @Test func turningTheCloudOffWithdrawsBothPreviewsWaitingAtOnce() async throws {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
-        defer { try? notes.forgetEverything() }
+        defer { discard(notes) }
         let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let (model, engine, runner) = feed()
@@ -204,7 +206,7 @@ struct ReconFeedTests {
     @Test func aRetryWithTheCloudOnAsksAgain() async throws {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
-        defer { try? notes.forgetEverything() }
+        defer { discard(notes) }
         let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let engine = ReplayEngine()
@@ -283,13 +285,13 @@ struct ReconFeedTests {
 
     @Test func aSecondSavedInARowIsSaidToo() throws {
         let memory = ShowcaseScene.emptyMemory()
-        defer { try? memory.forgetEverything() }
-        let engine = LocalFakeEngine(rule: .isolated(), origin: morning)
-        let runner = ReconRunner(engine: engine, provider: ReconTestData.sources)
+        defer { discard(memory) }
+        let played = realRecon(at: morning)
+        let runner = played.runner
         let model = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: runner, place: .onDevice,
                               memory: memory, now: { [morning] in morning })
         #expect(model.lookInto(SampleSources.poolTopic))
-        engine.advance(by: 30)
+        played.advance(30)
         let summary = try #require(runner.tasks.first.flatMap { runner.summary(for: $0.id) })
         let told = model.rememberTold
         #expect(model.remember(summary.points[0], in: summary))
@@ -360,6 +362,32 @@ struct ReconFeedTests {
         #expect(heardOnMain.allSatisfy { $0 })
     }
 
+    /// A summarizer that comes back on a background queue, as a cloud reply
+    /// does: every change Today publishes still happens on the main thread.
+    @Test(.timeLimit(.minutes(1)))
+    func aSummaryLandingOnABackgroundQueuePublishesOnlyOnTheMainThread() async throws {
+        let (model, engine, runner) = feed()
+        let mark = ThreadMark()
+        model.summarizer = { BackgroundSummarizer(mark: mark) }
+        // Plain, not tied to the main actor, so a change off it is noted
+        // rather than stopping the run.
+        let log = ThreadLog()
+        let watch = model.objectWillChange.sink { @Sendable _ in log.note() }
+        defer { watch.cancel() }
+        #expect(model.lookInto(SampleSources.libraryTopic))
+        engine.advance(by: 30)
+        let id = try #require(runner.tasks.first?.id)
+        await runner.settle(id)
+        // It was finished, and the runner told its observers, off the main thread.
+        #expect(mark.finishedOnMain == false)
+        for await feed in model.$feed.values
+            where feed.groups.flatMap(\.items).contains(where: { $0.id == id && $0.task?.state == .done }) {
+            break
+        }
+        #expect(!log.onMain.isEmpty)
+        #expect(log.onMain.allSatisfy { $0 })
+    }
+
     // MARK: The clock ticks only while something is live
 
     @Test func theClockTicksOnlyWhileACardIsLive() {
@@ -377,6 +405,27 @@ struct ReconFeedTests {
         #expect(!still.ticks)
     }
 
+    /// The scripted clock is moved by the home screen, not by Today's view,
+    /// so Today is shown only inside the home screen, and every showcase
+    /// scene with live tasks is a home screen. Then no scene's cards sit
+    /// still for want of a clock.
+    @Test func everySceneThatPlaysTasksHasTheClock() throws {
+        let sources = try ContrastGuardTests.sources()
+        let showing = sources.filter { !SwiftSource($0.text).calls(named: ["FeedView"]).isEmpty }.map(\.name)
+        #expect(showing == ["HomeView.swift"])
+        let home = try #require(sources.first { $0.name == "HomeView.swift" }?.text)
+        #expect(home.contains(".task(id: feed.ticks)"))
+        // In the showcase, the one scene that plays tasks live does it
+        // through `taskHome`, a home screen.
+        let showcase = SwiftSource(try #require(sources.first { $0.name == "ShowcaseScene.swift" }?.text))
+        let live = showcase.calls(named: ["HomeView"]).filter { $0.arguments.contains("drivesTasks:") }
+        #expect(live.count == 1)
+        #expect(showcase.calls(named: ["FeedModel"]).isEmpty)
+        for scene in ShowcaseScene.allCases where scene.tasks(rule: .isolated()) != nil {
+            #expect(scene.needsYou() != nil, "\(scene) has tasks but no home screen")
+        }
+    }
+
     // MARK: Forget everything while the cloud has it
 
     @Test func forgettingWhileACloudSummaryIsUnderWaySaysItCantBeCalledBack() async throws {
@@ -392,9 +441,8 @@ struct ReconFeedTests {
         #expect(model.forgotUnderway == ReconWords.forgotWhileInCloud)
         await gate.open()
         // The summary is still put together, late, and nothing keeps it.
-        await eventually { mark.finishedOnMain != nil }
+        await runner.settleEverything()
         #expect(mark.finishedOnMain != nil)
-        try await Task.sleep(for: .milliseconds(50))
         model.refresh()
         #expect(runner.tasks.isEmpty)
         #expect(!runner.isRecon(id))
@@ -446,13 +494,13 @@ struct ReconFeedTests {
         #expect(cloudy.note == ReconWords.wordedInCloud)
         let card = ReconCard(summary: cloudy, time: "9:40 AM", gathered: "Gathered today at 9:40 AM")
         #expect(ImageRenderer(content: card.frame(width: 393)).cgImage != nil)
-        #expect(card.footerSpoken == "Gathered today at 9:40 AM \(ReconWords.wordedInCloud)")
+        // A full stop between the two, so VoiceOver pauses.
+        #expect(card.footerSpoken == "Gathered today at 9:40 AM. \(ReconWords.wordedInCloud)")
         for note in [ReconWords.declinedCloud, ReconWords.cloudWithdrawn, ReconWords.cloudUnreadable] {
             let local = ReconSummary(id: pool.id, topic: pool.topic, overview: pool.overview, points: pool.points,
                                      sources: pool.sources, gatheredAt: pool.gatheredAt, madeOnDevice: true, note: note)
             let heard = ReconCard(summary: local, time: "9:40 AM", gathered: "Gathered today at 9:40 AM").footerSpoken
-            #expect(heard.hasPrefix("Gathered today at 9:40 AM"))
-            #expect(heard.contains(note), "not heard: \(note)")
+            #expect(heard == "Gathered today at 9:40 AM. \(note)", "not heard: \(note)")
         }
         // On the device with nothing to say, only when it was gathered.
         #expect(ReconCard(summary: pool, time: "", gathered: "Gathered today at 9:40 AM").footerSpoken
@@ -513,7 +561,7 @@ struct ReconFeedTests {
     @Test func aChangedCloudSettingWithdrawsTodaysPreview() async throws {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
-        defer { try? notes.forgetEverything() }
+        defer { discard(notes) }
         let store = InMemoryCloudHelpStore(CloudHelpSettings(isOn: true))
         let cloud = CloudHelp(store: store, endpoint: endpoint, memory: notes, transport: { maker.make() })
         let model = HomeView.reconFeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: nil,
@@ -544,7 +592,7 @@ struct ReconFeedTests {
     @Test func forgettingWhileTodaysPreviewWaitsSendsNothing() async throws {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
-        defer { try? notes.forgetEverything() }
+        defer { discard(notes) }
         let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let (model, engine, runner) = feed()
@@ -562,7 +610,8 @@ struct ReconFeedTests {
         #expect(review.pending == nil)
         #expect(model.forgotUnderway == ReconWords.forgotWhileInCloud)
         review.answer(.send, for: preview.id)
-        try await Task.sleep(for: .milliseconds(100))
+        // The summary's work has returned, so a late Send had every chance.
+        await runner.settleEverything()
         engine.advance(by: 60)
         model.refresh()
         #expect(maker.wire.sent.isEmpty)
@@ -611,6 +660,17 @@ struct ReconFeedTests {
         #expect(ChatView.arrival(for: refused, covered: false) == .reply(ReconWords.couldNotStart))
     }
 
+    /// VoiceOver lands on the offer's answers once they arrive, and each
+    /// says what it does: Not now says nothing starts.
+    @Test func theOffersButtonsAreFoundAndSayWhatTheyDo() {
+        #expect(ReconOfferButtons.arrivalFocus == .yes)
+        #expect(ReconOfferButtons.hint(.no) == "Nothing starts.")
+        #expect(ReconOfferButtons.hint(.yes) == ReconWords.offerYesHint)
+        #expect(ReconWords.offerYesHint.contains("Today"))
+        let buttons = ReconOfferButtons(onYes: {}, onNo: {}).frame(width: 393)
+        #expect(ImageRenderer(content: buttons).cgImage != nil)
+    }
+
     /// Each Remember this says which point it keeps, so buttons heard one
     /// at a time never sound the same.
     @Test func eachRememberButtonSaysWhichPoint() throws {
@@ -641,19 +701,25 @@ struct ReconFeedTests {
     /// A point the cloud put into words, from `CloudReconSummarizer.parse`,
     /// kept through Today's Remember this: the note says it was worded in
     /// the cloud, and its label never names the publisher.
-    @Test func aCloudWordedPointIsKeptAsARetelling() throws {
+    @Test func aCloudWordedPointIsKeptAsARetelling() async throws {
         let memory = ShowcaseScene.emptyMemory()
-        defer { try? memory.forgetEverything() }
-        let pool = try ReconTestData.pool()
-        let task = try #require(ReconTask(topic: pool.topic))
-        let summary = try #require(CloudReconSummarizer.parse("""
+        defer { discard(memory) }
+        let played = realRecon(at: morning)
+        let runner = played.runner
+        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: runner, place: .onDevice,
+                              memory: memory, now: { [morning] in morning })
+        model.summarizer = { CloudWorded(reply: """
             POINT: The Gazette reports the pool reopens on November 3. [1]
             POINT: Family swim is on Saturday mornings. [2]
-            """, task: task, id: pool.id, sources: pool.sources, gatheredAt: pool.gatheredAt))
+            """) }
+        #expect(model.lookInto(SampleSources.poolTopic))
+        played.advance(30)
+        let id = try #require(runner.tasks.first?.id)
+        await runner.settle(id)
+        let summary = try #require(runner.summary(for: id))
         #expect(!summary.madeOnDevice)
         let point = try #require(summary.points.first)
         let publisher = try #require(point.sourceIDs.first.flatMap(summary.source)?.publisher)
-        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), place: .onDevice, memory: memory)
         #expect(model.remember(point, in: summary))
         let note = try #require(memory.notes().first)
         #expect(note.text.hasPrefix(point.text))
@@ -663,17 +729,59 @@ struct ReconFeedTests {
         #expect(!note.source.label.contains(publisher))
     }
 
+    /// Made up news never reaches the notes as if it were real. On every
+    /// kind of example recon, from the one shared list: the card says
+    /// Example and offers no Remember, the choice of points never opens,
+    /// and no tap on any point saves anything. The real one, the control,
+    /// offers it and keeps the point.
+    @Test func aPointFromAnExampleIsNeverKept() throws {
+        for played in exampleRecons(at: morning) + [realRecon(at: morning)] {
+            let memory = ShowcaseScene.emptyMemory()
+            defer { discard(memory) }
+            let runner = played.runner
+            let model = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: runner, place: .onDevice,
+                                  memory: memory, now: { [morning] in morning })
+            #expect(model.lookInto(SampleSources.poolTopic), "\(played.name)")
+            played.advance(30)
+            model.refresh()
+            let item = try #require(model.feed.groups.flatMap(\.items).first { $0.task != nil }, "\(played.name)")
+            let task = try #require(item.task)
+            let summary = try #require(model.summary(for: task), "\(played.name)")
+            #expect(!summary.points.isEmpty)
+            let card = ReconCard(summary: summary, time: "9:40 AM", gathered: "", isSample: model.isSample(item),
+                                 canRemember: model.canRemember(summary))
+            let real = played.name == "real"
+            #expect(card.spoken.hasPrefix(FeedWords.exampleMarker) == !real, "\(played.name)")
+            #expect(card.actions.contains(.remember) == real, "\(played.name)")
+            model.choosingPoint = summary
+            #expect((model.choosingPoint != nil) == real, "\(played.name)")
+            model.choosingPoint = nil
+            let kept = summary.points.map { model.remember($0, in: summary) }
+            #expect(kept.allSatisfy { $0 == real }, "\(played.name)")
+            #expect(memory.notes().count == (real ? summary.points.count : 0), "\(played.name)")
+        }
+    }
+
+    /// The card alone: an example never offers Remember, even when told
+    /// its points could be kept.
+    @Test func anExampleCardNeverOffersRemember() throws {
+        let pool = try ReconTestData.pool()
+        #expect(!ReconCard(summary: pool, time: "", gathered: "", isSample: true).actions.contains(.remember))
+        #expect(!ReconCard(summary: pool, time: "", gathered: "", canRemember: false).actions.contains(.remember))
+        #expect(ReconCard(summary: pool, time: "", gathered: "").actions.contains(.remember))
+    }
+
     /// A kept note deleted on the memory screen: opening the choice again
     /// shows its point as not kept, and it can be kept again.
     @Test func aDeletedNoteNoLongerShowsItsPointAsKept() throws {
         let memory = ShowcaseScene.emptyMemory()
-        defer { try? memory.forgetEverything() }
-        let engine = LocalFakeEngine(rule: .isolated(), origin: morning)
-        let runner = ReconRunner(engine: engine, provider: ReconTestData.sources)
+        defer { discard(memory) }
+        let played = realRecon(at: morning)
+        let runner = played.runner
         let model = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: runner, place: .onDevice,
                               memory: memory, now: { [morning] in morning })
         #expect(model.lookInto(SampleSources.libraryTopic))
-        engine.advance(by: 30)
+        played.advance(30)
         let summary = try #require(runner.tasks.first.flatMap { runner.summary(for: $0.id) })
         let point = try #require(summary.points.first)
         #expect(model.remember(point, in: summary))
@@ -691,43 +799,56 @@ struct ReconFeedTests {
     }
 }
 
-/// A real engine's stand-in: the scripted engine underneath, but not an
-/// example.
-final class PlainEngine: ScriptedTaskEngine, @unchecked Sendable {
-    let inner: LocalFakeEngine
-    private let lock = NSLock()
-    private var count = 0
-    init(_ inner: LocalFakeEngine) { self.inner = inner }
-    /// How many times its tasks were asked for.
-    var reads: Int { lock.lock(); defer { lock.unlock() }; return count }
-    var rule: AskFirst { inner.rule }
-    var tasks: [AgentTask] {
-        lock.lock(); count += 1; lock.unlock()
-        return inner.tasks
-    }
-    func start(_ request: TaskRequest) -> String { inner.start(request) }
-    func start(_ script: TaskScript) -> String { inner.start(script) }
-    func observe(_ onChange: @escaping @Sendable (TaskSnapshot) -> Void) -> TaskObservation { inner.observe(onChange) }
-    func redirect(_ id: String, with instructions: String) -> Bool { inner.redirect(id, with: instructions) }
-    func stop(_ id: String) -> Bool { inner.stop(id) }
-    func dismiss(_ id: String) -> Bool { inner.dismiss(id) }
-    func clear() -> ClearedTasks { inner.clear() }
-    func retry(_ id: String) -> Bool { inner.retry(id) }
-    func resume(_ id: String, with approval: Approval) -> TaskApproval { inner.resume(id, with: approval) }
-    func questionClosed(_ request: ConfirmationRequest) { inner.questionClosed(request) }
-    func refresh() { inner.refresh() }
-}
-
 /// Pages on this device that aren't examples.
 struct RealPages: SourceProvider {
     var runsOnDevice: Bool { true }
+    var isSample: Bool { false }
     func sources(for task: ReconTask) throws -> [ReconSource] { [] }
 }
 
 /// The sample pages, but read somewhere off this device, so no recon may
-/// use them.
+/// use them. Said outright, so a change to the protocol's default can't
+/// let one through.
 struct FarPages: SourceProvider {
+    var runsOnDevice: Bool { false }
+    var isSample: Bool { false }
     func sources(for task: ReconTask) throws -> [ReconSource] { try ReconTestData.sources.sources(for: task) }
+}
+
+/// Puts a given cloud reply into a summary, as `CloudReconSummarizer`
+/// would once the person tapped Send. Sends nothing.
+struct CloudWorded: ReconSummarizer {
+    let reply: String
+    var mayLeaveDevice: Bool { true }
+    func summarize(_ task: ReconTask, id: String, sources: [ReconSource], gatheredAt: Date) async -> ReconSummary {
+        CloudReconSummarizer.parse(reply, task: task, id: id, sources: sources, gatheredAt: gatheredAt)
+            ?? LocalReconSummarizer().summary(task, id: id, sources: sources, gatheredAt: gatheredAt)
+    }
+}
+
+/// Comes back from a background dispatch queue, never the main thread,
+/// then puts the summary together on this device.
+struct BackgroundSummarizer: ReconSummarizer {
+    let mark: ThreadMark
+    var mayLeaveDevice: Bool { false }
+    func summarize(_ task: ReconTask, id: String, sources: [ReconSource], gatheredAt: Date) async -> ReconSummary {
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global(qos: .utility).async { done.resume() }
+        }
+        mark.mark()
+        return LocalReconSummarizer().summary(task, id: id, sources: sources, gatheredAt: gatheredAt)
+    }
+}
+
+/// Whether each change was on the main thread, in order.
+final class ThreadLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var seen: [Bool] = []
+    var onMain: [Bool] { lock.lock(); defer { lock.unlock() }; return seen }
+    func note() {
+        let main = Thread.isMainThread
+        lock.lock(); seen.append(main); lock.unlock()
+    }
 }
 
 /// Where a summary was finished: on the main thread or not.

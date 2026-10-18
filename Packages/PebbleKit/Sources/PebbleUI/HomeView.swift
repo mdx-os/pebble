@@ -137,6 +137,13 @@ public struct HomeView: View {
                     onForgetEverything: onForgetEverything)
     }
 
+    /// The memory screen's model as the home screen makes it: Forget
+    /// everything erases the notes, kept points included, and forgets
+    /// every task on `feed`, a recon still going included.
+    static func memoryModel(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp?, feed: FeedModel) -> MemoryModel {
+        memoryModel(store: store, place: place, cloud: cloud, onForgetEverything: { [weak feed] in feed?.forgetTasks() ?? .none })
+    }
+
     /// Today's model as the home screen makes it, with looking into things
     /// in it. Every task, a recon's included, runs through one runner. With
     /// no engine given, the scripted one plays in real time over `reading`.
@@ -664,8 +671,7 @@ struct HomeScreen: View {
             // Built inside MemoryView's StateObject, once per screen, never
             // on each pass through here. `place` then keeps its words in
             // step with the cloud setting and the open chat.
-            MemoryView(model: HomeView.memoryModel(store: memory, place: surfacePlace, cloud: cloud,
-                                                   onForgetEverything: { feed.forgetTasks() }),
+            MemoryView(model: HomeView.memoryModel(store: memory, place: surfacePlace, cloud: cloud, feed: feed),
                        place: surfacePlace, cloud: cloud)
         } else {
             // The store couldn't be opened. Say so rather than hide memory.

@@ -758,6 +758,22 @@ struct ReconOfferButtons: View {
     let onYes: () -> Void
     let onNo: () -> Void
 
+    enum Choice: Hashable { case yes, no }
+
+    /// Where VoiceOver goes once the buttons are on screen, so a person who
+    /// just heard the question lands on its answers rather than hunting.
+    static let arrivalFocus: Choice = .yes
+
+    /// What VoiceOver says each choice does.
+    static func hint(_ choice: Choice) -> String {
+        switch choice {
+        case .yes: ReconWords.offerYesHint
+        case .no: ReconWords.offerNoHint
+        }
+    }
+
+    @AccessibilityFocusState private var focus: Choice?
+
     var body: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) { buttons }
@@ -765,15 +781,24 @@ struct ReconOfferButtons: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("reconOffer")
+        .onAppear {
+            // A turn later, so the question is said first.
+            DispatchQueue.main.async { focus = Self.arrivalFocus }
+        }
     }
 
     @ViewBuilder
     private var buttons: some View {
         Button(ReconWords.offerYes, action: onYes)
             .buttonStyle(CardButtonStyle(kind: .primary))
+            .accessibilityHint(Self.hint(.yes))
+            .accessibilityFocused($focus, equals: .yes)
             .accessibilityIdentifier("reconOfferYes")
         Button(ReconWords.offerNo, action: onNo)
             .buttonStyle(CardButtonStyle(kind: .quiet))
+            .accessibilityHint(Self.hint(.no))
+            .accessibilityFocused($focus, equals: .no)
+            .accessibilityIdentifier("reconOfferNo")
     }
 }
 

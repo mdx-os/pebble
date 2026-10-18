@@ -148,6 +148,92 @@ public final class OwnStepsEngine: TaskEngine, @unchecked Sendable {
     public func refresh() {}
 }
 
+/// A real engine's stand-in: the scripted engine underneath, but not an
+/// example. Move it on through `inner`.
+public final class PlainEngine: ScriptedTaskEngine, @unchecked Sendable {
+    public let inner: LocalFakeEngine
+    private let lock = NSLock()
+    private var count = 0
+    public init(_ inner: LocalFakeEngine) { self.inner = inner }
+    /// Said outright, so a change to the protocol's default can't make it one.
+    public var isSample: Bool { false }
+    public func isSample(_ id: String) -> Bool { false }
+    /// How many times its tasks were asked for.
+    public var reads: Int { lock.lock(); defer { lock.unlock() }; return count }
+    public var rule: AskFirst { inner.rule }
+    public var tasks: [AgentTask] {
+        lock.lock(); count += 1; lock.unlock()
+        return inner.tasks
+    }
+    public func start(_ request: TaskRequest) -> String { inner.start(request) }
+    public func start(_ script: TaskScript) -> String { inner.start(script) }
+    public func observe(_ onChange: @escaping @Sendable (TaskSnapshot) -> Void) -> TaskObservation { inner.observe(onChange) }
+    public func redirect(_ id: String, with instructions: String) -> Bool { inner.redirect(id, with: instructions) }
+    public func stop(_ id: String) -> Bool { inner.stop(id) }
+    public func dismiss(_ id: String) -> Bool { inner.dismiss(id) }
+    public func clear() -> ClearedTasks { inner.clear() }
+    public func retry(_ id: String) -> Bool { inner.retry(id) }
+    public func resume(_ id: String, with approval: Approval) -> TaskApproval { inner.resume(id, with: approval) }
+    public func questionClosed(_ request: ConfirmationRequest) { inner.questionClosed(request) }
+    public func refresh() { inner.refresh() }
+}
+
+/// The sample pages' words, on this device, standing in for a real
+/// provider, so a test can keep a point from them. Not an example.
+public struct PagesNotExamples: SourceProvider {
+    public let pages: SampleSources
+    public init(now: @escaping @Sendable () -> Date) { pages = SampleSources(now: now) }
+    public var runsOnDevice: Bool { true }
+    public var isSample: Bool { false }
+    public func sources(for task: ReconTask) throws -> [ReconSource] { try pages.sources(for: task) }
+}
+
+/// A recon a test can play to its end.
+public struct PlayedRecon: Sendable {
+    public let name: String
+    public let runner: ReconRunner
+    /// Moves the scripted engine underneath on.
+    public let advance: @Sendable (TimeInterval) -> Void
+}
+
+/// Every way a recon is an example: example pages, the scripted engine,
+/// or both. No point from any of them may ever reach the notes, so the
+/// core and the UI tests both check each one, and a new kind of example
+/// goes here.
+public func exampleRecons(at origin: Date) -> [PlayedRecon] {
+    let both = LocalFakeEngine(rule: .isolated(), origin: origin)
+    let scripted = LocalFakeEngine(rule: .isolated(), origin: origin)
+    let pages = LocalFakeEngine(rule: .isolated(), origin: origin)
+    return [
+        PlayedRecon(name: "example pages on the scripted engine",
+                    runner: ReconRunner(engine: both, provider: SampleSources(now: { origin })),
+                    advance: { both.advance(by: $0) }),
+        PlayedRecon(name: "the scripted engine",
+                    runner: ReconRunner(engine: scripted, provider: PagesNotExamples(now: { origin })),
+                    advance: { scripted.advance(by: $0) }),
+        PlayedRecon(name: "example pages",
+                    runner: ReconRunner(engine: PlainEngine(pages), provider: SampleSources(now: { origin }),
+                                        now: { origin }),
+                    advance: { pages.advance(by: $0) }),
+    ]
+}
+
+/// The control for `exampleRecons`: neither the engine nor the pages are
+/// examples, so its points may be kept.
+public func realRecon(at origin: Date) -> PlayedRecon {
+    let inner = LocalFakeEngine(rule: .isolated(), origin: origin)
+    return PlayedRecon(name: "real", runner: ReconRunner(engine: PlainEngine(inner), provider: PagesNotExamples(now: { origin }),
+                                                         now: { [inner] in inner.currentDate }),
+                       advance: { inner.advance(by: $0) })
+}
+
+/// Lets go of a scratch notes store: its notes, and its file and any staged
+/// copy, so no test leaves one behind in the temporary folder.
+public func discard(_ store: MemoryStore) {
+    try? store.forgetEverything()
+    try? FileManager.default.removeItem(at: store.fileURL)
+}
+
 /// Holds something back until the test lets it go.
 public actor Gate {
     private var isOpen = false

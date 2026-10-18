@@ -19,9 +19,14 @@ final class FeedModel: ObservableObject {
     /// A summary whose sources are open to read.
     @Published var readingSources: ReconSummary?
     /// A summary whose points are open to choose one to remember. Opening
-    /// it looks again at which kept points are still in the notes.
+    /// it looks again at which kept points are still in the notes. An
+    /// example's points can't be kept, so its choice never opens.
     @Published var choosingPoint: ReconSummary? {
-        didSet { if choosingPoint != nil { refreshRemembered() } }
+        didSet {
+            guard let summary = choosingPoint else { return }
+            guard canRemember(summary) else { choosingPoint = nil; return }
+            refreshRemembered()
+        }
     }
     /// Points kept in memory from this screen, by `rememberKey`.
     @Published private(set) var remembered: Set<String> = []
@@ -115,17 +120,20 @@ final class FeedModel: ObservableObject {
          calendar: Calendar = .current,
          now: @escaping () -> Date = { Date() },
          clock: @escaping () -> ContinuousClock.Instant = { ContinuousClock.now }) {
-        self.sources = sources
+        let recon = tasks as? ReconRunner
+        // A card offers to look into something only when its tap can start
+        // it. Otherwise it offers to talk about it, which is what the tap does.
+        self.sources = recon?.canLookInto == true ? sources : sources.map { AsksInChat(source: $0) }
         self.needsYou = needsYou
         self.tasks = tasks
-        self.recon = tasks as? ReconRunner
+        self.recon = recon
         self.memory = memory
         self.drivesTasks = drivesTasks
         self.place = place
         self.calendar = calendar
         self.now = now
         self.clock = clock
-        feed = Feed.build(from: sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
+        feed = Feed.build(from: self.sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
         let list = tasks?.tasks ?? []
         track(list)
         sections = Self.sections(of: feed)
@@ -387,9 +395,17 @@ final class FeedModel: ObservableObject {
     /// when another window turned it off. A Send could no longer go out,
     /// so the person is never left being asked.
     func follow(cloudSettings: AnyPublisher<CloudHelpSettings, Never>) {
-        cloudWatch = cloudSettings.dropFirst().removeDuplicates().sink { [weak self] _ in
-            MainActor.assumeIsolated { self?.cloudReview.cancelPending() }
-        }
+        // On the main thread it is withdrawn then and there, so a Send
+        // tapped right after can't go. A change published on any other
+        // thread hops to the main one first, and never traps.
+        cloudWatch = cloudSettings.dropFirst().removeDuplicates()
+            .sink { @Sendable [weak self] _ in
+                if Thread.isMainThread {
+                    MainActor.assumeIsolated { self?.cloudReview.cancelPending() }
+                } else {
+                    Task { @MainActor in self?.cloudReview.cancelPending() }
+                }
+            }
     }
 
     /// True when a recon for `topic` is going or done on Today. One that
@@ -426,11 +442,18 @@ final class FeedModel: ObservableObject {
         remembered.contains(Self.rememberKey(summary, point))
     }
 
+    /// True when the summary's points may go in the notes. Never for one
+    /// read from example pages, so made up news is never kept as real.
+    func canRemember(_ summary: ReconSummary) -> Bool {
+        recon?.keepsPoints(summary.id) == true
+    }
+
     /// Keeps one point in memory, with where it came from, through the same
-    /// store the memory screen uses. Only a tap on Remember this calls it.
+    /// store the memory screen uses. Only a tap on Remember this calls it,
+    /// and never for an example.
     @discardableResult
     func remember(_ point: ReconPoint, in summary: ReconSummary) -> Bool {
-        guard summary.points.contains(point), !isRemembered(point, in: summary) else { return false }
+        guard canRemember(summary), summary.points.contains(point), !isRemembered(point, in: summary) else { return false }
         guard let memory else {
             rememberStatus = MemoryWords.couldNotOpen
             return false
@@ -684,6 +707,23 @@ final class FeedModel: ObservableObject {
     }
 }
 
+/// A feed source whose Look into it cards become Talk about it, with the
+/// same line ready in the chat, for a Today that can't start one. Its
+/// cards then never promise to start what the tap can't.
+struct AsksInChat: FeedSource {
+    let source: any FeedSource
+
+    var isSample: Bool { source.isSample }
+
+    func items(now: Date) -> [FeedItem] {
+        source.items(now: now).map { item in
+            guard case .lookInto(let topic) = item.action else { return item }
+            return FeedItem(id: item.id, kind: item.kind, time: item.time, title: item.title, body: item.body,
+                            action: .talk(ReconWords.askLine(topic)))
+        }
+    }
+}
+
 /// The refreshes a `FeedModel` has queued for the main actor, kept as one
 /// chain: each waits for the one before, so only the newest is held and
 /// waiting for it waits for them all. The watch on `NeedsYou` may call from
@@ -828,6 +868,7 @@ struct FeedView: View {
                             ReconCard(summary: summary, time: model.timeLabel(for: item.time),
                                       gathered: ReconWords.gathered(summary.gatheredAt, now: model.now()),
                                       isSample: model.isSample(item),
+                                      canRemember: model.canRemember(summary),
                                       onOpenSources: { model.readingSources = summary },
                                       onFollowUp: { model.followUp(summary, talk: onTalk) },
                                       onRemember: { model.choosingPoint = summary },

@@ -515,7 +515,7 @@ struct ReconTests {
         // It saves.
         let memory = MemoryStore(fileURL: FileManager.default.temporaryDirectory
             .appendingPathComponent("recon-memory-\(UUID().uuidString).json"))
-        defer { try? memory.forgetEverything() }
+        defer { discard(memory) }
         guard case .saved = try memory.remember(note, source: summary.memorySource(for: kept)) else {
             Issue.record("not saved: \(note)")
             return
@@ -558,6 +558,10 @@ final class RecordingProvider: SourceProvider, @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
     var asked: Int { lock.lock(); defer { lock.unlock() }; return count }
+    /// Said outright, so a change to the protocol's default can't make it
+    /// one the runner may ask.
+    var runsOnDevice: Bool { false }
+    var isSample: Bool { false }
 
     func sources(for task: ReconTask) throws -> [ReconSource] {
         lock.lock(); count += 1; lock.unlock()

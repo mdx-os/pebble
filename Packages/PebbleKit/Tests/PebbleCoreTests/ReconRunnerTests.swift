@@ -126,9 +126,10 @@ struct ReconRunnerTests {
         #expect(runner.held(id)?.hasSummary == true)
         #expect(runner.summary(for: id) == late)
         #expect(runner.tasks.first { $0.id == id }?.state == .done)
-        // A round that isn't the live one is dropped.
+        // A round that isn't the live one is dropped. Read from this
+        // runner, so it never leans on two runners starting alike.
         let (other, otherID, otherLate) = try waitingRecon(ReplayEngine())
-        other.finish(otherID, round: held.round + 1, with: otherLate)
+        other.finish(otherID, round: try #require(other.held(otherID)).round + 1, with: otherLate)
         #expect(other.held(otherID)?.hasSummary == false)
     }
 
@@ -284,7 +285,6 @@ struct ReconRunnerTests {
         // Its work was cancelled, which is what withdraws a waiting preview.
         await cancelled.wait()
         await gate.open()
-        #expect(runner.summary(for: id) == nil)
     }
 
     // MARK: Examples, per task
@@ -301,6 +301,25 @@ struct ReconRunnerTests {
         let plain = ReconRunner(engine: ReplayEngine(), provider: DeviceProvider(), now: { Self.readOn })
         let read = try #require(plain.lookInto(SampleSources.libraryTopic))
         #expect(!plain.isSample(read))
+    }
+
+    /// Made up news must never reach the notes as if it were real. Every
+    /// kind of example recon, from the one shared list, finishes with
+    /// points, and none may be kept. The real one, the control, may.
+    @Test func noPointFromAnExampleMayBeKept() throws {
+        for played in exampleRecons(at: Self.readOn) + [realRecon(at: Self.readOn)] {
+            let runner = played.runner
+            let id = try #require(runner.lookInto(SampleSources.poolTopic), "\(played.name)")
+            played.advance(30)
+            let summary = try #require(runner.summary(for: id), "\(played.name)")
+            #expect(!summary.points.isEmpty, "\(played.name)")
+            let real = played.name == "real"
+            #expect(runner.isSample(id) == !real, "\(played.name)")
+            #expect(runner.keepsPoints(id) == real, "\(played.name)")
+        }
+        // A task that isn't a recon has no points to keep.
+        let real = realRecon(at: Self.readOn).runner
+        #expect(!real.keepsPoints(real.start(TaskRequest(title: "Book the car service"))))
     }
 
     // MARK: A provider that fails
@@ -355,6 +374,23 @@ struct ReconRunnerTests {
         #expect(local.note == nil)
     }
 
+    /// The plain overview over the cloud's points says how many sources were
+    /// read, never how many of its points cite more than one: those numbers
+    /// are the cloud's. On the device it still counts them.
+    @Test func aCloudOverviewDoesNotCountTheCloudsCitations() {
+        let pages = Array(Self.sources.documents.prefix(2))
+        let ids = pages.map(\.id)
+        let points = [ReconPoint(id: "a", text: "Both say it.", sourceIDs: ids),
+                      ReconPoint(id: "b", text: "Both say this too.", sourceIDs: ids)]
+        let cloud = ReconSummary(id: "t", topic: "the pool", overview: "", points: points, sources: pages,
+                                 gatheredAt: Self.readOn, madeOnDevice: false)
+        #expect(cloud.overview == "I read 2 sources on the pool.")
+        #expect(!cloud.overview.contains("more than one"))
+        let device = ReconSummary(id: "t", topic: "the pool", overview: "", overviewSourceIDs: ["gone"], points: points,
+                                  sources: pages, gatheredAt: Self.readOn, madeOnDevice: true)
+        #expect(device.overview.contains("2 points come from more than one of them."))
+    }
+
     /// Kept as a note, a point worded on this device names its source, as
     /// those are the page's own words. One worded in the cloud says it was,
     /// and its label names no publisher.
@@ -384,6 +420,7 @@ struct ReconRunnerTests {
 /// Reads the sample pages, on this device, but not as examples.
 struct DeviceProvider: SourceProvider {
     var runsOnDevice: Bool { true }
+    var isSample: Bool { false }
     func sources(for task: ReconTask) throws -> [ReconSource] {
         try ReconTests.sources.sources(for: task)
     }
@@ -399,6 +436,7 @@ final class ShrinkingProvider: SourceProvider, @unchecked Sendable {
         set { lock.lock(); cut = newValue; lock.unlock() }
     }
     var runsOnDevice: Bool { true }
+    var isSample: Bool { false }
     func sources(for task: ReconTask) throws -> [ReconSource] {
         let all = try ReconTests.sources.sources(for: task)
         return limit.map { Array(all.prefix($0)) } ?? all
@@ -409,5 +447,6 @@ final class ShrinkingProvider: SourceProvider, @unchecked Sendable {
 struct FailingProvider: SourceProvider {
     struct Unreadable: Error {}
     var runsOnDevice: Bool { true }
+    var isSample: Bool { false }
     func sources(for task: ReconTask) throws -> [ReconSource] { throw Unreadable() }
 }

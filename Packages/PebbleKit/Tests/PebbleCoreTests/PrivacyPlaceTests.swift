@@ -46,6 +46,11 @@ struct PrivacyPlaceTests {
         #expect(FirstConversation.presence(.mayLeaveDevice) == "Here with you.")
         #expect(ReconWords.offer("the pool", examples: true, place: .mayLeaveDevice).contains("example pages"))
         #expect(ReconWords.rememberDetail(.mayLeaveDevice).contains("where it came from"))
+        // A kept point goes with Forget everything, and both lines say so.
+        #expect(ReconWords.rememberDetail(.mayLeaveDevice)
+            == "I'll keep it in your notes with where it came from. It's still there after this card goes, until you delete it or forget everything.")
+        #expect(ReconWords.rememberDetail(.onDevice)
+            == "I'll keep it in your notes with where it came from. It's still there after this card goes, until you delete it or forget everything. Notes stay on this device.")
     }
 
     /// Lines shown only after the cloud was asked name the cloud, never the

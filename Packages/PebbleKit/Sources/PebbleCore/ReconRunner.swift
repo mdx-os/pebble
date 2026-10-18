@@ -45,6 +45,11 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
     /// means a later look. Never held while observers are told.
     private let snapshotLock = NSLock()
     private var sequence = 0
+    /// Every summary's work until it returns, cancelled or not. Only for
+    /// `settleEverything`; nothing a recon read is held here.
+    private var underway: [UUID: Task<Void, Never>] = [:]
+    /// Work that returned before `summarize` could note it.
+    private var endedEarly: Set<UUID> = []
 
     private struct Run {
         let task: ReconTask
@@ -132,6 +137,24 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         await work(id)?.value
     }
 
+    /// Waits until every summary begun so far has returned, even one whose
+    /// card was stopped, let go or forgotten, so a test can be sure a late
+    /// one had its chance to land and didn't.
+    package func settleEverything() async {
+        while let next = nextUnderway() { await next.value }
+    }
+
+    private func nextUnderway() -> Task<Void, Never>? {
+        lock.lock(); defer { lock.unlock() }
+        return underway.values.first
+    }
+
+    /// The work has returned, kept or not.
+    private func ended(_ key: UUID) {
+        lock.lock(); defer { lock.unlock() }
+        if underway.removeValue(forKey: key) == nil { endedEarly.insert(key) }
+    }
+
     private func work(_ id: String) -> Task<Void, Never>? {
         lock.lock(); defer { lock.unlock() }
         return runs[id]?.work
@@ -186,12 +209,16 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
             return
         }
         let (summarizer, task, sources, gatheredAt) = (run.summarizer, run.task, run.sources, run.gatheredAt)
+        let key = UUID()
         let work = Task { [weak self] in
+            defer { self?.ended(key) }
             let summary = await summarizer.summarize(task, id: id, sources: sources, gatheredAt: gatheredAt)
             guard !Task.isCancelled else { return }
             self?.finish(id, round: round, with: summary)
         }
         lock.lock()
+        // Work that already ended before it could be noted needs no wait.
+        if endedEarly.remove(key) == nil { underway[key] = work }
         let current = runs[id]
         let keep = current?.round == round && current?.stopped == false && current?.summary == nil
         if keep { runs[id]?.work = work }
@@ -227,6 +254,13 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
 
     public func isSample(_ id: String) -> Bool {
         engine.isSample(id) || (provider.isSample && isRecon(id))
+    }
+
+    /// True when a point from this recon may be kept in the person's notes.
+    /// Never for an example: its points are made up, and a note outlives the
+    /// card that says it was one.
+    public func keepsPoints(_ id: String) -> Bool {
+        isRecon(id) && !isSample(id)
     }
 
     /// The engine's tasks. A recon the engine has finished while its summary

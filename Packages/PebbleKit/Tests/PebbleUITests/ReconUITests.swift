@@ -1,4 +1,5 @@
 #if canImport(SwiftUI)
+import Combine
 import Foundation
 import PebbleCore
 import PebbleModel
@@ -145,6 +146,17 @@ struct ReconUITests {
         return (model, engine, runner)
     }
 
+    /// Today over an engine and pages that aren't examples, so its points
+    /// may be kept. Move it on through the scripted engine underneath.
+    func realFeed(memory: MemoryStore?) -> (FeedModel, LocalFakeEngine, ReconRunner) {
+        let played = realRecon(at: ShowcaseScene.morning)
+        let runner = played.runner
+        let engine = (runner.engine as! PlainEngine).inner
+        let model = FeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()), tasks: runner,
+                              place: .onDevice, memory: memory, now: { ShowcaseScene.morning })
+        return (model, engine, runner)
+    }
+
     @Test func aFeedCardStartsItOnTapAndItLandsBackInTheFeed() throws {
         let (model, engine, runner) = feed(memory: nil)
         let card = try #require(model.feed.groups.flatMap(\.items).first { $0.id == "sample:pool" })
@@ -176,6 +188,70 @@ struct ReconUITests {
         #expect(ReconIntent.topic(in: talked[0]) == SampleSources.poolTopic)
     }
 
+    /// A Today that can't start a recon never shows a card promising to:
+    /// the card offers to talk about it, which is what its tap does, and
+    /// nothing starts. One that can start it keeps Look into it.
+    @Test func aCardThatCantStartOneSaysTalkAboutIt() throws {
+        func card(_ model: FeedModel) throws -> FeedItem {
+            try #require(model.feed.groups.flatMap(\.items).first { $0.id == "sample:pool" })
+        }
+        let (able, _, _) = feed(memory: nil)
+        #expect(try card(able).action == .lookInto(SampleSources.poolTopic))
+        let unableRunners = [ReconRunner(engine: OwnStepsEngine(), provider: ReconTestData.sources),
+                             ReconRunner(engine: ReplayEngine(), provider: FarPages())]
+        let unable = unableRunners.map {
+            FeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()), tasks: $0,
+                      place: .onDevice, now: { ShowcaseScene.morning })
+        } + [FeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()), place: .onDevice)]
+        for model in unable {
+            #expect(!model.canLookInto)
+            let item = try card(model)
+            #expect(item.action == .talk(ReconWords.askLine(SampleSources.poolTopic)))
+            #expect(item.action?.title == FeedWords.talkTitle)
+            #expect(item.action?.hint != ReconWords.lookIntoHint)
+            // Still an example, and still said to be one.
+            #expect(model.isSample(item))
+            var talked: [String] = []
+            model.perform(item) { talked.append($0) }
+            #expect(talked == [ReconWords.askLine(SampleSources.poolTopic)])
+            #expect(model.recon?.tasks.isEmpty ?? true)
+        }
+    }
+
+    /// The cloud setting changing on another thread still withdraws
+    /// Today's preview, on the main thread, and nothing is sent.
+    @Test(.timeLimit(.minutes(1)))
+    func aCloudSettingPublishedOffTheMainThreadIsSafe() async throws {
+        let maker = TransportMaker()
+        let notes = scratchMemory()
+        defer { discard(notes) }
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+                              memory: notes, transport: { maker.make() })
+        let (model, _, runner) = feed(memory: nil)
+        let review = model.cloudReview
+        model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel(), review: review)) }
+        let settings = PassthroughSubject<CloudHelpSettings, Never>()
+        model.follow(cloudSettings: settings.eraseToAnyPublisher())
+        settings.send(CloudHelpSettings(isOn: true))
+        #expect(model.lookInto(SampleSources.poolTopic))
+        let id = try #require(runner.tasks.first?.id)
+        runner.advance(by: 12)
+        await eventually { review.pending != nil }
+        #expect(review.pending != nil)
+        let sent = Flag()
+        // A subject may be sent to from any thread; that is the point here.
+        nonisolated(unsafe) let offThread = settings
+        DispatchQueue.global().async {
+            offThread.send(CloudHelpSettings(isOn: false))
+            Task { await sent.raise() }
+        }
+        await sent.wait()
+        await eventually { review.pending == nil }
+        #expect(review.pending == nil)
+        await runner.settle(id)
+        #expect(maker.wire.sent.isEmpty)
+    }
+
     @Test func aFollowUpOpensTheChatWithAQuestionReady() throws {
         let (model, engine, runner) = feed(memory: nil)
         let id = try #require(model.lookInto(SampleSources.libraryTopic) ? runner.tasks.first?.id : nil)
@@ -190,8 +266,8 @@ struct ReconUITests {
 
     @Test func aPointIsRememberedOnlyOnTap() throws {
         let memory = scratchMemory()
-        defer { try? memory.forgetEverything() }
-        let (model, engine, runner) = feed(memory: memory)
+        defer { discard(memory) }
+        let (model, engine, runner) = realFeed(memory: memory)
         #expect(model.lookInto(SampleSources.poolTopic))
         engine.advance(by: 30)
         let id = try #require(runner.tasks.first?.id)
@@ -217,7 +293,7 @@ struct ReconUITests {
     }
 
     @Test func rememberingWithNoMemorySaysSoKindly() throws {
-        let (model, engine, runner) = feed(memory: nil)
+        let (model, engine, runner) = realFeed(memory: nil)
         #expect(model.lookInto(SampleSources.poolTopic))
         engine.advance(by: 30)
         let summary = try #require(runner.tasks.first.flatMap { runner.summary(for: $0.id) })
@@ -227,8 +303,8 @@ struct ReconUITests {
 
     @Test func forgetEverythingTakesEveryReconAndClosesItsSheets() throws {
         let memory = scratchMemory()
-        defer { try? memory.forgetEverything() }
-        let (model, engine, runner) = feed(memory: memory)
+        defer { discard(memory) }
+        let (model, engine, runner) = realFeed(memory: memory)
         #expect(model.lookInto(SampleSources.poolTopic))
         engine.advance(by: 30)
         let id = try #require(runner.tasks.first?.id)
@@ -258,8 +334,8 @@ struct ReconUITests {
     /// everything, which erases the notes, takes it too.
     @Test func aKeptPointStaysInTheNotesUntilTheyAreForgotten() throws {
         let memory = scratchMemory()
-        defer { try? memory.forgetEverything() }
-        let (model, engine, runner) = feed(memory: memory)
+        defer { discard(memory) }
+        let (model, engine, runner) = realFeed(memory: memory)
         #expect(model.lookInto(SampleSources.poolTopic))
         engine.advance(by: 30)
         let summary = try #require(runner.tasks.first.flatMap { runner.summary(for: $0.id) })
@@ -270,11 +346,45 @@ struct ReconUITests {
         #expect(memory.notes().map(\.text) == [summary.note(for: point)])
         // The words promise exactly that.
         for place in [PrivacyPlace.onDevice, .mayLeaveDevice] {
-            #expect(ReconWords.rememberDetail(place).contains("It's still there after this card goes, until you delete it."))
+            #expect(ReconWords.rememberDetail(place).contains("It's still there after this card goes, until you delete it or forget everything."))
         }
         #expect(TaskWords.forgetTasksDetail.contains("Your notes aren't touched."))
-        // Forget everything erases the notes, the kept point included.
-        try memory.forgetEverything()
+    }
+
+    /// Forget everything, through the memory screen's model as the home
+    /// screen makes it, with a kept point in the notes and a recon still
+    /// putting a summary together in the cloud: the notes are empty, every
+    /// task is gone, and nothing is left that may leave the device.
+    @Test(.timeLimit(.minutes(1)))
+    func forgetEverythingErasesAKeptPointAndStopsARunningRecon() async throws {
+        let memory = scratchMemory()
+        defer { discard(memory) }
+        let (model, engine, runner) = realFeed(memory: memory)
+        #expect(model.lookInto(SampleSources.poolTopic))
+        engine.advance(by: 30)
+        let summary = try #require(runner.tasks.first.flatMap { runner.summary(for: $0.id) })
+        #expect(model.remember(try #require(summary.points.first), in: summary))
+        #expect(memory.notes().count == 1)
+        // A second recon, its summary held in the cloud's hands.
+        let gate = Gate()
+        model.summarizer = { HeldSummarizer(gate: gate, mark: ThreadMark(), leaves: true) }
+        #expect(model.lookInto(SampleSources.libraryTopic))
+        engine.advance(by: 30)
+        let running = try #require(runner.tasks.first { $0.isActive }?.id)
+        #expect(runner.summariesMayLeaveDevice == 1)
+
+        let screen = HomeView.memoryModel(store: memory, place: .onDevice, cloud: nil, feed: model)
+        screen.forgetEverything()
+        #expect(memory.notes().isEmpty)
+        #expect(runner.tasks.isEmpty)
+        #expect(runner.summariesMayLeaveDevice == 0)
+        #expect(!runner.isRecon(running))
+        // The held summary comes in late, and nothing keeps it. Its work
+        // has returned before anything is checked.
+        await gate.open()
+        await runner.settleEverything()
+        #expect(runner.tasks.isEmpty)
+        #expect(runner.summary(for: running) == nil)
         #expect(memory.notes().isEmpty)
     }
 
@@ -323,7 +433,7 @@ struct ReconUITests {
     @Test func withTheCloudOnThePersonSeesItFirstAndCanKeepItHere() async throws {
         let maker = TransportMaker()
         let notes = scratchMemory()
-        defer { try? notes.forgetEverything() }
+        defer { discard(notes) }
         _ = try notes.remember("Coach Priya teaches the Saturday lessons.", source: .toldMe)
         let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
@@ -356,7 +466,7 @@ struct ReconUITests {
     @Test func stoppingWhileThePreviewWaitsSendsNothing() async throws {
         let maker = TransportMaker()
         let notes = scratchMemory()
-        defer { try? notes.forgetEverything() }
+        defer { discard(notes) }
         let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let (model, _, runner) = feed(memory: nil)
@@ -389,7 +499,7 @@ struct ReconUITests {
             POINT: Family swim is on Saturdays. [2]
             """)
         let notes = scratchMemory()
-        defer { try? notes.forgetEverything() }
+        defer { discard(notes) }
         let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
                               memory: notes, transport: { URLSessionCloudTransport(load: wire.load) })
         let (model, _, runner) = feed(memory: nil)
@@ -407,9 +517,10 @@ struct ReconUITests {
         model.stop(try #require(runner.tasks.first))
         #expect(runner.tasks.first?.state == .stopped)
         await wire.gate.open()
-        await eventually { wire.answered }
+        // Waits for the summary's work itself to return, reply parsed and
+        // all, not for a guessed time.
+        await runner.settleEverything()
         #expect(wire.answered)
-        try await Task.sleep(for: .milliseconds(100))
         runner.advance(by: 30)
         model.refresh()
         #expect(wire.sentCount == 1)
@@ -428,7 +539,7 @@ struct ReconUITests {
             POINT: Family swim is on Saturdays. [2]
             """)
         let notes = scratchMemory()
-        defer { try? notes.forgetEverything() }
+        defer { discard(notes) }
         let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
                               memory: notes, transport: { URLSessionCloudTransport(load: wire.load) })
         let (model, _, runner) = feed(memory: nil)
@@ -453,7 +564,7 @@ struct ReconUITests {
     @Test func turningTheCloudOffWithdrawsTodaysPreview() async throws {
         let maker = TransportMaker()
         let notes = scratchMemory()
-        defer { try? notes.forgetEverything() }
+        defer { discard(notes) }
         let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let (model, _, runner) = feed(memory: nil)

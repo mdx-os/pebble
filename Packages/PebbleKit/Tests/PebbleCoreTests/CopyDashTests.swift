@@ -58,6 +58,35 @@ struct CopyDashTests {
         }
     }
 
+    /// Recon lines built at run time, from real summaries and dates, so a
+    /// dash slipping into a format string or a date style is caught too.
+    @Test func reconLinesBuiltAtRunTimeUseNoDash() throws {
+        let topic = "the Riverside pool reopening"
+        let pool = try ReconTests.summary(SampleSources.poolTopic)
+        let library = try ReconTests.summary(SampleSources.libraryTopic)
+        let now = ReconTests.readOn
+        let cloud = ReconSummary(id: pool.id, topic: pool.topic, overview: pool.overview, points: pool.points,
+                                 sources: pool.sources, gatheredAt: pool.gatheredAt, madeOnDevice: false)
+        var lines = [
+            ReconWords.offer(topic), ReconWords.offer(topic, examples: true, place: .onDevice),
+            ReconWords.offer(topic, examples: true, place: .mayLeaveDevice),
+            pool.overview, library.overview, cloud.overview, pool.plainText, cloud.plainText,
+            ReconWords.overview(topic: topic, sources: 3, backedTwice: 0, disagreements: 2, old: 3),
+            ReconWords.disputedBy(pool.sources.map(\.publisher)),
+            ReconWords.gathered(now, now: now), ReconWords.gathered(now - 86_400, now: now),
+            ReconWords.gathered(now - 9 * 86_400, now: now),
+            ReconWords.reading(2), ReconWords.reading(12), ReconWords.keptSources(2), ReconWords.keptSources(12),
+            ReconWords.followUpDraft(topic), ReconWords.askLine(topic), ReconWords.nothingFound(topic),
+            ReconWords.morePoints(3), ReconWords.from(pool.sources.map(\.publisher)),
+        ]
+        lines += pool.points.flatMap { [pool.note(for: $0), cloud.note(for: $0), $0.text] }
+        lines += pool.disagreements.map(\.text)
+        lines += (pool.points + cloud.points).map { pool.memorySource(for: $0).label }
+        for line in lines {
+            #expect(!line.contains(where: Self.dashes.contains), "dash in: \(line)")
+        }
+    }
+
     /// Every line a task card can show, from the one list both word tests
     /// read. A line missing here would go unchecked, so a few spot checks.
     @Test func everyTaskLineIsChecked() {
