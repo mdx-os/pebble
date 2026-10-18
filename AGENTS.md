@@ -59,7 +59,24 @@ in lint, a skill, or CI.
 - Title like `[area] Clear outcome`. Body: why, what changed, how it was verified.
 - No em dashes or en dashes in commits, PR bodies or UI copy.
 - No co-authored-by footers unless the founder asks.
+- Every PR that changes behavior carries evidence in its Evidence section:
+  screenshots or a short screen recording of Mia actually running, or for
+  non-UI work the exact `make verify` or test output. The template in
+  `.github/pull_request_template.md` has the slot.
 - Squash merge.
+
+## Risk lanes
+
+- Mandeep gates one-way doors: privacy, permissions, money, brand and
+  anything hard to undo. Code quality is `make verify` plus the reviewer
+  routine, which comments on PRs and never merges.
+- Fast lane: when every changed file is under `docs/`, a Markdown file, or
+  a test (`Tests/`, `Packages/*/Tests/`), and the PR has the `fast-lane`
+  label, `.github/workflows/fast-lane.yml` turns on squash auto-merge. It
+  merges only after required checks pass.
+- Gated: app code, entitlements, `Info.plist`, `Package.swift` or
+  dependencies, `.github/`, privacy, permissions or brand copy, and this
+  file. Mandeep merges. `scripts/risk-lane.sh` holds the exact rules.
 
 ## Never
 
