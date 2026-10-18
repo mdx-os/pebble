@@ -112,7 +112,7 @@ struct TestCleanupTests {
             // Made through init, the same suite.
             "func a() throws {\n let suite = \"a.\\(UUID().uuidString)\"\n let d = try #require(UserDefaults.init(suiteName: suite))\n}",
             // A fixed name, shared by tests run side by side.
-            "func a() throws {\n let suite = \"pebble.ui.hidden\"\n let d = try #require(UserDefaults(suiteName: suite))\n"
+            "func a() throws {\n let suite = \"first-run.hidden\"\n let d = try #require(UserDefaults(suiteName: suite))\n"
                 + " defer { d.removePersistentDomain(forName: suite) }\n}",
             "func a() throws {\n let d = try #require(UserDefaults(suiteName: suite))\n"
                 + " defer { d.removePersistentDomain(forName: suite) }\n}",

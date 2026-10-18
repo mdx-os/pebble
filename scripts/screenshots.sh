@@ -72,7 +72,7 @@ for kind in iPhone iPad; do
   xcrun simctl status_bar "$udid" override --time 9:41 --batteryState charged --batteryLevel 100 || true
   xcrun simctl install "$udid" "$ios_app"
   file="$out/$(echo "$kind" | tr '[:upper:]' '[:lower:]').png"
-  launch_and_shoot "$udid" "$bundle_id" "$file" -pebbleStill YES
+  launch_and_shoot "$udid" "$bundle_id" "$file" -showcaseStill YES
   echo "screenshots: $file"
   # In dark mode, where white words on the orange fill are hardest to
   # read: the iPad sidebar with Today selected, then with a question
@@ -96,7 +96,7 @@ for kind in iPhone iPad; do
   sleep 3
   for shot in $shots; do
     scene="${shot%%:*}"; file="$out/${shot#*:}.png"
-    launch_and_shoot "$udid" "$bundle_id" "$file" -pebbleScreen "$scene" -pebbleStill YES
+    launch_and_shoot "$udid" "$bundle_id" "$file" -showcaseScreen "$scene" -showcaseStill YES
     echo "screenshots: $file"
   done
   xcrun simctl ui "$udid" appearance "$was"
@@ -114,8 +114,8 @@ exe="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$mac_app/Contents
 echo "screenshots: $out/mac.png"
 # The memory sheet with its Done button, presented in a real window off
 # screen, in light and dark.
-"$mac_app/Contents/MacOS/$exe" -snapshotPath "$PWD/$out/mac-sheet.png" -pebbleScreen homeMemory -snapshotSheet YES
+"$mac_app/Contents/MacOS/$exe" -snapshotPath "$PWD/$out/mac-sheet.png" -showcaseScreen homeMemory -snapshotSheet YES
 echo "screenshots: $out/mac-sheet.png"
-"$mac_app/Contents/MacOS/$exe" -snapshotPath "$PWD/$out/mac-sheet-dark.png" -pebbleScreen homeMemory \
+"$mac_app/Contents/MacOS/$exe" -snapshotPath "$PWD/$out/mac-sheet-dark.png" -showcaseScreen homeMemory \
   -snapshotSheet YES -snapshotDark YES
 echo "screenshots: $out/mac-sheet-dark.png"

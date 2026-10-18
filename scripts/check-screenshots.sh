@@ -34,7 +34,7 @@ if [ -z "$known" ]; then
   exit 1
 fi
 asked="$( (grep -oE 'shots="[^"]*"' "$shots_script" | sed 's/^shots="//; s/"$//' | tr ' ' '\n' | sed 's/:.*//'
-           grep -oE -- '-pebbleScreen [a-zA-Z]+' "$shots_script" | sed 's/^-pebbleScreen //') | sort -u)"
+           grep -oE -- '-showcaseScreen [a-zA-Z]+' "$shots_script" | sed 's/^-showcaseScreen //') | sort -u)"
 # None found means the way scenes are written changed, not that none are
 # asked for, and the loop below would check nothing.
 if [ -z "$asked" ]; then

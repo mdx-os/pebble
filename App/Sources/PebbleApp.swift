@@ -17,14 +17,22 @@ struct PebbleApp: App {
     /// the setting must not re-run the body and rebuild the home screen.
     /// The screens that show it observe it themselves.
     @State private var cloud: CloudHelp
+    /// Tasks and receipts kept while the app is closed. If the folder
+    /// can't be opened they are kept in memory, and Forget everything still
+    /// deletes a file an earlier launch left.
+    private let kept: TaskStore
 
     init() {
         guard let brand = Brand(infoDictionary: Bundle.main.infoDictionary) else {
             preconditionFailure("\(Brand.infoKey) is missing from Info.plist. Set BRAND_NAME in Config/Brand.xcconfig.")
         }
         self.brand = brand
+        // Before launch finishes, so a nudge opened from the lock screen
+        // reaches Today even when it starts the app. Asks for nothing.
+        LocalQuestionNotifier.shared.install()
         let memory = try? MemoryStore.onDevice()
         self.memory = memory
+        kept = (try? TaskStore.onDevice()) ?? TaskStore.forgetOnly()
         let endpoint = CloudEndpoint.url(infoDictionary: Bundle.main.infoDictionary)
         // The setting is kept next to the notes. If either can't be opened,
         // nothing typed into the setting could be kept, so it reads as off,
@@ -46,7 +54,7 @@ struct PebbleApp: App {
     var body: some Scene {
         WindowGroup {
             #if DEBUG
-            // scripts/screenshots.sh launches with -pebbleStill YES, so the
+            // scripts/screenshots.sh launches with -showcaseStill YES, so the
             // screen settles and two shots of it match.
             Group {
                 if let scene = UserDefaults.standard.string(forKey: ShowcaseScene.launchKey).flatMap(ShowcaseScene.init(rawValue:)) {
@@ -70,6 +78,8 @@ struct PebbleApp: App {
             names: UserDefaultsAgentNameStore(),
             onboarding: UserDefaultsOnboardingStore(),
             memory: memory,
+            kept: kept,
+            notifier: LocalQuestionNotifier.shared,
             cloud: cloud
         )
     }

@@ -12,7 +12,7 @@ final class CloudUITests: XCTestCase {
 
     private func launch(_ screen: String) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-pebbleScreen", screen]
+        app.launchArguments = ["-showcaseScreen", screen]
         app.launch()
         return app
     }

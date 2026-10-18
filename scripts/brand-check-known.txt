@@ -1,0 +1,34 @@
+AppUITests/CloudUITests.swift: XCTAssertTrue(labels.label.contains("User-Agent, pebble"))
+AppUITests/CloudUITests.swift: app.launchArguments = ["-pebble.onboarding.finished", "YES", "-pebble.agent.displayName", "Pip"]
+Packages/PebbleKit/Sources/PebbleCore/AgentLook.swift: public static let storageKey = "pebble.agent.look"
+Packages/PebbleKit/Sources/PebbleCore/AgentName.swift: public static let storageKey = "pebble.agent.displayName"
+Packages/PebbleKit/Sources/PebbleCore/Memory.swift: var folder = base.appendingPathComponent("pebble", isDirectory: true)
+Packages/PebbleKit/Sources/PebbleCore/Onboarding.swift: public static let finished = "pebble.onboarding.finished"
+Packages/PebbleKit/Sources/PebbleCore/Onboarding.swift: public static let storageKey = "pebble.agent.proactivity"
+Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift: "User-Agent": "pebble",
+Packages/PebbleKit/Sources/PebblePulse/PageFetch.swift: request.setValue("pebble-pulse/0.1", forHTTPHeaderField: "User-Agent")
+Packages/PebbleKit/Sources/PebblePulse/XSearch.swift: request.setValue("pebble-pulse/0.1", forHTTPHeaderField: "User-Agent")
+Packages/PebbleKit/Tests/PebbleCoreTests/AgentLookTests.swift: let suite = "pebble.look.\(UUID().uuidString)"
+Packages/PebbleKit/Tests/PebbleCoreTests/AgentNameTests.swift: #expect(AgentName.storageKey == "pebble.agent.displayName")
+Packages/PebbleKit/Tests/PebbleCoreTests/AgentNameTests.swift: let suite = "pebble.agent-name.\(UUID().uuidString)"
+Packages/PebbleKit/Tests/PebbleCoreTests/CloudHelpSettingsTests.swift: #expect(UserDefaults.standard.object(forKey: "pebble.cloudHelp") == nil)
+Packages/PebbleKit/Tests/PebbleCoreTests/DiskNameTests.swift: "PebbleCore/AgentLook.swift: pebble.agent.look",
+Packages/PebbleKit/Tests/PebbleCoreTests/DiskNameTests.swift: "PebbleCore/AgentName.swift: pebble.agent.displayName",
+Packages/PebbleKit/Tests/PebbleCoreTests/DiskNameTests.swift: "PebbleCore/Memory.swift: pebble",
+Packages/PebbleKit/Tests/PebbleCoreTests/DiskNameTests.swift: "PebbleCore/Onboarding.swift: pebble.agent.proactivity",
+Packages/PebbleKit/Tests/PebbleCoreTests/DiskNameTests.swift: "PebbleCore/Onboarding.swift: pebble.onboarding.finished",
+Packages/PebbleKit/Tests/PebbleCoreTests/DiskNameTests.swift: return [brand.lowercased(), "pebble"]
+Packages/PebbleKit/Tests/PebbleCoreTests/MemorySourceTests.swift: let folder = FileManager.default.temporaryDirectory.appendingPathComponent("pebble-src-\(UUID().uuidString)")
+Packages/PebbleKit/Tests/PebbleCoreTests/MemoryStoreTests.swift: .appendingPathComponent("pebble-memory-\(UUID().uuidString)", isDirectory: true)
+Packages/PebbleKit/Tests/PebbleCoreTests/OnboardingTests.swift: let suite = "pebble.onboarding.\(UUID().uuidString)"
+Packages/PebbleKit/Tests/PebbleCoreTests/OnboardingTests.swift: let suite = "pebble.onboarding.over.\(UUID().uuidString)"
+Packages/PebbleKit/Tests/PebbleCoreTests/OnboardingTests.swift: let suite = "pebble.onboarding.reset.\(UUID().uuidString)"
+Packages/PebbleKit/Tests/PebbleCoreTests/OnboardingTests.swift: let suite = "pebble.onboarding.unoffered.\(UUID().uuidString)"
+Packages/PebbleKit/Tests/PebbleModelTests/CloudModelTests.swift: #expect(preview.request.headers["User-Agent"] == "pebble")
+Packages/PebbleKit/Tests/PebbleModelTests/CloudModelTests.swift: #expect(wire.value(forHTTPHeaderField: "User-Agent") == "pebble")
+Packages/PebbleKit/Tests/PebbleModelTests/CloudModelTests.swift: User-Agent: pebble
+Packages/PebbleKit/Tests/PebbleUITests/CloudHelpTests.swift: #expect(shown.contains("User-Agent: pebble"))
+Packages/PebbleKit/Tests/PebbleUITests/CloudHelpTests.swift: #expect(spoken.contains("User-Agent, pebble"))
+Packages/PebbleKit/Tests/PebbleUITests/FirstRunScreensTests.swift: let suite = "pebble.ui.onboarding.\(UUID().uuidString)"
+Packages/PebbleKit/Tests/PebbleUITests/FirstRunScreensTests.swift: let suite = "pebble.ui.skip.\(UUID().uuidString)"
+Packages/PebbleKit/Tests/PebbleUITests/FirstRunScreensTests.swift: let url = FileManager.default.temporaryDirectory.appendingPathComponent("pebble-ui-\(UUID().uuidString).json")

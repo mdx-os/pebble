@@ -115,7 +115,7 @@ struct FirstRunScreensTests {
     }
 
     @Test func theProactivityPageIsHiddenUntilThereIsAChoice() throws {
-        let suite = "pebble.ui.hidden.\(UUID().uuidString)"
+        let suite = "first-run.hidden.\(UUID().uuidString)"
         let looks = try #require(UserDefaults(suiteName: suite))
         defer { looks.removePersistentDomain(forName: suite) }
         let model = OnboardingModel(brand: brand, names: InMemoryAgentNameStore(), store: InMemoryOnboardingStore(),

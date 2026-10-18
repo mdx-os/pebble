@@ -13,7 +13,7 @@ final class HomeLayoutUITests: XCTestCase {
 
     private func launch(_ screen: String) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-pebbleScreen", screen]
+        app.launchArguments = ["-showcaseScreen", screen]
         app.launch()
         return app
     }
@@ -242,7 +242,7 @@ final class ShowcaseShots: XCTestCase {
             XCUIDevice.shared.orientation = orientation
             for screen in screens {
                 let app = XCUIApplication()
-                app.launchArguments = ["-pebbleScreen", screen]
+                app.launchArguments = ["-showcaseScreen", screen]
                 app.launch()
                 // Let entrances and the sidebar settle.
                 Thread.sleep(forTimeInterval: 2.5)

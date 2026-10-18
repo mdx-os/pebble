@@ -131,7 +131,15 @@ public struct ConfirmationSheet: View {
     let isExample: Bool
     @StateObject private var state: ConfirmationState
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.dynamicTypeSize) private var typeSize
     @AccessibilityFocusState private var footnoteFocused: Bool
+    /// Room for the longest label, "What happens", growing with the text.
+    @ScaledMetric(relativeTo: .subheadline) private var labelWidth: CGFloat = Self.labelColumn
+    /// The label column's width at the usual text size, and the room
+    /// between it and the value.
+    static let labelColumn: CGFloat = 96
+    static let labelSpacing: CGFloat = 12
+    @State private var detent: PresentationDetent = .large
 
     public init(
         request: ConfirmationRequest,
@@ -146,6 +154,12 @@ public struct ConfirmationSheet: View {
         _state = StateObject(wrappedValue: ConfirmationState(
             request: request, rule: rule, onApprove: onApprove, onDecline: onDecline
         ))
+    }
+
+    /// Over the details: what is shared when it is the person's own
+    /// details, else what goes out.
+    static func detailsLabel(_ kind: ConsequentialAction) -> String {
+        kind == .sharePersonalInfo ? ConfirmationWords.sharedLabel : ConfirmationWords.whatLabel
     }
 
     /// The footnote under the details.
@@ -163,12 +177,33 @@ public struct ConfirmationSheet: View {
         }
     }
 
+    /// False lays the words out at their full height, so a test can
+    /// measure what a scroll view would hide.
+    private var scrolls = true
+
+    /// The same sheet, its words laid out without a scroll view.
+    func unscrolled() -> ConfirmationSheet {
+        var sheet = self
+        sheet.scrolls = false
+        return sheet
+    }
+
     public var body: some View {
-        ScrollView {
-            content
+        Group {
+            if scrolls {
+                ScrollView {
+                    content
+                }
+                .scrollBounceBehavior(.basedOnSize)
+            } else {
+                content
+            }
         }
-        .scrollBounceBehavior(.basedOnSize)
-        .presentationDetents([.medium, .large])
+        // Opens tall, so what happens, to whom and what is shared are all
+        // seen with the buttons before anything is decided.
+        .presentationDetents([.medium, .large], selection: $detent)
+        // On iPad a form sheet keeps a set height; let it grow to its words.
+        .presentationSizing(.form.fitted(horizontal: false, vertical: true))
         .presentationDragIndicator(.visible)
         .interactiveDismissDisabled()
         .onDisappear {
@@ -222,16 +257,9 @@ public struct ConfirmationSheet: View {
                     .accessibilityAddTraits(.isHeader)
             }
             VStack(spacing: 0) {
-                row(action.kind == .purchase ? ConfirmationWords.fromLabel : ConfirmationWords.toLabel, action.recipient.displayName)
-                if let handle = action.recipient.handle {
-                    Divider().overlay(Theme.hairline(scheme))
-                    row(ConfirmationWords.whereLabel, handle)
-                }
-                Divider().overlay(Theme.hairline(scheme))
-                row(ConfirmationWords.whatLabel, action.details)
-                if let price = action.price {
-                    Divider().overlay(Theme.hairline(scheme))
-                    row(ConfirmationWords.priceLabel, price.formatted())
+                ForEach(Array(Self.rows(action).enumerated()), id: \.offset) { index, row in
+                    if index > 0 { Divider().overlay(Theme.hairline(scheme)) }
+                    self.row(row.label, row.value)
                 }
             }
             .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
@@ -263,16 +291,39 @@ public struct ConfirmationSheet: View {
         .frame(maxWidth: .infinity)
     }
 
+    /// The sheet's rows, each a label and its value: who, where, what goes
+    /// or is shared, the price, and what a yes will do, so nothing about it
+    /// is left to guess.
+    static func rows(_ action: ProposedAction) -> [(label: String, value: String)] {
+        var out: [(String, String)] = [(action.kind == .purchase ? ConfirmationWords.fromLabel : ConfirmationWords.toLabel,
+                                        action.recipient.displayName)]
+        if let handle = action.recipient.handle { out.append((ConfirmationWords.whereLabel, handle)) }
+        out.append((detailsLabel(action.kind), action.details))
+        if let price = action.price { out.append((ConfirmationWords.priceLabel, price.formatted())) }
+        if let outcome = action.outcome { out.append((ConfirmationWords.happensLabel, outcome)) }
+        return out
+    }
+
+    /// What VoiceOver reads for each row: its label and value, put together
+    /// as `.combine` puts them.
+    static func spokenRows(_ action: ProposedAction) -> [String] {
+        rows(action).map { "\($0.label), \($0.value)" }
+    }
+
+    /// At accessibility text sizes a label column would squeeze the value,
+    /// the part being said yes to, so the label sits over it instead.
+    static func stacksLabels(at size: DynamicTypeSize) -> Bool {
+        size.isAccessibilitySize
+    }
+
     private func row(_ label: String, _ value: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
+        LabeledRow(stacked: Self.stacksLabels(at: typeSize), labelWidth: labelWidth, spacing: Self.labelSpacing) {
             Text(label)
                 .font(.subheadline)
                 .foregroundStyle(Theme.secondaryText)
-                .frame(width: 56, alignment: .leading)
+        } value: {
             Text(value)
                 .font(.body.weight(.medium))
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)

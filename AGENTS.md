@@ -43,6 +43,9 @@ in lint, a skill, or CI.
 - The product name lives only in `Config/Brand.xcconfig`. Code reads it from
   `Brand` and never spells it. `make brand-check` enforces this.
 - Code, modules, bundle IDs and the repo use the codename `pebble`.
+- But never in a new key, path, folder or launch argument, where it would
+  be written down and outlive a rename: `make brand-check` fails on a new
+  lowercase `pebble` in Swift. Old ones stay in `scripts/brand-check-known.txt`.
 - Each user may name their own agent. Never confuse the agent's name with a
   person in the user's contacts.
 
@@ -63,6 +66,14 @@ in lint, a skill, or CI.
 - No em dashes or en dashes in commits, PR bodies or UI copy.
 - No co-authored-by footers unless the founder asks.
 - Squash merge.
+
+## Learned the hard way
+
+- `UNUserNotificationCenterDelegate`: use the completion-handler methods, not
+  the async ones. The async ones answer UIKit off the main thread and crash
+  the app as a notification opens. `NeedsYouFlowModelTests` guards this.
+- `onReceive` of a `@Published` publisher replays its value each time the
+  body runs. To react to a change, observe the object and use `onChange`.
 
 ## Never
 
