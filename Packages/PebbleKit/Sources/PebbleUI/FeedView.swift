@@ -21,6 +21,9 @@ final class FeedModel: ObservableObject {
     /// mentions the device never drifts from it.
     let place: PrivacyPlace
     private let sources: [any FeedSource]
+    /// This model's watch on `needsYou`, ended when the model goes, so a
+    /// closed window leaves nothing behind.
+    private var observation: NeedsYou.Observation?
     private let calendar: Calendar
     let now: () -> Date
 
@@ -34,13 +37,18 @@ final class FeedModel: ObservableObject {
         feed = Feed.build(from: sources, needsYou: needsYou, now: now(), calendar: calendar)
         // A question asked, answered or withdrawn shows at once, wherever
         // the person is. A question that times out is caught by `keepFresh`.
-        needsYou.onChange = { [weak self] in
+        // Each model watches for itself, so every window's Today updates.
+        observation = needsYou.observe { [weak self] in
             if Thread.isMainThread {
                 MainActor.assumeIsolated { self?.refresh() }
             } else {
                 Task { @MainActor in self?.refresh() }
             }
         }
+    }
+
+    isolated deinit {
+        if let observation { needsYou.stopObserving(observation) }
     }
 
     var isSample: Bool { needsYou.isSample || sources.contains { $0.isSample } }

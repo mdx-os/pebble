@@ -98,7 +98,7 @@ struct TodayFollowupsTests {
                                       now: { ShowcaseScene.morning })
                 let view = NavigationStack {
                     FeedView(model: model, look: .startingPoint, onTalk: { _ in })
-                        .safeAreaInset(edge: .bottom) { TodayComposer(chat: chat, keyboardSends: true, send: { _ in }) }
+                        .safeAreaInset(edge: .bottom) { TodayComposer(chat: chat, inFront: true, send: { _ in }) }
                 }
                 let renderer = ImageRenderer(content: view
                     .environment(\.dynamicTypeSize, text)
@@ -153,7 +153,7 @@ struct TodayFollowupsTests {
         let model = FeedModel(sources: [EmptyFeedSource()], needsYou: asks, place: .onDevice)
         let calls = Tally()
         let counted = NeedsYou(rule: .isolated())
-        counted.onChange = { MainActor.assumeIsolated { calls.count += 1 } }
+        _ = counted.observe { MainActor.assumeIsolated { calls.count += 1 } }
 
         let first = try #require(asks.ask(note))
         #expect(model.feed.needsYou.count == 1)
@@ -171,6 +171,37 @@ struct TodayFollowupsTests {
         counted.dismissed(asked)
         counted.dismissed(asked)
         #expect(calls.count == 2)
+    }
+
+    /// Two windows, two Todays, one set of questions. A yes or a dismissal
+    /// in either shows in both at once, and a window that closes stops
+    /// watching, so the one left keeps hearing every change.
+    @Test func everyWindowsTodayHearsEachChange() throws {
+        let rule = AskFirst.isolated()
+        let asks = NeedsYou(rule: rule)
+        let first = FeedModel(sources: [EmptyFeedSource()], needsYou: asks, place: .onDevice)
+        var second: FeedModel? = FeedModel(sources: [EmptyFeedSource()], needsYou: asks, place: .onDevice)
+        #expect(asks.observerCount == 2)
+
+        let asked = try #require(asks.ask(note))
+        #expect(first.feed.needsYou.count == 1)
+        #expect(second?.feed.needsYou.count == 1)
+        // Yes in the second window; the first one, made earlier, drops it too.
+        let yes = ConfirmationState(request: asked, rule: rule, onApprove: { asks.approved($0) }, onDecline: {})
+        #expect(yes.tapPrimary() == .approved)
+        #expect(first.feed.needsYou.isEmpty)
+        #expect(second?.feed.needsYou.isEmpty == true)
+
+        let again = try #require(asks.ask(note))
+        asks.dismissed(again)
+        #expect(first.feed.needsYou.isEmpty)
+        #expect(second?.feed.needsYou.isEmpty == true)
+
+        // The second window closes. The first still hears the next question.
+        second = nil
+        #expect(asks.observerCount == 1)
+        _ = try #require(asks.ask(note))
+        #expect(first.feed.needsYou.count == 1)
     }
 
     // MARK: Closing a sheet, then moving on
@@ -226,40 +257,86 @@ struct TodayFollowupsTests {
         #expect(!ran)
     }
 
-    /// When nothing was open to close, the step runs at once and anything
-    /// older is cleared, so a later dismissal runs nothing.
+    /// When nothing was open to close, `start` hands the step back to run
+    /// at once and clears anything older, so a later dismissal runs nothing.
     @Test func nothingOpenClearsAnOlderHandoff() throws {
         var handoff = SheetHandoff()
+        var older = false
+        handoff.hold({ older = true }, at: todayNarrow)
         var ran = false
-        handoff.hold({ ran = true }, at: todayNarrow)
-        handoff.clear()
-        handoff.sheetClosed(stillOpen: false, questionOpen: false)?()
-        #expect(!ran)
+        let now = handoff.start({ ran = true }, sheetOpen: false, at: todayNarrow)
+        try #require(now != nil)
+        now?()
+        #expect(ran)
         #expect(handoff.waiting == nil)
-        // The home screen clears it on that path, and drops it on a move.
-        let source = try #require(try ContrastGuardTests.sources().first { $0.name == "HomeView.swift" }?.text)
-        let nothingOpen = try #require(source.range(of: "guard anySheetOpen else {"))
-        #expect(source[nothingOpen.upperBound...].prefix(200).contains("handoff.clear()"))
-        #expect(source.contains("handoff.moved(to: now)"))
+        handoff.sheetClosed(stillOpen: false, questionOpen: false)?()
+        #expect(!older)
+    }
+
+    /// With a sheet open, `start` holds the step for the sheet's close.
+    @Test func aSheetOpenMakesTheStepWait() {
+        var handoff = SheetHandoff()
+        var ran = false
+        #expect(handoff.start({ ran = true }, sheetOpen: true, at: todayNarrow) == nil)
+        #expect(!ran)
+        handoff.sheetClosed(stillOpen: false, questionOpen: false)?()
+        #expect(ran)
     }
 
     // MARK: Command Return
 
-    /// Command Return never sends from behind a question, the shortcuts or
-    /// a piece of work open to read; and Today's composer only while Today
-    /// is in front.
-    @Test func commandReturnNeverSendsFromBehindASheet() throws {
-        #expect(HomeView.sendsFromKeyboard(questionOpen: false, sheetOpen: false))
-        #expect(!HomeView.sendsFromKeyboard(questionOpen: true, sheetOpen: false))
-        #expect(!HomeView.sendsFromKeyboard(questionOpen: false, sheetOpen: true))
-        let source = try #require(try ContrastGuardTests.sources().first { $0.name == "HomeView.swift" }?.text)
-        #expect(source.contains("sheetOpen: showsShortcuts || feed.reading != nil"))
-        #expect(source.contains("keyboardSends: section == .today && keyboardSends"))
+    private func cover(sidebar: Bool = false, _ section: HomeSection, shortcuts: Bool = false,
+                       reader: Bool = false, question: Bool = false) -> HomeCover {
+        HomeCover(usesSidebar: sidebar, section: section, showsShortcuts: shortcuts,
+                  readerOpen: reader, questionOpen: question)
+    }
+
+    /// Command Return never sends from behind a question, the shortcuts, a
+    /// piece of work open to read, or the memory sheet on a narrow window;
+    /// and Today's composer only while Today is in front. Every case reads
+    /// the same `HomeCover`, which also decides the handoff.
+    @Test func commandReturnNeverSendsFromBehindASheet() {
+        for sidebar in [false, true] {
+            #expect(cover(sidebar: sidebar, .chat).chatSendsFromKeyboard)
+            #expect(cover(sidebar: sidebar, .today).todayInFront)
+            #expect(!cover(sidebar: sidebar, .chat).todayInFront)
+            for covered in [cover(sidebar: sidebar, .chat, question: true), cover(sidebar: sidebar, .chat, shortcuts: true),
+                            cover(sidebar: sidebar, .chat, reader: true), cover(sidebar: sidebar, .today, question: true),
+                            cover(sidebar: sidebar, .today, shortcuts: true), cover(sidebar: sidebar, .today, reader: true)] {
+                #expect(!covered.chatSendsFromKeyboard, "\(covered)")
+                #expect(!covered.todayInFront, "\(covered)")
+            }
+        }
+        // The memory on a narrow window is a sheet over the chat.
+        let memorySheet = cover(.memory)
+        #expect(memorySheet.memorySheetOpen)
+        #expect(memorySheet.anySheetOpen)
+        #expect(!memorySheet.chatSendsFromKeyboard)
+        #expect(!memorySheet.todayInFront)
+        // Beside a sidebar it is a screen of its own, not a sheet.
+        #expect(!cover(sidebar: true, .memory).anySheetOpen)
+    }
+
+    /// Whatever stops Command Return also makes the handoff wait, and a
+    /// question is never something the handoff closes.
+    @Test func oneCoverDrivesTheKeyboardAndTheHandoff() {
+        for sidebar in [false, true] {
+            for section in HomeSection.allCases {
+                for (shortcuts, reader) in [(false, false), (true, false), (false, true)] {
+                    let c = cover(sidebar: sidebar, section, shortcuts: shortcuts, reader: reader)
+                    #expect(c.chatSendsFromKeyboard == !c.anySheetOpen, "\(c)")
+                    #expect(c.chatIsCovered == c.anySheetOpen, "\(c)")
+                }
+            }
+        }
+        let asking = cover(.chat, question: true)
+        #expect(!asking.anySheetOpen)
+        #expect(asking.chatIsCovered)
     }
 
     /// A VoiceOver user hears that sending from Today opens the chat.
     @Test func todaysComposerSaysWhereTheWordsGo() {
-        let composer = TodayComposer(chat: chat(), keyboardSends: true, send: { _ in }).composer
+        let composer = TodayComposer(chat: chat(), inFront: true, send: { _ in }).composer
         #expect(composer.hint == FeedWords.composerHint)
         #expect(FeedWords.composerHint.contains("chat"))
         #expect(Composer(draft: .constant(""), isBusy: false, keyboardSends: true, send: { _ in }).hint == nil)

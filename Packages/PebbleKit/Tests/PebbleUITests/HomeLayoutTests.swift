@@ -33,7 +33,7 @@ struct HomeLayoutTests {
             needsYouCount: feed.feed.needsYou.count,
             todayScreen: FeedView(model: feed, look: .startingPoint, onTalk: { _ in })
                 .safeAreaInset(edge: .bottom) {
-                    TodayComposer(chat: controller, keyboardSends: true, send: { _ in })
+                    TodayComposer(chat: controller, inFront: true, send: { _ in })
                 },
             chatScreen: ChatView(controller: controller, look: .startingPoint, firstMessage: nil),
             memoryScreen: MemoryView(store: ShowcaseScene.sampleMemory(), place: .onDevice),

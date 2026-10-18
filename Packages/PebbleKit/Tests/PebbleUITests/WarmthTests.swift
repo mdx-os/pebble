@@ -248,23 +248,32 @@ struct WarmthTests {
     @Test func nothingIsSpokenWhileASheetCoversTheChat() {
         #expect(ChatView.speaks(covered: false))
         #expect(!ChatView.speaks(covered: true))
-        #expect(HomeView.chatIsCovered(usesSidebar: true, section: .chat, showsShortcuts: true))
-        #expect(HomeView.chatIsCovered(usesSidebar: false, section: .chat, showsShortcuts: true))
-        #expect(HomeView.chatIsCovered(usesSidebar: false, section: .memory, showsShortcuts: false))
-        #expect(!HomeView.chatIsCovered(usesSidebar: false, section: .chat, showsShortcuts: false))
-        #expect(!HomeView.chatIsCovered(usesSidebar: true, section: .chat, showsShortcuts: false))
+        #expect(covers(usesSidebar: true, section: .chat, showsShortcuts: true))
+        #expect(covers(usesSidebar: false, section: .chat, showsShortcuts: true))
+        #expect(covers(usesSidebar: false, section: .memory))
+        #expect(!covers(usesSidebar: false, section: .chat))
+        #expect(!covers(usesSidebar: true, section: .chat))
         // A question or a result opened from Today covers it too.
-        #expect(HomeView.chatIsCovered(usesSidebar: true, section: .chat, showsShortcuts: false, feedSheetOpen: true))
-        #expect(HomeView.chatIsCovered(usesSidebar: false, section: .chat, showsShortcuts: false, feedSheetOpen: true))
+        #expect(covers(usesSidebar: true, section: .chat, readerOpen: true))
+        #expect(covers(usesSidebar: false, section: .chat, readerOpen: true))
+        #expect(covers(usesSidebar: true, section: .chat, questionOpen: true))
+        #expect(covers(usesSidebar: false, section: .chat, questionOpen: true))
+    }
+
+    private func covers(usesSidebar: Bool, section: HomeSection, showsShortcuts: Bool = false,
+                        readerOpen: Bool = false, questionOpen: Bool = false) -> Bool {
+        HomeCover(usesSidebar: usesSidebar, section: section, showsShortcuts: showsShortcuts,
+                  readerOpen: readerOpen, questionOpen: questionOpen).chatIsCovered
     }
 
     /// A reply that lands while a sheet covers the chat is not read over the
-    /// sheet. It is still in the transcript, and the same reply is read once
-    /// nothing covers the chat.
+    /// sheet. It stays in the transcript to read once the sheet goes, but
+    /// nothing reads it aloud then. The second check only shows that the
+    /// same reply is spoken when nothing covers the chat.
     @Test func aReplyThatLandsWhileCoveredIsNotReadOverTheSheet() async throws {
         let controller = ChatController(brand: brand, model: LocalStubModel(),
                                         names: InMemoryAgentNameStore(stored: "Pip"), replyBeat: .zero)
-        let covered = HomeView.chatIsCovered(usesSidebar: true, section: .chat, showsShortcuts: true)
+        let covered = covers(usesSidebar: true, section: .chat, showsShortcuts: true)
         #expect(covered)
         controller.submit("Help me plan my morning.")
         await settle(controller)
@@ -272,6 +281,67 @@ struct WarmthTests {
         #expect(reply.speaker == .agent)
         #expect(ChatView.announcement(for: controller.conversation, covered: covered) == nil)
         #expect(ChatView.announcement(for: controller.conversation, covered: false) == reply.text)
+    }
+
+    // MARK: Sent from Today
+
+    /// A line sent from Today fails after the person went back to Today.
+    /// The words come back into Today's composer, and the failure shows
+    /// right above it, so the line never reappears unexplained. It is
+    /// spoken only while Today is in front.
+    @Test func aFailedReplySentFromTodayIsExplainedOnToday() async {
+        let gate = Gate()
+        let controller = ChatController(brand: brand, model: GatedModel(gate: gate, fails: true),
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
+        let today = TodayComposer(chat: controller, inFront: true, send: { _ in })
+        #expect(today.failure == nil)
+        controller.draft = "Plan my day"
+        #expect(HomeView.sendsFromToday(controller.draft, chat: controller))
+        await gate.release()
+        await settle(controller)
+        #expect(controller.draft == "Plan my day")
+        #expect(today.failure == FirstConversation.couldNotAnswer)
+        #expect(TodayComposer.spokenFailure(today.failure, inFront: true) == FirstConversation.couldNotAnswer)
+        #expect(TodayComposer.spokenFailure(today.failure, inFront: false) == nil)
+        let renderer = ImageRenderer(content: today.frame(width: 393))
+        #expect(renderer.cgImage != nil)
+    }
+
+    /// With a newer draft kept, the words honestly say where the line is,
+    /// in a way that is true on Today as well as in the chat.
+    @Test func theKeptDraftLineIsTrueFromToday() {
+        #expect(FirstConversation.couldNotAnswerKeptDraft.contains("in the chat"))
+        #expect(!FirstConversation.couldNotAnswerKeptDraft.contains("above"))
+        #expect(!FirstConversation.couldNotAnswerKeptDraft.contains("still here"))
+    }
+
+    /// The chat opens after a line sent from Today. A reply still on its
+    /// way gets its "thinking", and one that landed before the chat was on
+    /// screen is read as the chat arrives, once.
+    @Test func aLineSentFromTodayIsStillSpokenWhenTheChatArrives() async {
+        let gate = Gate()
+        let controller = ChatController(brand: brand, model: GatedModel(gate: gate),
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
+        #expect(ChatView.arrival(for: controller, covered: false) == .nothing)
+        HomeView.sendsFromToday("Plan my day", chat: controller)
+        #expect(ChatView.arrival(for: controller, covered: false) == .thinking)
+        #expect(ChatView.arrival(for: controller, covered: true) == .nothing)
+        await gate.release()
+        await settle(controller)
+        // Covered keeps it for later.
+        #expect(ChatView.arrival(for: controller, covered: true) == .nothing)
+        #expect(ChatView.arrival(for: controller, covered: false) == .reply("Here's a plan"))
+        #expect(ChatView.arrival(for: controller, covered: false) == .nothing)
+    }
+
+    /// A reply a chat on screen saw land is never read again on arrival.
+    @Test func aReplySeenLandingIsNotReadAgain() async {
+        let controller = ChatController(brand: brand, model: LocalStubModel(),
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
+        controller.submit("Plan my day")
+        await settle(controller)
+        controller.replyWasSeen()
+        #expect(ChatView.arrival(for: controller, covered: false) == .nothing)
     }
 
     /// The example note says "this device" only when the model keeps every
@@ -285,6 +355,10 @@ struct WarmthTests {
             #expect(model.place == place)
         }
     }
+
+    /// A file with no read permission stands in for locked notes, which only
+    /// works when permissions apply, as for anyone but root.
+    nonisolated static var permissionsAreEnforced: Bool { getuid() != 0 }
 
     @Test func unreadableNotesTurnOffAddingAndStayOnDisk() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("warmth-unreadable-\(UUID().uuidString).json")
@@ -307,8 +381,9 @@ struct WarmthTests {
 
     /// Notes that can't be opened right now, such as on a locked iPhone, are
     /// never written over. A file with no read permission stands in for the
-    /// locked file here.
-    @Test func lockedNotesTurnOffAddingAndStayOnDisk() throws {
+    /// locked file here, so the test is skipped as root, which reads it anyway.
+    @Test(.enabled(if: Self.permissionsAreEnforced, "root reads a file with no read permission"))
+    func lockedNotesTurnOffAddingAndStayOnDisk() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("warmth-locked-\(UUID().uuidString).json")
         let seed = MemoryStore(fileURL: url)
         try seed.remember("Prefers tea", source: .toldMe)
@@ -338,8 +413,9 @@ struct WarmthTests {
 
     /// The screen's own guard holds even when the store would now accept the
     /// note: what the screen last saw as locked is not written to until it
-    /// looks again.
-    @Test func theScreenRefusesNotesItLastSawAsLocked() throws {
+    /// looks again. Skipped as root, like the test above.
+    @Test(.enabled(if: Self.permissionsAreEnforced, "root reads a file with no read permission"))
+    func theScreenRefusesNotesItLastSawAsLocked() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("warmth-guard-\(UUID().uuidString).json")
         let seed = MemoryStore(fileURL: url)
         try seed.remember("Prefers tea", source: .toldMe)

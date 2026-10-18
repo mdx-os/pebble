@@ -121,6 +121,7 @@ public struct ChatView: View {
             }
             .onChange(of: controller.conversation.turns.count) {
                 Self.scrollToLatest(controller.conversation, with: scroller, animated: !reduceMotion)
+                controller.replyWasSeen()
                 if let line = Self.announcement(for: controller.conversation, covered: covered) {
                     AccessibilityNotification.Announcement(line).post()
                 }
@@ -132,13 +133,7 @@ public struct ChatView: View {
                 thinkingNotice?.cancel()
                 thinkingNotice = nil
                 guard replying else { return }
-                if Self.speaks(covered: covered) {
-                    thinkingNotice = Task { @MainActor in
-                        try? await Task.sleep(for: Self.thinkingNoticeDelay(after: controller.replyBeat))
-                        guard !Task.isCancelled, controller.isReplying else { return }
-                        AccessibilityNotification.Announcement(FirstConversation.thinking).post()
-                    }
-                }
+                if Self.speaks(covered: covered) { sayThinkingSoon() }
                 if reduceMotion {
                     scroller.scrollTo(Self.thinkingID, anchor: .bottom)
                 } else {
@@ -165,6 +160,15 @@ public struct ChatView: View {
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.4, dampingFraction: 0.85),
                    value: controller.conversation.turns.count)
         .haptic(.sent, trigger: controller.sentCount)
+        .onAppear {
+            // Sent from Today, the line may be answered, or still on its
+            // way, before this screen was here to see it change.
+            switch Self.arrival(for: controller, covered: covered) {
+            case .reply(let line): AccessibilityNotification.Announcement(line).post()
+            case .thinking: sayThinkingSoon()
+            case .nothing: break
+            }
+        }
         .onDisappear {
             // Never say "thinking" over another screen.
             thinkingNotice?.cancel()
@@ -257,6 +261,36 @@ public struct ChatView: View {
         } else {
             scroller.scrollTo(last, anchor: .bottom)
         }
+    }
+
+    /// Says "thinking" once, a beat after the dots appear, unless the reply
+    /// lands first.
+    private func sayThinkingSoon() {
+        thinkingNotice?.cancel()
+        thinkingNotice = Task { @MainActor in
+            try? await Task.sleep(for: Self.thinkingNoticeDelay(after: controller.replyBeat))
+            guard !Task.isCancelled, controller.isReplying else { return }
+            AccessibilityNotification.Announcement(FirstConversation.thinking).post()
+        }
+    }
+
+    /// What the chat says as it comes on screen.
+    enum Arrival: Equatable {
+        case nothing
+        /// A reply that landed while no chat was on screen.
+        case reply(String)
+        /// A reply still on its way, so "thinking" follows as usual.
+        case thinking
+    }
+
+    /// A line sent from Today may be answered, or still coming, before the
+    /// chat opens, and then the chat never sees the change it speaks on.
+    /// So it looks as it arrives. A reply nobody heard is read once, and
+    /// covered means quiet with the reply kept for later.
+    static func arrival(for controller: ChatController, covered: Bool) -> Arrival {
+        guard speaks(covered: covered) else { return .nothing }
+        if controller.isReplying { return .thinking }
+        return controller.takeUnheardReply().map { .reply($0) } ?? .nothing
     }
 
     /// Where the thinking dots sit, so the chat can follow them.
@@ -361,6 +395,10 @@ final class ChatController: ObservableObject {
     /// can tell it is no longer the current one.
     private var replyGeneration = 0
     @Published var failure: String?
+    /// The newest reply, until a chat on screen has seen it land. A line
+    /// sent from Today can be answered before the chat has opened, so the
+    /// chat reads this as it arrives instead of relying on seeing it change.
+    private(set) var unheardReply: String?
     /// Goes up by one each time the person sends something.
     @Published private(set) var sentCount = 0
     /// The shortest time the thinking dots show, so a quick reply settles
@@ -457,6 +495,7 @@ final class ChatController: ObservableObject {
         }
         if byHand { sentCount += 1 }
         failure = nil
+        unheardReply = nil
         isReplying = true
         replyGeneration += 1
         let generation = replyGeneration
@@ -480,6 +519,7 @@ final class ChatController: ObservableObject {
             // nothing and changes nothing; only the newest reply settles.
             guard !Task.isCancelled, generation == replyGeneration else { return }
             if let next {
+                unheardReply = next.turns.last.flatMap { $0.speaker == .agent ? $0.text : nil }
                 conversation = next
             } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 // The failure line promises the words are back, ready to send.
@@ -500,6 +540,19 @@ final class ChatController: ObservableObject {
         replyTask = nil
         replyGeneration += 1
         isReplying = false
+    }
+
+    /// A chat on screen saw the newest reply land, spoken or not, so it is
+    /// never read again later.
+    func replyWasSeen() {
+        unheardReply = nil
+    }
+
+    /// The reply that landed before any chat was on screen, handed over
+    /// once.
+    func takeUnheardReply() -> String? {
+        defer { unheardReply = nil }
+        return unheardReply
     }
 }
 

@@ -188,7 +188,7 @@ public final class NeedsYou: FeedSource, @unchecked Sendable {
     public let isSample: Bool
     private let lock = NSLock()
     private var waiting: [Waiting] = []
-    private var changed: (@Sendable () -> Void)?
+    private var observers: [Observation: @Sendable () -> Void] = [:]
     private let locale: Locale
 
     public init(rule: AskFirst = .shared, isSample: Bool = false, locale: Locale = .current) {
@@ -197,16 +197,41 @@ public final class NeedsYou: FeedSource, @unchecked Sendable {
         self.locale = locale
     }
 
-    /// Called after a question is asked, answered with a yes, or dismissed,
-    /// so whatever shows the count can update at once. Never called with
-    /// the lock held.
-    public var onChange: (@Sendable () -> Void)? {
-        get { lock.lock(); defer { lock.unlock() }; return changed }
-        set { lock.lock(); changed = newValue; lock.unlock() }
+    /// One watcher of the questions, kept so it can stop watching.
+    public struct Observation: Hashable, Sendable {
+        fileprivate let id = UUID()
+    }
+
+    /// Calls `hook` after a question is asked, answered with a yes, or
+    /// dismissed, so whatever shows the count can update at once. Several
+    /// can watch at once, such as one Today per window on iPad, and each
+    /// hears every change. Hooks are never called with the lock held.
+    public func observe(_ hook: @escaping @Sendable () -> Void) -> Observation {
+        let observation = Observation()
+        lock.lock()
+        observers[observation] = hook
+        lock.unlock()
+        return observation
+    }
+
+    /// Stops calling the hook `observe` returned this for.
+    public func stopObserving(_ observation: Observation) {
+        lock.lock()
+        observers[observation] = nil
+        lock.unlock()
+    }
+
+    /// How many are watching, for tests.
+    package var observerCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return observers.count
     }
 
     private func didChange() {
-        onChange?()
+        lock.lock()
+        let hooks = Array(observers.values)
+        lock.unlock()
+        for hook in hooks { hook() }
     }
 
     /// Ask the person about `action`. Nil, and nothing on the feed, when

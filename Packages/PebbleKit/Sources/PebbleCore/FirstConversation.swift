@@ -31,11 +31,14 @@ public enum FirstConversation {
     public static let sendTitle = "Send"
     /// Read out once by VoiceOver while a reply is on its way.
     public static let thinking = "Thinking it over."
-    /// When the words were put back in the composer.
+    /// When the words were put back in the composer. Shown right above a
+    /// composer, in the chat or on Today, which share one draft, so "here"
+    /// is true in both.
     public static let couldNotAnswer = "Sorry, I couldn't finish a reply just now. What you wrote is still here, so you can send it again when you're ready."
     /// When the person had already started a new draft, so the words were
-    /// left in the chat instead of replacing it.
-    public static let couldNotAnswerKeptDraft = "Sorry, I couldn't finish a reply just now. What you sent is still in the chat above, so you can send it again when you're ready."
+    /// left in the chat instead of replacing it. It may show on Today too,
+    /// so it says "in the chat", never "above".
+    public static let couldNotAnswerKeptDraft = "Sorry, I couldn't finish a reply just now. What you sent is still in the chat, so you can send it again when you're ready."
     /// Above the starter choices in a new chat.
     public static let startersHeading = "A few places to start"
 

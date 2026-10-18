@@ -123,6 +123,10 @@ public enum MemoryWords {
     public static let addPlaceholder = "Something for me to remember"
     public static let addTitle = "Remember"
     public static let forgetEverythingQuestion = "Forget everything I remember?"
+    // Says "this device" without asking `place`, and that is on purpose.
+    // It is about where the notes are, not where the chat goes: notes live
+    // only in `MemoryStore`'s local file whatever the model is, so this is
+    // true even with a cloud model. Don't gate it like the lines above.
     public static let forgetEverythingDetail = "This removes every note from this device. It can't be undone."
     /// See the note above `empty`.
     public static func privacyNote(_ place: PrivacyPlace) -> String {
