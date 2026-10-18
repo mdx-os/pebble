@@ -1,6 +1,12 @@
 import Foundation
 import PebbleCore
 
+/// Set around a summary's own request, so `CloudModel` marks its preview
+/// as one (`CloudPreview.forSummary`). A chat never sets it.
+enum CloudAsk {
+    @TaskLocal static var forSummary = false
+}
+
 /// Picks how a summary is put together: on this device, unless the model
 /// the person chose for new chats runs somewhere else. With the cloud off
 /// that model is on the device, so nothing is sent.
@@ -41,7 +47,10 @@ public struct CloudReconSummarizer: ReconSummarizer {
         let asked = Conversation(turns: [ChatTurn(id: UUID(), speaker: .person, text: prompt)], onDevice: false)
         let reply: String
         do {
-            guard let last = try await asked.appendingReply(from: model).turns.last, last.speaker == .agent else {
+            // Marked as a summary's where the request is built, so the
+            // preview says so whatever the words are.
+            let answered = try await CloudAsk.$forSummary.withValue(true) { try await asked.appendingReply(from: model) }
+            guard let last = answered.turns.last, last.speaker == .agent else {
                 return onDevice(ReconWords.cloudUnreadable)
             }
             reply = last.text
@@ -160,10 +169,12 @@ public struct CloudReconSummarizer: ReconSummarizer {
         return nil
     }
 
-    /// The topic a request asks about, as it was sent, so the preview can
-    /// say what it is for. Nil for a request that isn't a summary's.
-    public static func topic(asked request: CloudRequest) -> String? {
-        guard let payload = try? JSONDecoder().decode(CloudPayload.self, from: request.body),
+    /// The topic a summary's request asks about, as it was sent, so the
+    /// preview can say what it is for. Nil for a request that isn't a
+    /// summary's, as `CloudPreview.forSummary` says, whatever its words.
+    public static func topic(asked preview: CloudPreview) -> String? {
+        guard preview.forSummary,
+              let payload = try? JSONDecoder().decode(CloudPayload.self, from: preview.request.body),
               let first = payload.messages.first(where: { $0.role == "person" })?.text,
               first.hasPrefix(askOpening) else { return nil }
         let rest = first.dropFirst(askOpening.count)

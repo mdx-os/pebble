@@ -13,6 +13,15 @@ extension ReconSummarizer {
     public var mayLeaveDevice: Bool { false }
 }
 
+/// How a summary's work says the person's yes to sending what it read was
+/// given and is being used. `ReconRunner` sets `heard` around each summary;
+/// a model that sends calls it once the preview got Send and the request is
+/// about to go, and never before. Outside a summary's work it is nil, so a
+/// chat's send marks nothing.
+public enum CloudYes {
+    @TaskLocal public static var heard: (@Sendable () -> Void)?
+}
+
 /// Puts a summary together on this device, from the sources' own sentences.
 ///
 /// It never writes a claim of its own. Each point is a sentence one source

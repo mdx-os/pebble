@@ -631,10 +631,9 @@ final class FeedModel: ObservableObject {
         askedBy.removeAll()
         // Asked before clearing: a summary going through the cloud may have
         // sent what it read already, and that can't be called back. Only
-        // one past the person's yes: one whose preview still waits on
-        // Today's gate has sent nothing, and goes with its sheet below.
-        let waiting = cloudReview.pending == nil ? 0 : 1
-        let inCloud = (recon?.summariesMayLeaveDevice ?? 0) - waiting > 0
+        // one past the person's yes: one still reading, taking details out
+        // or waiting on its preview has sent nothing.
+        let inCloud = (recon?.summariesPastAYes ?? 0) > 0
         // A preview still waiting goes at once, with its sheet, so a Send
         // tapped on it later sends nothing from a recon that is forgotten.
         // Clearing cancels the work too, but that answers only on a later

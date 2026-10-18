@@ -99,6 +99,9 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         var work: Task<Void, Never>?
         /// The summary has been begun this round, so it is never begun twice.
         var begun = false
+        /// This round's summary is past the person's yes to send what was
+        /// read, as `CloudYes` says. Only then may it have left the device.
+        var pastYes = false
         /// Stopped by the person. The card says stopped, never done, and
         /// nothing it read is kept.
         var stopped = false
@@ -307,6 +310,22 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         return runs.values.filter { $0.work != nil && $0.summarizer.mayLeaveDevice }.count
     }
 
+    /// Summaries still being put together whose sources may already have
+    /// left the device: the person said yes to sending them. One still
+    /// reading, taking details out or waiting on its preview counts as none.
+    public var summariesPastAYes: Int {
+        lock.lock(); defer { lock.unlock() }
+        return runs.values.filter { $0.work != nil && $0.pastYes }.count
+    }
+
+    /// The yes for this round's summary is in. Not for one begun before a
+    /// retry or Forget everything.
+    private func heardYes(_ id: String, round: Int, generation begun: Int) {
+        lock.lock(); defer { lock.unlock() }
+        guard generation == begun, runs[id]?.round == round else { return }
+        runs[id]?.pastYes = true
+    }
+
     /// The card has reached the step where the summary is put together.
     private static func isSummarizing(_ task: AgentTask) -> Bool {
         task.state == .done || (task.state == .running && task.step == ReconWords.puttingTogether)
@@ -322,9 +341,12 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         }
         let (summarizer, task, sources, gatheredAt) = (run.summarizer, run.task, run.sources, run.gatheredAt)
         let key = UUID()
+        let yes: @Sendable () -> Void = { [weak self] in self?.heardYes(id, round: round, generation: begun) }
         let work = Task { [weak self] in
             defer { self?.ended(key) }
-            let summary = await summarizer.summarize(task, id: id, sources: sources, gatheredAt: gatheredAt)
+            let summary = await CloudYes.$heard.withValue(yes) {
+                await summarizer.summarize(task, id: id, sources: sources, gatheredAt: gatheredAt)
+            }
             guard !Task.isCancelled else { return }
             self?.finish(id, round: round, generation: begun, with: summary)
         }
@@ -585,6 +607,7 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
             run.summary = nil
             run.work = nil
             run.begun = false
+            run.pastYes = false
             run.stopped = false
             run.stopping = false
             run.sources = sources

@@ -32,10 +32,9 @@ final class WaitingSignIn: CloudAuth, @unchecked Sendable {
     }
 }
 
-/// Mandeep's decision, item 11: with the cloud on, the device promise is
-/// false everywhere, read from one flag, `PrivacyPlace` from the model.
-/// Plus the merge with main's shared send path and `HomeCover`, and the
-/// last review round's shoulds and nits.
+/// With the cloud on, the device promise is false everywhere, read from one
+/// flag, `PrivacyPlace` from the model. Also the shared send path and
+/// `HomeCover`, sign-in, private words, and a setting that can't be opened.
 @MainActor
 struct CloudPromiseTests {
     let brand = Brand(name: "Nova")
@@ -103,7 +102,7 @@ struct CloudPromiseTests {
         #expect(PrivacyPlace.all() == .onDevice)
     }
 
-    // MARK: Item 11
+    // MARK: Every device line follows the flag
 
     /// A chat started with the cloud on shows no device promise anywhere:
     /// the chat header, the opening, memory's empty, saved and header
@@ -285,7 +284,7 @@ struct CloudPromiseTests {
         #expect(maker.wire.sent.isEmpty)
     }
 
-    // MARK: The last review round: shoulds
+    // MARK: Sign-in and a setting that can't be opened
 
     @Test func turningOffCancelsASignInUnderWay() async throws {
         let auth = WaitingSignIn()
@@ -360,7 +359,7 @@ struct CloudPromiseTests {
         #expect(!app.contains("InMemoryCloudHelpStore"))
     }
 
-    // MARK: The last review round: nits
+    // MARK: Previews, private words and the add button
 
     @Test func aCancelledReplyCountsAsNothingSent() {
         #expect(ChatController.nothingWasSent(CancellationError()))
@@ -431,7 +430,7 @@ struct CloudPromiseTests {
         #expect(next.contains(".accessibilityHidden(true)"))
     }
 
-    // MARK: Fix round 5
+    // MARK: Rebuilding the home screen, and the fallback memory screen
 
     /// The home screen as the app builds it again on a redraw, with the
     /// same setting and notes.
@@ -610,7 +609,7 @@ struct CloudPromiseTests {
         #expect(app.contains("file: { try CloudHelpFileStore.onDevice() }"))
     }
 
-    // MARK: Fix round 6
+    // MARK: Words in a setting that couldn't be opened
 
     /// The notes opened but the setting's file didn't, so the normal memory
     /// screen shows. Forget everything still erases the words kept in that
@@ -724,7 +723,7 @@ struct CloudPromiseTests {
         #expect(detail.contains("memoryScreen"))
     }
 
-    // MARK: Fix round 8
+    // MARK: One setting, many windows
 
     /// Two windows share one setting. Window B has a cloud chat open, the
     /// cloud goes off, and window A starts an on-device chat. A's setting

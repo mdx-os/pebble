@@ -82,11 +82,16 @@ public struct CloudPreview: Sendable, Equatable, Identifiable {
     public let id: UUID
     public let request: CloudRequest
     public let hidden: [Redaction.Kind: Int]
+    /// Asked by a summary's work, not by a chat. Set by the code that built
+    /// the request, never read from its words, so nothing a person types
+    /// in a chat can make it look like a summary's.
+    public let forSummary: Bool
 
-    public init(id: UUID = UUID(), request: CloudRequest, hidden: [Redaction.Kind: Int]) {
+    public init(id: UUID = UUID(), request: CloudRequest, hidden: [Redaction.Kind: Int], forSummary: Bool = false) {
         self.id = id
         self.request = request
         self.hidden = hidden
+        self.forSummary = forSummary
     }
 }
 
@@ -281,7 +286,8 @@ public struct CloudModel: ModelClient {
         }
         let preview = try Self.preview(
             for: transcript, endpoint: endpoint, redactor: redactor,
-            headers: auth.headers(for: Self.url(for: endpoint))
+            headers: auth.headers(for: Self.url(for: endpoint)),
+            forSummary: CloudAsk.forSummary
         )
         switch await reviewer.review(preview) {
         case .send: break
@@ -290,6 +296,8 @@ public struct CloudModel: ModelClient {
         }
         try Task.checkCancellation()
         try checkOn()
+        // Past the yes: a summary's work notes that what it read may go.
+        CloudYes.heard?()
         // The very request the person saw, unchanged.
         let data = try await transport.send(preview.request)
         guard let reply = try? JSONDecoder().decode(CloudPayload.Reply.self, from: data) else {
@@ -320,7 +328,8 @@ public struct CloudModel: ModelClient {
         for transcript: [ChatTurn],
         endpoint: URL,
         redactor: Redactor,
-        headers: [String: String] = [:]
+        headers: [String: String] = [:],
+        forSummary: Bool = false
     ) throws -> CloudPreview {
         // Before redaction: the same decision Conversation makes.
         if CareCheck.answersWithCare(transcript) { throw CloudModelError.staysHere }
@@ -340,7 +349,8 @@ public struct CloudModel: ModelClient {
         let body = try CloudPayload(messages: messages, version: CloudPayload.currentVersion).encoded()
         return CloudPreview(
             request: CloudRequest(url: url(for: endpoint), headers: CloudHeaders.merged(with: headers), body: body),
-            hidden: hidden
+            hidden: hidden,
+            forSummary: forSummary
         )
     }
 }

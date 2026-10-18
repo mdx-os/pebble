@@ -810,9 +810,11 @@ struct CloudPreviewSheet: View {
     let onCancel: () -> Void
 
     /// The purpose line for one of Today's summary previews: the topic it
-    /// asks about, as it is sent, and that it is Today's.
-    static func todayPurpose(_ preview: CloudPreview) -> String {
-        ReconWords.previewForSummary(CloudReconSummarizer.topic(asked: preview.request))
+    /// asks about, as it is sent, and that it is Today's. None for a
+    /// request a summary didn't make.
+    static func todayPurpose(_ preview: CloudPreview) -> String? {
+        guard preview.forSummary else { return nil }
+        return ReconWords.previewForSummary(CloudReconSummarizer.topic(asked: preview))
     }
 
     /// What the payload card shows: the very request that will be sent.
@@ -952,7 +954,7 @@ extension View {
     /// message (see `CloudPreviewSheet.purpose`).
     @ViewBuilder
     func cloudPreview(_ review: CloudReview?, blocked: Bool = false, waiting: Binding<Bool>? = nil,
-                      purpose: ((CloudPreview) -> String)? = nil) -> some View {
+                      purpose: ((CloudPreview) -> String?)? = nil) -> some View {
         if let review {
             modifier(CloudPreviewPresenter(review: review, blocked: blocked, waiting: waiting, purpose: purpose))
         } else {
@@ -971,7 +973,7 @@ struct CloudPreviewPresenter: ViewModifier {
     @ObservedObject var review: CloudReview
     let blocked: Bool
     let waiting: Binding<Bool>?
-    var purpose: ((CloudPreview) -> String)? = nil
+    var purpose: ((CloudPreview) -> String?)? = nil
 
     /// The preview to put on screen now: none while something else is open.
     static func shown(_ pending: CloudPreview?, blocked: Bool) -> CloudPreview? {

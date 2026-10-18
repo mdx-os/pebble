@@ -650,14 +650,17 @@ struct ReconFeedTests {
 
     // MARK: Forget everything while the cloud has it
 
+    /// The person said yes, and the summary is still on its way: what it
+    /// read may have gone, so Today says it may.
     @Test func forgettingWhileACloudSummaryIsUnderWaySaysItCantBeCalledBack() async throws {
         let (model, engine, runner) = feed()
         let gate = Gate()
         let mark = ThreadMark()
-        model.summarizer = { HeldSummarizer(gate: gate, mark: mark, leaves: true) }
+        model.summarizer = { HeldSummarizer(gate: gate, mark: mark, leaves: true, saysYes: true) }
         #expect(model.lookInto(SampleSources.poolTopic))
         engine.advance(by: 30)
         #expect(runner.summariesMayLeaveDevice == 1)
+        await eventually { runner.summariesPastAYes == 1 }
         let id = try #require(runner.tasks.first?.id)
         model.forgetTasks()
         #expect(model.forgotUnderway == ReconWords.forgotWhileInCloud)
@@ -671,6 +674,60 @@ struct ReconFeedTests {
         #expect(runner.summary(for: id) == nil)
         #expect(runner.summariesMayLeaveDevice == 0)
         #expect(!model.feed.groups.flatMap(\.items).contains { $0.id == id })
+    }
+
+    /// A summary that may go through the cloud, still working before any
+    /// yes: nothing was asked and nothing went, so no line says it may have.
+    @Test func forgettingACloudSummaryBeforeAnyYesSaysNothingAboutTheCloud() async throws {
+        let (model, engine, runner) = feed()
+        let gate = Gate()
+        model.summarizer = { HeldSummarizer(gate: gate, mark: ThreadMark(), leaves: true) }
+        #expect(model.lookInto(SampleSources.poolTopic))
+        engine.advance(by: 30)
+        #expect(runner.summariesMayLeaveDevice == 1)
+        #expect(runner.summariesPastAYes == 0)
+        model.forgetTasks()
+        #expect(model.forgotUnderway == nil)
+        await gate.open()
+        await runner.settleEverything()
+        #expect(runner.tasks.isEmpty)
+    }
+
+    /// With the real cloud summarizer and Today's own gate, Forget lands
+    /// while the summary is on its way to the preview, before it shows:
+    /// no yes was asked for, so no line says anything may have gone, no
+    /// connection is made and nothing is sent.
+    @Test(.timeLimit(.minutes(1)))
+    func forgettingJustBeforeTodaysPreviewSaysNothingWent() async throws {
+        let maker = TransportMaker()
+        let notes = ShowcaseScene.emptyMemory()
+        defer { discard(notes) }
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+                              memory: notes, transport: { maker.make() })
+        let (model, engine, runner) = feed()
+        let review = model.cloudReview
+        let gate = Gate()
+        model.summarizer = {
+            let made = cloud.chatModel(local: LocalStubModel(), review: review, madeOnSend: true)
+            return ReconSummarizers.choose(for: HeldModel(gate: gate, model: made))
+        }
+        #expect(model.lookInto(SampleSources.poolTopic))
+        let id = try #require(runner.tasks.first?.id)
+        engine.advance(by: 12)
+        await eventually { runner.summariesMayLeaveDevice == 1 }
+        #expect(review.pending == nil)
+
+        model.forgetTasks()
+        #expect(model.forgotUnderway == nil)
+        await gate.open()
+        await runner.settleEverything()
+        engine.advance(by: 60)
+        model.refresh()
+        #expect(review.pending == nil)
+        #expect(maker.made == 0)
+        #expect(maker.wire.sent.isEmpty)
+        #expect(runner.tasks.isEmpty)
+        #expect(runner.summary(for: id) == nil)
     }
 
     @Test func forgettingAnOnDeviceSummarySaysNothingAboutTheCloud() throws {
@@ -1274,6 +1331,80 @@ struct ReconFeedTests {
         #expect(maker.wire.sent.isEmpty)
     }
 
+    /// A page's title and publisher are sent with its text, so each is
+    /// held to the same checks. One page with the words in its title only,
+    /// and one with them in its publisher only.
+    func page(title: String = "Riverside pool reopening", publisher: String = "Riverside Gazette") -> ReconSource {
+        ReconSource(id: "test:page", title: title, publisher: publisher,
+                    url: URL(string: "https://gazette.example.org/pool")!, published: morning - 86_400,
+                    text: "The Riverside pool reopens on November 10. Family swim at the pool runs on Saturdays.")
+    }
+
+
+    /// Words of crisis in a page's title, or in its publisher, with the
+    /// cloud on: no preview ever shows, no connection is made, nothing is
+    /// sent, and the card says why.
+    @Test func hardWordsInATitleOrPublisherNeverReachThePreview() async throws {
+        let hard = "Suicide prevention line"
+        for heavy in [page(title: "\(hard) posted at the Riverside pool"), page(publisher: "\(hard) of Riverside")] {
+            let maker = TransportMaker()
+            let notes = ShowcaseScene.emptyMemory()
+            defer { discard(notes) }
+            let provider = CountingProvider(now: { [morning] in morning })
+            provider.give([heavy])
+            let (model, runner, _) = cloudToday(reading: provider, transport: { maker.make() }, notes: notes)
+            // Every preview Today's gate puts up, however briefly.
+            let shown = PreviewLog()
+            let watch = model.cloudReview.$pending.sink { if $0 != nil { shown.note() } }
+            defer { watch.cancel() }
+            #expect(model.lookInto(SampleSources.poolTopic))
+            let id = try #require(runner.tasks.first?.id)
+            runner.advance(by: 12)
+            await runner.settleEverything()
+            runner.advance(by: 30)
+            #expect(shown.count == 0, "a preview showed for \(heavy.title), \(heavy.publisher)")
+            #expect(model.cloudReview.pending == nil)
+            #expect(maker.made == 0)
+            #expect(maker.wire.sent.isEmpty)
+            let summary = try #require(runner.summary(for: id))
+            #expect(summary.madeOnDevice)
+            #expect(summary.note == ReconWords.keptForCare)
+        }
+    }
+
+    /// A private word in a page's title, or in its publisher, is masked in
+    /// the preview and in the bytes that go, as it is in the page's text.
+    @Test func aPrivateWordInATitleOrPublisherIsMasked() async throws {
+        for named in [page(title: "Lemon cake at the Riverside pool snack bar"), page(publisher: "The Lemon Cake Gazette")] {
+            let maker = TransportMaker()
+            let notes = ShowcaseScene.emptyMemory()
+            defer { discard(notes) }
+            let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"])),
+                                  endpoint: endpoint, memory: notes, transport: { maker.make() })
+            let provider = CountingProvider(now: { [morning] in morning })
+            provider.give([named])
+            let model = HomeView.reconFeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: nil,
+                                                drivesTasks: false, reading: provider, place: .mayLeaveDevice,
+                                                memory: notes, model: LocalStubModel(), cloud: cloud,
+                                                now: { [morning] in morning })
+            let runner = try #require(model.recon)
+            #expect(model.lookInto(SampleSources.poolTopic))
+            let id = try #require(runner.tasks.first?.id)
+            runner.advance(by: 12)
+            let preview = await model.cloudReview.shown()
+            let body = preview.request.text
+            #expect(!body.localizedCaseInsensitiveContains("lemon cake"), "shown for \(named.title), \(named.publisher)")
+            #expect(body.contains("[private]"))
+            // The rest of the field is there, so it was sent and masked, not left out.
+            #expect(body.contains("at the Riverside pool snack bar") || body.contains("[private] Gazette"))
+            model.cloudReview.answer(.send, for: preview.id)
+            await runner.settle(id)
+            #expect(maker.wire.sent.count == 1)
+            #expect(maker.wire.sentText.allSatisfy { !$0.localizedCaseInsensitiveContains("lemon cake") })
+            #expect(maker.wire.sentText.allSatisfy { $0.contains("[private]") })
+        }
+    }
+
     /// Today's preview can come up over the chat or the notes, so it says
     /// what it is for: a summary, for Today, and of what, as it is sent.
     /// The topic itself is masked, there and in the bytes that go.
@@ -1287,7 +1418,7 @@ struct ReconFeedTests {
         let id = try #require(runner.tasks.first?.id)
         runner.advance(by: 12)
         let preview = await model.cloudReview.shown()
-        let purpose = CloudPreviewSheet.todayPurpose(preview)
+        let purpose = try #require(CloudPreviewSheet.todayPurpose(preview))
         #expect(purpose == ReconWords.previewForSummary("[name]'s swim lessons at the Riverside pool"))
         #expect(purpose.contains("Today"))
         #expect(!purpose.contains("Priya"))
@@ -1301,6 +1432,29 @@ struct ReconFeedTests {
         #expect(maker.wire.sentText.allSatisfy { !$0.contains("Priya") })
         // A chat's own preview gets no such line.
         #expect(ReconWords.previewForSummary(nil) == "This is for a summary on Today, not for a chat.")
+    }
+
+    /// A chat send in a summary's own words gets no line about Today's
+    /// summary, even shown through Today's gate.
+    @Test func aChatInASummarysWordsGetsNoSummaryLine() async throws {
+        let reviewer = CloudReview()
+        let notes = ShowcaseScene.emptyMemory()
+        defer { discard(notes) }
+        let maker = TransportMaker()
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+                              memory: notes, transport: { maker.make() })
+        let model = cloud.chatModel(local: LocalStubModel(), review: reviewer, madeOnSend: true)
+        let text = "Please look into the pool using only the sources below, and answer in plain words."
+        let chat = Conversation(turns: [ChatTurn(id: UUID(), speaker: .person, text: text)], onDevice: false)
+        let asking = Task { try? await chat.appendingReply(from: model) }
+        let preview = await reviewer.shown()
+        #expect(preview.request.text.contains("Please look into the pool"))
+        #expect(CloudReconSummarizer.topic(asked: preview) == nil)
+        #expect(CloudPreviewSheet.todayPurpose(preview) == nil)
+        reviewer.answer(.cancel, for: preview.id)
+        _ = await asking.value
+        #expect(maker.made == 0)
+        #expect(maker.wire.sent.isEmpty)
     }
 
     /// Today started one with the cloud on, and the cloud went off before
@@ -1487,16 +1641,41 @@ final class ThreadMark: @unchecked Sendable {
     }
 }
 
+/// Counts what it is told of, from any thread.
+final class PreviewLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var seen = 0
+    var count: Int { lock.withLock { seen } }
+    func note() { lock.withLock { seen += 1 } }
+}
+
+/// Holds a model's reply until the gate opens, so a test can act while a
+/// summary is on its way to the preview, before anything is shown.
+struct HeldModel: ModelClient {
+    let gate: Gate
+    let model: any ModelClient
+    var runsOnDevice: Bool { model.runsOnDevice }
+
+    func reply(to transcript: [ChatTurn]) async throws -> String {
+        await gate.wait()
+        return try await model.reply(to: transcript)
+    }
+}
+
 /// Waits for the gate, then puts the summary together on this device. Says
-/// it may leave the device when `leaves`, as a cloud one would.
+/// it may leave the device when `leaves`, as a cloud one would, and, when
+/// `saysYes`, that the person's yes is in before it waits, as a cloud one
+/// does once Send is tapped.
 struct HeldSummarizer: ReconSummarizer {
     let gate: Gate
     let mark: ThreadMark
     var leaves = false
+    var saysYes = false
 
     var mayLeaveDevice: Bool { leaves }
 
     func summarize(_ task: ReconTask, id: String, sources: [ReconSource], gatheredAt: Date) async -> ReconSummary {
+        if saysYes { CloudYes.heard?() }
         await gate.wait()
         mark.mark()
         return LocalReconSummarizer().summary(task, id: id, sources: sources, gatheredAt: gatheredAt)

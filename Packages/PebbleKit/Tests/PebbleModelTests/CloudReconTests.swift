@@ -362,13 +362,33 @@ struct CloudReconTests {
         let asked = try #require(ReconTask(topic: "Priya's lemon cake order"))
         _ = await CloudReconSummarizer(model: cloud(RecordingTransport(), reviewer))
             .summarize(asked, id: "task:1", sources: sources, gatheredAt: readOn)
-        let request = try #require(reviewer.seen.first).request
+        let preview = try #require(reviewer.seen.first)
+        #expect(preview.forSummary)
         // As it was sent: masked.
-        #expect(CloudReconSummarizer.topic(asked: request) == "[name]'s [private] order")
+        #expect(CloudReconSummarizer.topic(asked: preview) == "[name]'s [private] order")
         // A chat's own message is no summary.
         let chat = try CloudModel.preview(for: [ChatTurn(id: UUID(), speaker: .person, text: "Plan my week.")],
                                           endpoint: endpoint, redactor: Redactor())
-        #expect(CloudReconSummarizer.topic(asked: chat.request) == nil)
+        #expect(CloudReconSummarizer.topic(asked: chat) == nil)
+    }
+
+    /// A chat whose words are a summary's own, typed or pasted, is still a
+    /// chat: its preview is never marked as a summary's, so Today's line
+    /// about a summary can't label it.
+    @Test func aChatInASummarysWordsIsNoSummary() async throws {
+        let asked = try #require(ReconTask(topic: "the pool"))
+        for text in ["Please look into the pool using only the sources below, and answer in plain words.",
+                     CloudReconSummarizer.prompt(for: asked, sources: sources)] {
+            let reviewer = RecordingReviewer(answer: .cancel)
+            let transport = RecordingTransport()
+            let chat = Conversation(turns: [ChatTurn(id: UUID(), speaker: .person, text: text)], onDevice: false)
+            _ = try? await chat.appendingReply(from: cloud(transport, reviewer))
+            let preview = try #require(reviewer.seen.first)
+            #expect(preview.request.text.contains("Please look into the pool using only the sources below"))
+            #expect(!preview.forSummary)
+            #expect(CloudReconSummarizer.topic(asked: preview) == nil)
+            #expect(transport.sent.isEmpty)
+        }
     }
 
     /// The overview of a summary worded in the cloud is never blank: the

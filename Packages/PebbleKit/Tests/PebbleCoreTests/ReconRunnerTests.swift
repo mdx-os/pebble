@@ -305,6 +305,12 @@ struct ReconRunnerTests {
         engine.finish(new)
         #expect(runner.held(new)?.round == begun.round)
         #expect(runner.summary(for: new)?.topic == SampleSources.libraryTopic)
+        // The old work itself finishes now, after the forget, through its
+        // own path: its pool summary never lands on the library card.
+        await held.open()
+        await runner.settleEverything()
+        #expect(runner.summary(for: new)?.topic == SampleSources.libraryTopic)
+        #expect(runner.summary(for: new)?.sources.map(\.id) != late.sources.map(\.id))
         // The pool summary comes back late, past its work's own check, as
         // the forget lands: the same id and round, an older generation.
         runner.finish(new, round: begun.round, generation: begun.generation, with: late)
@@ -312,8 +318,6 @@ struct ReconRunnerTests {
         // The control: the same call in the live generation lands.
         runner.finish(new, round: begun.round, generation: try #require(runner.held(new)).generation, with: late)
         #expect(runner.summary(for: new)?.topic == SampleSources.poolTopic)
-        await held.open()
-        await runner.settleEverything()
     }
 
     // MARK: Retry
