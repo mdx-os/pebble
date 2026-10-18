@@ -354,6 +354,37 @@ struct BackgroundFeedTests {
         #expect(memory.forgottenCount == 1)
     }
 
+    /// Turned on but never run, the file holds only the queue. Forget
+    /// everything erases it, but no summary was made, so none is said to
+    /// be gone. Once one was made, it is, even after an erase that failed
+    /// took the cards from the screen first.
+    @Test func aQueueAloneHasNoSummariesToSayAreGone() throws {
+        let faults = BackgroundStoreFaults()
+        let runner = runner(on: true, store: scratchStore(faults: faults))
+        #expect(runner.store.hasStoredFile, "the queue is in the file")
+        #expect(runner.results.isEmpty)
+        let memory = MemoryModel(store: scratchMemory(), place: .onDevice,
+                                 alsoForget: { throw CocoaError(.fileWriteNoPermission) },
+                                 background: runner, now: { Self.at(9) })
+        #expect(memory.hasSomethingToForget)
+        memory.forgetEverything()
+        #expect(memory.status == CloudWords.forgotNotesNotWords)
+        #expect(memory.status?.contains(MemoryWords.summariesGone) == false)
+        expectNoSummaryFiles(runner.store)
+
+        runner.turnOn(now: Self.at(6))
+        runner.runDue(now: Self.at(7, days: 1), conditions: .foreground)
+        #expect(!runner.results.isEmpty)
+        faults.eraseFails = true
+        memory.forgetEverything()
+        #expect(runner.results.isEmpty, "the cards went from the screen")
+        faults.eraseFails = false
+        memory.forgetEverything()
+        #expect(memory.status == MemoryModel.forgotLine(notesGone: true, rest: .some(nil), tasksGone: false,
+                                                        summaries: .erased))
+        #expect(memory.status?.contains(MemoryWords.summariesGone) == true)
+    }
+
     /// If the summaries' file can't be erased, the line says so rather
     /// than read as done, and Forget everything stays to try again.
     @Test func aSummaryFileThatCantBeErasedIsSaid() throws {
@@ -591,6 +622,101 @@ struct BackgroundFeedTests {
         #expect(runner.queue.isEmpty)
         #expect(memory.backgroundNext == nil)
         #expect(heard == [next], "nothing more to say when it turns off")
+    }
+
+    /// The line under the switch is said again while the screen stays
+    /// open: at the due time, so "today" never stays up past it, and at
+    /// midnight, when "tomorrow" becomes "today". The screen waits for that
+    /// moment each time it moves.
+    @Test func theNextLineFollowsTheClockWhileTheScreenIsOpen() async throws {
+        var calendar = Calendar.current
+        calendar.timeZone = .current
+        let morning = BackgroundPlan.morning(of: Date(), calendar: calendar)
+        let runner = BackgroundRunner(store: scratchStore(), toggle: InMemoryBackgroundSwitch(),
+                                      needsYou: Self.oneWaiting(), watchingSince: .distantPast, calendar: calendar)
+        var now = morning - 60 * 60
+        runner.turnOn(now: now)
+        let memory = MemoryModel(store: scratchMemory(), place: .onDevice, background: runner, now: { now })
+        #expect(memory.backgroundNext == BackgroundWords.nextDue(morning, now: now))
+        #expect(memory.backgroundNextChange == morning)
+
+        var slept: [TimeInterval] = []
+        await memory.refreshBackgroundAtNextChange { seconds in
+            slept.append(seconds)
+            now += seconds
+        }
+        #expect(slept == [60 * 60])
+        #expect(memory.backgroundNext == BackgroundWords.nextDue(morning, now: now))
+        #expect(memory.backgroundNext?.hasSuffix("today.") == false, "never today once the time has come")
+
+        // Late in the evening, after the morning's look, tomorrow is named
+        // until midnight, then today.
+        runner.runDue(now: now, conditions: .foreground)
+        let tomorrow = try #require(runner.queue.first?.due)
+        now = calendar.startOfDay(for: tomorrow) - 60
+        memory.refreshBackground()
+        #expect(memory.backgroundNext?.hasSuffix("tomorrow.") == true)
+        #expect(memory.backgroundNextChange == calendar.startOfDay(for: tomorrow))
+        await memory.refreshBackgroundAtNextChange { now += $0 }
+        #expect(memory.backgroundNext?.hasSuffix("today.") == true)
+        #expect(memory.backgroundNextChange == tomorrow)
+
+        let view = try String(contentsOf: SwiftSource.repositoryRoot(from: #filePath)
+            .appendingPathComponent("Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift"), encoding: .utf8)
+        let code = String(SwiftSource(view).code)
+        #expect(code.contains(".task(id: model.backgroundNextChange) { await model.refreshBackgroundAtNextChange() }"))
+        #expect(code.contains(".task(id: model.setting.nextChange) { await model.refreshAtNextChange() }"))
+    }
+
+    /// With no notes store, the screen shown in its place still has the
+    /// switch and a way to forget the summaries whenever a runner was
+    /// built: they keep their own file. Forgetting them there turns work
+    /// while away off, erases the file and says so, and leaves the tasks.
+    @Test func withNoNotesTheSwitchAndTheSummariesStay() throws {
+        let faults = BackgroundStoreFaults()
+        let runner = runner(on: false, store: scratchStore(faults: faults))
+        let setting = BackgroundSettingModel(runner: runner, now: { Self.at(6) })
+        var heard: [String] = []
+        setting.announce = { heard.append($0) }
+        #expect(!setting.setting.isOn)
+        #expect(!setting.setting.hasSomethingToForget)
+
+        setting.set(true)
+        #expect(runner.isOn)
+        let next = BackgroundWords.nextDue(Self.at(7), now: Self.at(6))
+        #expect(setting.setting.next == next)
+        #expect(heard == [next])
+        runner.runDue(now: Self.at(7), conditions: .foreground)
+        setting.refresh()
+        #expect(setting.setting.hasSomethingToForget)
+
+        faults.eraseFails = true
+        setting.forget()
+        #expect(!runner.isOn)
+        #expect(setting.status == MemoryWords.couldNotForgetSummariesAlone)
+        #expect(setting.forgottenCount == 0)
+        #expect(setting.setting.hasSomethingToForget, "still there to try again")
+        faults.eraseFails = false
+        setting.forget()
+        #expect(setting.status == MemoryWords.summariesGone)
+        #expect(setting.forgottenCount == 1)
+        #expect(!setting.setting.hasSomethingToForget)
+        expectNoSummaryFiles(runner.store)
+        #expect(heard.suffix(2) == [MemoryWords.couldNotForgetSummariesAlone, MemoryWords.summariesGone])
+
+        // The home screen hands its runner to the screen with no notes,
+        // which shows the section whenever it has one.
+        let root = SwiftSource.repositoryRoot(from: #filePath).appendingPathComponent("Packages/PebbleKit/Sources/PebbleUI")
+        let home = SwiftSource(try String(contentsOf: root.appendingPathComponent("HomeView.swift"), encoding: .utf8))
+        let fallback = try #require(home.calls(named: ["MemoryUnavailableView"]).first)
+        #expect(fallback.arguments.contains("background: background"))
+        let memory = String(SwiftSource(try String(contentsOf: root.appendingPathComponent("MemoryView.swift"),
+                                                   encoding: .utf8)).code)
+        let shown = try #require(memory.range(of: "if let background {"), "shown whenever there is a runner")
+        #expect(memory[shown.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+            .hasPrefix("BackgroundFallbackSection(model: BackgroundSettingModel(runner: background))"))
+        try smokeRender(MemoryUnavailableView(hasTasks: true, background: runner, onForgetTasks: {})
+            .frame(width: 393, height: 852))
     }
 
     /// The app wires no task engine yet, so the line under the switch, read
