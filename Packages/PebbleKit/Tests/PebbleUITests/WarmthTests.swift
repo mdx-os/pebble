@@ -109,6 +109,13 @@ private final class FirstOf {
     }
 }
 
+/// Writes down every wait a reply asks for and returns at once. Shared
+/// with `TodayFollowupsTests`.
+actor Sleeps {
+    private(set) var asked: [Duration] = []
+    func ask(_ duration: Duration) { asked.append(duration) }
+}
+
 /// A model that does not run here, like a cloud model would.
 private struct RemoteModel: ModelClient {
     func reply(to transcript: [ChatTurn]) async throws -> String { "From afar." }
@@ -159,6 +166,7 @@ struct WarmthTests {
     }
 
     @Test func aQuickReplyWaitsACalmBeat() async {
+        // The real sleep: a lower bound, which a slow machine only makes longer.
         let controller = ChatController(brand: brand, model: LocalStubModel(),
                                         names: InMemoryAgentNameStore(), replyBeat: .milliseconds(300))
         let started = ContinuousClock.now
@@ -166,23 +174,32 @@ struct WarmthTests {
         await settle(controller)
         #expect(ContinuousClock.now - started >= .milliseconds(300))
         #expect(controller.conversation.turns.last?.speaker == .agent)
+        // And it asks for the rest of the beat, once.
+        let sleeps = Sleeps()
+        let recorded = ChatController(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(),
+                                      replyBeat: .seconds(60), sleep: { await sleeps.ask($0) })
+        recorded.submit("Help me plan my morning.")
+        await settle(recorded)
+        let asked = await sleeps.asked
+        #expect(asked.count == 1)
+        #expect(asked.allSatisfy { $0 > .zero && $0 <= .seconds(60) })
+        #expect(recorded.conversation.turns.last?.speaker == .agent)
     }
 
+    /// Whether a reply took the beat is read from what it asked to wait,
+    /// never from the wall clock, so a slow, busy machine can't fail it.
     @Test func wordsOfCareAreNeverHeldBack() async {
-        let controller = ChatController(brand: brand, model: LocalStubModel(),
-                                        names: InMemoryAgentNameStore(), replyBeat: .seconds(60))
-        // The beat is a full minute, so a care reply that skips it is
-        // clear even on a slow, busy machine.
-        let started = ContinuousClock.now
+        let sleeps = Sleeps()
+        let controller = ChatController(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(),
+                                        replyBeat: .seconds(60), sleep: { await sleeps.ask($0) })
         controller.submit("I want to end my life")
         await settle(controller)
-        #expect(ContinuousClock.now - started < .seconds(30))
+        #expect(await sleeps.asked.isEmpty, "the care reply waited for the beat")
         #expect(controller.conversation.turns.last?.text == CareCheck.reply)
         // The follow-up after care is never held back either.
-        let again = ContinuousClock.now
         controller.submit("yes")
         await settle(controller)
-        #expect(ContinuousClock.now - again < .seconds(30))
+        #expect(await sleeps.asked.isEmpty, "the follow-up after care waited for the beat")
         #expect(controller.conversation.turns.last?.text == CareCheck.followUp)
     }
 
