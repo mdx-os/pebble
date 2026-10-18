@@ -933,10 +933,10 @@ struct TaskCardTests {
     }
 
     /// `NeedsYou`'s change hook rebuilds the feed with the tasks still in
-    /// it: a new question sits beside a pinned task at once, questions
-    /// first, and a dismissal leaves the task where it was. A model that
-    /// goes stops watching.
-    @Test func aNeedsYouChangeKeepsTaskCardsInPlace() throws {
+    /// it: a new question sits beside a pinned task on the next turn of the
+    /// main actor, questions first, and a dismissal leaves the task where it
+    /// was. A model that goes stops watching.
+    @Test func aNeedsYouChangeKeepsTaskCardsInPlace() async throws {
         let engine = LocalFakeEngine(rule: .isolated())
         let id = engine.start(SampleTasks.dentist)
         engine.advance(by: 45)
@@ -945,10 +945,12 @@ struct TaskCardTests {
                                           now: { ShowcaseScene.morning })
         #expect(model?.feed.needsYou.map(\.id) == [id])
         let asked = try #require(asks.ask(Self.bakery))
+        await model?.settled()
         #expect(model?.feed.needsYou.count == 2)
         #expect(model?.feed.needsYou.first?.request?.id == asked.id)
         #expect(model?.feed.needsYou.last?.id == id)
         asks.dismissed(asked)
+        await model?.settled()
         #expect(model?.feed.needsYou.map(\.id) == [id])
         #expect(asks.observerCount == 1)
         model = nil
@@ -1086,15 +1088,18 @@ struct TaskCardTests {
         }
     }
 
-    /// Every pair a task card button draws is one `Theme.textPairs` checks,
-    /// over the card, and each reads.
+    /// Every pair a task card button or its field draws is one
+    /// `Theme.textPairs` checks, over the card, and each reads.
     @Test(arguments: [ColorScheme.light, .dark])
     func everyCardButtonPairIsChecked(scheme: ColorScheme) {
         let pairs = Theme.textPairs(scheme)
         for base in ["backdrop top", "backdrop bottom", "sheet"] {
             for (text, background) in [("accentText", "accent wash on the card on \(base)"),
                                        ("secondaryText", "card on \(base)"),
-                                       ("secondaryText", "disabled button on the card on \(base)")] {
+                                       ("secondaryText", "disabled button on the card on \(base)"),
+                                       // Change course: the placeholder and the typed words.
+                                       ("secondaryText", "field on the card on \(base)"),
+                                       ("primary", "field on the card on \(base)")] {
                 let pair = pairs.first { $0.text == text && $0.background == background }
                 #expect(pair != nil, "\(text) on \(background)")
                 #expect((pair?.contrast ?? 0) >= 4.5, "\(text) on \(background)")

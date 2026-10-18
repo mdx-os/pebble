@@ -9,10 +9,9 @@ import Foundation
 /// value and only makes the promise when it is `.onDevice`.
 ///
 /// Some models take a copy once, when they are made: `FeedModel.place`,
-/// `MemoryModel.place` and the chat's opening line. That is safe only
-/// because the app's model is fixed for as long as the app runs. If the
-/// model can ever be swapped while running, rebuild those models (or read
-/// the place through a closure) so no copy goes stale.
+/// `MemoryModel.place` and the chat's opening line. `HomeView` keys its
+/// screen on the model, so another model builds them all again and no copy
+/// goes stale. Anything new that keeps the place must be rebuilt the same way.
 public enum PrivacyPlace: Sendable, Equatable {
     /// The model runs here and nothing the person says leaves the device.
     case onDevice

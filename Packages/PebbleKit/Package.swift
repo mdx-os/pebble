@@ -9,6 +9,8 @@ import PackageDescription
 //                Imports PebbleCore. A later MLX or Ollama adapter lives here.
 //   PebbleUI     SwiftUI views shared by Mac, iPhone and iPad.
 //                Imports PebbleCore and PebbleModel.
+// SourceScan is not a layer. It lives under Tests, is in no product, and
+// only the test targets use it, to read Swift source for their guards.
 let package = Package(
     name: "PebbleKit",
     platforms: [.iOS(.v26), .macOS(.v26)],
@@ -25,9 +27,10 @@ let package = Package(
         .target(name: "PebbleModel", dependencies: ["PebbleCore"]),
         .target(name: "PebbleUI", dependencies: ["PebbleCore", "PebbleModel"]),
         .executableTarget(name: "pulse", dependencies: ["PebbleCore", "PebblePulse"]),
-        .testTarget(name: "PebbleCoreTests", dependencies: ["PebbleCore"]),
+        .target(name: "SourceScan", path: "Tests/SourceScan"),
+        .testTarget(name: "PebbleCoreTests", dependencies: ["PebbleCore", "SourceScan"]),
         .testTarget(name: "PebblePulseTests", dependencies: ["PebblePulse", "PebbleCore"]),
         .testTarget(name: "PebbleModelTests", dependencies: ["PebbleModel", "PebbleCore"]),
-        .testTarget(name: "PebbleUITests", dependencies: ["PebbleUI", "PebbleModel", "PebbleCore"]),
+        .testTarget(name: "PebbleUITests", dependencies: ["PebbleUI", "PebbleModel", "PebbleCore", "SourceScan"]),
     ]
 )

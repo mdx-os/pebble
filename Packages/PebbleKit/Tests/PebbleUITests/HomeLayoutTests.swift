@@ -16,7 +16,7 @@ struct HomeLayoutTests {
                             conversation: ShowcaseScene.sampleFirstChat())
     }
 
-    @Test(arguments: [
+    @Test("Smoke: the sidebar layout draws at each size", arguments: [
         CGSize(width: 1032, height: 1376), // iPad Pro 13-inch, portrait
         CGSize(width: 1376, height: 1032), // iPad Pro 13-inch, landscape
         CGSize(width: 744, height: 1133),  // iPad mini, portrait
@@ -24,7 +24,7 @@ struct HomeLayoutTests {
         CGSize(width: 678, height: 1032),  // half of a 13-inch in Split View
         CGSize(width: 500, height: 600),   // a small Stage Manager window
     ], HomeSection.allCases)
-    func theSidebarLayoutRendersAtEachSize(size: CGSize, section: HomeSection) throws {
+    func smokeTheSidebarLayoutAtEachSize(size: CGSize, section: HomeSection) throws {
         let controller = chat()
         let feed = FeedModel(sources: [SampleFeedSource()], needsYou: ShowcaseScene.sampleQuestion(), place: .onDevice)
         let view = HomeSplit(
@@ -39,25 +39,21 @@ struct HomeLayoutTests {
             memoryScreen: MemoryView(store: ShowcaseScene.sampleMemory(), place: .onDevice),
             newChat: {}
         )
-        let renderer = ImageRenderer(content: view.frame(width: size.width, height: size.height))
-        let image = try #require(renderer.cgImage)
-        #expect(image.width == Int(size.width * renderer.scale))
+        try smokeRender(view.frame(width: size.width, height: size.height))
     }
 
-    @Test(arguments: [ColorScheme.light, .dark])
-    func theShortcutsScreenRenders(scheme: ColorScheme) throws {
-        let renderer = ImageRenderer(content: KeyboardShortcutsView()
+    @Test("Smoke: the shortcuts screen draws", arguments: [ColorScheme.light, .dark])
+    func smokeTheShortcutsScreen(scheme: ColorScheme) throws {
+        try smokeRender(KeyboardShortcutsView()
             .environment(\.colorScheme, scheme)
             .frame(width: 540, height: 620))
-        #expect(try #require(renderer.cgImage).width > 0)
     }
 
-    @Test(arguments: [DynamicTypeSize.large, .accessibility3])
-    func theChatRendersWideAtEachTextSize(size: DynamicTypeSize) throws {
-        let renderer = ImageRenderer(content: ChatView(controller: chat(), look: .startingPoint, firstMessage: nil)
+    @Test("Smoke: the wide chat draws at each text size", arguments: [DynamicTypeSize.large, .accessibility3])
+    func smokeTheChatWideAtEachTextSize(size: DynamicTypeSize) throws {
+        try smokeRender(ChatView(controller: chat(), look: .startingPoint, firstMessage: nil)
             .environment(\.dynamicTypeSize, size)
             .frame(width: 1376, height: 1032))
-        #expect(try #require(renderer.cgImage).width > 0)
     }
 
     /// The chat column stops at a reading width, so lines never run edge to

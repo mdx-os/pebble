@@ -23,6 +23,12 @@ struct Composer: View {
     var hint: String?
     let send: (String) -> Void
 
+    /// The placeholder, in `Theme.secondaryText` on the field, a pair
+    /// `Theme.textPairs` holds to 4.5 to 1.
+    static var placeholder: Text {
+        Text(FirstConversation.composerPlaceholder).foregroundStyle(Theme.secondaryText)
+    }
+
     private var canSend: Bool {
         !isBusy && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -30,7 +36,11 @@ struct Composer: View {
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
             // Return sends and Shift Return starts a new line.
-            TextField(FirstConversation.composerPlaceholder, text: text, axis: .vertical)
+            // The system placeholder gray is too faint to read, so the
+            // placeholder is drawn in the quieter words color.
+            TextField(text: text, prompt: Self.placeholder, axis: .vertical) {
+                Text(FirstConversation.composerPlaceholder)
+            }
                 .textFieldStyle(.plain)
                 .lineLimit(lines)
                 .submitLabel(.send)
@@ -41,6 +51,8 @@ struct Composer: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(Color.primary.opacity(Theme.fieldTint), in: RoundedRectangle(cornerRadius: 14))
+                // An edge that reads at 3 to 1, so the field can be found.
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.fieldEdge, lineWidth: 1))
                 // One send path per platform: the draft binding reads a lone
                 // Return as Send on iOS, and onKeyPress handles it on the Mac.
                 #if os(macOS)

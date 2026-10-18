@@ -43,6 +43,25 @@ enum Theme {
     /// needs, so this one is a little deeper in light.
     static let secondaryText = Ink(light: RGB(0.36, 0.36, 0.38), dark: RGB(0.68, 0.68, 0.71))
 
+    /// The tint for system controls that fill with it and write white words
+    /// on top: the selected row in the iPad sidebar and a confirmation
+    /// button such as Done. `accentText` is light in dark mode, so white on
+    /// it reads near 2 to 1; this deep orange keeps white over 4.5 to 1 in
+    /// both schemes. Use it only where the tint is a fill, never for words.
+    ///
+    /// The sidebar's tint also colors the icons of the rows not chosen. So
+    /// in dark mode it is a touch lighter, enough to clear the 3 to 1 an
+    /// icon needs (WCAG 1.4.11) on the sidebar, while white on it still
+    /// clears 4.5. Words in it would need 4.5 on dark and can't have both,
+    /// which is why it is never for words. `ContrastLint` keeps it to the
+    /// sidebar and `DoneButton`.
+    static let tintFill = Ink(light: RGB(0.66, 0.29, 0.07), dark: RGB(0.74, 0.33, 0.08))
+
+    /// The edge of a text field, so the field can be found on the bar or
+    /// the backdrop it sits on: 3 to 1 against both, as WCAG 1.4.11 asks
+    /// of a control's boundary.
+    static let fieldEdge = Ink(light: RGB(0.46, 0.46, 0.48), dark: RGB(0.50, 0.50, 0.53))
+
     /// Words for a choice that removes something, such as Forget everything.
     static let dangerText = Ink(light: RGB(0.74, 0.12, 0.10), dark: RGB(1.00, 0.54, 0.51))
 
@@ -78,6 +97,9 @@ enum Theme {
         let background: String
         let textColor: RGB
         let backgroundColor: RGB
+        /// 4.5 to 1 for words. A field's edge is not words, so it needs the
+        /// 3 to 1 WCAG asks of a control's boundary.
+        var minimum = 4.5
 
         var contrast: Double { textColor.contrast(with: backgroundColor) }
     }
@@ -125,12 +147,41 @@ enum Theme {
         }
         // Words on the accent fill: the primary button, "Have a look", Send.
         pairs.append(TextPair(text: "onAccent", background: "accent", textColor: onAccentRGB, backgroundColor: accentRGB))
+        // White words a system control writes on its tint fill: the selected
+        // sidebar row and a confirmation button (`DoneButton`).
+        pairs.append(TextPair(text: "white", background: "tintFill", textColor: .white, backgroundColor: tintFill.rgb(scheme)))
+        // The sidebar's unchosen rows draw their icons in its tint, beside
+        // words in the primary ink. An icon needs 3 to 1.
+        for (name, base) in sidebarRGBs(scheme) {
+            pairs.append(TextPair(text: "tintFill icon", background: name,
+                                  textColor: tintFill.rgb(scheme), backgroundColor: base, minimum: 3))
+        }
+        // The composer, on Today and in the chat: its placeholder, and its
+        // edge against the field and against what the field sits on (Today's
+        // bar is the bottom of the backdrop).
+        for (name, base) in bases {
+            let field = ink.over(base, opacity: fieldTint)
+            pairs.append(TextPair(text: "placeholder", background: "field on \(name)",
+                                  textColor: secondaryText.rgb(scheme), backgroundColor: field))
+            pairs.append(TextPair(text: "field edge", background: name,
+                                  textColor: fieldEdge.rgb(scheme), backgroundColor: base, minimum: 3))
+            pairs.append(TextPair(text: "field edge", background: "field on \(name)",
+                                  textColor: fieldEdge.rgb(scheme), backgroundColor: field, minimum: 3))
+        }
         return pairs
     }
 
     /// The system background a sheet opens on.
     static func sheetRGB(_ scheme: ColorScheme) -> RGB {
         scheme == .dark ? RGB(0.11, 0.11, 0.12) : .white
+    }
+
+    /// What the iPad sidebar can sit on: the system's plain and grouped
+    /// backgrounds, the lightest and darkest it draws in each scheme.
+    static func sidebarRGBs(_ scheme: ColorScheme) -> [(String, RGB)] {
+        scheme == .dark
+            ? [("sidebar", .black), ("sidebar, grouped", RGB(0.11, 0.11, 0.12))]
+            : [("sidebar", .white), ("sidebar, grouped", RGB(0.95, 0.95, 0.97))]
     }
 
     /// A soft wash behind every screen. Adapts to light and dark.
@@ -244,6 +295,22 @@ struct QuietButtonStyle: ButtonStyle {
             .frame(minHeight: 44)
             .opacity(configuration.isPressed ? 0.5 : 1)
             .contentShape(Rectangle())
+    }
+}
+
+/// Done, for a sheet's toolbar. A confirmation button is drawn filled with
+/// the tint and white words on it, on iOS 26 and on the Mac alike, so it
+/// takes `Theme.tintFill`, where white reads at over 4.5 to 1. Its words
+/// are never drawn in the tint itself. `ContrastGuardTests` makes every
+/// confirmation button one of these.
+struct DoneButton: View {
+    var title = MemoryWords.doneTitle
+    let action: () -> Void
+
+    var body: some View {
+        Button(title, action: action)
+            .keyboardShortcut(.cancelAction)
+            .tint(Theme.tintFill)
     }
 }
 
