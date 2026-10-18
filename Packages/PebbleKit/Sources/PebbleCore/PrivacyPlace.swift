@@ -20,6 +20,11 @@ import Foundation
 ///   place of the model a new chat would get. With the cloud on, that is
 ///   never `.onDevice`. `HomeView` works it out and pushes every change into
 ///   `FeedModel.place` and `MemoryModel.place`, so no copy goes stale.
+///
+/// The model that runs here can change too. `HomeView` keys its screen on
+/// it, so another one builds the chat, `FeedModel` and `MemoryModel` again.
+/// Anything new that keeps the place must either follow the pushes above
+/// or be rebuilt the same way.
 public enum PrivacyPlace: Sendable, Equatable {
     /// The model runs here and nothing the person says leaves the device.
     case onDevice

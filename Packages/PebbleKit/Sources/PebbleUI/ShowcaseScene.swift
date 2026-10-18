@@ -43,7 +43,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     looks: looks, conversation: Self.sampleFirstChat(),
                     section: self == .home ? .chat : .memory,
                     // Its own rule, so the showcase never touches the app's.
-                    needsYou: NeedsYou(rule: .isolated())
+                    needsYou: needsYou(at: morning) ?? NeedsYou(rule: .isolated())
                 )
             case .today, .todayNeedsYou, .todayEmpty:
                 HomeView(
@@ -51,7 +51,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     onboarding: InMemoryOnboardingStore(finished: true), memory: Self.sampleMemory(),
                     looks: looks, conversation: Self.sampleFirstChat(), section: .today,
                     feed: self == .todayEmpty ? [EmptyFeedSource()] : [SampleFeedSource()],
-                    needsYou: self == .todayNeedsYou ? Self.sampleQuestion(at: morning) : NeedsYou(rule: .isolated()),
+                    needsYou: needsYou(at: morning) ?? NeedsYou(rule: .isolated()),
                     now: { morning }
                 )
             case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive:
@@ -100,19 +100,73 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
             case .confirm, .confirmTimedOut:
                 ZStack {
                     Backdrop()
-                    // The timed out scene uses a window that has already passed.
-                    let rule = AskFirst.isolated(window: self == .confirmTimedOut ? -1 : AskFirst.defaultWindow)
-                    if let request = rule.ask(ProposedAction(
-                            kind: .purchase,
-                            recipient: Recipient(id: "merchant:sample-bakery", displayName: "Rise Bakery", handle: "risebakery.example"),
-                            details: "Sourdough loaf and two croissants, pickup at 9",
-                            price: Price(minorUnits: 1450, currency: "CAD")
-                        )) {
-                        ConfirmationSheet(request: request, rule: rule, onApprove: { _ in }, onDecline: {})
+                    if let sheet = sampleSheet {
+                        ConfirmationSheet(request: sheet.request, rule: sheet.rule, isExample: sheet.isExample,
+                                          onApprove: { _ in }, onDecline: {})
                     }
                 }
             }
         }
+    }
+
+    /// A sample question shown in a confirmation sheet of its own.
+    struct SampleSheet {
+        let request: ConfirmationRequest
+        let rule: AskFirst
+        /// Always true: a sample sheet says it is an example.
+        let isExample: Bool
+    }
+
+    /// The sheet the question scenes show, asked through a rule of its own.
+    /// The timed out scene uses a window that has already passed.
+    var sampleSheet: SampleSheet? {
+        guard self == .confirm || self == .confirmTimedOut else { return nil }
+        let rule = AskFirst.isolated(window: self == .confirmTimedOut ? -1 : AskFirst.defaultWindow)
+        guard let request = rule.ask(ProposedAction(
+            kind: .purchase,
+            recipient: Recipient(id: "merchant:sample-bakery", displayName: "Rise Bakery", handle: "risebakery.example"),
+            details: "Sourdough loaf and two croissants, pickup at 9",
+            price: Price(minorUnits: 1450, currency: "CAD")
+        )) else { return nil }
+        return SampleSheet(request: request, rule: rule, isExample: true)
+    }
+
+    /// The questions a home screen scene has waiting, which Today's cards
+    /// open in the confirmation sheet. Nil for scenes without a home screen.
+    /// The task scenes ask through `rule`, the one their tasks share.
+    func needsYou(at now: Date = morning, rule: AskFirst = .isolated()) -> NeedsYou? {
+        switch self {
+        case .todayNeedsYou: Self.sampleQuestion(at: now)
+        case .today, .todayEmpty, .home, .homeMemory: NeedsYou(rule: .isolated())
+        case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive: NeedsYou(rule: rule)
+        default: nil
+        }
+    }
+
+    /// The scripted tasks a scene shows, asking through `rule`. Nil for
+    /// scenes without tasks.
+    @MainActor
+    func tasks(rule: AskFirst) -> LocalFakeEngine? {
+        switch self {
+        case .tasksLive: Self.liveTasks(rule: rule)
+        case .taskRunning, .taskRetrying, .taskWaiting, .taskDone: Self.sampleTasks(self, rule: rule)
+        default: nil
+        }
+    }
+
+    /// Whether every confirmation sheet this scene can show says it is an
+    /// example: its own sample sheet, the sheet a waiting question opens
+    /// from Today, which follows `NeedsYou.isSample`, or the sheet a task's
+    /// Approve opens, which follows the engine's `isSample`. Any task may
+    /// come to ask, so a scene with tasks counts even before one does. Nil
+    /// when the scene can show no question at all.
+    @MainActor
+    var confirmationSheetsAreExamples: Bool? {
+        if let sheet = sampleSheet { return sheet.isExample }
+        var examples: [Bool] = []
+        if let asks = needsYou(), !asks.items(now: Self.morning).isEmpty { examples.append(asks.isSample) }
+        if let tasks = tasks(rule: .isolated()), !tasks.tasks.isEmpty { examples.append(tasks.isSample) }
+        return examples.isEmpty ? nil : !examples.contains(false)
     }
 
     /// Today at 9:40, so the feed's times sit just before the 9:41 the
@@ -141,14 +195,15 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     private func taskHome(brand: Brand, looks: UserDefaults) -> HomeView {
         let rule = AskFirst.isolated()
         let live = self == .tasksLive
+        let morning = Self.morning
         return HomeView(
             brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
             onboarding: InMemoryOnboardingStore(finished: true), memory: Self.sampleMemory(),
             looks: looks, conversation: Self.sampleFirstChat(), section: .today,
-            feed: [SampleFeedSource()], needsYou: NeedsYou(rule: rule),
-            tasks: live ? Self.liveTasks(rule: rule) : Self.sampleTasks(self, rule: rule),
+            feed: [SampleFeedSource()], needsYou: needsYou(at: morning, rule: rule) ?? NeedsYou(rule: rule),
+            tasks: tasks(rule: rule),
             drivesTasks: live,
-            now: live ? { Date() } : { Self.morning }
+            now: live ? { Date() } : { morning }
         )
     }
 

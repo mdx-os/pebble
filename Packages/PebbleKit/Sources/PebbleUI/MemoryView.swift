@@ -10,7 +10,8 @@ public struct MemoryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @FocusState private var addFocused: Bool
-    private let place: PrivacyPlace
+    /// Nil keeps the place the model was made with.
+    private let place: PrivacyPlace?
     private let cloud: CloudHelp?
 
     /// `place` comes from the active model (`ModelClient.privacyPlace`), so
@@ -24,20 +25,33 @@ public struct MemoryView: View {
     /// what it forgot, so the status line can be honest about it.
     public init(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp? = nil,
                 onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) {
-        // Forget everything erases the words always hidden too.
-        var alsoForget: (@MainActor () throws -> CloudHelp.Forgot)?
-        if let cloud { alsoForget = { try cloud.forgetPrivateWords() } }
-        _model = StateObject(wrappedValue: MemoryModel(store: store, place: place, alsoForget: alsoForget,
+        _model = StateObject(wrappedValue: MemoryModel(store: store, place: place, alsoForget: Self.alsoForget(cloud),
                                                        onForgetEverything: onForgetEverything))
         self.place = place
         self.cloud = cloud
     }
 
-    /// Shows a model that already has something to say, for screenshots.
-    init(model: @autoclosure @escaping () -> MemoryModel, place: PrivacyPlace) {
+    /// Takes a model built from the active model, as `HomeView` does, or
+    /// one that already has something to say, for screenshots. With
+    /// `place`, the words follow it as it changes; with `cloud`, the screen
+    /// ends with a way into the cloud setting, and the model should be
+    /// made with the same `cloud` so Forget everything erases its words.
+    ///
+    /// Load-bearing: `model()` is called inside StateObject's own
+    /// autoclosure, so it runs once for the screen, not on every pass of
+    /// the view around it. Calling it first would reset "Saved." and a
+    /// pending Forget everything on every publish.
+    init(model: @autoclosure @escaping () -> MemoryModel, place: PrivacyPlace? = nil, cloud: CloudHelp? = nil) {
         _model = StateObject(wrappedValue: model())
         self.place = place
-        cloud = nil
+        self.cloud = cloud
+    }
+
+    /// What Forget everything erases besides the notes: the words always
+    /// hidden, when there is a cloud setting.
+    static func alsoForget(_ cloud: CloudHelp?) -> (@MainActor () throws -> CloudHelp.Forgot)? {
+        guard let cloud else { return nil }
+        return { try cloud.forgetPrivateWords() }
     }
 
     /// The Forget everything question's words: they name the private words
@@ -133,7 +147,9 @@ public struct MemoryView: View {
         .haptic(.saved, trigger: model.savedCount)
         .haptic(.forgotten, trigger: model.forgottenCount)
         // The flag can change under an open screen; the words follow it.
-        .onChange(of: place, initial: true) { _, place in model.place = place }
+        .onChange(of: place, initial: true) { _, place in
+            if let place { model.place = place }
+        }
     }
 
     @ViewBuilder

@@ -104,13 +104,23 @@ final class FeedModel: ObservableObject {
         // Each model watches for itself, so every window's Today updates.
         // A task's question is asked through the rule, not `NeedsYou`, so
         // its card moves with the engine's own snapshots above.
+        //
+        // The change can come from inside a view update, such as a sheet's
+        // yes. Publishing then is undefined behavior in SwiftUI, so the
+        // refresh always waits for the next turn of the main actor.
+        let hops = pendingRefreshes
         observation = needsYou.observe { [weak self] in
-            if Thread.isMainThread {
-                MainActor.assumeIsolated { self?.refresh() }
-            } else {
-                Task { @MainActor in self?.refresh() }
-            }
+            hops.add { self?.refresh() }
         }
+    }
+
+    /// Refreshes asked for by `needsYou` and not yet run.
+    private let pendingRefreshes = PendingRefreshes()
+
+    /// Returns once every refresh `needsYou` has asked for so far has run,
+    /// so tests wait for exactly that and nothing rests on timing.
+    func settled() async {
+        await pendingRefreshes.last?.value
     }
 
     /// Plain, not isolated: the observation and `needsYou` are Sendable and
@@ -452,6 +462,30 @@ final class FeedModel: ObservableObject {
 
     var dateLine: String {
         now().formatted(.dateTime.weekday(.wide).month(.wide).day())
+    }
+}
+
+/// The refreshes a `FeedModel` has queued for the main actor, kept as one
+/// chain: each waits for the one before, so only the newest is held and
+/// waiting for it waits for them all. The watch on `NeedsYou` may call from
+/// any thread, so the chain takes its own lock.
+private final class PendingRefreshes: @unchecked Sendable {
+    private let lock = NSLock()
+    private var newest: Task<Void, Never>?
+
+    func add(_ refresh: @escaping @MainActor @Sendable () -> Void) {
+        lock.lock()
+        let before = newest
+        newest = Task { @MainActor in
+            await before?.value
+            refresh()
+        }
+        lock.unlock()
+    }
+
+    var last: Task<Void, Never>? {
+        lock.lock(); defer { lock.unlock() }
+        return newest
     }
 }
 
@@ -816,8 +850,7 @@ struct FeedReader: View {
             .background(Backdrop())
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(FeedWords.doneTitle) { dismiss() }
-                        .keyboardShortcut(.cancelAction)
+                    DoneButton(title: FeedWords.doneTitle) { dismiss() }
                 }
             }
         }

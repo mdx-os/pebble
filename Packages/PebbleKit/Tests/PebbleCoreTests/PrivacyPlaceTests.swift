@@ -18,8 +18,10 @@ struct PrivacyPlaceTests {
         ]
     }
 
+    /// Reads the one phrase list, `DevicePromise.phrases`. A line allowed
+    /// with a written reason there is not a promise about the device.
     static func promisesTheDevice(_ line: String) -> Bool {
-        line.contains("this device") || line.contains("stays here")
+        !DevicePromise.found(in: line).isEmpty && !DevicePromise.allowedLines.contains(line)
     }
 
     @Test func onDeviceEveryLineMakesThePromise() {

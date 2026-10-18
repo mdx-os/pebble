@@ -478,14 +478,46 @@ struct CloudPromiseTests {
         #expect(maker.made == 1)
     }
 
+    #if os(macOS)
+    /// The home screen is keyed on the model that runs here, and the cloud
+    /// setting is not that model. So turning the cloud off and on again
+    /// under a live screen makes no new screen: the open cloud chat stays,
+    /// and no chat model or transport is made again. The copy still moves,
+    /// through `surfacePlace`.
+    @MainActor
+    @Test func turningTheCloudOffAndOnKeepsTheOpenCloudChat() {
+        let maker = TransportMaker()
+        let cloud = help(CloudHelpSettings(isOn: true), maker: maker)
+        let host = NSHostingView(rootView: rebuildHome(cloud))
+        host.frame = CGRect(x: 0, y: 0, width: 600, height: 800)
+        host.layoutSubtreeIfNeeded()
+        #expect(cloud.chatModelsAsked == 1)
+        #expect(cloud.place == .mayLeaveDevice)
+        cloud.setOn(false)
+        host.rootView = rebuildHome(cloud)
+        host.layoutSubtreeIfNeeded()
+        // The cloud chat is still the one open, so nothing promises the device.
+        #expect(cloud.place == .mayLeaveDevice)
+        cloud.setOn(true)
+        cloud.confirmTurnOn()
+        host.rootView = rebuildHome(cloud)
+        host.layoutSubtreeIfNeeded()
+        #expect(cloud.chatModelsAsked == 1, "the same screen keeps the same chat")
+        #expect(maker.made == 1)
+    }
+    #endif
+
     /// The init never writes the setting's flag, and the app holds the
     /// setting without observing it, so its changes don't rebuild home.
     @Test func neitherTheHomeInitNorTheAppObservesOrWritesTheFlag() throws {
         let home = try String(contentsOf: Self.sources.appendingPathComponent("PebbleUI/HomeView.swift"),
                               encoding: .utf8)
         let start = try #require(home.range(of: "package init("))
-        let end = try #require(home.range(of: "static func newChat("))
+        // Through `HomeScreen`'s init too, which ends where its own
+        // `newChat()` begins.
+        let end = try #require(home.range(of: "private func newChat() -> ChatController {"))
         #expect(!home[start.upperBound..<end.lowerBound].contains("cloud?.place ="))
+        #expect(home[start.upperBound..<end.lowerBound].contains("struct HomeScreen"))
         let app = try String(contentsOf: Self.repo.appendingPathComponent("App/Sources/PebbleApp.swift"), encoding: .utf8)
         #expect(app.contains("@State private var cloud: CloudHelp"))
         #expect(!app.contains("@StateObject private var cloud"))
