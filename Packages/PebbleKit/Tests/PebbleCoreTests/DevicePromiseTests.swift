@@ -69,6 +69,117 @@ enum DevicePromise {
         Allowed(file: "PebbleCore/Feed.swift", literal: "These are examples for now. Nothing was sent or bought.",
                 reason: "FeedWords.sampleNote off the device. \"Nothing was sent\" is about the example cards' actions, "
                     + "which never ran, not about where words go, so it is true with any model."),
+    ] + cloud
+
+    /// "Private words" is the name of the person's own list in the cloud
+    /// setting, the words `Redactor` always takes out. It names the list;
+    /// it promises nothing about where a chat goes.
+    static let privateWordsName = "\"Private words\" names the list of words the person asked to hide (CloudHelp's private "
+        + "words, `Redaction.Kind.privateWord`). It names that list and promises nothing about where a chat goes, so it "
+        + "is true with the cloud on or off."
+
+    /// The cloud setting's lines. Each is shown whatever the open chat's
+    /// place, and each is true with the cloud on and off.
+    static let cloud: [Allowed] = [
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "On for new chats. Before anything from a chat leaves this device, I show you exactly what goes, and you decide.",
+                reason: "CloudWords.onDetail, shown only while the cloud is on. It says words do leave, the opposite of a "
+                    + "device promise, and the preview it describes gates every cloud request (CloudReview)."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "There's no cloud model set up for this device yet, so this stays off.",
+                reason: "CloudWords.unavailable. \"This device\" names the install that has no cloud address, and \"stays "
+                    + "off\" is the setting; neither says where a chat goes."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Sorry, I can't open the place I keep this setting and your private words, so it stays off for now. Closing and reopening the app may help.",
+                reason: privateWordsName),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Your next new chat will use a bigger model on a computer somewhere else, not on this device.",
+                reason: "The first point before turning the cloud on. It says new chats run off the device, a disclosure, "
+                    + "not a promise that anything stays."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "I try to take out names from your notes, emails, phone numbers, addresses, card numbers and your private words first. Check what I show you, since I can miss things.",
+                reason: privateWordsName),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "If that computer needs me to sign in, I do it right after your yes. Signing in never carries your chats, notes or private words.",
+                reason: privateWordsName + " That sign in carries none of them is CloudAuth.signIn's contract."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Your notes themselves never leave this device.",
+                reason: "True even with the cloud on: the notes file is only read on the device, by Redactor, to find what "
+                    + "to take out. A cloud request carries the chat, never the notes themselves."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Like any website, the computer it goes to can see this device's internet address.",
+                reason: "A disclosure before turning the cloud on: it says what the cloud does see. \"This device\" names "
+                    + "whose address it is, and promises nothing stays."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Anything here is taken out before anything is sent. These words are kept only on this device, and Forget everything erases them too.",
+                reason: "CloudWords.privateDetail is about where the private words are kept, CloudHelpFileStore beside the "
+                    + "notes, and Redactor takes them out of every request, so they never leave even with the cloud on."),
+        Allowed(file: "PebbleCore/CloudHelp.swift", literal: "A word or name to keep private",
+                reason: "The private words field's placeholder. Redactor takes every one out of every cloud request before "
+                    + "it is sent, and with the cloud off nothing is sent, so it is kept out either way."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Sorry, I can't read your private words just now, so I've left them as they are. If the device is locked, unlock it and try again.",
+                reason: privateWordsName),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Sorry, I couldn't save that just now, so your private words are as they were. Please try again in a moment.",
+                reason: privateWordsName),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Sorry, I couldn't save that. Help from the cloud is off, and to make sure it stays off I cleared the cloud setting, along with your private words. You can add them again anytime.",
+                reason: privateWordsName + " \"Stays off\" is the setting."),
+        Allowed(file: "PebbleCore/CloudHelp.swift", literal: "Here is exactly what leaves your device",
+                reason: "The cloud preview's title, shown only over a cloud request about to go. It says words leave, the "
+                    + "opposite of a device promise."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "This is the whole request for this message: where it goes, the labels sent with it, and the words. I took out the personal details I found. Earlier messages in this chat go again with each new one. Like any website, the computer it goes to also sees this device's internet address.",
+                reason: "The cloud preview's detail, shown only over a cloud request. \"This device\" names whose address "
+                    + "the cloud sees, a disclosure, not a promise."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Part of this chat has to stay on this device, so I won't send any of it. A new chat starts fresh, and I can help there.",
+                reason: "CloudWords.staysHere, said as CloudModel refuses to send a chat that promised the device. Nothing "
+                    + "of that chat is sent, so it is true; it explains a refusal, not where other chats go."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Sorry, I can't read your notes or private words just now, so I can't tell what to take out. I didn't send anything. If the device is locked, unlock it and try again.",
+                reason: privateWordsName),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "This removes every note, every task and every word you asked me to hide from this device, and stops any task still going. It can't be undone.",
+                reason: "CloudWords.forgetEverythingDetail, like MemoryWords.forgetEverythingDetail: it names where the "
+                    + "notes, tasks and private words are erased from, all local files, whatever the model is."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Your notes are gone, but I couldn't erase your private words just now. Please try Forget everything again in a moment.",
+                reason: privateWordsName),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Your notes and tasks are gone, but I couldn't erase your private words just now. Please try Forget everything again in a moment.",
+                reason: privateWordsName),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Your private words are gone, but I couldn't erase your notes just now. Please try Forget everything again in a moment.",
+                reason: privateWordsName),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Your tasks and private words are gone, but I couldn't erase your notes just now. Please try Forget everything again in a moment.",
+                reason: privateWordsName),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Your tasks are gone, but I couldn't erase your notes or private words just now. Please try Forget everything again in a moment.",
+                reason: privateWordsName),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Gone. I no longer have it. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. You can turn it on again anytime.",
+                reason: privateWordsName),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Your private words are gone. To be sure of that I cleared the cloud setting too, so help from the cloud is off. I couldn't erase your notes just now. Please try Forget everything again in a moment.",
+                reason: privateWordsName),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Your tasks and private words are gone. To be sure of that I cleared the cloud setting too, so help from the cloud is off. I couldn't erase your notes just now. Please try Forget everything again in a moment.",
+                reason: privateWordsName),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "This stops any task still going, and removes every task, what you told me for it and any words you asked me to hide from this device. It can't be undone. Your notes aren't touched.",
+                reason: "CloudWords.forgetTasksAndWordsDetail, like TaskWords.forgetTasksDetail: \"from this device\" is "
+                    + "the honest limit of what is erased, local files only, whatever the model is."),
+        Allowed(file: "PebbleCore/Redactor.swift", literal: "[private]",
+                reason: "The mask that replaces a private word in the text that leaves. " + privateWordsName),
+        Allowed(file: "PebbleCore/Redactor.swift", literal: "hidden private word",
+                reason: "What VoiceOver says for the [private] mask. " + privateWordsName),
+        Allowed(file: "PebbleCore/Redactor.swift", literal: "private word",
+                reason: "The preview's count of hidden private words, one. " + privateWordsName),
+        Allowed(file: "PebbleCore/Redactor.swift", literal: "private words",
+                reason: "The preview's count of hidden private words, many. " + privateWordsName),
     ]
 
     /// True when `literal` in `file` is an allowed line, word for word.
@@ -82,6 +193,37 @@ enum DevicePromise {
         MemoryWords.forgetEverythingDetail,
         TaskWords.forgetTasksDetail,
         FeedWords.sampleNote(.mayLeaveDevice),
+        CloudWords.onDetail,
+        CloudWords.unavailable,
+        CloudWords.couldNotOpen,
+        CloudWords.privateDetail,
+        CloudWords.privatePlaceholder,
+        CloudWords.privateUnreadable,
+        CloudWords.privateNotSaved,
+        CloudWords.offButCleared,
+        CloudWords.previewTitle,
+        CloudWords.previewDetail,
+        CloudWords.staysHere,
+        CloudWords.notesUnreadable,
+        CloudWords.forgetEverythingDetail,
+        CloudWords.forgotNotesNotWords,
+        CloudWords.forgotNotesAndTasksNotWords,
+        CloudWords.forgotWordsNotNotes,
+        CloudWords.forgotTasksAndWordsNotNotes,
+        CloudWords.forgotTasksNotNotesOrWords,
+        CloudWords.forgotAndCloudOff,
+        CloudWords.forgotWordsAndCloudNotNotes,
+        CloudWords.forgotTasksAndWordsAndCloudNotNotes,
+        CloudWords.forgetTasksAndWordsDetail,
+        Redaction.Kind.privateWord.mask,
+        Redaction.Kind.privateWord.spoken,
+    ] + CloudWords.askPoints.filter { !found(in: $0).isEmpty }
+
+    /// Lines built at run time around an allowed literal, each with the
+    /// literal it is built from. What is built around it adds no phrase.
+    static let allowedBuiltLines: [(line: String, literal: String)] = [
+        (Redaction.Kind.privateWord.counted(1), "private word"),
+        (Redaction.Kind.privateWord.counted(2), "private words"),
     ]
 
     /// A literal is gated when it is the true branch of a ternary whose
@@ -155,6 +297,12 @@ struct DevicePromiseTests {
         for line in DevicePromise.allowedLines {
             #expect(DevicePromise.allowed.contains { line == $0.literal }, "no reason given for: \(line)")
         }
+        for built in DevicePromise.allowedBuiltLines {
+            #expect(DevicePromise.allowed.contains { built.literal == $0.literal }, "no reason given for: \(built.literal)")
+            #expect(built.line.contains(built.literal), "\(built.line) is not built from \(built.literal)")
+            let added = built.line.replacingOccurrences(of: built.literal, with: "")
+            #expect(DevicePromise.found(in: added).isEmpty, "\(built.line) adds a promise of its own")
+        }
     }
 
     /// Every line the copy lists hold: the gated lines on the device, the
@@ -165,7 +313,8 @@ struct DevicePromiseTests {
             + PrivacyPlaceTests.deviceLines(.mayLeaveDevice) + Self.sampleFeedWords
         #expect(lines.count > 100)
         for line in lines where !DevicePromise.found(in: line).isEmpty {
-            #expect(gated.contains(line) || DevicePromise.allowedLines.contains(line),
+            #expect(gated.contains(line) || DevicePromise.allowedLines.contains(line)
+                        || DevicePromise.allowedBuiltLines.contains { $0.line == line },
                     "promises \(DevicePromise.found(in: line)) without PrivacyPlace: \(line)")
         }
     }
@@ -185,6 +334,14 @@ struct DevicePromiseTests {
             if case .talk(let text) = item.action { words.append(text) }
             return words
         }
+    }
+
+    /// The line said when the cloud was turned off mid chat can't read the
+    /// next chat's place, so it promises nothing and needs no pass.
+    @Test func theTurnedOffLinePromisesNothing() {
+        #expect(DevicePromise.found(in: CloudWords.turnedOff).isEmpty)
+        #expect(!DevicePromise.allowedLines.contains(CloudWords.turnedOff))
+        #expect(!DevicePromise.allowed.contains { $0.literal == CloudWords.turnedOff })
     }
 
     /// The guard catches what it is for, and lets the right things by.

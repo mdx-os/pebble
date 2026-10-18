@@ -61,6 +61,14 @@ public struct Conversation: Sendable, Equatable {
         return next
     }
 
+    /// The conversation without the turn `id`, as when the person chose not
+    /// to send it. Later requests then never carry those words.
+    public func removingTurn(_ id: UUID) -> Conversation {
+        var next = self
+        next.turns.removeAll { $0.id == id }
+        return next
+    }
+
     /// Asks `model` to answer the turns so far and appends that reply.
     /// Words of crisis get a caring reply before any device check, so a
     /// remote model never blocks 988.

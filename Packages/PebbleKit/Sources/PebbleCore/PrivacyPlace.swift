@@ -8,10 +8,23 @@ import Foundation
 /// of its own that could drift. Copy that mentions the device takes this
 /// value and only makes the promise when it is `.onDevice`.
 ///
-/// Some models take a copy once, when they are made: `FeedModel.place`,
-/// `MemoryModel.place` and the chat's opening line. `HomeView` keys its
-/// screen on the model, so another model builds them all again and no copy
-/// goes stale. Anything new that keeps the place must be rebuilt the same way.
+/// The active model can change while the app runs: with help from the
+/// cloud on, each new chat gets the cloud model. So there are two readings,
+/// both from models and nothing else:
+/// - A chat reads its own model (`ChatController.privacyPlace`). Its opening
+///   and header are fixed with that chat, which keeps its model for life,
+///   so an on-device chat started before the cloud was turned on keeps its
+///   promise, and is never sent.
+/// - Every line outside a chat (memory, Today's sample note, the hello and
+///   the cloud setting) reads `all(_:)` of the open chat's place and the
+///   place of the model a new chat would get. With the cloud on, that is
+///   never `.onDevice`. `HomeView` works it out and pushes every change into
+///   `FeedModel.place` and `MemoryModel.place`, so no copy goes stale.
+///
+/// The model that runs here can change too. `HomeView` keys its screen on
+/// it, so another one builds the chat, `FeedModel` and `MemoryModel` again.
+/// Anything new that keeps the place must either follow the pushes above
+/// or be rebuilt the same way.
 public enum PrivacyPlace: Sendable, Equatable {
     /// The model runs here and nothing the person says leaves the device.
     case onDevice
@@ -25,4 +38,11 @@ public enum PrivacyPlace: Sendable, Equatable {
 
     /// True only when every word stays on this device.
     public var staysOnDevice: Bool { self == .onDevice }
+
+    /// `.onDevice` only when every place given is. A line read by more than
+    /// one chat, or by a chat and the next one, promises only what all of
+    /// them keep.
+    public static func all(_ places: PrivacyPlace...) -> PrivacyPlace {
+        PrivacyPlace(staysOnDevice: places.allSatisfy(\.staysOnDevice))
+    }
 }

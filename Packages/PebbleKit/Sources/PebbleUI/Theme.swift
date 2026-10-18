@@ -80,6 +80,12 @@ enum Theme {
     /// How strongly the primary ink tints a button that can't be pressed yet.
     static let disabledTint = 0.08
 
+    /// How strongly the accent marks what was taken out of a cloud preview,
+    /// such as `[name]`, behind the primary words on the payload card.
+    static func maskWash(_ scheme: ColorScheme) -> Double {
+        scheme == .dark ? 0.45 : 0.28
+    }
+
     /// A color for words that reads well in light and dark: `light` in
     /// light mode and `dark` in dark mode.
     struct Ink: ShapeStyle {
@@ -147,6 +153,12 @@ enum Theme {
         }
         // Words on the accent fill: the primary button, "Have a look", Send.
         pairs.append(TextPair(text: "onAccent", background: "accent", textColor: onAccentRGB, backgroundColor: accentRGB))
+        for (name, base) in bases {
+            let card = RGB.white.over(base, opacity: cardOpacity(scheme))
+            // A mask such as [name] in the cloud preview's payload card.
+            pairs.append(TextPair(text: "primary", background: "mask on the card on \(name)",
+                                  textColor: ink, backgroundColor: accentRGB.over(card, opacity: maskWash(scheme))))
+        }
         // White words a system control writes on its tint fill: the selected
         // sidebar row and a confirmation button (`DoneButton`).
         pairs.append(TextPair(text: "white", background: "tintFill", textColor: .white, backgroundColor: tintFill.rgb(scheme)))
