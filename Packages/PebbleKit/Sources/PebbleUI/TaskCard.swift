@@ -203,9 +203,11 @@ struct TaskCard: View {
 
     /// The wrap up's "I didn't ..." line, unless the closing line already
     /// says the one thing that was not done, and that it is that thing.
+    /// Told by the step's own mark, never by its words, so a change to how
+    /// a closing line reads can't bring the line back twice.
     func showsNotDone(_ wrapUp: TaskWrapUp) -> Bool {
-        guard let closingLine, wrapUp.notDone.count == 1 else { return true }
-        return !closingLine.hasSuffix("didn't \(wrapUp.notDone[0]).")
+        guard closingLine != nil, let undone = task.history.last?.undone else { return true }
+        return wrapUp.notDone != [undone]
     }
 
     // MARK: What it says

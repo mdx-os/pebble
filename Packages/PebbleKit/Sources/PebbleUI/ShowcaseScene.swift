@@ -198,8 +198,10 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     @MainActor
     static func liveAsks() -> (rule: AskFirst, engine: LocalFakeEngine, store: TaskStore) {
         if let liveAsk { return liveAsk }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("pebble-showcase-asks.json")
-        let store = TaskStore(fileURL: url)
+        let temporary = FileManager.default.temporaryDirectory
+        let store = TaskStore(fileURL: temporary.appendingPathComponent("showcase-asks.json"),
+                              forgetMarker: temporary.appendingPathComponent("showcase-asks-pending", isDirectory: true)
+                                  .appendingPathComponent("tasks-forgotten"))
         if !UserDefaults.standard.bool(forKey: keepAsksKey) { store.reset() }
         let rule = AskFirst.isolated()
         // Played to the moment the dentist search asks, so the question
@@ -269,6 +271,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         func post(_ nudge: QuestionNudge, after delay: TimeInterval) {}
         func remove(_ ids: [String]) {}
         func removeAll() {}
+        func forget() {}
         func onOpen(_ handler: @escaping @MainActor @Sendable (String) -> Void) {}
     }
 
@@ -516,7 +519,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     }
 
     static func sampleMemory() -> MemoryStore {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("pebble-showcase-memory.json")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("showcase-memory.json")
         let store = MemoryStore(fileURL: url)
         try? store.forgetEverything()
         let day: TimeInterval = 86_400

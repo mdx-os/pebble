@@ -407,7 +407,7 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
                              approvedAt: phase == .approved ? run.approvedAt : nil,
                              approvedAction: phase == .approved ? run.approvedAction.map(SavedAction.init) : nil,
                              kept: run.kept, notDone: run.notDone,
-                             history: run.task.history.map { .init(text: $0.text, mark: $0.mark, at: $0.at) },
+                             history: run.task.history.map { .init(text: $0.text, mark: $0.mark, at: $0.at, undone: $0.undone) },
                              startedAt: run.task.startedAt)
         }
     }
@@ -425,7 +425,7 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
                     task: AgentTask(id: entry.id, title: script.title, step: step.text,
                                     progress: script.determinate ? .fraction(Double(entry.step) / Double(script.steps.count))
                                         : .indeterminate,
-                                    history: entry.history.map { TaskStep($0.text, mark: $0.mark, at: $0.at) },
+                                    history: entry.history.map { TaskStep($0.text, mark: $0.mark, at: $0.at, undone: $0.undone) },
                                     startedAt: entry.startedAt, updatedAt: date),
                     script: script, index: entry.step, phase: .working(attempt: 0, since: elapsed),
                     stallsLeft: script.steps.map { if case .work(let stalls) = $0.kind { stalls } else { 0 } },
@@ -440,7 +440,10 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
                     run.task.step = TaskWords.stuck
                 case .waiting:
                     // Asked again with the deadline it had, or, once that has
-                    // passed or the clock went back, ended as a timeout.
+                    // passed or the clock went back, ended as a timeout. The
+                    // deadline is the saved one, the action today's script's:
+                    // a step an update changed inherits the old time left,
+                    // and still needs a fresh yes.
                     let age = entry.askedAt.map { now.timeIntervalSince($0) } ?? .infinity
                     if case .ask = step.kind, age >= 0, age <= window {
                         run.askedAgo = age
@@ -612,7 +615,7 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
         let step = run.script.steps[run.index]
         run.task.question = nil
         run.notDone.append(step.todo)
-        run.task.record(TaskStep(line, mark: .skipped, at: date))
+        run.task.record(TaskStep(line, mark: .skipped, at: date, undone: step.todo))
         run.index += 1
         begin(&run)
     }

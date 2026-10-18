@@ -152,13 +152,18 @@ public struct TaskStep: Sendable, Hashable {
     public let text: String
     public let mark: Mark
     public let at: Date
+    /// For a step left undone, what it would have done, such as "hold a
+    /// Saturday visit", so a card can tell this line already says so
+    /// without reading its words.
+    public let undone: String?
     /// Where the step falls in its task, from zero. Set by `AgentTask.record`.
     public private(set) var number: Int
 
-    public init(_ text: String, mark: Mark, at: Date) {
+    public init(_ text: String, mark: Mark, at: Date, undone: String? = nil) {
         self.text = text
         self.mark = mark
         self.at = at
+        self.undone = undone
         self.number = 0
     }
 

@@ -294,7 +294,14 @@ struct NeedsYouFlowTests {
         let json = String(decoding: try JSONEncoder().encode(honest), as: UTF8.self)
         for tampered in [json.replacingOccurrences(of: "Saturday at 10:30", with: "Saturday at 10:30\\u202E"),
                          json.replacingOccurrences(of: "mapledental.example", with: "mapledental.example\\u200B"),
-                         json.replacingOccurrences(of: #""kind":"sharePersonalInfo""#, with: #""kind":"purchase""#)] {
+                         json.replacingOccurrences(of: #""kind":"sharePersonalInfo""#, with: #""kind":"purchase""#),
+                         // The kind kept, the recipient's id changed.
+                         json.replacingOccurrences(of: #""recipientID":"\#(honest.recipientID)""#,
+                                                   with: #""recipientID":"\#(honest.recipientID)​""#),
+                         json.replacingOccurrences(of: #""recipientID":"\#(honest.recipientID)""#,
+                                                   with: #""recipientID":"""#),
+                         json.replacingOccurrences(of: #""recipientName":"Maple Dental""#,
+                                                   with: #""recipientName":"Maple‮Dental""#)] {
             #expect(tampered != json)
             let action = try JSONDecoder().decode(SavedAction.self, from: Data(tampered.utf8))
             #expect(action.action == nil, "\(tampered)")
@@ -392,20 +399,22 @@ struct NeedsYouFlowTests {
     // MARK: The store
 
     @Test func theFileOutlastsTheStoreAndForgetLeavesOnlyTheNudgeChoice() throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tasks-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: url) }
+        let folder = try Self.folder()
+        let marker = try Self.marker()
+        defer { Self.cleanUp(folder, marker.deletingLastPathComponent()) }
+        let url = folder.appendingPathComponent("tasks.json")
         let rule = AskFirst.isolated()
         let (engine, task) = Self.atQuestion(rule: rule)
         _ = engine.resume(task.id, with: try Self.yes(try #require(task.question), rule: rule))
         engine.advance(by: 4)
-        let store = TaskStore(fileURL: url)
+        let store = TaskStore(fileURL: url, forgetMarker: marker)
         store.keep(engine)
         store.setNudges(.declined)
-        let again = TaskStore(fileURL: url)
+        let again = TaskStore(fileURL: url, forgetMarker: marker)
         #expect(again.receipts == store.receipts)
         #expect(again.nudges == .declined)
         again.forget()
-        let after = TaskStore(fileURL: url)
+        let after = TaskStore(fileURL: url, forgetMarker: marker)
         #expect(after.receipts.isEmpty)
         #expect(after.tasks.isEmpty)
         #expect(after.nudges == .declined)
@@ -413,31 +422,46 @@ struct NeedsYouFlowTests {
         #expect(!FileManager.default.fileExists(atPath: url.path), "nothing to keep, so no file")
     }
 
-    /// A file that is read but can't be understood is moved aside, never
-    /// written over, and never stops what happens now from being kept: a
-    /// yes saved after it is on disk.
-    @Test func aFileThatCannotBeDecodedIsMovedAsideAndTheStoreGoesOn() throws {
+    /// A file that is read but can't be understood is deleted: nothing
+    /// could ever read it back, and the person couldn't see or clear what
+    /// it held. It never stops what happens now from being kept: a yes
+    /// saved after it is on disk.
+    @Test func aFileThatCannotBeDecodedIsDeletedAndTheStoreGoesOn() throws {
         let folder = try Self.folder()
-        defer { try? FileManager.default.removeItem(at: folder) }
+        let marker = try Self.marker()
+        defer { Self.cleanUp(folder, marker.deletingLastPathComponent()) }
         let url = folder.appendingPathComponent("tasks.json")
-        try Data("not json".utf8).write(to: url)
-        let store = TaskStore(fileURL: url)
-        #expect(try Data(contentsOf: folder.appendingPathComponent(".tasks.json.unreadable")) == Data("not json".utf8))
+        try Data("not json, Maple Dental".utf8).write(to: url)
+        let store = TaskStore(fileURL: url, forgetMarker: marker)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty, "gone, not moved aside")
+        #expect(!FileManager.default.fileExists(atPath: marker.path), "nothing is owed")
         let rule = AskFirst.isolated()
         let (engine, task) = Self.atQuestion(rule: rule)
         _ = engine.resume(task.id, with: try Self.yes(try #require(task.question), rule: rule))
         store.keep(engine)
         store.setNudges(.allowed)
-        let next = TaskStore(fileURL: url)
+        let next = TaskStore(fileURL: url, forgetMarker: marker)
         #expect(next.tasks.map(\.phase) == [.approved], "the yes is on disk")
         #expect(next.nudges == .allowed)
-        // Forget everything takes the one moved aside too, and keeps only
-        // the nudge choice.
-        next.forget()
         #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["tasks.json"])
-        let after = TaskStore(fileURL: url)
-        #expect(after.tasks.isEmpty)
-        #expect(after.nudges == .allowed)
+    }
+
+    /// A file that can't be understood and won't go is owed a forget, so
+    /// it is never read and goes as soon as it can.
+    @Test(.enabled(if: canLockFiles, "file permissions don't stop root"))
+    func aFileThatCannotBeDecodedAndWontGoIsOwedAForget() throws {
+        let folder = try Self.folder()
+        let marker = try Self.marker()
+        defer { Self.cleanUp(folder, marker.deletingLastPathComponent()) }
+        let url = folder.appendingPathComponent("tasks.json")
+        try Data("not json".utf8).write(to: url)
+        try Self.setWritable(folder: folder, false)
+        let store = TaskStore(fileURL: url, forgetMarker: marker)
+        #expect(FileManager.default.fileExists(atPath: marker.path))
+        try Self.setWritable(folder: folder, true)
+        #expect(store.receipts.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
     }
 
     /// A store file in a folder of its own, holding one receipt and a
@@ -446,7 +470,7 @@ struct NeedsYouFlowTests {
     private static func earlierFile() throws -> (folder: URL, url: URL, marker: URL, receipt: Receipt) {
         let folder = try folder()
         let url = folder.appendingPathComponent("tasks.json")
-        let marker = try Self.folder().appendingPathComponent("tasks-forgotten")
+        let marker = try Self.marker()
         let rule = AskFirst.isolated()
         let (engine, task) = atQuestion(rule: rule)
         _ = engine.resume(task.id, with: try yes(try #require(task.question), rule: rule))
@@ -461,6 +485,12 @@ struct NeedsYouFlowTests {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("tasks-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         return folder
+    }
+
+    /// Where a forget still owed is written down, in a temporary folder of
+    /// its own, so no test shares one with another or with the app.
+    private static func marker() throws -> URL {
+        try folder().appendingPathComponent("tasks-forgotten")
     }
 
     private static func setReadable(_ url: URL, _ readable: Bool) throws {
@@ -506,15 +536,16 @@ struct NeedsYouFlowTests {
 
     @Test func forgetRemovesAFileThatCouldNotBeDecoded() throws {
         let folder = try Self.folder()
-        defer { try? FileManager.default.removeItem(at: folder) }
+        let marker = try Self.marker()
+        defer { Self.cleanUp(folder, marker.deletingLastPathComponent()) }
         let url = folder.appendingPathComponent("tasks.json")
         // As a later version might write it: a receipt this one can't read.
         try Data(#"{"tasks":[],"receipts":[{"kind":"teleport"}],"nudges":"allowed"}"#.utf8).write(to: url)
         try Data("half a write".utf8).write(to: folder.appendingPathComponent(".tasks.json.next"))
-        let store = TaskStore(fileURL: url)
+        let store = TaskStore(fileURL: url, forgetMarker: marker)
         store.forget()
         #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
-        #expect(TaskStore(fileURL: url).receipts.isEmpty)
+        #expect(TaskStore(fileURL: url, forgetMarker: marker).receipts.isEmpty)
     }
 
     /// PERMANENT GUARD. When the file can't even be removed, it is still
@@ -591,21 +622,48 @@ struct NeedsYouFlowTests {
         #expect(store.nudges == .allowed)
     }
 
-    @Test func theForgetMarkerHasAFolderOfItsOwn() {
+    /// A forget an earlier launch still owed is carried out by a store that
+    /// couldn't open its folder, as soon as it opens.
+    @Test func aStoreThatCouldNotOpenItsFolderCarriesOutAForgetStillOwed() throws {
+        let (folder, url, marker, _) = try Self.earlierFile()
+        defer { Self.cleanUp(folder, marker.deletingLastPathComponent()) }
+        try Data().write(to: marker)
+        _ = TaskStore(forgetOnly: url, forgetMarker: marker)
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+    }
+
+    /// The file lives in the app's own folder, named by whoever opens the
+    /// store, never by a name written in the code. The marker has a folder
+    /// of its own beside the file's.
+    @Test func theStoreLivesInTheAppsFolderAndTheMarkerInOneOfItsOwn() {
         let base = URL(fileURLWithPath: "/tmp/support")
-        let (file, marker) = TaskStore.location(base: base)
-        #expect(file.path == "/tmp/support/pebble/tasks/tasks.json")
+        let (file, marker) = TaskStore.location(base: base, app: "com.example.app")
+        let root = base.appendingPathComponent("com.example.app")
+        #expect(file.deletingLastPathComponent().deletingLastPathComponent().path == root.path)
+        #expect(marker.deletingLastPathComponent().deletingLastPathComponent().path == root.path)
         #expect(marker.deletingLastPathComponent() != file.deletingLastPathComponent())
         #expect(!marker.path.hasPrefix(file.deletingLastPathComponent().path))
+        #expect(file.lastPathComponent == "tasks.json")
+        let other = TaskStore.location(base: base, app: "org.example.other")
+        #expect(other.file != file, "another app's folder is another place")
+    }
+
+    /// PERMANENT GUARD. The folder is named by the app's bundle, so no name
+    /// the code spells, the product's or the codename, is written on disk.
+    @Test func theAppsFolderIsItsBundleIdentifier() {
+        #expect(TaskStore.appFolder(.main) == Bundle.main.bundleIdentifier ?? "kept-tasks")
+        let empty = Bundle(path: FileManager.default.temporaryDirectory.path)
+        #expect(empty.map { TaskStore.appFolder($0) } == "kept-tasks")
     }
 
     /// A file read late never takes back what changed since launch.
     @Test(.enabled(if: canLockFiles, "file permissions don't stop root"))
     func aLateReadKeepsWhatChangedSinceLaunch() throws {
-        let (folder, url, _, earlier) = try Self.earlierFile()
-        defer { try? FileManager.default.removeItem(at: folder) }
+        let (folder, url, marker, earlier) = try Self.earlierFile()
+        defer { Self.cleanUp(folder, marker.deletingLastPathComponent()) }
         try Self.setReadable(url, false)
-        let store = TaskStore(fileURL: url)
+        let store = TaskStore(fileURL: url, forgetMarker: marker)
         let (engine, task) = Self.atQuestion(rule: .isolated(), origin: Self.base + 1000)
         store.keep(engine)
         store.setNudges(.allowed)
@@ -613,10 +671,109 @@ struct NeedsYouFlowTests {
         #expect(store.tasks.map(\.id) == [task.id], "the task kept now, not the file's")
         #expect(store.nudges == .allowed)
         #expect(store.receipts.map(\.id) == [earlier.id], "the earlier receipt is still kept")
-        let next = TaskStore(fileURL: url)
+        let next = TaskStore(fileURL: url, forgetMarker: marker)
         #expect(next.tasks.map(\.id) == [task.id])
         #expect(next.nudges == .allowed)
         #expect(next.receipts.map(\.id) == [earlier.id])
+    }
+
+    /// PERMANENT GUARD. A file read late never drops the tasks it saved,
+    /// even after a `keep` from before the read that knew none of them. An
+    /// approved step under way still ends saying it may be done, with its
+    /// receipt, and is never run again.
+    @Test(.enabled(if: canLockFiles, "file permissions don't stop root"))
+    func aLateReadNeverDropsSavedTasks() throws {
+        let folder = try Self.folder()
+        let marker = try Self.marker()
+        defer { Self.cleanUp(folder, marker.deletingLastPathComponent()) }
+        let url = folder.appendingPathComponent("tasks.json")
+        let saved = try Self.savedYes()
+        // As an earlier launch left it.
+        try JSONEncoder().encode(TaskStore.State(tasks: [saved])).write(to: url)
+        try Self.setReadable(url, false)
+
+        // Launched before the first unlock: nothing can be read.
+        let store = TaskStore(fileURL: url, forgetMarker: marker)
+        let heard = Heard()
+        _ = store.observe { heard.add() }
+        let engine = LocalFakeEngine(rule: .isolated(), origin: Self.base + 43)
+        store.restore(into: engine, now: Self.base + 43)
+        #expect(engine.tasks.isEmpty)
+        store.keep(engine, now: Self.base + 43)
+        let before = heard.count
+
+        // Unlocked. The read brings the task in, and says so.
+        try Self.setReadable(url, true)
+        #expect(store.tasks.map(\.phase) == [.approved])
+        #expect(store.hasLateTasks)
+        #expect(heard.count > before, "watchers hear that it arrived")
+        // The next keep, which knows nothing of it, picks it up first.
+        store.keep(engine, now: Self.base + 44)
+        #expect(!store.hasLateTasks)
+        let back = try #require(engine.task(saved.id))
+        #expect(back.step == TaskWords.interrupted)
+        #expect(back.wrapUp?.underway == "hold a Saturday visit")
+        #expect(store.receipts.map(\.outcome) == [.mayBeDone])
+        #expect(store.tasks.isEmpty, "ended, so nothing left to pick up")
+        let next = TaskStore(fileURL: url, forgetMarker: marker)
+        #expect(next.receipts.map(\.outcome) == [.mayBeDone])
+    }
+
+    /// PERMANENT GUARD. Clearing the last receipt when its file won't go
+    /// is owed a forget, written down, so the receipt never comes back,
+    /// even after the app is killed.
+    @Test(.enabled(if: canLockFiles, "file permissions don't stop root"))
+    func aReceiptClearedWhenItsFileWontGoNeverComesBack() throws {
+        let folder = try Self.folder()
+        let marker = try Self.marker()
+        defer { Self.cleanUp(folder, marker.deletingLastPathComponent()) }
+        let url = folder.appendingPathComponent("tasks.json")
+        let store = TaskStore(fileURL: url, forgetMarker: marker)
+        let rule = AskFirst.isolated()
+        let (engine, task) = Self.atQuestion(rule: rule)
+        _ = engine.resume(task.id, with: try Self.yes(try #require(task.question), rule: rule))
+        engine.advance(by: 4)
+        store.keep(engine)
+        let receipt = try #require(store.receipts.first)
+        try Self.setWritable(folder: folder, false)
+        #expect(store.clearReceipt(receipt.id))
+        #expect(FileManager.default.fileExists(atPath: url.path), "the folder won't let it go")
+        #expect(FileManager.default.fileExists(atPath: marker.path), "the clear is written down")
+        // The app is killed. The next launch never reads it.
+        let relaunched = TaskStore(fileURL: url, forgetMarker: marker)
+        #expect(relaunched.receipts.isEmpty)
+        try Self.setWritable(folder: folder, true)
+        #expect(relaunched.receipts.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+        #expect(TaskStore(fileURL: url, forgetMarker: marker).receipts.isEmpty)
+    }
+
+    /// PERMANENT GUARD. A rewrite that fails after a clear stays owed and
+    /// is tried again at the next look, so the cleared receipt is gone from
+    /// the file as soon as the file can be written.
+    @Test(.enabled(if: canLockFiles, "file permissions don't stop root"))
+    func aClearThatCouldNotBeWrittenIsWrittenAtTheNextLook() throws {
+        let folder = try Self.folder()
+        let marker = try Self.marker()
+        defer { Self.cleanUp(folder, marker.deletingLastPathComponent()) }
+        let url = folder.appendingPathComponent("tasks.json")
+        let store = TaskStore(fileURL: url, forgetMarker: marker)
+        for _ in 0..<2 {
+            let rule = AskFirst.isolated()
+            let (engine, task) = Self.atQuestion(rule: rule)
+            _ = engine.resume(task.id, with: try Self.yes(try #require(task.question), rule: rule))
+            engine.advance(by: 4)
+            store.keep(engine)
+        }
+        let receipts = store.receipts
+        #expect(receipts.count == 2)
+        try Self.setWritable(folder: folder, false)
+        #expect(store.clearReceipt(receipts[0].id))
+        #expect(TaskStore(fileURL: url, forgetMarker: marker).receipts.count == 2, "not written yet")
+        try Self.setWritable(folder: folder, true)
+        #expect(store.receipts.map(\.id) == [receipts[1].id])
+        #expect(TaskStore(fileURL: url, forgetMarker: marker).receipts.map(\.id) == [receipts[1].id])
     }
 
     @Test func aReceiptClearsAndTheOldestGoPastTheLimit() throws {
@@ -679,11 +836,19 @@ struct NeedsYouFlowTests {
         for line in ReceiptWords.all + NudgeWords.all + [TaskWords.interrupted] {
             #expect(!line.contains("!"), "exclamation in: \(line)")
             for avoid in ["retry", "error", "failed", "invalid", "timeout", "request", "N/A", "notification",
-                          "permission", "authoriz", "record"] {
+                          "alert", "permission", "authoriz", "record"] {
                 #expect(!line.lowercased().contains(avoid.lowercased()), "\(avoid) in: \(line)")
             }
         }
     }
+}
+
+/// Counts calls from any thread.
+private final class Heard: @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls = 0
+    var count: Int { lock.lock(); defer { lock.unlock() }; return calls }
+    func add() { lock.lock(); calls += 1; lock.unlock() }
 }
 
 extension ReceiptWords {
@@ -696,6 +861,6 @@ extension ReceiptWords {
 extension NudgeWords {
     /// Every nudge line a person can see or hear, the lock screen's included.
     static var all: [String] {
-        [question("Pip"), offerTitle, offerDetail, allowTitle, declineTitle, off]
+        [question("Pip"), on, offerTitle, offerDetail, allowTitle, declineTitle, off]
     }
 }

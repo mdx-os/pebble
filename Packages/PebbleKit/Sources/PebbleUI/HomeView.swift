@@ -339,12 +339,13 @@ struct HomeScreen: View {
         // A waiting cloud preview covers the screen, so no question is
         // nudged until it has its answer.
         .onChange(of: previewWaiting, initial: true) { _, waiting in feed.preview(waiting: waiting) }
-        // A nudge opened: Today, with its card in view. A question or a
-        // cloud preview already up stays up; any other sheet makes way.
+        // A nudge opened: Today, with its card in view, in the window in
+        // front. A question or a cloud preview already up stays up, and the
+        // nudge is let go; any other sheet makes way.
         .background {
             if let flow = feed.flow {
                 NudgeOpened(flow: flow) {
-                    guard finished, !cover.waitsForAnAnswer else { return }
+                    guard flow.takesOpened(in: feed.window, canShow: finished && !cover.waitsForAnAnswer) else { return }
                     if showsShortcuts { showsShortcuts = false }
                     if feed.reading != nil { feed.reading = nil }
                     if section != .today { go(.today) }
@@ -595,7 +596,7 @@ struct HomeScreen: View {
             // step with the cloud setting and the open chat.
             MemoryView(model: HomeView.memoryModel(store: memory, place: surfacePlace, cloud: cloud,
                                                    onForgetEverything: { feed.forgetTasks() }),
-                       place: surfacePlace, cloud: cloud)
+                       place: surfacePlace, cloud: cloud, holdsMore: feed.hasSomethingToForget)
         } else {
             // The store couldn't be opened. Say so rather than hide memory.
             // Tasks can still be forgotten here, since Forget everything isn't.
@@ -613,7 +614,7 @@ struct HomeScreen: View {
             // Private words kept from an earlier launch go with the tasks,
             // through `CloudHelp.eraseWordsWithoutNotes`, and the line says
             // whether they could.
-            MemoryUnavailableView(hasTasks: feed.hasTasks, forgotten: feed.tasksForgotten,
+            MemoryUnavailableView(hasTasks: feed.hasSomethingToForget, forgotten: feed.tasksForgotten,
                                   underway: feed.forgotUnderway, wordsErased: wordsErased,
                                   erasesWords: cloud != nil, onForgetTasks: forgetTasksWithoutNotes)
         }

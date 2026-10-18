@@ -41,15 +41,26 @@ final class NeedsYouFlow: ObservableObject {
     private let agentName: () -> String
     private let now: () -> Date
 
-    private static var made: [ObjectIdentifier: NeedsYouFlow] = [:]
+    /// A flow made by `forApp`, held weakly: the windows that use it keep
+    /// it, and it goes when the last of them does.
+    private struct Made {
+        weak var flow: NeedsYouFlow?
+    }
+
+    /// Every flow `forApp` made, by the store it was made for. A flow holds
+    /// its store, so while an entry's flow lives no other store can take
+    /// that store's identity.
+    private static var made: [ObjectIdentifier: Made] = [:]
 
     /// The app's one flow for `store`. A second window gets the same one,
-    /// so it never takes away the first one's nudges or its taps.
+    /// so it never takes away the first one's nudges or its taps. Another
+    /// store, as in a test, gets a flow of its own.
     static func forApp(store: TaskStore, notifier: (any QuestionNotifying)?,
                        agentName: @escaping () -> String) -> NeedsYouFlow {
-        if let flow = made[ObjectIdentifier(store)] { return flow }
+        made = made.filter { $0.value.flow != nil }
+        if let flow = made[ObjectIdentifier(store)]?.flow, flow.store === store { return flow }
         let flow = NeedsYouFlow(store: store, notifier: notifier, agentName: agentName)
-        made[ObjectIdentifier(store)] = flow
+        made[ObjectIdentifier(store)] = Made(flow: flow)
         return flow
     }
 
@@ -85,8 +96,13 @@ final class NeedsYouFlow: ObservableObject {
         var previewWaiting = false
     }
 
-    /// Every window, by its Today's model.
-    private var windows: [ObjectIdentifier: Window] = [:]
+    /// Every window, by its Today's token. A token is never used twice, so
+    /// a window that closed late can't take another's place.
+    private var windows: [UUID: Window] = [:]
+    /// The window that came to the front last. Only it acts on a nudge.
+    private var front: UUID?
+    /// What each window does when Forget everything runs in any of them.
+    private var forgetHooks: [UUID: @MainActor () -> Void] = [:]
     /// Some window is in front, so a waiting question is already on screen.
     var isActive: Bool { windows.isEmpty ? soloActive : windows.values.contains(where: \.active) }
     /// In front or not, before any window has said.
@@ -99,7 +115,7 @@ final class NeedsYouFlow: ObservableObject {
     /// A cloud preview waits for its answer in some window.
     private var previewWaiting: Bool { windows.values.contains(where: \.previewWaiting) }
     /// Every question nudged already, so none is nudged twice.
-    private var told: Set<String> = []
+    private(set) var told: Set<String> = []
     /// Tasks whose question was pinned this launch, so a nudge for one can
     /// bring its card into view. A tap for any other task does nothing.
     private var knownTasks: Set<String> = []
@@ -125,7 +141,7 @@ final class NeedsYouFlow: ObservableObject {
     /// The tasks whose questions are pinned in `window`'s Needs you, asked
     /// through `rule`. Only these are nudged: a question from another rule
     /// is never pinned, so never nudged.
-    func pinned(_ tasks: [AgentTask], rule: AskFirst, from window: ObjectIdentifier) {
+    func pinned(_ tasks: [AgentTask], rule: AskFirst, from window: UUID) {
         windows[window, default: Window(active: soloActive)].waiting = tasks.compactMap { task in
             task.question.map { Waiting(nudge: QuestionNudge(question: $0, taskID: task.id, agentName: agentName()),
                                         question: $0, rule: rule) }
@@ -134,14 +150,41 @@ final class NeedsYouFlow: ObservableObject {
     }
 
     /// A window closed. What it had pinned is no longer on any screen.
-    func closed(_ window: ObjectIdentifier) {
+    func closed(_ window: UUID) {
+        forgetHooks[window] = nil
+        if front == window { front = nil }
         guard windows.removeValue(forKey: window) != nil else { return }
         update()
     }
 
+    /// Runs `hook` in `window` whenever Forget everything runs, from any
+    /// window, so none keeps what another forgot.
+    func onForget(in window: UUID, _ hook: @escaping @MainActor () -> Void) {
+        forgetHooks[window] = hook
+    }
+
+    /// True when `window` should act on a nudge just opened: it is the one
+    /// that came to the front last, or no window has said.
+    func opens(in window: UUID) -> Bool {
+        front == nil || front == window
+    }
+
+    /// Whether `window` brings a nudge just opened into view. Only the
+    /// window in front does. One that can't show it now, as during the
+    /// first run or while a cloud preview waits, lets it go, so Today never
+    /// jumps to the card much later.
+    func takesOpened(in window: UUID, canShow: Bool) -> Bool {
+        guard focus != nil, opens(in: window) else { return false }
+        guard canShow else {
+            focus = nil
+            return false
+        }
+        return true
+    }
+
     /// A cloud preview in `window` started or stopped waiting for its
     /// answer. Once none waits, a question may nudge again.
-    func preview(waiting: Bool, from window: ObjectIdentifier) {
+    func preview(waiting: Bool, from window: UUID) {
         guard windows[window]?.previewWaiting != waiting else { return }
         windows[window, default: Window(active: soloActive)].previewWaiting = waiting
         postIfAway()
@@ -171,7 +214,9 @@ final class NeedsYouFlow: ObservableObject {
             let granted = await notifier.requestPermission()
             guard let self else { return }
             self.store.setNudges(granted ? .allowed : .denied)
-            if !granted { self.sayNudgesAreOff() }
+            // The offer has gone from under VoiceOver either way, so a line
+            // is said either way.
+            if granted { self.announce(NudgeWords.on) } else { self.sayNudgesAreOff() }
             self.asking = nil
             self.postIfAway()
         }
@@ -202,9 +247,10 @@ final class NeedsYouFlow: ObservableObject {
     /// go, and one taken away before it showed may nudge the next time.
     /// Once every window is away, each waiting question gets one, after a
     /// short wait.
-    func scene(isActive active: Bool, from window: ObjectIdentifier? = nil) {
+    func scene(isActive active: Bool, from window: UUID? = nil) {
         if let window {
             windows[window, default: Window()].active = active
+            if active { front = window } else if front == window { front = nil }
         } else {
             soloActive = active
             for id in windows.keys { windows[id]?.active = active }
@@ -253,12 +299,17 @@ final class NeedsYouFlow: ObservableObject {
     }
 
     /// Forget everything: receipts and saved tasks go, and so does every
-    /// nudge about a question, from this launch or before.
+    /// nudge about a question, from this launch or before, and a nudge
+    /// opened and not yet handed over. Every window is told, so none keeps
+    /// what another forgot.
     func forget() {
-        notifier?.removeAll()
+        notifier?.forget()
         posted = [:]
+        told = []
         knownTasks = []
+        focus = nil
         store.forget()
+        for hook in forgetHooks.values { hook() }
     }
 
     private func postIfAway() {
@@ -340,6 +391,7 @@ public final class LocalQuestionNotifier: NSObject, QuestionNotifying, UNUserNot
     }
 
     public func post(_ nudge: QuestionNudge, after delay: TimeInterval) {
+        guard installed else { return }
         let trigger = delay > 0 ? UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false) : nil
         let request = UNNotificationRequest(identifier: nudge.id, content: Self.content(for: nudge), trigger: trigger)
         let round = currentRound
@@ -374,14 +426,19 @@ public final class LocalQuestionNotifier: NSObject, QuestionNotifying, UNUserNot
     }
 
     public func remove(_ ids: [String]) {
+        guard installed else { return }
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: ids)
         center.removeDeliveredNotifications(withIdentifiers: ids)
     }
 
+    /// Takes away both kinds, the ones still to come and the ones shown,
+    /// and only in the questions' thread: anything else the app may show
+    /// stays.
     public func removeAll() {
         // Only the app's own notifier, made the delegate at launch, has a
         // notification center; anywhere else, as in a test, there is none.
+        // The same goes for `post` and `remove`.
         guard installed else { return }
         lock.lock()
         round += 1
@@ -396,13 +453,29 @@ public final class LocalQuestionNotifier: NSObject, QuestionNotifying, UNUserNot
         }
     }
 
+    public func forget() {
+        lock.lock()
+        waitingOpen = nil
+        lock.unlock()
+        removeAll()
+    }
+
+    /// The hand over of a nudge opened before anything listened, while it
+    /// is on its way. Nil when nothing was waiting. Tests wait on it.
+    var handOver: Task<Void, Never>? {
+        lock.lock()
+        defer { lock.unlock() }
+        return handingOver
+    }
+    private var handingOver: Task<Void, Never>?
+
     public func onOpen(_ handler: @escaping @MainActor @Sendable (String) -> Void) {
         lock.lock()
         self.handler = handler
         let waiting = waitingOpen
         waitingOpen = nil
+        handingOver = waiting.map { waiting in Task { @MainActor in handler(waiting) } }
         lock.unlock()
-        if let waiting { Task { @MainActor in handler(waiting) } }
     }
 
     /// The task a nudge's tap opens, or nil when it isn't one of ours.
