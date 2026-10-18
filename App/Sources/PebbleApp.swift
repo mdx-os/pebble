@@ -14,9 +14,10 @@ struct PebbleApp: App {
     /// Getting the on-device model, from the memory screen. Nil if its
     /// folder can't be found.
     private let modelSetup: OnDeviceModelSetup?
-    /// Stops on-device replies when the app goes to the background on
-    /// iPhone and iPad. Follows every window together, so one window going
-    /// back doesn't stop a reply in another still in front.
+    /// Stops on-device replies when the last window leaves the active state
+    /// on iPhone and iPad, and waits until the graphics chip is idle before
+    /// the background callback returns. One window going back doesn't stop
+    /// a reply in another still active.
     private let foreground = OnDeviceForeground()
     @Environment(\.scenePhase) private var scenePhase
     /// The one notes store, shared by the memory screen and the cloud
@@ -92,6 +93,7 @@ struct PebbleApp: App {
         tasks = wiring.tasks
         background = wiring.service
         background.start()
+        foreground.watchSystemScenes()
     }
 
     var body: some Scene {

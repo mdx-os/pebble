@@ -188,7 +188,9 @@ actor MLXGenerator: OnDeviceGenerating {
     }
 
     /// Reads the prompt and generates the reply. When cancelled, stops
-    /// taking new tokens and waits for the model's last work to end.
+    /// taking new tokens. `TokenIterator` can throw while reading the prompt,
+    /// before its last `eval` and before a generation task exists. The runner
+    /// synchronizes the graphics chip after this returns, including that throw.
     private static func generate(_ lines: [OnDeviceTranscriptLine], context: ModelContext) async throws -> String {
         let input = try await context.processor.prepare(input: UserInput(chat: messages(for: lines)))
         try Task.checkCancellation()

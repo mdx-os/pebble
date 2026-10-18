@@ -72,7 +72,12 @@ let package = Package(
         .target(name: "TestScratch", path: "Tests/TestScratch"),
         .testTarget(name: "PebbleCoreTests", dependencies: ["PebbleCore", "SourceScan", "TestScratch"]),
         .testTarget(name: "PebblePulseTests", dependencies: ["PebblePulse", "PebbleCore"]),
-        .testTarget(name: "PebbleModelTests", dependencies: ["PebbleModel", "PebbleCore"]),
+        .testTarget(name: "PebbleModelTests", dependencies: [
+            "PebbleModel",
+            "PebbleCore",
+            .product(name: "MLX", package: "mlx-swift"),
+            .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+        ]),
         .testTarget(name: "PebbleBackgroundTests",
                     dependencies: ["PebbleBackground", "PebbleCore", "SourceScan", "TestScratch"]),
         .testTarget(name: "PebbleUITests",
