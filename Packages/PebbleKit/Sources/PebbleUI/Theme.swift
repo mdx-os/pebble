@@ -16,51 +16,158 @@ enum Theme {
     /// each about as wide as a phone.
     static let feedWidth: CGFloat = 880
 
-    /// The warm accent used for primary actions.
-    static let accent = Color(red: accentRGB.red, green: accentRGB.green, blue: accentRGB.blue)
+    typealias RGB = Contrast.RGB
+
+    /// The warm brand accent, for fills, strokes and the washes below. Never
+    /// for words: on a light card it reads at about 2.4 to 1. Words in the
+    /// accent's warmth use `accentText`. `ContrastGuardTests` checks both.
+    static let accent = accentRGB.color
     static let accentRGB = RGB(red: 0.96, green: 0.52, blue: 0.29)
+
+    /// The accent for a symbol beside words, such as a card's kind icon.
+    /// Only ever on an `Image`; `ContrastGuardTests` checks.
+    ///
+    /// This is the raw accent, about 2.4 to 1 on a light card. That is fine
+    /// while the symbol is decoration next to words that say the same thing.
+    /// A symbol that carries meaning on its own needs 3 to 1 (WCAG 1.4.11),
+    /// so give it a deeper color, such as `accentText`, rather than this.
+    static let accentSymbol = accent
+
+    /// Words in the accent's warmth, such as "Open" on a card: a deeper
+    /// orange in light and a lighter one in dark, so they clear 4.5 to 1 on
+    /// the backdrop, the cards and the accent wash.
+    static let accentText = Ink(light: RGB(0.66, 0.29, 0.07), dark: RGB(0.98, 0.64, 0.44))
+
+    /// Quieter words, such as times and details. The system's secondary
+    /// gray reads at about 3.5 to 1 on white, under the 4.5 small text
+    /// needs, so this one is a little deeper in light.
+    static let secondaryText = Ink(light: RGB(0.36, 0.36, 0.38), dark: RGB(0.68, 0.68, 0.71))
+
+    /// Words for a choice that removes something, such as Forget everything.
+    static let dangerText = Ink(light: RGB(0.74, 0.12, 0.10), dark: RGB(1.00, 0.54, 0.51))
 
     /// Small words on an accent fill. White there is too faint to read
     /// (about 2.5 to 1), so it is a deep brown of the same warmth, well over
     /// the 4.5 to 1 small text needs.
-    static let onAccent = Color(red: onAccentRGB.red, green: onAccentRGB.green, blue: onAccentRGB.blue)
+    static let onAccent = onAccentRGB.color
     static let onAccentRGB = RGB(red: 0.20, green: 0.10, blue: 0.04)
 
-    /// An sRGB color by its parts, so contrast can be checked in tests.
-    struct RGB {
-        let red: Double
-        let green: Double
-        let blue: Double
+    /// How strongly the accent tints a soft button, a chip or a pill.
+    static let accentWash = 0.14
+    /// How strongly the accent tints the person's own chat bubbles.
+    static let personBubbleWash = 0.18
+    /// How strongly the primary ink tints a text field or a neutral chip.
+    static let fieldTint = 0.06
+    /// How strongly the primary ink tints a button that can't be pressed yet.
+    static let disabledTint = 0.08
 
-        /// Relative luminance, as WCAG defines it.
-        var luminance: Double {
-            func linear(_ c: Double) -> Double { c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
-            return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+    /// How strongly the accent marks what was taken out of a cloud preview,
+    /// such as `[name]`, behind the primary words on the payload card.
+    static func maskWash(_ scheme: ColorScheme) -> Double {
+        scheme == .dark ? 0.45 : 0.28
+    }
+
+    /// A color for words that reads well in light and dark: `light` in
+    /// light mode and `dark` in dark mode.
+    struct Ink: ShapeStyle {
+        let light: RGB
+        let dark: RGB
+
+        func rgb(_ scheme: ColorScheme) -> RGB { scheme == .dark ? dark : light }
+
+        func resolve(in environment: EnvironmentValues) -> Color { rgb(environment.colorScheme).color }
+    }
+
+    /// Words and what they sit on, by name, for `textPairs`.
+    struct TextPair {
+        let text: String
+        let background: String
+        let textColor: RGB
+        let backgroundColor: RGB
+
+        var contrast: Double { textColor.contrast(with: backgroundColor) }
+    }
+
+    /// Every pair of words and background the screens use, worked out as the
+    /// colors that reach the eye. Add a pair here whenever a screen puts
+    /// words on something new; `ContrastGuardTests` holds each to 4.5 to 1.
+    ///
+    /// The primary ink is the system label: black in light, white in dark.
+    /// Each surface is checked over both ends of the backdrop and over a
+    /// sheet, the system background a question or a reader opens on.
+    static func textPairs(_ scheme: ColorScheme) -> [TextPair] {
+        let ink: RGB = scheme == .dark ? .white : .black
+        let ends = backdropEnds(scheme)
+        let bases: [(String, RGB)] = [
+            ("backdrop top", ends.top),
+            ("backdrop bottom", ends.bottom),
+            ("sheet", sheetRGB(scheme)),
+        ]
+        var surfaces: [(String, RGB)] = []
+        for (name, base) in bases {
+            let card = RGB.white.over(base, opacity: cardOpacity(scheme))
+            surfaces += [
+                (name, base),
+                ("card on \(name)", card),
+                ("accent wash on \(name)", accentRGB.over(base, opacity: accentWash)),
+                ("accent wash on the card on \(name)", accentRGB.over(card, opacity: accentWash)),
+                ("your bubble on \(name)", accentRGB.over(base, opacity: personBubbleWash)),
+                ("agent bubble on \(name)", ink.over(base, opacity: bubbleTint)),
+                ("field on \(name)", ink.over(base, opacity: fieldTint)),
+                ("field on the card on \(name)", ink.over(card, opacity: fieldTint)),
+                ("disabled button on \(name)", ink.over(base, opacity: disabledTint)),
+            ]
         }
-
-        /// The WCAG contrast ratio between two colors, from 1 to 21.
-        func contrast(with other: RGB) -> Double {
-            let (light, dark) = (max(luminance, other.luminance), min(luminance, other.luminance))
-            return (light + 0.05) / (dark + 0.05)
+        let inks: [(String, RGB)] = [
+            ("primary", ink),
+            ("secondaryText", secondaryText.rgb(scheme)),
+            ("accentText", accentText.rgb(scheme)),
+            ("dangerText", dangerText.rgb(scheme)),
+        ]
+        var pairs = inks.flatMap { text in
+            surfaces.map { TextPair(text: text.0, background: $0.0, textColor: text.1, backgroundColor: $0.1) }
         }
+        // Words on the accent fill: the primary button, "Have a look", Send.
+        pairs.append(TextPair(text: "onAccent", background: "accent", textColor: onAccentRGB, backgroundColor: accentRGB))
+        for (name, base) in bases {
+            let card = RGB.white.over(base, opacity: cardOpacity(scheme))
+            // A mask such as [name] in the cloud preview's payload card.
+            pairs.append(TextPair(text: "primary", background: "mask on the card on \(name)",
+                                  textColor: ink, backgroundColor: accentRGB.over(card, opacity: maskWash(scheme))))
+        }
+        return pairs
+    }
 
-        static let white = RGB(red: 1, green: 1, blue: 1)
+    /// The system background a sheet opens on.
+    static func sheetRGB(_ scheme: ColorScheme) -> RGB {
+        scheme == .dark ? RGB(0.11, 0.11, 0.12) : .white
     }
 
     /// A soft wash behind every screen. Adapts to light and dark.
     static func backdrop(_ scheme: ColorScheme) -> LinearGradient {
-        let top = scheme == .dark
-            ? Color(red: 0.11, green: 0.10, blue: 0.12)
-            : Color(red: 1.00, green: 0.97, blue: 0.94)
-        let bottom = scheme == .dark
-            ? Color(red: 0.07, green: 0.07, blue: 0.08)
-            : Color(red: 0.99, green: 0.99, blue: 0.98)
-        return LinearGradient(colors: [top, bottom], startPoint: .top, endPoint: .bottom)
+        let ends = backdropEnds(scheme)
+        return LinearGradient(colors: [ends.top.color, ends.bottom.color], startPoint: .top, endPoint: .bottom)
     }
+
+    /// The two ends of the backdrop, as numbers so contrast can be checked.
+    static func backdropEnds(_ scheme: ColorScheme) -> (top: Contrast.RGB, bottom: Contrast.RGB) {
+        scheme == .dark
+            ? (Contrast.RGB(0.11, 0.10, 0.12), Contrast.RGB(0.07, 0.07, 0.08))
+            : (Contrast.RGB(1.00, 0.97, 0.94), Contrast.RGB(0.99, 0.99, 0.98))
+    }
+
+    /// How strongly the chat bubbles and the thinking bubble are tinted with
+    /// the primary ink over the backdrop.
+    static let bubbleTint = 0.06
 
     /// Card surface that reads well in light and dark.
     static func card(_ scheme: ColorScheme) -> Color {
-        scheme == .dark ? Color.white.opacity(0.07) : Color.white.opacity(0.85)
+        Color.white.opacity(cardOpacity(scheme))
+    }
+
+    /// How much white a card lays over what is behind it.
+    static func cardOpacity(_ scheme: ColorScheme) -> Double {
+        scheme == .dark ? 0.07 : 0.85
     }
 
     static func hairline(_ scheme: ColorScheme) -> Color {
@@ -85,11 +192,55 @@ struct PrimaryButtonStyle: ButtonStyle {
         configuration.label
             .font(.headline)
             // Dark words on the accent read at about 6.4 to 1; white was 2.5.
-            .foregroundStyle(Theme.onAccent)
+            // Not ready yet, it goes quiet gray on a neutral fill, which still
+            // reads in dark mode where a faded accent would not.
+            .foregroundStyle(isEnabled ? AnyShapeStyle(Theme.onAccent) : AnyShapeStyle(Theme.secondaryText))
             .frame(maxWidth: .infinity, minHeight: 52)
-            .background(Theme.accent.opacity(isEnabled ? 1 : 0.4), in: Capsule())
+            .background(isEnabled ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.primary.opacity(Theme.disabledTint)),
+                        in: Capsule())
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
+            .contentShape(Capsule())
+    }
+}
+
+/// The primary button's look at the size of its words, such as Send.
+struct AccentButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(isEnabled ? AnyShapeStyle(Theme.onAccent) : AnyShapeStyle(Theme.secondaryText))
+            .padding(.horizontal, 16)
+            .frame(minHeight: 44)
+            .background(isEnabled ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.primary.opacity(Theme.disabledTint)),
+                        in: Capsule())
+            .scaleEffect(configuration.isPressed ? Motion.pressedScale(reduceMotion: reduceMotion) : 1)
+            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
+            .contentShape(Capsule())
+    }
+}
+
+/// A soft button for a second choice: accent words on the accent wash, or
+/// plain words on a neutral one.
+struct SoftButtonStyle: ButtonStyle {
+    var neutral = false
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(!isEnabled ? AnyShapeStyle(Theme.secondaryText)
+                             : neutral ? AnyShapeStyle(Color.primary) : AnyShapeStyle(Theme.accentText))
+            .padding(.horizontal, 16)
+            .frame(minHeight: 44)
+            .background(neutral || !isEnabled ? AnyShapeStyle(Color.primary.opacity(Theme.fieldTint))
+                        : AnyShapeStyle(Theme.accent.opacity(Theme.accentWash)), in: Capsule())
+            .scaleEffect(configuration.isPressed ? Motion.pressedScale(reduceMotion: reduceMotion) : 1)
+            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
             .contentShape(Capsule())
     }
 }
@@ -99,7 +250,7 @@ struct QuietButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.subheadline.weight(.medium))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Theme.secondaryText)
             .frame(minHeight: 44)
             .opacity(configuration.isPressed ? 0.5 : 1)
             .contentShape(Rectangle())
@@ -124,6 +275,63 @@ extension View {
         #else
         self
         #endif
+    }
+}
+
+/// WCAG contrast math for checking that small marks, like the thinking
+/// dots, stay visible against what is behind them.
+enum Contrast {
+    struct RGB: Equatable {
+        let red, green, blue: Double
+
+        init(_ red: Double, _ green: Double, _ blue: Double) {
+            self.red = red
+            self.green = green
+            self.blue = blue
+        }
+
+        init(red: Double, green: Double, blue: Double) {
+            self.init(red, green, blue)
+        }
+
+        /// The WCAG contrast ratio between two colors, from 1 to 21.
+        func contrast(with other: RGB) -> Double { Contrast.ratio(self, other) }
+
+        static let black = RGB(0, 0, 0)
+        static let white = RGB(1, 1, 1)
+
+        var color: Color { Color(red: red, green: green, blue: blue) }
+
+        /// This color laid at `opacity` over `base`.
+        func over(_ base: RGB, opacity: Double) -> RGB {
+            RGB(base.red + (red - base.red) * opacity,
+                base.green + (green - base.green) * opacity,
+                base.blue + (blue - base.blue) * opacity)
+        }
+
+        /// Relative luminance in sRGB.
+        var luminance: Double {
+            func linear(_ c: Double) -> Double { c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+            return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+        }
+    }
+
+    /// From 1 (none) to 21 (black on white).
+    static func ratio(_ a: RGB, _ b: RGB) -> Double {
+        let (hi, lo) = (max(a.luminance, b.luminance), min(a.luminance, b.luminance))
+        return (hi + 0.05) / (lo + 0.05)
+    }
+
+    /// A thinking dot at `opacity` against the bubble behind it, over the
+    /// lightest-contrast end of the backdrop. The primary ink is black in
+    /// light and white in dark.
+    static func thinkingDot(_ scheme: ColorScheme, opacity: Double) -> Double {
+        let ink: RGB = scheme == .dark ? .white : .black
+        let ends = Theme.backdropEnds(scheme)
+        return [ends.top, ends.bottom].map { end in
+            let bubble = ink.over(end, opacity: Theme.bubbleTint)
+            return ratio(ink.over(bubble, opacity: opacity), bubble)
+        }.min() ?? 1
     }
 }
 

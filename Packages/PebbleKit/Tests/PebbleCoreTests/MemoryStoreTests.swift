@@ -84,6 +84,9 @@ struct MemoryStoreTests {
         #expect(throws: MemoryStore.Unreadable.self) { try store.remember("Prefers tea", source: .toldMe) }
         #expect(throws: MemoryStore.Unreadable.self) { try store.edit(UUID(), to: "x") }
         #expect(throws: MemoryStore.Unreadable.self) { try store.forget(UUID()) }
+        // The refusal comes first, before the words are even checked.
+        #expect(throws: MemoryStore.Unreadable.self) { try store.remember("   ", source: .toldMe) }
+        #expect(throws: MemoryStore.Unreadable.self) { try store.edit(UUID(), to: "   ") }
         #expect(FileManager.default.contents(atPath: store.fileURL.path) == garbage)
     }
 

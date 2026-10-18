@@ -201,9 +201,18 @@ public enum CloudEndpoint {
 public enum CloudWords {
     public static let title = "Help from the cloud"
     public static let toggleTitle = "Use a cloud model"
-    public static let offDetail = "Off. Everything I do stays on this device."
+    /// The setting while it is off. The device promise follows `place`, the
+    /// same flag as every other device line: with a cloud chat still open,
+    /// its words already left, so it says only that new chats are off.
+    public static func offDetail(_ place: PrivacyPlace) -> String {
+        place.staysOnDevice ? "Off. Everything I do stays on this device." : "Off for new chats."
+    }
     public static let onDetail = "On for new chats. Before anything from a chat leaves this device, I show you exactly what goes, and you decide."
     public static let unavailable = "There's no cloud model set up for this device yet, so this stays off."
+    /// The file the setting and private words are kept in couldn't be
+    /// opened at launch, so nothing typed here could be kept. It is opened
+    /// again only when the app starts.
+    public static let couldNotOpen = "Sorry, I can't open the place I keep this setting and your private words, so it stays off for now. Closing and reopening the app may help."
     public static let rowTitle = "Help from the cloud"
     public static let rowOff = "Off"
     public static let rowOn = "On"
@@ -226,6 +235,11 @@ public enum CloudWords {
     public static let askNo = "Not now"
 
     public static let privateTitle = "Words I always hide"
+    // Says "this device" without asking `PrivacyPlace`, like
+    // `MemoryWords.forgetEverythingDetail`: it is about where the words are
+    // kept, `CloudHelpFileStore` next to the notes, not where a chat goes.
+    // They are taken out of every request, so they never leave even with
+    // the cloud on. Don't gate it like `offDetail`.
     public static let privateDetail = "Anything here is taken out before anything is sent. These words are kept only on this device, and Forget everything erases them too."
     public static let privatePlaceholder = "A word or name to keep private"
     public static let privateAdd = "Hide this word"
@@ -245,7 +259,7 @@ public enum CloudWords {
     public static let onNotSaved = "Sorry, I couldn't save that, so help from the cloud is still off. Please try again in a moment."
 
     public static let previewTitle = "Here is exactly what leaves your device"
-    public static let previewDetail = "This is everything I send: where it goes, the labels sent with it, and the words. I took out the personal details I found. Earlier messages in this chat go again with each new one, and like any website, the computer it goes to also sees this device's internet address."
+    public static let previewDetail = "This is the whole request for this message: where it goes, the labels sent with it, and the words. I took out the personal details I found. Earlier messages in this chat go again with each new one. Like any website, the computer it goes to also sees this device's internet address."
     public static func previewDestination(_ host: String) -> String { "Going to \(host)" }
     public static let previewNothingHidden = "I didn't find anything personal to take out."
     public static func previewHidden(_ parts: [String]) -> String {
@@ -293,11 +307,10 @@ public enum CloudWords {
     public static let forgotAndCloudOff = "Gone. I no longer have it. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. You can turn it on again anytime."
     /// The same, but the notes couldn't be erased.
     public static let forgotWordsAndCloudNotNotes = "Your private words are gone. To be sure of that I cleared the cloud setting too, so help from the cloud is off. I couldn't erase your notes just now. Please try Forget everything again in a moment."
-    /// The chat header when the model is not on this device.
-    public static let presence = "Here with you."
 
     public static let all: [String] = [
-        title, toggleTitle, offDetail, onDetail, unavailable, rowTitle, rowOff, rowOn,
+        title, toggleTitle, offDetail(.onDevice), offDetail(.mayLeaveDevice), onDetail, unavailable, couldNotOpen,
+        rowTitle, rowOff, rowOn,
         askQuestion, askYes, askNo, privateTitle, privateDetail, privatePlaceholder, privateAdd,
         privateRemove("Sam"), privateUnreadable, privateNotSaved, offButCleared, offForNow, onNotSaved,
         previewTitle, previewDetail, previewDestination("example.com"),
@@ -306,6 +319,6 @@ public enum CloudWords {
         spokenSignIn("X-Sample", characters: 8),
         spokenMessage(role: "person", text: "Hi"), spokenMessage(role: "agent", text: "Hi"),
         notSent, turnedOff, staysHere, notesUnreadable, forgetEverythingDetail,
-        forgotNotesNotWords, forgotWordsNotNotes, forgotAndCloudOff, forgotWordsAndCloudNotNotes, presence,
+        forgotNotesNotWords, forgotWordsNotNotes, forgotAndCloudOff, forgotWordsAndCloudNotNotes,
     ] + askPoints + Redaction.Kind.allCases.map(\.spoken)
 }

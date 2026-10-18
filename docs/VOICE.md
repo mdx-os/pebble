@@ -68,10 +68,17 @@ person.
 Privacy promises are facts, not decoration. State them simply and only
 when the code makes them true.
 
-- Say "stays on this device" only when the model really runs on the device.
-  `FirstConversation.opening` and `FirstRunWords.helloDetail` check this;
-  keep it that way. Memory notes may say it always, because they never
-  reach a model or the network.
+- Say "stays on this device", "kept only on this device" or "on this
+  device" only when the flag says so. The flag is `PrivacyPlace`, read
+  from the active model's `runsOnDevice` through `ModelClient.privacyPlace`
+  and passed down by the app. There is no second flag. Every device line
+  takes it: `FirstConversation.opening` and `presence`,
+  `FirstRunWords.helloDetail`, `MemoryWords.empty`, `saved` and
+  `privacyNote`, `FeedWords.sampleNote` and `CloudWords.offDetail`. Memory lines follow it too: notes never reach a model,
+  but with a cloud model the chat does leave the device, so a promise on
+  the memory screen would mislead. `PrivacyPlaceTests` pins every line.
+- When the flag is off, say nothing about the device. Drop the sentence
+  rather than replace it with a claim about the cloud.
 - Never soften a promise that is true ("mostly private") and never stretch
   one that is not ("totally secure").
 - Say only what the agent knows. After a note is forgotten, "Gone. I no
@@ -80,9 +87,11 @@ when the code makes them true.
 - A promise about what happens next must have a button or a behavior
   behind it. "I'll look again" needs a Try again or a re-check.
 - Help from the cloud (`CloudWords`) is off until the person says yes to
-  a question that names what changes. Before anything leaves, the person
-  sees "Here is exactly what leaves your device" with the very bytes that
-  will be sent. A chat on the cloud never says "on this device".
+  a question that names what changes. Before anything from a chat leaves,
+  the person sees "Here is exactly what leaves your device" with the very
+  bytes that will be sent. `CloudModel` reports `.mayLeaveDevice`, so a
+  chat on the cloud, and every line that reads the flag from it, never
+  says "on this device".
 
 ## When someone may be in danger
 
@@ -115,9 +124,29 @@ Say what will appear here, why it is worth having, and offer one clear
 action.
 
 - Good: "Nothing here yet. Tell me something worth keeping, like a
-  birthday or how you take your tea. It stays on this device." with a button
-  "Add your first note".
+  birthday or how you take your tea. It stays on this device, and you can
+  change or remove it anytime." with a button "Add your first note". With
+  a model that leaves the device, the device sentence goes: "You can
+  change or remove it anytime."
 - Bad: "No data."
+
+An empty state promises only what exists today. Today's empty state says
+"It's just us for now. Write to me below, and we'll start a chat." with the
+composer under it, and says nothing about work done in the background until
+a real feed source ships.
+
+Examples are always labeled. Sample cards start with "Example" for
+VoiceOver, and a sample opened to read or a sample question says "This is
+an example. Nothing here was really done."
+
+### Readable words
+
+Words a person reads clear 4.5 to 1 against what they sit on, in light and
+dark. Use `Theme.accentText` for words in the accent's warmth,
+`Theme.secondaryText` for quieter words, and `Theme.onAccent` on the accent
+fill. The raw accent and the system grays are too faint for words.
+`ContrastGuardTests` checks every pair in `Theme.textPairs` and scans the
+screens for colors outside them.
 
 ### Waiting
 
@@ -127,6 +156,7 @@ with Reduce Motion on, and VoiceOver hears "Thinking it over." once.
 ### Confirmations
 
 Short and specific. "Saved. It stays on this device." beats "Success!".
+With a model that leaves the device it is just "Saved."
 
 ## Short examples
 
@@ -135,5 +165,10 @@ Short and specific. "Saved. It stays on this device." beats "Success!".
 | First hello | "Hi there. I'm glad you're here." | "Welcome to the app." |
 | Naming | "Type a name first. Any name works." | "Name is required." |
 | Too long | "That's a little long. Try a name of N letters or fewer." (N is `AgentName.maxLength`) | "Max length exceeded." |
-| Memory saved | "Saved. It stays on this device." | "Note created." |
+| Memory saved, model on device | "Saved. It stays on this device." | "Note created." |
+| Memory saved, model may leave the device | "Saved." | "Saved. It stays on this device." |
+| Memory header, model on device | "Kept only on this device. Removing a note erases it." | "Stored locally." |
+| Memory header, model may leave the device | "Removing a note erases it." | "Kept only on this device." |
+| Chat presence, model on device | "Here with you, on this device." | "Running locally." |
+| Chat presence, model may leave the device | "Here with you." | "Here with you, on this device." |
 | Question timed out | "That question timed out, so I didn't do it." | "Request expired." |

@@ -644,7 +644,7 @@ struct CloudHelpTests {
         let memory = scratchMemory()
         let cloud = help(CloudHelpSettings(isOn: true), endpoint: endpoint, maker: maker, memory: memory)
         #expect(cloud.memory === memory)
-        let notes = MemoryModel(store: memory)
+        let notes = MemoryModel(store: memory, place: .onDevice)
         notes.newNote = "Priya is my sister."
         notes.add()
         let controller = chat(cloud)
@@ -661,7 +661,7 @@ struct CloudHelpTests {
         let store = InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"]))
         let memory = scratchMemory("Sam's birthday is May 14.")
         let cloud = help(endpoint: endpoint, maker: TransportMaker(), memory: memory, store: store)
-        let model = MemoryModel(store: memory, alsoForget: { try cloud.forgetPrivateWords() })
+        let model = MemoryModel(store: memory, place: .onDevice, alsoForget: { try cloud.forgetPrivateWords() })
         model.forgetEverything()
         #expect(model.status == MemoryWords.forgotten)
         #expect(memory.notes().isEmpty)
@@ -684,7 +684,7 @@ struct CloudHelpTests {
         }
         let store = InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"]))
         let help = help(endpoint: endpoint, maker: TransportMaker(), memory: memory, store: store)
-        let model = MemoryModel(store: memory, alsoForget: { try help.forgetPrivateWords() })
+        let model = MemoryModel(store: memory, place: .onDevice, alsoForget: { try help.forgetPrivateWords() })
         model.forgetEverything()
         #expect(model.status == CloudWords.forgotWordsNotNotes)
         #expect(try store.load().privateWords.isEmpty)
@@ -697,7 +697,7 @@ struct CloudHelpTests {
         store.savesToFail = .max
         store.eraseFails = true
         let help = cloud(store, maker: TransportMaker())
-        let model = MemoryModel(store: memory, alsoForget: { try help.forgetPrivateWords() })
+        let model = MemoryModel(store: memory, place: .onDevice, alsoForget: { try help.forgetPrivateWords() })
         model.forgetEverything()
         #expect(model.status == CloudWords.forgotNotesNotWords)
         #expect(memory.notes().isEmpty)
@@ -710,7 +710,7 @@ struct CloudHelpTests {
         let store = FailingCloudStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"]))
         store.savesToFail = .max
         let help = cloud(store, maker: TransportMaker())
-        let model = MemoryModel(store: memory, alsoForget: { try help.forgetPrivateWords() })
+        let model = MemoryModel(store: memory, place: .onDevice, alsoForget: { try help.forgetPrivateWords() })
         model.forgetEverything()
         #expect(model.status == CloudWords.forgotAndCloudOff)
         #expect(CloudWords.forgotAndCloudOff.contains("help from the cloud is off"))
@@ -733,7 +733,7 @@ struct CloudHelpTests {
         let store = InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"]))
         let help = help(endpoint: endpoint, maker: TransportMaker(), memory: memory, store: store)
         store.makeUnreadable()
-        let model = MemoryModel(store: memory, alsoForget: { try help.forgetPrivateWords() })
+        let model = MemoryModel(store: memory, place: .onDevice, alsoForget: { try help.forgetPrivateWords() })
         model.forgetEverything()
         #expect(model.status == CloudWords.forgotWordsAndCloudNotNotes)
         #expect(try store.load() == .off)
@@ -746,7 +746,7 @@ struct CloudHelpTests {
         store.savesToFail = .max
         let help = cloud(store, maker: TransportMaker())
         let model = MemoryModel(store: scratchMemory("Sam's birthday is May 14."),
-                                alsoForget: { try help.forgetPrivateWords() })
+                                place: .onDevice, alsoForget: { try help.forgetPrivateWords() })
         model.forgetEverything()
         #expect(model.status == MemoryWords.forgotten)
         #expect(store.saved == nil)
@@ -775,7 +775,7 @@ struct CloudHelpTests {
         let store = InMemoryCloudHelpStore(CloudHelpSettings(privateWords: ["lemon cake"]))
         let help = help(endpoint: endpoint, maker: TransportMaker(), store: store)
         help.newPrivateWord = "Riverside Cli"
-        MemoryModel(store: scratchMemory(), alsoForget: { try help.forgetPrivateWords() }).forgetEverything()
+        MemoryModel(store: scratchMemory(), place: .onDevice, alsoForget: { try help.forgetPrivateWords() }).forgetEverything()
         #expect(help.newPrivateWord.isEmpty)
         // Even when nothing could be erased.
         let failing = FailingCloudStore(CloudHelpSettings(privateWords: ["lemon cake"]))
@@ -799,7 +799,7 @@ struct CloudHelpTests {
         controller.submit("Ask Sam about the lemon cake")
         review.answer(.send, for: await review.shown().id)
         await controller.settled()
-        MemoryModel(store: memory, alsoForget: { try help.forgetPrivateWords() }).forgetEverything()
+        MemoryModel(store: memory, place: .onDevice, alsoForget: { try help.forgetPrivateWords() }).forgetEverything()
         #expect(memory.notes().isEmpty && help.settings.privateWords.isEmpty)
         controller.submit("Thanks")
         let next = await review.shown()
@@ -834,7 +834,8 @@ struct CloudHelpTests {
                                              conversation: promised)
         #expect(!controller.conversation.onDevice)
         #expect(controller.conversation.turns.first?.text.contains("stays") == false)
-        #expect(controller.presence == CloudWords.presence)
+        #expect(controller.privacyPlace == .mayLeaveDevice)
+        #expect(FirstConversation.presence(controller.privacyPlace) == "Here with you.")
         // And sent directly, it is refused before any preview.
         await #expect(throws: ConversationError.leavesDevice) {
             try await promised.sending("Write to Sam", with: model)
@@ -878,7 +879,8 @@ struct CloudHelpTests {
     @Test func theOnDeviceHeaderStaysForOnDeviceChats() {
         let controller = ChatController.make(brand: brand, model: LocalStubModel(),
                                              names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil)
-        #expect(controller.presence == FirstConversation.presence)
+        #expect(controller.privacyPlace == .onDevice)
+        #expect(FirstConversation.presence(controller.privacyPlace) == "Here with you, on this device.")
     }
 
     @Test func eachFailureHasItsOwnLine() {

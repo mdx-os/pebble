@@ -136,6 +136,13 @@ public protocol CloudAuth: Sendable {
     /// words, saying where sign-in goes and what it sends, such as an
     /// account name or a device token. Without that line it must not be
     /// used.
+    ///
+    /// It runs in a task that is cancelled when the person turns the cloud
+    /// off, or when Forget everything has to clear the cloud setting. An
+    /// implementation must check for cancellation (`Task.isCancelled`, or a
+    /// cancellable `URLSession` call) before each step that reaches the
+    /// network or saves anything, and stop at once without saving a token,
+    /// so a sign-in that was under way never finishes after the cloud is off.
     func signIn() async
 }
 
@@ -245,7 +252,12 @@ public struct CloudModel: ModelClient {
         self.isOn = isOn
     }
 
-    public var runsOnDevice: Bool { false }
+    /// Words in a cloud chat leave the device, so no line read from this
+    /// model promises the device. `ModelChoice` hands out the same value
+    /// before a cloud chat exists.
+    public static let place = PrivacyPlace.mayLeaveDevice
+
+    public var runsOnDevice: Bool { Self.place.staysOnDevice }
 
     public func reply(to transcript: [ChatTurn]) async throws -> String {
         guard isOn() else { throw CloudModelError.off }
@@ -353,10 +365,16 @@ public enum ModelChoice {
         settings.isOn && endpoint != nil
     }
 
+    /// The `privacyPlace` of the model `model(...)` would pick, without
+    /// making it: `CloudModel.place` with the cloud on, else `local`'s.
+    public static func privacyPlace(settings: CloudHelpSettings, endpoint: URL?, local: any ModelClient) -> PrivacyPlace {
+        usesCloud(settings: settings, endpoint: endpoint) ? CloudModel.place : local.privacyPlace
+    }
+
     /// Whether the model `model(...)` picks runs on this device, without
     /// making it.
     public static func runsOnDevice(settings: CloudHelpSettings, endpoint: URL?, local: any ModelClient) -> Bool {
-        usesCloud(settings: settings, endpoint: endpoint) ? false : local.runsOnDevice
+        privacyPlace(settings: settings, endpoint: endpoint, local: local).staysOnDevice
     }
 }
 

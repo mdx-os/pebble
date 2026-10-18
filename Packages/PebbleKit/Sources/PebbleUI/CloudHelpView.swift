@@ -22,8 +22,17 @@ public final class CloudHelp: ObservableObject {
         didSet { if status != nil { statusCount += 1 } }
     }
     @Published private(set) var statusCount = 0
+    /// The flag the setting's own words read, the same one every line
+    /// outside a chat reads. `HomeView` works it out from the open chat's
+    /// model and the next one's (see `PrivacyPlace`) and keeps this up to
+    /// date. Until then it makes no promise.
+    @Published var place: PrivacyPlace = .mayLeaveDevice
 
     public let endpoint: URL?
+    /// False when the file that keeps the setting and the private words
+    /// couldn't be opened at launch. Nothing typed here could be kept, so
+    /// the setting stays off and says so.
+    public let storeOpened: Bool
     /// The same store the memory screen uses, so the redactor always reads
     /// the notes as they are now.
     let memory: MemoryStore?
@@ -32,7 +41,8 @@ public final class CloudHelp: ObservableObject {
     private let makeTransport: @Sendable () -> any CloudTransport
     /// Every chat's preview gate, so turning the cloud off closes them all.
     private let reviews = NSHashTable<CloudReview>.weakObjects()
-    /// Sign-in after the person's yes. Tests wait on it.
+    /// Sign-in after the person's yes. Tests wait on it. Cancelled when the
+    /// cloud goes off, so a sign-in under way never finishes after that.
     private(set) var signingIn: Task<Void, Never>?
     /// Set when the person turns the cloud off, and cleared only by their
     /// yes to turning it on again. While set, nothing is sent from any
@@ -40,39 +50,76 @@ public final class CloudHelp: ObservableObject {
     /// leave it on.
     private let switchedOff = SwitchedOff()
 
-    public init(
+    public convenience init(
         store: any CloudHelpStoring,
         endpoint: URL?,
         memory: MemoryStore?,
         auth: any CloudAuth = NoCloudAuth(),
         transport: @escaping @Sendable () -> any CloudTransport = { URLSessionCloudTransport() }
     ) {
+        self.init(store: store, endpoint: endpoint, memory: memory, auth: auth, transport: transport,
+                  storeOpened: true)
+    }
+
+    private init(
+        store: any CloudHelpStoring,
+        endpoint: URL?,
+        memory: MemoryStore?,
+        auth: any CloudAuth,
+        transport: @escaping @Sendable () -> any CloudTransport,
+        storeOpened: Bool
+    ) {
         self.store = store
         self.endpoint = endpoint
+        self.storeOpened = storeOpened
         self.memory = memory
         self.auth = auth
         self.makeTransport = transport
-        settings = store.loadOrOff()
+        settings = storeOpened ? store.loadOrOff() : .off
     }
 
-    /// False when no address is set up. The setting then stays off.
-    public var isAvailable: Bool { endpoint != nil }
+    /// The setting when its file couldn't be opened at launch. It reads as
+    /// off and can't be turned on, so no private word is ever typed into
+    /// something that would quietly forget it, and no chat uses the cloud.
+    public static func couldNotOpen(endpoint: URL?, memory: MemoryStore?) -> CloudHelp {
+        CloudHelp(store: InMemoryCloudHelpStore(), endpoint: endpoint, memory: memory, auth: NoCloudAuth(),
+                  transport: { URLSessionCloudTransport() }, storeOpened: false)
+    }
+
+    /// False when no address is set up, or the setting's file couldn't be
+    /// opened. The setting then stays off.
+    public var isAvailable: Bool { endpoint != nil && storeOpened }
+
+    /// The address, only while the setting can be used. Every choice of
+    /// model goes through this, so an unopened file means no cloud.
+    private var usableEndpoint: URL? { storeOpened ? endpoint : nil }
 
     /// True when a new chat would use the cloud model.
     public var usesCloudForNewChats: Bool {
-        ModelChoice.usesCloud(settings: settings, endpoint: endpoint)
+        ModelChoice.usesCloud(settings: settings, endpoint: usableEndpoint)
     }
 
     /// Whether a new chat's model runs on this device, without making it.
     public func runsOnDevice(local: any ModelClient) -> Bool {
-        ModelChoice.runsOnDevice(settings: settings, endpoint: endpoint, local: local)
+        privacyPlace(local: local).staysOnDevice
+    }
+
+    /// The `privacyPlace` of the model a new chat would get, without making
+    /// it. See `PrivacyPlace` for how this joins the open chat's.
+    public func privacyPlace(local: any ModelClient) -> PrivacyPlace {
+        privacyPlace(local: local, settings: settings)
+    }
+
+    /// The same, for `settings` about to be set, as `$settings` sends them.
+    func privacyPlace(local: any ModelClient, settings: CloudHelpSettings) -> PrivacyPlace {
+        ModelChoice.privacyPlace(settings: settings, endpoint: usableEndpoint, local: local)
     }
 
     /// The model for a new chat: `local` unless the cloud is on. A cloud
     /// chat asks the person through `review`, which belongs to that chat
     /// alone, so one window's preview never shows in another.
     public func chatModel(local: any ModelClient, review: CloudReview) -> any ModelClient {
-        ModelChoice.model(settings: settings, endpoint: endpoint, local: local) { url in
+        ModelChoice.model(settings: settings, endpoint: usableEndpoint, local: local) { url in
             reviews.add(review)
             let store = self.store
             let memory = self.memory
@@ -100,7 +147,7 @@ public final class CloudHelp: ObservableObject {
     /// Reads the settings again, as after the device was locked at launch.
     /// A switch off that couldn't be saved before is saved now, if it can be.
     func refresh() {
-        guard var fresh = try? store.load() else { return }
+        guard storeOpened, var fresh = try? store.load() else { return }
         if switchedOff.value, fresh.isOn {
             fresh.isOn = false
             try? store.save(fresh)
@@ -133,6 +180,7 @@ public final class CloudHelp: ObservableObject {
         }
         status = nil
         let auth = auth
+        signingIn?.cancel()
         signingIn = Task { await auth.signIn() }
     }
 
@@ -147,8 +195,7 @@ public final class CloudHelp: ObservableObject {
     func turnOff() {
         switchedOff.value = true
         settings.isOn = false
-        // Anything waiting for a yes is not sent.
-        for review in reviews.allObjects { review.cancelPending() }
+        stopEverythingUnderWay()
         if update({ $0.isOn = false }).isDone || update({ $0.isOn = false }).isDone {
             status = nil
         } else if (try? store.erase()) != nil {
@@ -159,10 +206,26 @@ public final class CloudHelp: ObservableObject {
         }
     }
 
+    /// Anything a cloud chat has under way stops: every preview waiting for
+    /// a yes is not sent, and a sign-in still going is cancelled (see
+    /// `CloudAuth.signIn`).
+    private func stopEverythingUnderWay() {
+        for review in reviews.allObjects { review.cancelPending() }
+        signingIn?.cancel()
+        signingIn = nil
+    }
+
+    /// A preview waiting for a yes was redacted with the private words as
+    /// they were. Once they change it is no longer what would be hidden, so
+    /// it is withdrawn and nothing goes; the next send shows a fresh one.
+    private func withdrawPreviews() {
+        for review in reviews.allObjects { review.cancelPending() }
+    }
+
     func addPrivateWord() {
         let word = newPrivateWord
         switch update({ _ = $0.addPrivateWord(word) }) {
-        case .saved: newPrivateWord = ""; status = nil
+        case .saved: newPrivateWord = ""; status = nil; withdrawPreviews()
         case .unchanged: break
         case .unreadable: status = CloudWords.privateUnreadable
         case .notSaved: status = CloudWords.privateNotSaved
@@ -171,7 +234,7 @@ public final class CloudHelp: ObservableObject {
 
     func removePrivateWord(_ word: String) {
         switch update({ $0.removePrivateWord(word) }) {
-        case .saved: status = nil
+        case .saved: status = nil; withdrawPreviews()
         case .unchanged: break
         case .unreadable: status = CloudWords.privateUnreadable
         case .notSaved: status = CloudWords.privateNotSaved
@@ -200,7 +263,10 @@ public final class CloudHelp: ObservableObject {
             current.privateWords = []
             if switchedOff.value { current.isOn = false }
             if (try? store.save(current)) != nil {
+                let hadWords = !settings.privateWords.isEmpty
                 settings = current
+                // What waits was hidden with words that are gone now.
+                if hadWords { withdrawPreviews() }
                 return .privateWords
             }
         }
@@ -208,10 +274,13 @@ public final class CloudHelp: ObservableObject {
         let mightHaveBeenOn = current?.isOn ?? true
         try store.erase()
         settings = .off
-        guard mightHaveBeenOn, !switchedOff.value else { return .privateWords }
+        guard mightHaveBeenOn, !switchedOff.value else {
+            withdrawPreviews()
+            return .privateWords
+        }
         // Off for chats already open, as a switch off is.
         switchedOff.value = true
-        for review in reviews.allObjects { review.cancelPending() }
+        stopEverythingUnderWay()
         return .privateWordsAndCloud
     }
 
@@ -339,7 +408,7 @@ public struct CloudHelpView: View {
                     if let status = help.status {
                         Text(status)
                             .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -359,9 +428,11 @@ public struct CloudHelpView: View {
         }
     }
 
-    private var detail: String {
+    /// What the setting says under its switch.
+    static func detail(for help: CloudHelp) -> String {
+        if !help.storeOpened { return CloudWords.couldNotOpen }
         if !help.isAvailable { return CloudWords.unavailable }
-        return help.usesCloudForNewChats ? CloudWords.onDetail : CloudWords.offDetail
+        return help.usesCloudForNewChats ? CloudWords.onDetail : CloudWords.offDetail(help.place)
     }
 
     private var switchCard: some View {
@@ -370,12 +441,12 @@ public struct CloudHelpView: View {
                 Label(CloudWords.toggleTitle, systemImage: help.settings.isOn ? "cloud.fill" : "lock.fill")
                     .font(.body.weight(.semibold))
             }
-            .tint(Theme.accent)
+            .tint(Theme.accentText)
             .disabled(!help.isAvailable)
             .accessibilityIdentifier("cloudToggle")
-            Text(detail)
+            Text(Self.detail(for: help))
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(16)
@@ -390,32 +461,63 @@ public struct CloudHelpView: View {
                     .accessibilityAddTraits(.isHeader)
                 Text(CloudWords.privateDetail)
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 10) {
                 PrivateWordField(word: $help.newPrivateWord) { help.addPrivateWord() }
-                Button { help.addPrivateWord() } label: {
-                    Image(systemName: "plus")
-                        .font(.headline)
-                        .foregroundStyle(Theme.onAccent)
-                        .frame(width: Self.addButtonSize, height: Self.addButtonSize)
-                        .background(Theme.accent, in: Circle())
-                        .pointerHover(in: Circle())
-                }
-                .buttonStyle(.plain)
-                .help(CloudWords.privateAdd)
-                .accessibilityLabel(CloudWords.privateAdd)
-                .disabled(help.newPrivateWord.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                AddPrivateWordButton(size: Self.addButtonSize) { help.addPrivateWord() }
+                    .disabled(!Self.canAdd(help.newPrivateWord))
             }
             .padding(.leading, 14)
             .padding(.trailing, 4)
             .padding(.vertical, 4)
-            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: Theme.smallCorner, style: .continuous))
+            .background(Color.primary.opacity(Theme.fieldTint), in: RoundedRectangle(cornerRadius: Theme.smallCorner, style: .continuous))
             PrivateWordList(words: help.settings.privateWords) { help.removePrivateWord($0) }
         }
         .padding(16)
         .card(scheme)
+    }
+
+    /// Only words can be added, not blank space.
+    static func canAdd(_ word: String) -> Bool {
+        !word.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+/// The round add button beside the private word field. With nothing typed
+/// it can't be pressed, and it looks it: a quiet gray outline on the field
+/// itself, rather than the accent it has when ready. A gray fill stacked on
+/// the field would sink the gray below 4.5 to 1 in dark.
+struct AddPrivateWordButton: View {
+    let size: CGFloat
+    let action: () -> Void
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "plus")
+                .font(.headline)
+                .foregroundStyle(Self.symbolStyle(enabled: isEnabled))
+                .frame(width: size, height: size)
+                .background(Self.fill(enabled: isEnabled), in: Circle())
+                .overlay(Circle().stroke(isEnabled ? Color.clear : Theme.hairline(scheme)))
+                .pointerHover(in: Circle())
+        }
+        .buttonStyle(.plain)
+        .help(CloudWords.privateAdd)
+        .accessibilityLabel(CloudWords.privateAdd)
+    }
+
+    static func symbolStyle(enabled: Bool) -> AnyShapeStyle {
+        enabled ? AnyShapeStyle(Theme.onAccent) : AnyShapeStyle(Theme.secondaryText)
+    }
+
+    static func fill(enabled: Bool) -> AnyShapeStyle {
+        // Disabled, it shows the field it sits in: secondaryText on "field
+        // on the card", a pair `Theme.textPairs` already checks.
+        enabled ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.clear)
     }
 }
 
@@ -464,7 +566,7 @@ struct PrivateWordList: View {
                     Spacer(minLength: 8)
                     Button { onRemove(word) } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.secondaryText)
                             .frame(minWidth: 44, minHeight: 44)
                     }
                     .buttonStyle(.plain)
@@ -492,17 +594,20 @@ struct CloudHelpRow: View {
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: help.settings.isOn ? "cloud.fill" : "lock.fill")
-                    .foregroundStyle(Theme.accent)
+                    .foregroundStyle(Theme.accentSymbol)
                     .frame(width: 24)
+                    // Decoration: "On" or "Off" beside it says the same.
+                    .accessibilityHidden(true)
                 Text(CloudWords.rowTitle)
                     .font(.body.weight(.medium))
                     .foregroundStyle(.primary)
                 Spacer(minLength: 8)
                 Text(help.settings.isOn ? CloudWords.rowOn : CloudWords.rowOff)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.secondaryText)
                 Image(systemName: "chevron.right")
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.secondaryText)
+                    .accessibilityHidden(true)
             }
             .padding(.horizontal, 16)
             .frame(minHeight: 52)
@@ -542,7 +647,7 @@ struct CloudTurnOnSheet: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         } icon: {
                             Image(systemName: Self.symbols[index % Self.symbols.count])
-                                .foregroundStyle(Theme.accent)
+                                .foregroundStyle(Theme.accentSymbol)
                         }
                         .font(.body)
                     }
@@ -622,7 +727,7 @@ struct CloudPreviewSheet: View {
                         .accessibilityAddTraits(.isHeader)
                     Text(CloudWords.previewDetail)
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 VStack(alignment: .leading, spacing: 6) {
@@ -688,7 +793,7 @@ struct CloudPayloadCard: View {
         for kind in Redaction.Kind.allCases {
             var start = text.startIndex
             while let range = text[start...].range(of: kind.mask) {
-                text[range].backgroundColor = Theme.accent.opacity(scheme == .dark ? 0.45 : 0.28)
+                text[range].backgroundColor = Theme.accent.opacity(Theme.maskWash(scheme))
                 text[range].font = .system(.footnote, design: .monospaced).weight(.bold)
                 start = range.upperBound
             }
@@ -700,12 +805,17 @@ struct CloudPayloadCard: View {
 extension View {
     /// Shows `review`'s preview over this screen. Closing it any way but
     /// Send means nothing is sent.
+    ///
+    /// `blocked` is true while another sheet or a question is open; only
+    /// one sheet can show at a time, so the preview waits, unsent, until it
+    /// closes. `waiting` is told whenever a preview is pending, shown or
+    /// not, so `HomeCover` can count it as covering the screen.
     @ViewBuilder
-    func cloudPreview(_ review: CloudReview?) -> some View {
+    func cloudPreview(_ review: CloudReview?, blocked: Bool = false, waiting: Binding<Bool>? = nil) -> some View {
         if let review {
-            modifier(CloudPreviewPresenter(review: review))
+            modifier(CloudPreviewPresenter(review: review, blocked: blocked, waiting: waiting))
         } else {
-            self
+            self.onAppear { waiting?.wrappedValue = false }
         }
     }
 
@@ -716,18 +826,30 @@ extension View {
     }
 }
 
-private struct CloudPreviewPresenter: ViewModifier {
+struct CloudPreviewPresenter: ViewModifier {
     @ObservedObject var review: CloudReview
+    let blocked: Bool
+    let waiting: Binding<Bool>?
+
+    /// The preview to put on screen now: none while something else is open.
+    static func shown(_ pending: CloudPreview?, blocked: Bool) -> CloudPreview? {
+        blocked ? nil : pending
+    }
 
     func body(content: Content) -> some View {
         // Swiping the sheet away only ever cancels, which is always safe.
-        // Send is tied to the preview that sheet showed.
+        // Send is tied to the preview that sheet showed. A preview held back
+        // by another sheet is never cancelled for it.
         content.sheet(
-            item: Binding(get: { review.pending }, set: { if $0 == nil { review.cancelPending() } })
+            item: Binding(get: { Self.shown(review.pending, blocked: blocked) },
+                          set: { if $0 == nil, !blocked { review.cancelPending() } })
         ) { preview in
             CloudPreviewSheet(preview: preview,
                               onSend: { review.answer(.send, for: preview.id) },
                               onCancel: { review.answer(.cancel, for: preview.id) })
+        }
+        .onChange(of: review.pending?.id, initial: true) { _, id in
+            waiting?.wrappedValue = id != nil
         }
     }
 }

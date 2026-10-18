@@ -22,9 +22,16 @@ struct PebbleApp: App {
         let memory = try? MemoryStore.onDevice()
         self.memory = memory
         let endpoint = CloudEndpoint.url(infoDictionary: Bundle.main.infoDictionary)
-        // A store that can't be opened reads as off, like a fresh device.
-        let store: any CloudHelpStoring = (try? CloudHelpFileStore.onDevice()) ?? InMemoryCloudHelpStore()
-        _cloud = StateObject(wrappedValue: CloudHelp(store: store, endpoint: endpoint, memory: memory))
+        // The setting is kept next to the notes. If either can't be opened,
+        // nothing typed into the setting could be kept, so it reads as off,
+        // can't be turned on, and says so plainly.
+        let cloud: CloudHelp
+        if memory != nil, let store = try? CloudHelpFileStore.onDevice() {
+            cloud = CloudHelp(store: store, endpoint: endpoint, memory: memory)
+        } else {
+            cloud = CloudHelp.couldNotOpen(endpoint: endpoint, memory: memory)
+        }
+        _cloud = StateObject(wrappedValue: cloud)
         #if os(macOS)
         SnapshotMode.runIfRequested(brand: brand)
         #endif

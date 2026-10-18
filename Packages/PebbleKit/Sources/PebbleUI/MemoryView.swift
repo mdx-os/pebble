@@ -10,15 +10,28 @@ public struct MemoryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @FocusState private var addFocused: Bool
+    private let place: PrivacyPlace
     private let cloud: CloudHelp?
 
-    /// With `cloud`, the screen ends with a way into the cloud setting.
-    public init(store: MemoryStore, cloud: CloudHelp? = nil) {
+    /// `place` comes from the active model (`ModelClient.privacyPlace`), so
+    /// the device promise here is the same one the chat makes. It can change
+    /// while the screen is open, as when the cloud is turned on from here,
+    /// and the words follow it. With `cloud`, the screen ends with a way
+    /// into the cloud setting.
+    public init(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp? = nil) {
         // Forget everything erases the words always hidden too.
         var alsoForget: (@MainActor () throws -> CloudHelp.Forgot)?
         if let cloud { alsoForget = { try cloud.forgetPrivateWords() } }
-        _model = StateObject(wrappedValue: MemoryModel(store: store, alsoForget: alsoForget))
+        _model = StateObject(wrappedValue: MemoryModel(store: store, place: place, alsoForget: alsoForget))
+        self.place = place
         self.cloud = cloud
+    }
+
+    /// Shows a model that already has something to say, for screenshots.
+    init(model: @autoclosure @escaping () -> MemoryModel, place: PrivacyPlace) {
+        _model = StateObject(wrappedValue: model())
+        self.place = place
+        cloud = nil
     }
 
     /// Whether there are private words that Forget everything would erase.
@@ -70,7 +83,7 @@ public struct MemoryView: View {
                     if let status = model.status {
                         Text(status)
                             .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.secondaryText)
                             .frame(maxWidth: .infinity)
                             .accessibilityAddTraits(.updatesFrequently)
                     }
@@ -113,6 +126,8 @@ public struct MemoryView: View {
         }
         .haptic(.saved, trigger: model.savedCount)
         .haptic(.forgotten, trigger: model.forgottenCount)
+        // The flag can change under an open screen; the words follow it.
+        .onChange(of: place, initial: true) { _, place in model.place = place }
     }
 
     @ViewBuilder
@@ -134,6 +149,8 @@ public struct MemoryView: View {
             Button(role: .destructive) { model.askForgetEverything = true } label: {
                 Text(MemoryWords.forgetEverythingTitle)
                     .font(.subheadline.weight(.semibold))
+                    // The system red is about 3.6 to 1 on white.
+                    .foregroundStyle(Theme.dangerText)
                     .frame(maxWidth: .infinity, minHeight: 44)
             }
             .padding(.top, 8)
@@ -145,9 +162,9 @@ public struct MemoryView: View {
             Text(MemoryWords.title)
                 .font(.system(.largeTitle, design: .rounded).weight(.bold))
                 .accessibilityAddTraits(.isHeader)
-            Label(MemoryWords.privacyNote, systemImage: "lock.fill")
+            Label(MemoryWords.privacyNote(model.place), systemImage: "lock.fill")
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
         }
     }
 
@@ -161,7 +178,7 @@ public struct MemoryView: View {
             Button { model.add() } label: {
                 Image(systemName: "plus")
                     .font(.headline)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.onAccent)
                     .frame(width: 36, height: 36)
                     .background(Theme.accent, in: Circle())
                     .pointerHover(in: Circle())
@@ -186,7 +203,7 @@ public struct MemoryView: View {
         EmptyState(
             symbol: "sparkles",
             title: MemoryWords.emptyTitle,
-            detail: MemoryWords.empty,
+            detail: MemoryWords.empty(model.place),
             actionTitle: MemoryWords.emptyActionTitle
         ) {
             addFocused = true
@@ -225,7 +242,7 @@ struct MemoryRow: View {
                     Spacer()
                     Button(MemoryWords.saveTitle, action: onSave)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Theme.accent)
+                        .foregroundStyle(Theme.accentText)
                         .frame(minHeight: 44)
                 }
             } else {
@@ -238,14 +255,14 @@ struct MemoryRow: View {
                         SourceLabel(source: note.source)
                         Text(note.savedAt, format: .dateTime.month(.abbreviated).day())
                             .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(Theme.secondaryText)
                     }
                     // At large text sizes the source gets its own line so it never clips.
                     VStack(alignment: .leading, spacing: 4) {
                         SourceLabel(source: note.source)
                         Text(note.savedAt, format: .dateTime.month(.abbreviated).day())
                             .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(Theme.secondaryText)
                     }
                 }
                     Spacer(minLength: 0)
@@ -263,7 +280,7 @@ struct MemoryRow: View {
                         .accessibilityLabel(MemoryWords.forgetTitle)
                 }
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 .buttonStyle(.plain)
             }
         }
@@ -286,16 +303,16 @@ struct SourceLabel: View {
     var body: some View {
         Label {
             Text(source.label)
-                .foregroundStyle(source == .inferred ? Color.primary : Color.secondary)
+                .foregroundStyle(source == .inferred ? AnyShapeStyle(.primary) : AnyShapeStyle(Theme.secondaryText))
         } icon: {
             Image(systemName: source.symbol)
-                .foregroundStyle(source == .inferred ? Theme.accent : .secondary)
+                .foregroundStyle(source == .inferred ? AnyShapeStyle(Theme.accentSymbol) : AnyShapeStyle(Theme.secondaryText))
         }
             .font(.caption.weight(.medium))
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(
-                (source == .inferred ? Theme.accent : Color.secondary).opacity(0.12),
+                source == .inferred ? Theme.accent.opacity(Theme.accentWash) : Color.primary.opacity(Theme.fieldTint),
                 in: Capsule()
             )
             .fixedSize(horizontal: false, vertical: true)
@@ -308,6 +325,17 @@ struct SourceLabel: View {
 @MainActor
 final class MemoryModel: ObservableObject {
     let store: MemoryStore
+    /// Whether the words here may promise the device.
+    /// Whether the words here may promise the device. The screen keeps it
+    /// up to date, since turning the cloud on or starting a cloud chat
+    /// changes it while the notes stay open.
+    @Published var place: PrivacyPlace {
+        didSet {
+            // A "Saved" line on screen promises what was true when it was
+            // said. Say it again with the flag as it is now.
+            if place != oldValue, status == MemoryWords.saved(oldValue) { status = MemoryWords.saved(place) }
+        }
+    }
     @Published private(set) var notes: [MemoryNote] = []
     @Published private(set) var isUnreadable = false
     @Published private(set) var isUnavailable = false
@@ -330,8 +358,9 @@ final class MemoryModel: ObservableObject {
     /// sometimes the cloud setting with them.
     private let alsoForget: (@MainActor () throws -> CloudHelp.Forgot)?
 
-    init(store: MemoryStore, alsoForget: (@MainActor () throws -> CloudHelp.Forgot)? = nil) {
+    init(store: MemoryStore, place: PrivacyPlace, alsoForget: (@MainActor () throws -> CloudHelp.Forgot)? = nil) {
         self.store = store
+        self.place = place
         self.alsoForget = alsoForget
         refresh()
     }
@@ -351,6 +380,11 @@ final class MemoryModel: ObservableObject {
     /// False while the saved notes can't be read or opened, so they stay untouched.
     var canAdd: Bool { !isUnreadable && !isUnavailable }
 
+    /// The store refuses notes it can't read or open, so the words that were
+    /// typed stay in the field and the file stays as it was. The screen
+    /// refuses first too, as a second guard, so notes it last saw as
+    /// unreadable or locked are never written over even if the store
+    /// changes how it reads them.
     func add() {
         guard canAdd else {
             status = isUnavailable ? MemoryWords.unavailable : MemoryWords.unreadable
@@ -419,7 +453,7 @@ final class MemoryModel: ObservableObject {
     private func report(_ decision: @autoclosure () throws -> MemoryStore.Decision, onSaved: () -> Void) {
         do {
             switch try decision() {
-            case .saved: status = MemoryWords.saved; savedCount += 1; onSaved()
+            case .saved: status = MemoryWords.saved(place); savedCount += 1; onSaved()
             case .needsWords: status = MemoryWords.needsWords
             case .tooLong: status = MemoryWords.tooLong
             case .notFound: status = nil; cancelEdit()

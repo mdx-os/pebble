@@ -9,9 +9,12 @@ in one place, `Config/Brand.xcconfig`, so the product can be renamed without
 touching code.
 
 Status: the app opens a first conversation on Mac, iPhone, and iPad. You can
-name your agent on the device. After the first run, home is Today: a feed of
-what the agent did, made and noticed, with any question that needs your yes
-pinned on top. The feed shows sample cards only in the showcase screens.
+name your agent on the device. After the first run, home is Today, with the
+chat's composer right on it: type, press Return, and the chat opens with your
+words sent. Today is built to hold what the agent did, made and noticed, with
+any question that needs your yes pinned on top, but no real source of
+finished work ships yet, so for now it is a quiet place to start a chat. The
+feed shows sample cards, marked as examples, only in the showcase screens.
 Replies come from an on-device placeholder until a local model adapter is
 plugged in. See [the roadmap](#roadmap).
 
@@ -76,7 +79,9 @@ chooses one.
   is sent when the notes or private words can't be read. The setting and the
   private words are kept next to the notes, out of backups. Sign-in is a
   `CloudAuth` hook that adds nothing by default and may only use the network
-  after the person says yes; no keys live in the repo.
+  after the person says yes; no keys live in the repo. `CloudModel` reports
+  `PrivacyPlace.mayLeaveDevice`, so a chat started with the cloud on makes
+  no device promise anywhere.
 
 ## The agent's name
 

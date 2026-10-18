@@ -14,9 +14,9 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// Today with sample work, with a question waiting, and for a brand new
     /// person with nothing yet.
     case today, todayNeedsYou, todayEmpty
-    /// A reply on its way, a new chat with its starters, and a memory with
-    /// nothing in it yet.
-    case thinking, newChat, memoryEmpty
+    /// A reply on its way, a new chat with its starters, a memory with
+    /// nothing in it yet, and a note just saved.
+    case thinking, newChat, memoryEmpty, memorySaved
     /// The cloud setting off, the question before it turns on, and the
     /// preview of exactly what would leave the device.
     case cloudOff, cloudAsk, cloudPreview
@@ -59,7 +59,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     store: InMemoryOnboardingStore(),
                     looks: looks,
                     // The showcase plays the on-device model, as the app does.
-                    onDevice: LocalStubModel().runsOnDevice,
+                    onDevice: LocalStubModel().privacyPlace.staysOnDevice,
                     startAt: page,
                     draftName: self == .name || self == .look || self == .ideas ? "Pip" : ""
                 ) { _ in }
@@ -79,9 +79,12 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                              look: AgentLook.load(from: looks), firstMessage: nil)
                 }
             case .memory:
-                MemoryView(store: Self.sampleMemory())
+                MemoryView(store: Self.sampleMemory(), place: LocalStubModel().privacyPlace)
             case .memoryEmpty:
-                MemoryView(store: Self.emptyMemory())
+                MemoryView(store: Self.emptyMemory(), place: LocalStubModel().privacyPlace)
+            case .memorySaved:
+                MemoryView(model: Self.savedNoteMemory(place: LocalStubModel().privacyPlace),
+                           place: LocalStubModel().privacyPlace)
             case .cloudOff, .cloudAsk:
                 NavigationStack {
                     CloudHelpView(help: Self.sampleCloud(asking: self == .cloudAsk))
@@ -95,7 +98,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     let rule = AskFirst.isolated(window: self == .confirmTimedOut ? -1 : AskFirst.defaultWindow)
                     if let request = rule.ask(ProposedAction(
                             kind: .purchase,
-                            recipient: Recipient(id: "merchant:sample-bakery", displayName: "Rise Bakery", handle: "risebakery.ca"),
+                            recipient: Recipient(id: "merchant:sample-bakery", displayName: "Rise Bakery", handle: "risebakery.example"),
                             details: "Sourdough loaf and two croissants, pickup at 9",
                             price: Price(minorUnits: 1450, currency: "CAD")
                         )) {
@@ -113,12 +116,13 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     }
 
     /// One purchase waiting for a yes, asked through its own rule so the
-    /// showcase never touches the app's.
+    /// showcase never touches the app's. Marked as an example, so its card
+    /// and its sheet say so.
     static func sampleQuestion(at now: Date = morning) -> NeedsYou {
-        let asks = NeedsYou(rule: .isolated())
+        let asks = NeedsYou(rule: .isolated(), isSample: true)
         asks.ask(ProposedAction(
             kind: .purchase,
-            recipient: Recipient(id: "merchant:sample-bakery", displayName: "Rise Bakery", handle: "risebakery.ca"),
+            recipient: Recipient(id: "merchant:sample-bakery", displayName: "Rise Bakery", handle: "risebakery.example"),
             details: "Sourdough loaf and two croissants, pickup tomorrow at 9",
             price: Price(minorUnits: 1450, currency: "CAD")
         ), at: now - 4 * 60)
@@ -156,19 +160,23 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     static let sampleEndpoint = URL(string: "https://cloud.example.com")!
 
     /// The cloud setting, off, with one private word. `asking` opens on the
-    /// question before turning it on.
+    /// question before turning it on. With the cloud off and no cloud chat
+    /// open, the flag is the on-device model's, as `HomeView` would set it.
     @MainActor
     static func sampleCloud(asking: Bool = false) -> CloudHelp {
         let help = CloudHelp(
             store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: false, privateWords: ["lemon cake"])),
             endpoint: sampleEndpoint, memory: sampleMemory(), transport: { NoSendTransport() }
         )
+        help.place = HomeView.surfacePlace(chat: LocalStubModel().privacyPlace,
+                                           newChat: help.privacyPlace(local: LocalStubModel()))
         if asking { help.setOn(true) }
         return help
     }
 
-    /// A chat on the cloud model with its preview showing. The preview is
-    /// built by the same code a real reply uses.
+    /// A chat on the cloud model with its preview showing, presented the
+    /// way `HomeView` presents it. The preview is built by the same code a
+    /// real reply uses.
     @MainActor
     static func cloudPreviewChat(brand: Brand, looks: UserDefaults) -> some View {
         let memory = sampleMemory()
@@ -192,8 +200,9 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         controller.isReplying = true
         return ZStack {
             Backdrop()
-            ChatView(controller: controller, look: AgentLook.load(from: looks), firstMessage: nil)
+            ChatView(controller: controller, look: AgentLook.load(from: looks), firstMessage: nil, covered: true)
         }
+        .cloudPreview(review)
     }
 
     static func emptyMemory() -> MemoryStore {
@@ -201,6 +210,22 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         let store = MemoryStore(fileURL: url)
         try? store.forgetEverything()
         return store
+    }
+
+    /// A first note, just added the way a person adds one, so the saved
+    /// line shows under it. The note goes to a scratch file of its own,
+    /// which is removed once it is saved: the model keeps what it read, so
+    /// the screen still shows the note and nothing is left behind.
+    @MainActor
+    static func savedNoteMemory(place: PrivacyPlace) -> MemoryModel {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("showcase-saved-memory-\(UUID().uuidString).json")
+        let store = MemoryStore(fileURL: url)
+        let model = MemoryModel(store: store, place: place)
+        model.newNote = "Sam's birthday is May 14. Loves lemon cake."
+        model.add()
+        try? store.forgetEverything()
+        return model
     }
 
     private var page: OnboardingView.Page {
