@@ -61,6 +61,16 @@ public struct Conversation: Sendable, Equatable {
         return next
     }
 
+    /// Adds a line the agent says on this device without asking a model,
+    /// such as an offer to look into something.
+    public func appendingAgent(_ text: String, id: UUID = UUID()) throws -> Conversation {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw ConversationError.blank }
+        var next = self
+        next.turns.append(ChatTurn(id: id, speaker: .agent, text: trimmed))
+        return next
+    }
+
     /// The conversation without the turn `id`, as when the person chose not
     /// to send it. Later requests then never carry those words.
     public func removingTurn(_ id: UUID) -> Conversation {

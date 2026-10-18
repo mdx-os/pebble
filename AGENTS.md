@@ -77,7 +77,8 @@ in lint, a skill, or CI.
   closed, so those are not in the summary yet.
 - Forget everything clears the runner (its file and the switch's) and
   everything `TaskStore` keeps (saved tasks, receipts, nudges) in one tap.
-  `BackgroundFeedTests` guards both together.
+  `BackgroundFeedTests` guards both together. Each window's recons go in
+  the same tap, and `TaskStore` never keeps a recon (`ReconNeedsYouTests`).
 - "Locked" for the runner means its file can't be opened yet, found by
   trying the file (`BackgroundConditions.background(store:...)`). Never
   derive it from `isProtectedDataAvailable` or the screen lock: a phone
@@ -114,6 +115,10 @@ Things no test here can reach. Check each on a real iPhone before a release.
   person sees follows `docs/VOICE.md`.
 - Motion is gentle and stops with Reduce Motion; haptics are light and only
   on iPhone. Shared pieces live in `PebbleUI/Presence.swift`.
+- Never move VoiceOver focus while a line is being read; it cuts the line off.
+  Wait for `announcementDidFinishNotification`, or leave focus alone. Manual
+  check before merging such a change: on an iPhone with VoiceOver on, ask the
+  chat to look into something and hear the whole offer before "Look into it".
 - Private by default: personal content never leaves the device without consent.
 - Local open-weight models by default; cloud models only when the user chooses.
 - Every action the agent can take is a capability with a permission and a log entry.

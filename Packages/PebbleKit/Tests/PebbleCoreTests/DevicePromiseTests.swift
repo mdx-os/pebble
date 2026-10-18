@@ -111,7 +111,7 @@ enum DevicePromise {
         Allowed(file: "PebbleCore/Feed.swift", literal: "These are examples for now. Nothing was sent or bought.",
                 reason: "FeedWords.sampleNote off the device. \"Nothing was sent\" is about the example cards' actions, "
                     + "which never ran, not about where words go, so it is true with any model."),
-    ] + cloud + ideaFitKeywords.map { keyword in
+    ] + cloud + recon + ideaFitKeywords.map { keyword in
         Allowed(file: "PebbleCore/IdeaDraft.swift", literal: keyword,
                 reason: "A keyword IdeaDraft.fit looks for in a competitor's own words, to score how private that "
                     + "product is. Matched with `contains`, never shown to anyone, and promises nothing about this app.")
@@ -292,6 +292,60 @@ enum DevicePromise {
                 reason: "The preview's count of hidden private words, many. " + privateWordsName),
     ]
 
+    /// A summary's cloud note says what the cloud did or didn't do for it.
+    static let reconCloudNote = "A note on a summary the cloud was asked for (CloudReconSummarizer), shown only after "
+        + "the cloud was chosen for it. \"Cloud\" names that model. \"Without the cloud\" says which helper wasn't "
+        + "used, never that words stayed on the device, so it is true with the cloud on or off."
+
+    /// The lines of looking into something that name the cloud.
+    static let recon: [Allowed] = [
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Nothing went to the cloud. What you wrote is still here.",
+                reason: "CloudWords.withdrawn, said when a cloud chat's preview was taken away before any answer, "
+                    + "so CloudModel sent nothing (CloudModelError.withdrawn). It is about that one message, which "
+                    + "is back in the composer, and promises nothing about where the next one goes."),
+        Allowed(file: "PebbleCore/Recon.swift",
+                literal: "You chose not to send it, so I put this together without the cloud.",
+                reason: reconCloudNote + " ReconWords.declinedCloud follows a Don't send."),
+        Allowed(file: "PebbleCore/Recon.swift",
+                literal: "I couldn't use the answer from the cloud, so I put this together without it.",
+                reason: reconCloudNote + " ReconWords.cloudUnreadable: the request may have gone, and it says so."),
+        Allowed(file: "PebbleCore/Recon.swift",
+                literal: "I couldn't reach the cloud just now, so I put this together without it.",
+                reason: reconCloudNote + " ReconWords.cloudUnavailable never says nothing went."),
+        Allowed(file: "PebbleCore/Recon.swift",
+                literal: "Nothing went to the cloud, so I put this together without it.",
+                reason: reconCloudNote + " ReconWords.cloudWithdrawn follows a preview taken away with no answer, "
+                    + "so CloudModel never sent that request."),
+        Allowed(file: "PebbleCore/Recon.swift",
+                literal: "Help from the cloud was off by then, so I put this together without it.",
+                reason: cloudSettingName + " ReconWords.cloudOff names the setting, which was off."),
+        Allowed(file: "PebbleCore/Recon.swift",
+                literal: "It was stopped after you said send, so some of what I read may already have gone to the cloud. I put this together without it.",
+                reason: reconCloudNote + " ReconWords.cloudStopped follows a Stop after a yes, and says plainly "
+                    + "that words may have left."),
+        Allowed(file: "PebbleCore/Recon.swift",
+                literal: "I stopped, as you asked. You'd already said send, so some of what I read may already have gone to the cloud, and that can't be called back.",
+                reason: reconCloudNote + " ReconWords.stoppedAfterSend is a stopped card's step once a yes let a "
+                    + "request go (ReconRunner.sentToCloud), and says plainly that words may have left."),
+        Allowed(file: "PebbleCore/Recon.swift",
+                literal: "Some of what I read touches on hard things, so I didn't send any of it and put this together without the cloud.",
+                reason: reconCloudNote + " ReconWords.keptForCare: CareCheck kept that request from going."),
+        Allowed(file: "PebbleCore/Recon.swift",
+                literal: "Put into words in the cloud, from these sources. Open sources to read what each one says.",
+                reason: reconCloudNote + " ReconWords.wordedInCloud says words went, the opposite of a device promise."),
+        Allowed(file: "PebbleCore/Recon.swift",
+                literal: "Sources for a summary may already have gone to the cloud, and that can't be called back.",
+                reason: reconCloudNote + " ReconWords.forgotWhileInCloud says words may have left, never that they stayed."),
+        Allowed(file: "PebbleCore/Recon.swift",
+                literal: "I'm already on that one. Today started it with the cloud on, so its summary may be put into words there, only with your yes. Its card is in Today.",
+                reason: reconCloudNote + " ReconWords.alreadyOnWithCloud tells a chat that stays here that the "
+                    + "summary already going may leave, so the chat's own promise stays true."),
+        Allowed(file: "PebbleCore/Recon.swift",
+                literal: "(put into words in the cloud, from the sources it was given)",
+                reason: reconCloudNote + " ReconWords.wordedInCloudMark, in a kept note, says the words went to the cloud."),
+    ]
+
     /// The only files that make a `LocalStubModel`: the app, which wires it
     /// in as the model, the Debug showcase, and the stub itself.
     static let stubMakers: Set<String> = [
@@ -375,6 +429,19 @@ enum DevicePromise {
         CloudWords.forgetTasksAndWordsDetail,
         Redaction.Kind.privateWord.mask,
         Redaction.Kind.privateWord.spoken,
+        CloudWords.withdrawn,
+        ReconWords.declinedCloud,
+        ReconWords.cloudUnreadable,
+        ReconWords.cloudUnavailable,
+        ReconWords.cloudWithdrawn,
+        ReconWords.cloudOff,
+        ReconWords.cloudStopped,
+        ReconWords.stoppedAfterSend,
+        ReconWords.keptForCare,
+        ReconWords.wordedInCloud,
+        ReconWords.forgotWhileInCloud,
+        ReconWords.alreadyOnWithCloud,
+        ReconWords.wordedInCloudMark,
     ] + CloudWords.forgotAndCloudOffNotSummariesLines + CloudWords.askPoints.filter { !found(in: $0).isEmpty }
 
     /// Lines built at run time around an allowed literal, each with the
@@ -382,7 +449,8 @@ enum DevicePromise {
     static let allowedBuiltLines: [(line: String, literal: String)] = [
         (Redaction.Kind.privateWord.counted(1), "private word"),
         (Redaction.Kind.privateWord.counted(2), "private words"),
-    ]
+    ] + ReconWords.all.filter { $0.contains(ReconWords.wordedInCloudMark) && $0 != ReconWords.wordedInCloudMark }
+        .map { ($0, ReconWords.wordedInCloudMark) }
 
     /// A literal is gated when it is the true branch of a ternary whose
     /// whole condition is `.staysOnDevice` read inline from a

@@ -45,6 +45,9 @@ struct CopyDashTests {
         ProposedAction.yesTitle, ProposedAction.noTitle, ProposedAction.declined,
         CareCheck.reply, CareCheck.followUp,
     ] + PrivacyPlaceTests.everyPlace.map(CloudWords.offDetail)
+      + PrivacyPlaceTests.everyPlace.flatMap { place in
+          [ReconWords.offer("the pool", examples: true, place: place), ReconWords.rememberDetail(place)]
+      }
       + FirstConversation.jobs.flatMap { [$0.title, $0.prompt] }
       + Proactivity.allCases.flatMap { [$0.title, $0.detail] }
       + AgentLook.allCases.map(\.title)
@@ -53,6 +56,8 @@ struct CopyDashTests {
       + CloudWords.all
       + Redaction.Kind.allCases.flatMap { [$0.mask, $0.counted(1), $0.counted(2)] }
       + TaskWords.all
+      + ReconWords.all
+      + [MemorySource.lookedUp("Riverside Gazette").label, MemorySource.lookedUp("").label]
       + BackgroundWordsTests.all
       + MemoryWords.couldNotForgetSummariesLines
       + ReceiptWords.all
@@ -60,6 +65,54 @@ struct CopyDashTests {
 
     @Test func noScreenWordsUseADash() {
         for line in Self.copy {
+            #expect(!line.contains(where: Self.dashes.contains), "dash in: \(line)")
+        }
+    }
+
+    /// Recon lines built at run time, from real summaries and dates, so a
+    /// dash slipping into a format string or a date style is caught too.
+    @Test func reconLinesBuiltAtRunTimeUseNoDash() throws {
+        let topic = "the Riverside pool reopening"
+        // Read as real pages, so every point has a note to check.
+        let pool = try ReconTests.realSummary(SampleSources.poolTopic)
+        let library = try ReconTests.summary(SampleSources.libraryTopic)
+        let now = ReconTests.readOn
+        let cloud = ReconSummary(id: pool.id, topic: pool.topic, overview: pool.overview, points: pool.points,
+                                 sources: pool.sources, gatheredAt: pool.gatheredAt, madeOnDevice: false)
+        var lines = [
+            ReconWords.offer(topic), ReconWords.offer(topic, examples: true, place: .onDevice),
+            ReconWords.offer(topic, examples: true, place: .mayLeaveDevice),
+            pool.overview, library.overview, cloud.overview, pool.plainText, cloud.plainText,
+            ReconWords.overview(topic: topic, sources: 3, backedTwice: 0, disagreements: 2, old: 3),
+            ReconWords.disputedBy(pool.sources.map(\.publisher)),
+            // The cloud's cut dispute, which names no side.
+            ReconWords.disputedBy([]), ReconWords.pointTooLong,
+            ReconWords.previewForSummary(topic), ReconWords.previewForSummary(nil),
+            ReconWords.reading(2), ReconWords.reading(12), ReconWords.keptSources(2), ReconWords.keptSources(12),
+            ReconWords.followUpDraft(topic), ReconWords.askLine(topic), ReconWords.nothingFound(topic),
+            ReconWords.morePoints(3), ReconWords.from(pool.sources.map(\.publisher)),
+            // The chat's line when a preview was taken away unanswered.
+            CloudWords.withdrawn,
+        ]
+        // What VoiceOver says each source's link does, from its own host.
+        lines += pool.sources.compactMap(\.link).map { ReconWords.pageLinkHint($0.host) }
+        #expect(lines.contains("Opens gazette.example.org in your browser."))
+        lines += pool.points.flatMap { [pool.note(for: $0), cloud.note(for: $0), $0.text].compactMap { $0 } }
+        lines += pool.disagreements.map(\.text)
+        lines += (pool.points + cloud.points).compactMap { pool.memorySource(for: $0)?.label }
+        // The gathered line in the time style of a few places, since a
+        // locale's own style could bring a dash in. The app reads the
+        // person's own locale, so these stand in for what it may be.
+        for identifier in ["en_US", "en_GB", "fr_FR", "ja_JP"] {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.locale = Locale(identifier: identifier)
+            let locale = Locale(identifier: identifier)
+            let dates: [Date] = [now, now - 86_400, now - 9 * 86_400, now - 400 * 86_400]
+            for date in dates {
+                lines.append(ReconWords.gathered(date, now: now, calendar: calendar, locale: locale))
+            }
+        }
+        for line in lines {
             #expect(!line.contains(where: Self.dashes.contains), "dash in: \(line)")
         }
     }
