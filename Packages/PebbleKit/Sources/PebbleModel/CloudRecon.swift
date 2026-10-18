@@ -55,9 +55,8 @@ public struct CloudReconSummarizer: ReconSummarizer {
         } catch {
             return onDevice(ReconWords.cloudUnavailable)
         }
-        let fallback = onDevice(nil)
-        return Self.parse(reply, task: task, id: id, sources: sources, gatheredAt: gatheredAt,
-                          fallbackOverview: fallback.overview) ?? onDevice(ReconWords.cloudUnreadable)
+        return Self.parse(reply, task: task, id: id, sources: sources, gatheredAt: gatheredAt)
+            ?? onDevice(ReconWords.cloudUnreadable)
     }
 
     /// What is sent, before redaction. The person sees it, redacted, in the preview.
@@ -76,10 +75,12 @@ public struct CloudReconSummarizer: ReconSummarizer {
     }
 
     /// Reads the answer. Nil when it has no point that names a real source.
+    /// Its SUMMARY line is read past, never shown: the overview of a summary
+    /// worded in the cloud is the plain one that only says what was read
+    /// (see `ReconSummary`).
     public static func parse(_ reply: String, task: ReconTask, id: String, sources: [ReconSource],
-                             gatheredAt: Date, fallbackOverview: String) -> ReconSummary? {
+                             gatheredAt: Date) -> ReconSummary? {
         guard !sources.isEmpty else { return nil }
-        var overview: (String, [String])?
         var points: [ReconPoint] = []
         var disagreements: [(String, [String])] = []
         for raw in reply.split(whereSeparator: \.isNewline) {
@@ -88,7 +89,7 @@ public struct CloudReconSummarizer: ReconSummarizer {
             let (text, ids) = refs(rest, sources: sources)
             guard !text.isEmpty, !ids.isEmpty else { continue }
             switch kind {
-            case "SUMMARY": if overview == nil { overview = (text, ids) }
+            case "SUMMARY": continue
             case "POINT": points.append(ReconPoint(id: "point:\(points.count)", text: text, sourceIDs: ids))
             default: if Set(ids).count >= 2 { disagreements.append((text, ids)) }
             }
@@ -130,8 +131,7 @@ public struct CloudReconSummarizer: ReconSummarizer {
             }
         }
         // The model's own retelling, so the card says where the words came from.
-        let summary = ReconSummary(id: id, topic: task.topic, overview: overview?.0 ?? fallbackOverview,
-                                   overviewSourceIDs: overview?.1 ?? [], points: points, sources: sources,
+        let summary = ReconSummary(id: id, topic: task.topic, overview: "", points: points, sources: sources,
                                    gatheredAt: gatheredAt, madeOnDevice: false, note: ReconWords.wordedInCloud)
         return summary.points.isEmpty ? nil : summary
     }

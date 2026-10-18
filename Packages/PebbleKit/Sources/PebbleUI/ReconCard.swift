@@ -136,6 +136,12 @@ struct ReconCard: View {
         return source.isOld(at: gatheredAt) ? "\(line). \(ReconWords.olderLabel)" : line
     }
 
+    /// What VoiceOver reads for the footer: when it was gathered, then how
+    /// it was made, such as worded in the cloud, not sent, or withdrawn.
+    var footerSpoken: String {
+        [gathered, summary.note].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
     private var footer: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(gathered)
@@ -146,7 +152,8 @@ struct ReconCard: View {
         .font(.footnote)
         .foregroundStyle(Theme.secondaryText)
         .fixedSize(horizontal: false, vertical: true)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(footerSpoken)
     }
 
     enum Action: Hashable { case sources, followUp, remember, dismiss }
@@ -301,6 +308,10 @@ struct ReconSourcesSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
 
+    /// Under the points: how they were made. Here above all, beside each
+    /// source's own text, a retelling from the cloud must never read as a quote.
+    var pointsNote: String? { summary.points.isEmpty ? nil : summary.note }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -318,6 +329,13 @@ struct ReconSourcesSheet: View {
                                 .accessibilityAddTraits(.isHeader)
                             ForEach(summary.points) { point in
                                 ReconPointRow(point: point, summary: summary)
+                            }
+                            if let pointsNote {
+                                Text(pointsNote)
+                                    .font(.footnote)
+                                    .foregroundStyle(Theme.secondaryText)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .accessibilityIdentifier("pointsNote")
                             }
                         }
                         .padding(16)
@@ -388,6 +406,12 @@ struct ReconRememberSheet: View {
 
     static let title = ReconWords.rememberTitle
 
+    /// What VoiceOver says for a point's button: the point's own words with
+    /// it, so a button heard alone says which point it keeps.
+    static func buttonLabel(_ point: ReconPoint, kept: Bool) -> String {
+        kept ? ReconWords.rememberedLabel(point.text) : ReconWords.rememberThisLabel(point.text)
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -413,6 +437,7 @@ struct ReconRememberSheet: View {
                             }
                             .buttonStyle(CardButtonStyle(kind: kept ? .quiet : .secondary))
                             .disabled(kept)
+                            .accessibilityLabel(Self.buttonLabel(point, kept: kept))
                         }
                         .padding(16)
                         .frame(maxWidth: .infinity, alignment: .leading)

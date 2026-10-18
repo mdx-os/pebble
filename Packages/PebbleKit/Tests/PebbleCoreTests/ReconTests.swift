@@ -1,5 +1,6 @@
 import Foundation
 @testable import PebbleCore
+import ReconTestSupport
 import Testing
 
 struct ReconTests {
@@ -26,6 +27,10 @@ struct ReconTests {
         ("Hey Pip, look into flu shots near us", "flu shots near us"),
         ("help me read up on composting", "composting"),
         ("I\u{2019}d like you to dig into the hydro bill", "the hydro bill"),
+        // "would you mind" comes off whole, ahead of the shorter "would you".
+        ("Would you mind looking into the bus strike?", "the bus strike"),
+        ("would you mind researching quiet dishwashers for me", "quiet dishwashers"),
+        ("Would you mind, please look into flu shots near us", "flu shots near us"),
     ])
     func asksToLookIntoSomething(said: String, topic: String) {
         #expect(ReconIntent.topic(in: said) == topic)
@@ -45,6 +50,9 @@ struct ReconTests {
         "Plan my morning",
         "So sorry, I'm late",
         "Remind me about the pool",
+        // Without "would you mind" before it, "looking into" is a statement.
+        "Looking into the pool was fun",
+        "Researching quiet dishwashers took all day",
         "",
     ])
     func ordinarySentencesAreNotRequests(said: String) {
@@ -121,9 +129,24 @@ struct ReconTests {
         let summary = ReconSummary(id: "t", topic: "the pool", overview: "The pool is shut forever.",
                                    overviewSourceIDs: ["nowhere"],
                                    points: [ReconPoint(id: "a", text: "Real.", sourceIDs: [source.id])],
-                                   sources: [source], gatheredAt: Self.readOn, madeOnDevice: false)
+                                   sources: [source], gatheredAt: Self.readOn, madeOnDevice: true)
         #expect(summary.overview.hasPrefix("I read 1 source on the pool."))
         #expect(summary.overviewSourceIDs.isEmpty)
+    }
+
+    /// The card shows no source numbers beside an overview, so one worded
+    /// in the cloud is never used, even when it names real sources. The
+    /// plain one, which only says what was read, stands in.
+    @Test func anOverviewWordedInTheCloudIsAlwaysThePlainOne() {
+        let source = Self.sources.documents[0]
+        let summary = ReconSummary(id: "t", topic: "the pool", overview: "The pool reopens on November 3.",
+                                   overviewSourceIDs: [source.id],
+                                   points: [ReconPoint(id: "a", text: "Retold.", sourceIDs: [source.id])],
+                                   sources: [source], gatheredAt: Self.readOn, madeOnDevice: false)
+        #expect(summary.overview == ReconWords.overview(topic: "the pool", sources: 1, backedTwice: 0,
+                                                        disagreements: 0, old: 0))
+        #expect(summary.overviewSourceIDs.isEmpty)
+        #expect(!summary.plainText.contains("November 3"))
     }
 
     @Test func noPointsAtAllWhenNothingWasFound() throws {
@@ -454,28 +477,53 @@ struct ReconTests {
         #expect(MemorySource.lookedUp(" ").label == "From something I looked into")
     }
 
-    @Test func reconWordsAreCalmAndUseNoDashes() {
+    /// Dashes are checked over `ReconWords.all` by `CopyDashTests`.
+    @Test func reconWordsAreCalm() {
         for line in ReconWords.all {
-            #expect(!line.contains("\u{2014}") && !line.contains("\u{2013}"), "dash in: \(line)")
             #expect(!line.contains("!"), "exclamation in: \(line)")
         }
     }
-}
 
-/// Holds a summary back until the test lets it go.
-actor Gate {
-    private var isOpen = false
-    private var waiting: [CheckedContinuation<Void, Never>] = []
-
-    func wait() async {
-        if isOpen { return }
-        await withCheckedContinuation { waiting.append($0) }
+    /// The newest line is in the list the dash and tone checks read.
+    @Test func everyCloudNoteIsInTheCheckedList() {
+        for line in [ReconWords.cloudWithdrawn, ReconWords.declinedCloud, ReconWords.cloudUnreadable,
+                     ReconWords.cloudUnavailable, ReconWords.wordedInCloud, ReconWords.forgotWhileInCloud,
+                     ReconWords.alreadyOn] {
+            #expect(ReconWords.all.contains(line), "not checked: \(line)")
+        }
     }
 
-    func open() {
-        isOpen = true
-        for continuation in waiting { continuation.resume() }
-        waiting = []
+    // MARK: A disputed point too long to keep whole
+
+    /// The person can't shorten a note they didn't write, so when the whole
+    /// disagreement would make it too long, it names only the sides. It is
+    /// still never kept as if it were settled.
+    @Test func aLongDisputeIsCutToItsSidesSoThePointCanBeKept() throws {
+        let pages = Self.sources.documents.filter { ["sample:gazette-pool", "sample:parks-pool"].contains($0.id) }
+        let long = "Sources don't agree on this. " + String(repeating: "Each page tells it a little differently. ", count: 14)
+        let point = ReconPoint(id: "a", text: "Riverside Pool reopens on November 10.", sourceIDs: ["sample:parks-pool"],
+                               disagreement: ReconDisagreement(text: long, sourceIDs: pages.map(\.id)))
+        let summary = ReconSummary(id: "t", topic: SampleSources.poolTopic, overview: "", points: [point],
+                                   sources: pages, gatheredAt: Self.readOn, madeOnDevice: true)
+        let kept = try #require(summary.points.first)
+        let note = summary.note(for: kept)
+        #expect(note.count <= MemoryStore.maxLength)
+        #expect(!note.contains("a little differently"))
+        #expect(note.hasPrefix(kept.text))
+        #expect(note.hasSuffix(ReconWords.disputedBy(["Riverside Gazette", "City of Riverside Parks"])))
+        #expect(note.contains("Riverside Gazette and City of Riverside Parks don't agree on this."))
+        // It saves.
+        let memory = MemoryStore(fileURL: FileManager.default.temporaryDirectory
+            .appendingPathComponent("recon-memory-\(UUID().uuidString).json"))
+        defer { try? memory.forgetEverything() }
+        guard case .saved = try memory.remember(note, source: summary.memorySource(for: kept)) else {
+            Issue.record("not saved: \(note)")
+            return
+        }
+        // A short dispute is kept whole.
+        let pool = try Self.summary(SampleSources.poolTopic)
+        let disputed = try #require(pool.points.first { $0.disagreement != nil })
+        #expect(pool.note(for: disputed).hasSuffix(try #require(disputed.disagreement?.text)))
     }
 }
 

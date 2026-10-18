@@ -153,14 +153,19 @@ public struct HomeView: View {
         // cloud asks through Today's own preview gate.
         let review = feed.cloudReview
         feed.summarizer = { ReconSummarizers.choose(for: cloud?.chatModel(local: model, review: review) ?? model) }
+        if let cloud { feed.follow(cloudSettings: cloud.$settings.eraseToAnyPublisher()) }
         return feed
     }
 
     /// Lets a chat offer to look into something. It starts only on the person's tap.
     /// An on-device chat's recon stays on this device, whatever the cloud
-    /// setting is when the person taps.
+    /// setting is when the person taps. When Today can't start one at all,
+    /// the chat is left unable to offer, so "research X" gets a reply
+    /// rather than an offer whose tap could only fail.
     static func wired(_ chat: ChatController, to feed: FeedModel) -> ChatController {
-        chat.lookInto = { [weak feed] topic, onDevice in feed?.lookInto(topic, onDevice: onDevice) ?? false }
+        chat.lookInto = feed.canLookInto
+            ? { [weak feed] topic, onDevice in feed?.lookInto(topic, onDevice: onDevice) ?? false }
+            : nil
         chat.reconReadsExamples = feed.readsExamples
         return chat
     }

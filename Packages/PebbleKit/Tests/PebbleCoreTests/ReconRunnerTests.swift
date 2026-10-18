@@ -1,5 +1,6 @@
 import Foundation
 @testable import PebbleCore
+import ReconTestSupport
 import Testing
 
 /// The runner's promises about when a summary is begun, kept, let go and
@@ -55,25 +56,80 @@ struct ReconRunnerTests {
         #expect(!runner.isRecon(id))
     }
 
+    /// The runner says up front whether a start could happen, so a chat
+    /// never offers what every tap would refuse.
+    @Test func theRunnerSaysWhetherItCanStartOne() {
+        #expect(ReconRunner(engine: ReplayEngine(), provider: Self.sources).canLookInto)
+        #expect(ReconRunner(engine: LocalFakeEngine(rule: .isolated()), provider: Self.sources).canLookInto)
+        // An engine that picks its own steps, or pages that leave the device: never.
+        #expect(!ReconRunner(engine: OwnStepsEngine(), provider: Self.sources).canLookInto)
+        #expect(!ReconRunner(engine: ReplayEngine(), provider: RecordingProvider()).canLookInto)
+    }
+
     // MARK: Stop keeps nothing
 
-    /// A summary that lands after Stop is tapped, but before the engine has
-    /// answered, is dropped: Stop wins.
-    @Test func stopWinsOverASummaryThatLandsWhileItStops() throws {
-        let engine = ReplayEngine()
+    /// What a recon whose summary is still coming can be stopped with, and
+    /// the summary that would come back for it.
+    func waitingRecon(_ engine: ReplayEngine) throws -> (ReconRunner, String, ReconSummary) {
         let runner = ReconRunner(engine: engine, provider: Self.sources, now: { Self.readOn })
         let id = try #require(runner.lookInto(SampleSources.poolTopic, with: GatedSummarizer(gate: Gate())))
-        engine.finish(id)
-        #expect(runner.held(id)?.working == true)
         let task = try #require(ReconTask(topic: SampleSources.poolTopic))
         let late = LocalReconSummarizer().summary(task, id: id, sources: try Self.sources.sources(for: task),
                                                   gatheredAt: Self.readOn)
-        engine.duringStop = { [runner] stopping in runner.finish(stopping, round: 0, with: late) }
+        return (runner, id, late)
+    }
+
+    /// The engine has finished and the card waits only on its summary.
+    /// Stop is tapped; the engine answers that it had nothing running, and
+    /// before the runner has stopped the card itself, the summary lands. It
+    /// is dropped: Stop wins. The round is read from the runner, so the
+    /// summary would land if no stop were under way (see the control).
+    @Test func stopWinsOverASummaryThatLandsBeforeTheRunnerHasStopped() throws {
+        let engine = ReplayEngine()
+        let (runner, id, late) = try waitingRecon(engine)
+        engine.finish(id)
+        let held = try #require(runner.held(id))
+        #expect(held.working)
+        engine.duringStop = { [runner] stopping in runner.finish(stopping, round: held.round, with: late) }
         #expect(runner.stop(id))
         #expect(runner.tasks.first { $0.id == id }?.state == .stopped)
         #expect(runner.summary(for: id) == nil)
         #expect(runner.held(id)?.hasSummary == false)
         #expect(runner.held(id)?.sources == 0)
+    }
+
+    /// The engine was still playing the card when Stop was tapped. It
+    /// stops it, and the summary lands after that, before `stop` returns.
+    /// It is dropped too.
+    @Test func stopWinsOverASummaryThatLandsAfterTheEngineStopped() throws {
+        let engine = ReplayEngine()
+        let (runner, id, late) = try waitingRecon(engine)
+        engine.show(id, step: ReconWords.puttingTogether)
+        let held = try #require(runner.held(id))
+        #expect(held.working)
+        engine.duringStop = { [runner] stopping in runner.finish(stopping, round: held.round, with: late) }
+        #expect(runner.stop(id))
+        #expect(engine.tasks.first { $0.id == id }?.state == .stopped)
+        #expect(runner.tasks.first { $0.id == id }?.state == .stopped)
+        #expect(runner.summary(for: id) == nil)
+        #expect(runner.held(id)?.hasSummary == false)
+    }
+
+    /// The control: the very same call, with no stop under way, lands. So
+    /// the tests above are dropped by Stop, not by a stale round.
+    @Test func theSameSummaryLandsWhenNothingIsStopping() throws {
+        let engine = ReplayEngine()
+        let (runner, id, late) = try waitingRecon(engine)
+        engine.finish(id)
+        let held = try #require(runner.held(id))
+        runner.finish(id, round: held.round, with: late)
+        #expect(runner.held(id)?.hasSummary == true)
+        #expect(runner.summary(for: id) == late)
+        #expect(runner.tasks.first { $0.id == id }?.state == .done)
+        // A round that isn't the live one is dropped.
+        let (other, otherID, otherLate) = try waitingRecon(ReplayEngine())
+        other.finish(otherID, round: held.round + 1, with: otherLate)
+        #expect(other.held(otherID)?.hasSummary == false)
     }
 
     @Test func stoppingClearsTheSummaryAndWhatWasRead() throws {
@@ -165,10 +221,33 @@ struct ReconRunnerTests {
         provider.limit = 2
         #expect(runner.retry(id))
         #expect(runner.held(id)?.sources == 2)
-        engine.show(id, step: ReconWords.reading(4))
-        #expect(runner.tasks.first { $0.id == id }?.step == ReconWords.reading(2))
+        engine.show(id, step: ReconWords.reading(4), kept: [ReconWords.keptQuestions, ReconWords.keptSources(4)])
+        let shown = try #require(runner.tasks.first { $0.id == id })
+        #expect(shown.step == ReconWords.reading(2))
+        #expect(shown.wrapUp?.kept == [ReconWords.keptQuestions, ReconWords.keptSources(2)])
         engine.finish(id)
         #expect(runner.summary(for: id) != nil)
+    }
+
+    /// A retry that finds no sources at all never says "Reading 0 sources"
+    /// or keeps "0 sources". It says it is looking, then that it found nothing.
+    @Test func aRetryThatFindsNothingSaysItIsLooking() throws {
+        let engine = ReplayEngine()
+        let provider = ShrinkingProvider()
+        let runner = ReconRunner(engine: engine, provider: provider, now: { Self.readOn })
+        let id = try #require(runner.lookInto(SampleSources.poolTopic))
+        #expect(runner.stop(id))
+        provider.limit = 0
+        #expect(runner.retry(id))
+        #expect(runner.held(id)?.sources == 0)
+        engine.show(id, step: ReconWords.reading(4), kept: [ReconWords.keptQuestions, ReconWords.keptSources(4)])
+        let shown = try #require(runner.tasks.first { $0.id == id })
+        #expect(shown.step == ReconWords.looking)
+        #expect(shown.wrapUp?.kept == [ReconWords.keptQuestions])
+        engine.finish(id)
+        let done = try #require(runner.tasks.first { $0.id == id })
+        #expect(done.step == ReconWords.nothingFoundLine)
+        #expect(runner.summary(for: id)?.points.isEmpty == true)
     }
 
     @Test func aTaskTheEngineWontRetryStaysAsItWas() throws {
@@ -276,147 +355,29 @@ struct ReconRunnerTests {
         #expect(local.note == nil)
     }
 
+    /// Kept as a note, a point worded on this device names its source, as
+    /// those are the page's own words. One worded in the cloud says it was,
+    /// and its label names no publisher.
+    @Test func aRememberedPointSaysWhoWordedIt() throws {
+        let page = Self.sources.documents[0]
+        let point = ReconPoint(id: "a", text: "The pool reopens soon.", sourceIDs: [page.id])
+        let local = ReconSummary(id: "t", topic: "the pool", overview: "", points: [point],
+                                 sources: [page], gatheredAt: Self.readOn, madeOnDevice: true)
+        #expect(local.memorySource(for: point) == .lookedUp("Riverside Gazette"))
+        #expect(local.note(for: point).contains("(Riverside Gazette, "))
+        #expect(!local.note(for: point).contains("cloud"))
+        let cloud = ReconSummary(id: "t", topic: "the pool", overview: "", points: [point],
+                                 sources: [page], gatheredAt: Self.readOn, madeOnDevice: false)
+        #expect(cloud.memorySource(for: point) == .lookedUp(""))
+        #expect(cloud.memorySource(for: point).label == "From something I looked into")
+        #expect(cloud.note(for: point).contains("(put into words in the cloud from Riverside Gazette, "))
+    }
+
     @Test func aPointOnlyOnOldPagesIsKnownAsOld() throws {
         let summary = try ReconTests.summary(SampleSources.poolTopic)
         let council = try #require(summary.points.first { $0.sourceIDs == ["sample:council-pool"] })
         #expect(summary.restsOnOldPages(council))
         #expect(!summary.points.filter { !$0.sourceIDs.contains("sample:council-pool") }.contains { summary.restsOnOldPages($0) })
-    }
-}
-
-/// A scripted engine that shows none of a script's steps, with a test
-/// moving each task on by hand. Unlike `LocalFakeEngine`, it plays a task
-/// again from any end on retry, as a looser engine might.
-final class ReplayEngine: ScriptedTaskEngine, @unchecked Sendable {
-    let rule = AskFirst.isolated()
-    private let lock = NSLock()
-    private var list: [AgentTask] = []
-    private var observers: [UUID: @Sendable (TaskSnapshot) -> Void] = [:]
-    private var sequence = 0
-    private var made = 0
-    /// Called inside `stop`, after the engine has answered and before
-    /// `stop` returns, so a test can land something in the middle.
-    var duringStop: ((String) -> Void)?
-
-    var tasks: [AgentTask] { lock.lock(); defer { lock.unlock() }; return list }
-
-    func start(_ script: TaskScript) -> String {
-        start(TaskRequest(title: script.title))
-    }
-
-    /// Shows `step` on the card, as an engine playing its script would.
-    func show(_ id: String, step: String) {
-        change {
-            guard let index = list.firstIndex(where: { $0.id == id }) else { return }
-            list[index].step = step
-        }
-    }
-
-    func start(_ request: TaskRequest) -> String {
-        change { () -> String in
-            made += 1
-            let id = "replay:\(made)"
-            list.insert(AgentTask(id: id, title: request.title, step: "Working", startedAt: Date(timeIntervalSince1970: 0)), at: 0)
-            return id
-        }
-    }
-
-    func finish(_ id: String) { set(id, .done) }
-
-    func observe(_ onChange: @escaping @Sendable (TaskSnapshot) -> Void) -> TaskObservation {
-        let key = UUID()
-        lock.lock()
-        observers[key] = onChange
-        let snapshot = TaskSnapshot(sequence: sequence, tasks: list)
-        lock.unlock()
-        onChange(snapshot)
-        return TaskObservation { [weak self] in
-            self?.lock.lock()
-            self?.observers[key] = nil
-            self?.lock.unlock()
-        }
-    }
-
-    func redirect(_ id: String, with instructions: String) -> Bool { false }
-
-    func stop(_ id: String) -> Bool {
-        let active = tasks.first(where: { $0.id == id })?.isActive == true
-        if active { set(id, .stopped) }
-        duringStop?(id)
-        return active
-    }
-
-    func dismiss(_ id: String) -> Bool {
-        change {
-            guard let index = list.firstIndex(where: { $0.id == id }), !list[index].isActive else { return false }
-            list.remove(at: index)
-            return true
-        }
-    }
-
-    func clear() -> ClearedTasks {
-        change {
-            let count = list.count
-            list.removeAll()
-            return ClearedTasks(forgotten: count)
-        }
-    }
-
-    func retry(_ id: String) -> Bool {
-        guard tasks.contains(where: { $0.id == id }) else { return false }
-        set(id, .running)
-        return true
-    }
-
-    func resume(_ id: String, with approval: Approval) -> TaskApproval { .refused }
-    func questionClosed(_ request: ConfirmationRequest) {}
-    func refresh() {}
-
-    private func set(_ id: String, _ state: TaskState) {
-        change {
-            guard let index = list.firstIndex(where: { $0.id == id }) else { return }
-            list[index].state = state
-            list[index].step = state == .done ? "Done" : "Working"
-        }
-    }
-
-    private func change<T>(_ body: () -> T) -> T {
-        lock.lock()
-        let value = body()
-        sequence += 1
-        let snapshot = TaskSnapshot(sequence: sequence, tasks: list)
-        let listeners = Array(observers.values)
-        lock.unlock()
-        for listener in listeners { listener(snapshot) }
-        return value
-    }
-}
-
-/// A clock a test moves by hand.
-final class HandClock: @unchecked Sendable {
-    private let lock = NSLock()
-    private var date: Date
-    init(_ date: Date) { self.date = date }
-    var now: Date {
-        get { lock.lock(); defer { lock.unlock() }; return date }
-        set { lock.lock(); date = newValue; lock.unlock() }
-    }
-}
-
-/// Raised once; anyone waiting goes on.
-actor Flag {
-    private var raised = false
-    private var waiting: [CheckedContinuation<Void, Never>] = []
-
-    func raise() {
-        raised = true
-        for continuation in waiting { continuation.resume() }
-        waiting = []
-    }
-
-    func wait() async {
-        if raised { return }
-        await withCheckedContinuation { waiting.append($0) }
     }
 }
 
@@ -442,32 +403,6 @@ final class ShrinkingProvider: SourceProvider, @unchecked Sendable {
         let all = try ReconTests.sources.sources(for: task)
         return limit.map { Array(all.prefix($0)) } ?? all
     }
-}
-
-/// An engine that picks its own steps for whatever it is asked, and
-/// plays no given script. It only notes what it was asked to start.
-final class OwnStepsEngine: TaskEngine, @unchecked Sendable {
-    let rule = AskFirst.isolated()
-    private let lock = NSLock()
-    private var titles: [String] = []
-    var started: [String] { lock.lock(); defer { lock.unlock() }; return titles }
-    var tasks: [AgentTask] { [] }
-    func start(_ request: TaskRequest) -> String {
-        lock.lock(); titles.append(request.title); lock.unlock()
-        return "own:\(request.title)"
-    }
-    func observe(_ onChange: @escaping @Sendable (TaskSnapshot) -> Void) -> TaskObservation {
-        onChange(TaskSnapshot(sequence: 0, tasks: []))
-        return TaskObservation {}
-    }
-    func redirect(_ id: String, with instructions: String) -> Bool { false }
-    func stop(_ id: String) -> Bool { false }
-    func dismiss(_ id: String) -> Bool { false }
-    func clear() -> ClearedTasks { ClearedTasks(forgotten: 0) }
-    func retry(_ id: String) -> Bool { false }
-    func resume(_ id: String, with approval: Approval) -> TaskApproval { .refused }
-    func questionClosed(_ request: ConfirmationRequest) {}
-    func refresh() {}
 }
 
 /// On this device, and can't be read.

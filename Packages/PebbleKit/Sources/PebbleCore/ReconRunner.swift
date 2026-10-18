@@ -90,6 +90,13 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
 
     // MARK: Looking into something
 
+    /// True when `lookInto` can start anything at all: the engine plays a
+    /// given script and the provider reads on this device. When false, a
+    /// chat never offers, since every tap would end in "couldn't start".
+    public var canLookInto: Bool {
+        provider.runsOnDevice && engine is ScriptedTaskEngine
+    }
+
     /// Starts looking into `topic`. Returns the task's id, or nil when
     /// nothing was started: an empty topic, words of crisis, a provider
     /// that doesn't run on this device, or an engine that doesn't play a
@@ -149,11 +156,14 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         let working: Bool
         let hasSummary: Bool
         let sources: Int
+        /// The live round, so a test lands a summary for this try, not a guess.
+        var round = 0
     }
 
     func held(_ id: String) -> Held? {
         lock.lock(); defer { lock.unlock() }
-        return runs[id].map { Held(begun: $0.begun, working: $0.work != nil, hasSummary: $0.summary != nil, sources: $0.sources.count) }
+        return runs[id].map { Held(begun: $0.begun, working: $0.work != nil, hasSummary: $0.summary != nil,
+                                   sources: $0.sources.count, round: $0.round) }
     }
 
     /// Summaries being put together by a summarizer that may send what was
@@ -256,13 +266,18 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
     }
 
     /// The card's step and what it kept, with the number of sources this
-    /// round read rather than the number its script was made for.
+    /// round read rather than the number its script was made for. A round
+    /// that found none says it is looking, and keeps no "0 sources".
     private static func counted(_ task: AgentTask, _ run: Run) -> AgentTask {
         guard run.read != run.scripted else { return task }
         var shown = task
-        if shown.step == ReconWords.reading(run.scripted) { shown.step = ReconWords.reading(run.read) }
+        if shown.step == ReconWords.reading(run.scripted) {
+            shown.step = run.read == 0 ? ReconWords.looking : ReconWords.reading(run.read)
+        }
         if let wrapUp = shown.wrapUp {
-            let kept = wrapUp.kept.map { $0 == ReconWords.keptSources(run.scripted) ? ReconWords.keptSources(run.read) : $0 }
+            let scripted = ReconWords.keptSources(run.scripted)
+            let kept = run.read == 0 ? wrapUp.kept.filter { $0 != scripted }
+                : wrapUp.kept.map { $0 == scripted ? ReconWords.keptSources(run.read) : $0 }
             shown.wrapUp = TaskWrapUp(kept: kept, notDone: wrapUp.notDone, underway: wrapUp.underway)
         }
         return shown

@@ -48,7 +48,11 @@ struct CloudReconTests {
         #expect(body.contains("[phone number]"))
         #expect(body.contains("The pool reopens on November 10."))
         #expect(!summary.madeOnDevice)
-        #expect(summary.overviewSourceIDs == ["a", "b"])
+        // The model's SUMMARY line has no source numbers on the card, so the
+        // plain overview stands in, which only says what was read.
+        #expect(summary.overviewSourceIDs.isEmpty)
+        #expect(summary.overview.hasPrefix("I read 2 sources"))
+        #expect(!summary.overview.contains("but the two sources give different dates"))
         #expect(summary.points.count == 3)
         #expect(summary.points.allSatisfy { !$0.sourceIDs.isEmpty })
         #expect(summary.disagreements.count == 1)
@@ -74,7 +78,7 @@ struct CloudReconTests {
 
     func parsed(_ reply: String, sources: [ReconSource]? = nil) -> ReconSummary? {
         CloudReconSummarizer.parse(reply, task: task, id: "task:1", sources: sources ?? self.sources,
-                                   gatheredAt: readOn, fallbackOverview: "Plain words.")
+                                   gatheredAt: readOn)
     }
 
     /// The model cites both sides on one side's words. The card never shows
@@ -98,6 +102,13 @@ struct CloudReconTests {
 
     /// A point with a source beside the dispute keeps only that one; a
     /// point whose only source is one side keeps it, as that is its side.
+    ///
+    /// So a point cited [2][3] lets go of source 2, while one cited [2]
+    /// alone keeps it. With [3] beside it, the point has a source no side
+    /// of the dispute claims, so it needn't name a side at all. With [2]
+    /// alone, dropping it would leave the point with no source, and a
+    /// point that names one side and carries the dispute says plainly
+    /// whose words it is.
     @Test func aPointLetsGoOfTheSourcesInADispute() throws {
         let third = ReconSource(id: "c", title: "Swim notes", publisher: "Riverside Swim Club",
                                 url: URL(string: "https://swim.example.org/pool")!, published: readOn,
@@ -115,6 +126,22 @@ struct CloudReconTests {
             """))
         #expect(only.points.map(\.sourceIDs) == [["b"]])
         #expect(only.points.first?.disagreement != nil)
+    }
+
+    /// A point the cloud put into words is a retelling. Kept as a note, it
+    /// says so, and its label names no publisher, so the Gazette is never
+    /// credited with words it didn't write.
+    @Test func aCloudWordedPointIsNeverKeptAsThePublishersOwnWords() throws {
+        let summary = try #require(parsed(Self.goodReply))
+        let gazette = try #require(summary.points.first { $0.sourceIDs == ["a"] })
+        let note = summary.note(for: gazette)
+        #expect(note.hasPrefix(gazette.text))
+        #expect(note.contains("(put into words in the cloud from Riverside Gazette, "))
+        #expect(!note.contains("(Riverside Gazette, "))
+        let source = summary.memorySource(for: gazette)
+        #expect(source == .lookedUp(""))
+        #expect(source.label == "From something I looked into")
+        #expect(!source.label.contains("Riverside Gazette"))
     }
 
     @Test func noSourcesMeansNothingToRead() {

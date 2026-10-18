@@ -191,9 +191,13 @@ side is named in the disagreement, and a remembered point keeps that
 disagreement with it. It says when it was gathered, so the person knows how
 fresh it is. Saving a point to memory happens only on a tap. While the
 only pages to read are examples, the offer says so. Points the cloud put
-into words say so under the card, since they are a retelling, not quotes.
-Sources that couldn't be read are a failure, said plainly, never "nothing
-found".
+into words say so under the card and under the points in Open sources,
+since they are a retelling, not quotes. Remembered, such a point says
+"put into words in the cloud from" its source, and its label names no
+publisher. The overview above a card worded in the cloud is the plain one
+that only says what was read. A kept point is the person's own note: it
+stays when the card goes, and the remember sheet says so. Sources that
+couldn't be read are a failure, said plainly, never "nothing found".
 
 ### Confirmations
 

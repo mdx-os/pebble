@@ -2,6 +2,7 @@
 import Foundation
 import PebbleCore
 import PebbleModel
+import ReconTestSupport
 import SwiftUI
 import Testing
 @testable import PebbleUI
@@ -105,6 +106,7 @@ struct ReconFeedTests {
     @Test func theHomeScreensTodayAsksThroughItsOwnGate() async throws {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
+        defer { try? notes.forgetEverything() }
         let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let model = HomeView.reconFeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: nil,
@@ -121,7 +123,7 @@ struct ReconFeedTests {
         let runner = try #require(model.recon)
         let id = try #require(runner.tasks.first?.id)
         runner.advance(by: 12)
-        for _ in 0..<500 where model.cloudReview.pending == nil { try await Task.sleep(for: .milliseconds(10)) }
+        await eventually { model.cloudReview.pending != nil }
         #expect(model.cloudReview.pending != nil)
         #expect(chat.review?.pending == nil)
         // The screen going away withdraws it, as the home screen does.
@@ -170,6 +172,7 @@ struct ReconFeedTests {
     @Test func turningTheCloudOffWithdrawsBothPreviewsWaitingAtOnce() async throws {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
+        defer { try? notes.forgetEverything() }
         let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let (model, engine, runner) = feed()
@@ -182,21 +185,16 @@ struct ReconFeedTests {
         #expect(model.lookInto(SampleSources.poolTopic))
         let id = try #require(runner.tasks.first?.id)
         engine.advance(by: 30)
-        for _ in 0..<500 where chatReview.pending == nil || today.pending == nil {
-            #expect(maker.wire.sent.isEmpty)
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        await eventually { chatReview.pending != nil && today.pending != nil }
         #expect(chatReview.pending != nil)
         #expect(today.pending != nil)
         #expect(maker.wire.sent.isEmpty)
         _ = cloud.setOn(false)
-        for _ in 0..<500 where chatReview.pending != nil || today.pending != nil {
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        await eventually { chatReview.pending == nil && today.pending == nil }
         #expect(chatReview.pending == nil)
         #expect(today.pending == nil)
         await runner.settle(id)
-        for _ in 0..<500 where chat.isReplying { try await Task.sleep(for: .milliseconds(10)) }
+        await eventually { !chat.isReplying }
         #expect(maker.wire.sent.isEmpty)
         #expect(runner.summary(for: id)?.note == ReconWords.cloudWithdrawn)
     }
@@ -206,9 +204,10 @@ struct ReconFeedTests {
     @Test func aRetryWithTheCloudOnAsksAgain() async throws {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
+        defer { try? notes.forgetEverything() }
         let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
-        let engine = HandEngine()
+        let engine = ReplayEngine()
         let runner = ReconRunner(engine: engine, provider: ReconTestData.sources, now: { [morning] in morning })
         let model = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: runner, place: .mayLeaveDevice,
                               now: { [morning] in morning })
@@ -225,7 +224,7 @@ struct ReconFeedTests {
 
         #expect(runner.retry(id))
         engine.finish(id)
-        for _ in 0..<500 where review.pending == nil { try await Task.sleep(for: .milliseconds(10)) }
+        await eventually { review.pending != nil }
         let second = try #require(review.pending)
         #expect(second.id != first.id)
         // The earlier Send, given again, does nothing.
@@ -338,7 +337,7 @@ struct ReconFeedTests {
     @Test(.timeLimit(.minutes(1)))
     func aSummaryFinishedOffTheMainThreadReachesTheFeedOnIt() async throws {
         let (model, engine, runner) = feed()
-        let gate = UIGate()
+        let gate = Gate()
         let mark = ThreadMark()
         model.summarizer = { HeldSummarizer(gate: gate, mark: mark) }
         var heardOnMain: [Bool] = []
@@ -382,7 +381,7 @@ struct ReconFeedTests {
 
     @Test func forgettingWhileACloudSummaryIsUnderWaySaysItCantBeCalledBack() async throws {
         let (model, engine, runner) = feed()
-        let gate = UIGate()
+        let gate = Gate()
         let mark = ThreadMark()
         model.summarizer = { HeldSummarizer(gate: gate, mark: mark, leaves: true) }
         #expect(model.lookInto(SampleSources.poolTopic))
@@ -393,7 +392,7 @@ struct ReconFeedTests {
         #expect(model.forgotUnderway == ReconWords.forgotWhileInCloud)
         await gate.open()
         // The summary is still put together, late, and nothing keeps it.
-        for _ in 0..<500 where mark.finishedOnMain == nil { try await Task.sleep(for: .milliseconds(10)) }
+        await eventually { mark.finishedOnMain != nil }
         #expect(mark.finishedOnMain != nil)
         try await Task.sleep(for: .milliseconds(50))
         model.refresh()
@@ -438,6 +437,8 @@ struct ReconFeedTests {
         #expect(ImageRenderer(content: sheet.frame(width: 393, height: 800)).cgImage != nil)
     }
 
+    /// The card's footer says how the summary was made, and VoiceOver
+    /// hears it: worded in the cloud, not sent, or withdrawn.
     @Test func aCloudWordedCardSaysSo() throws {
         let pool = try ReconTestData.pool()
         let cloudy = ReconSummary(id: pool.id, topic: pool.topic, overview: pool.overview, points: pool.points,
@@ -445,6 +446,248 @@ struct ReconFeedTests {
         #expect(cloudy.note == ReconWords.wordedInCloud)
         let card = ReconCard(summary: cloudy, time: "9:40 AM", gathered: "Gathered today at 9:40 AM")
         #expect(ImageRenderer(content: card.frame(width: 393)).cgImage != nil)
+        #expect(card.footerSpoken == "Gathered today at 9:40 AM \(ReconWords.wordedInCloud)")
+        for note in [ReconWords.declinedCloud, ReconWords.cloudWithdrawn, ReconWords.cloudUnreadable] {
+            let local = ReconSummary(id: pool.id, topic: pool.topic, overview: pool.overview, points: pool.points,
+                                     sources: pool.sources, gatheredAt: pool.gatheredAt, madeOnDevice: true, note: note)
+            let heard = ReconCard(summary: local, time: "9:40 AM", gathered: "Gathered today at 9:40 AM").footerSpoken
+            #expect(heard.hasPrefix("Gathered today at 9:40 AM"))
+            #expect(heard.contains(note), "not heard: \(note)")
+        }
+        // On the device with nothing to say, only when it was gathered.
+        #expect(ReconCard(summary: pool, time: "", gathered: "Gathered today at 9:40 AM").footerSpoken
+                == "Gathered today at 9:40 AM")
+    }
+
+    /// The sources sheet sets the points beside each page's own text, so
+    /// the note that they were worded in the cloud shows under them there.
+    @Test func theSourcesSheetSaysThePointsWereWordedInTheCloud() throws {
+        let pool = try ReconTestData.pool()
+        let task = try #require(ReconTask(topic: pool.topic))
+        let parsed = try #require(CloudReconSummarizer.parse("""
+            POINT: The pool opens again on November 10, the city says. [2]
+            POINT: Family swim is Saturday mornings. [2]
+            """, task: task, id: pool.id, sources: pool.sources, gatheredAt: pool.gatheredAt))
+        let sheet = ReconSourcesSheet(summary: parsed)
+        #expect(sheet.pointsNote == ReconWords.wordedInCloud)
+        #expect(ImageRenderer(content: sheet.frame(width: 393, height: 1200)).cgImage != nil)
+        #expect(ReconSourcesSheet(summary: pool).pointsNote == nil)
+    }
+
+    // MARK: Only offered when it can start
+
+    /// A chat offers to look into things only when Today's runner could
+    /// start one: a scripted engine and pages on this device. Otherwise
+    /// "research X" gets a reply, never an offer whose tap could only fail.
+    @Test func aChatOffersOnlyWhenTodayCanStartIt() async throws {
+        func today(tasks: (any TaskEngine)?, reading: any SourceProvider) -> FeedModel {
+            HomeView.reconFeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: tasks,
+                                    drivesTasks: false, reading: reading, place: .onDevice, memory: nil,
+                                    model: LocalStubModel(), cloud: nil, now: { [morning] in morning })
+        }
+        func chat(to feed: FeedModel) -> ChatController {
+            HomeView.wired(ChatController.make(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
+                                               conversation: nil, replyBeat: .zero), to: feed)
+        }
+        let scripted = today(tasks: nil, reading: ReconTestData.sources)
+        #expect(scripted.canLookInto)
+        #expect(chat(to: scripted).lookInto != nil)
+        for feed in [today(tasks: OwnStepsEngine(), reading: ReconTestData.sources),
+                     today(tasks: ReplayEngine(), reading: FarPages())] {
+            #expect(!feed.canLookInto)
+            let unable = chat(to: feed)
+            #expect(unable.lookInto == nil)
+            unable.submit("research quiet dishwashers")
+            #expect(unable.reconOffer == nil)
+            await unable.settled()
+            #expect(unable.conversation.turns.last?.speaker == .agent)
+            #expect(unable.conversation.turns.last?.text != ReconWords.couldNotStart)
+        }
+    }
+
+    // MARK: The cloud setting changes while Today's preview waits
+
+    /// Another window turned the cloud off, and this one reads the setting
+    /// again. Today's preview is withdrawn then and there, so the person
+    /// is never asked to approve what could no longer go out.
+    @Test func aChangedCloudSettingWithdrawsTodaysPreview() async throws {
+        let maker = TransportMaker()
+        let notes = ShowcaseScene.emptyMemory()
+        defer { try? notes.forgetEverything() }
+        let store = InMemoryCloudHelpStore(CloudHelpSettings(isOn: true))
+        let cloud = CloudHelp(store: store, endpoint: endpoint, memory: notes, transport: { maker.make() })
+        let model = HomeView.reconFeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: nil,
+                                            drivesTasks: false, reading: ReconTestData.sources, place: .mayLeaveDevice,
+                                            memory: notes, model: LocalStubModel(), cloud: cloud, now: { [morning] in morning })
+        let runner = try #require(model.recon)
+        #expect(model.lookInto(SampleSources.poolTopic))
+        let id = try #require(runner.tasks.first?.id)
+        runner.advance(by: 12)
+        await eventually { model.cloudReview.pending != nil }
+        let preview = try #require(model.cloudReview.pending)
+        try store.save(CloudHelpSettings(isOn: false))
+        cloud.refresh()
+        #expect(model.cloudReview.pending == nil)
+        // A Send on the sheet that was there does nothing.
+        model.cloudReview.answer(.send, for: preview.id)
+        await runner.settle(id)
+        runner.advance(by: 30)
+        #expect(maker.wire.sent.isEmpty)
+        #expect(runner.summary(for: id)?.note == ReconWords.cloudWithdrawn)
+    }
+
+    // MARK: Forget everything while Today's preview waits
+
+    /// With the real cloud summarizer and Today's own gate: Forget
+    /// everything withdraws the preview at once, a Send tapped late on it
+    /// sends nothing, and no summary comes back.
+    @Test func forgettingWhileTodaysPreviewWaitsSendsNothing() async throws {
+        let maker = TransportMaker()
+        let notes = ShowcaseScene.emptyMemory()
+        defer { try? notes.forgetEverything() }
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+                              memory: notes, transport: { maker.make() })
+        let (model, engine, runner) = feed()
+        let review = model.cloudReview
+        model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel(), review: review)) }
+        #expect(model.lookInto(SampleSources.poolTopic))
+        let id = try #require(runner.tasks.first?.id)
+        engine.advance(by: 12)
+        await eventually { review.pending != nil }
+        let preview = try #require(review.pending)
+        #expect(runner.summariesMayLeaveDevice == 1)
+
+        model.forgetTasks()
+        // Gone with its sheet, not on a later turn.
+        #expect(review.pending == nil)
+        #expect(model.forgotUnderway == ReconWords.forgotWhileInCloud)
+        review.answer(.send, for: preview.id)
+        try await Task.sleep(for: .milliseconds(100))
+        engine.advance(by: 60)
+        model.refresh()
+        #expect(maker.wire.sent.isEmpty)
+        #expect(review.pending == nil)
+        #expect(runner.tasks.isEmpty)
+        #expect(!runner.isRecon(id))
+        #expect(runner.summary(for: id) == nil)
+        #expect(runner.summariesMayLeaveDevice == 0)
+        #expect(!model.feed.groups.flatMap(\.items).contains { $0.id == id })
+    }
+
+    // MARK: Taps heard
+
+    /// A second tap on Look into it starts nothing, and VoiceOver hears why.
+    @Test func aSecondTapOnLookIntoItIsHeard() throws {
+        let (model, _, runner) = feed()
+        var heard: [String] = []
+        model.announce = { heard.append($0.text) }
+        let card = try #require(model.feed.groups.flatMap(\.items).first { $0.id == "sample:pool" })
+        model.perform(card) { _ in }
+        #expect(!heard.contains(ReconWords.alreadyOn))
+        model.perform(card) { _ in }
+        #expect(runner.tasks.count == 1)
+        #expect(heard.filter { $0 == ReconWords.alreadyOn }.count == 1)
+    }
+
+    /// The answers to Look into it and Not now are read aloud like any
+    /// reply, once.
+    @Test func theAnswersToAnOfferAreHeard() {
+        for (accept, line) in [(true, ReconWords.started), (false, ReconWords.offerDeclined)] {
+            let controller = ChatController.make(brand: brand, model: LocalStubModel(),
+                                                 names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil)
+            controller.lookInto = { _, _ in true }
+            controller.submit("research quiet dishwashers")
+            #expect(ChatView.replyLanded(in: controller, covered: false) == ReconWords.offer("quiet dishwashers"))
+            if accept { controller.acceptReconOffer() } else { controller.declineReconOffer() }
+            #expect(ChatView.replyLanded(in: controller, covered: false) == line)
+            #expect(ChatView.replyLanded(in: controller, covered: false) == nil)
+        }
+        // A start that couldn't happen is heard too.
+        let refused = ChatController.make(brand: brand, model: LocalStubModel(),
+                                          names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil)
+        refused.lookInto = { _, _ in false }
+        refused.submit("look into the bus strike")
+        refused.acceptReconOffer()
+        #expect(ChatView.arrival(for: refused, covered: false) == .reply(ReconWords.couldNotStart))
+    }
+
+    /// Each Remember this says which point it keeps, so buttons heard one
+    /// at a time never sound the same.
+    @Test func eachRememberButtonSaysWhichPoint() throws {
+        let pool = try ReconTestData.pool()
+        let labels = pool.points.map { ReconRememberSheet.buttonLabel($0, kept: false) }
+        #expect(Set(labels).count == pool.points.count)
+        for (point, label) in zip(pool.points, labels) {
+            #expect(label == "\(ReconWords.rememberThis): \(point.text)")
+        }
+        let first = try #require(pool.points.first)
+        #expect(ReconRememberSheet.buttonLabel(first, kept: true) == "\(ReconWords.remembered): \(first.text)")
+    }
+
+    // MARK: Chats and a withdrawn preview
+
+    /// A chat preview taken away, by the cloud going off, a private word
+    /// changing or the screen going, is handled as nothing sent: the turn
+    /// comes back to the composer, and the line says so and points at it.
+    @Test func aChatTreatsAWithdrawnPreviewAsNothingSent() {
+        #expect(ChatController.nothingWasSent(CloudModelError.withdrawn))
+        #expect(ChatController.failureLine(for: CloudModelError.withdrawn) == CloudWords.notSent)
+        #expect(ChatController.pointsAtTheDraft(ChatController.failureLine(for: CloudModelError.withdrawn)))
+        #expect(ChatController.nothingWasSent(CloudModelError.withdrawn) == ChatController.nothingWasSent(CloudModelError.notSent))
+    }
+
+    // MARK: Remembering
+
+    /// A point the cloud put into words, from `CloudReconSummarizer.parse`,
+    /// kept through Today's Remember this: the note says it was worded in
+    /// the cloud, and its label never names the publisher.
+    @Test func aCloudWordedPointIsKeptAsARetelling() throws {
+        let memory = ShowcaseScene.emptyMemory()
+        defer { try? memory.forgetEverything() }
+        let pool = try ReconTestData.pool()
+        let task = try #require(ReconTask(topic: pool.topic))
+        let summary = try #require(CloudReconSummarizer.parse("""
+            POINT: The Gazette reports the pool reopens on November 3. [1]
+            POINT: Family swim is on Saturday mornings. [2]
+            """, task: task, id: pool.id, sources: pool.sources, gatheredAt: pool.gatheredAt))
+        #expect(!summary.madeOnDevice)
+        let point = try #require(summary.points.first)
+        let publisher = try #require(point.sourceIDs.first.flatMap(summary.source)?.publisher)
+        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), place: .onDevice, memory: memory)
+        #expect(model.remember(point, in: summary))
+        let note = try #require(memory.notes().first)
+        #expect(note.text.hasPrefix(point.text))
+        #expect(note.text.contains("(put into words in the cloud from \(publisher), "))
+        #expect(note.source == .lookedUp(""))
+        #expect(note.source.label == "From something I looked into")
+        #expect(!note.source.label.contains(publisher))
+    }
+
+    /// A kept note deleted on the memory screen: opening the choice again
+    /// shows its point as not kept, and it can be kept again.
+    @Test func aDeletedNoteNoLongerShowsItsPointAsKept() throws {
+        let memory = ShowcaseScene.emptyMemory()
+        defer { try? memory.forgetEverything() }
+        let engine = LocalFakeEngine(rule: .isolated(), origin: morning)
+        let runner = ReconRunner(engine: engine, provider: ReconTestData.sources)
+        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: runner, place: .onDevice,
+                              memory: memory, now: { [morning] in morning })
+        #expect(model.lookInto(SampleSources.libraryTopic))
+        engine.advance(by: 30)
+        let summary = try #require(runner.tasks.first.flatMap { runner.summary(for: $0.id) })
+        let point = try #require(summary.points.first)
+        #expect(model.remember(point, in: summary))
+        let kept = try #require(memory.notes().first)
+        #expect(try memory.forget(kept.id))
+        // Opening the choice looks again.
+        model.choosingPoint = summary
+        #expect(!model.isRemembered(point, in: summary))
+        #expect(model.remember(point, in: summary))
+        #expect(memory.notes().count == 1)
+        // A note still there keeps its point kept.
+        model.choosingPoint = nil
+        model.choosingPoint = summary
+        #expect(model.isRemembered(point, in: summary))
     }
 }
 
@@ -475,118 +718,16 @@ final class PlainEngine: ScriptedTaskEngine, @unchecked Sendable {
     func refresh() { inner.refresh() }
 }
 
-/// A scripted engine that shows none of a script's steps, moved on by the
-/// test, and that plays a task again from any end on retry.
-final class HandEngine: ScriptedTaskEngine, @unchecked Sendable {
-    let rule = AskFirst.isolated()
-    private let lock = NSLock()
-    private var list: [AgentTask] = []
-    private var observers: [UUID: @Sendable (TaskSnapshot) -> Void] = [:]
-    private var sequence = 0
-
-    var tasks: [AgentTask] { lock.lock(); defer { lock.unlock() }; return list }
-
-    func start(_ script: TaskScript) -> String { start(TaskRequest(title: script.title)) }
-
-    func start(_ request: TaskRequest) -> String {
-        change { () -> String in
-            let id = "hand:\(list.count + 1)"
-            list.insert(AgentTask(id: id, title: request.title, step: "Working", startedAt: Date(timeIntervalSince1970: 0)), at: 0)
-            return id
-        }
-    }
-
-    func finish(_ id: String) { set(id, .done) }
-
-    func observe(_ onChange: @escaping @Sendable (TaskSnapshot) -> Void) -> TaskObservation {
-        let key = UUID()
-        lock.lock()
-        observers[key] = onChange
-        let snapshot = TaskSnapshot(sequence: sequence, tasks: list)
-        lock.unlock()
-        onChange(snapshot)
-        return TaskObservation { [weak self] in
-            self?.lock.lock()
-            self?.observers[key] = nil
-            self?.lock.unlock()
-        }
-    }
-
-    func redirect(_ id: String, with instructions: String) -> Bool { false }
-
-    func stop(_ id: String) -> Bool {
-        guard tasks.first(where: { $0.id == id })?.isActive == true else { return false }
-        set(id, .stopped)
-        return true
-    }
-
-    func dismiss(_ id: String) -> Bool {
-        change {
-            guard let index = list.firstIndex(where: { $0.id == id }), !list[index].isActive else { return false }
-            list.remove(at: index)
-            return true
-        }
-    }
-
-    func clear() -> ClearedTasks {
-        change {
-            let count = list.count
-            list.removeAll()
-            return ClearedTasks(forgotten: count)
-        }
-    }
-
-    func retry(_ id: String) -> Bool {
-        guard tasks.contains(where: { $0.id == id }) else { return false }
-        set(id, .running)
-        return true
-    }
-
-    func resume(_ id: String, with approval: Approval) -> TaskApproval { .refused }
-    func questionClosed(_ request: ConfirmationRequest) {}
-    func refresh() {}
-
-    private func set(_ id: String, _ state: TaskState) {
-        change {
-            guard let index = list.firstIndex(where: { $0.id == id }) else { return }
-            list[index].state = state
-            list[index].step = state == .done ? "Done" : "Working"
-        }
-    }
-
-    private func change<T>(_ body: () -> T) -> T {
-        lock.lock()
-        let value = body()
-        sequence += 1
-        let snapshot = TaskSnapshot(sequence: sequence, tasks: list)
-        let listeners = Array(observers.values)
-        lock.unlock()
-        for listener in listeners { listener(snapshot) }
-        return value
-    }
-}
-
 /// Pages on this device that aren't examples.
 struct RealPages: SourceProvider {
     var runsOnDevice: Bool { true }
     func sources(for task: ReconTask) throws -> [ReconSource] { [] }
 }
 
-/// Holds a summary back until the test lets it go.
-actor UIGate {
-    private var isOpen = false
-    private var waiting: [CheckedContinuation<Void, Never>] = []
-
-    func wait() async {
-        if isOpen { return }
-        await withCheckedContinuation { waiting.append($0) }
-    }
-
-    func open() {
-        isOpen = true
-        for continuation in waiting { continuation.resume() }
-        waiting = []
-    }
+/// The sample pages, but read somewhere off this device, so no recon may
+/// use them.
+struct FarPages: SourceProvider {
+    func sources(for task: ReconTask) throws -> [ReconSource] { try ReconTestData.sources.sources(for: task) }
 }
 
 /// Where a summary was finished: on the main thread or not.
@@ -603,7 +744,7 @@ final class ThreadMark: @unchecked Sendable {
 /// Waits for the gate, then puts the summary together on this device. Says
 /// it may leave the device when `leaves`, as a cloud one would.
 struct HeldSummarizer: ReconSummarizer {
-    let gate: UIGate
+    let gate: Gate
     let mark: ThreadMark
     var leaves = false
 

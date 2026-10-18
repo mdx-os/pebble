@@ -1,6 +1,7 @@
 import Foundation
 import PebbleCore
 #if canImport(SwiftUI)
+import Combine
 import SwiftUI
 
 /// Everything the Today screen shows and does, kept apart from the view so
@@ -17,12 +18,20 @@ final class FeedModel: ObservableObject {
     @Published var reading: FeedItem?
     /// A summary whose sources are open to read.
     @Published var readingSources: ReconSummary?
-    /// A summary whose points are open to choose one to remember.
-    @Published var choosingPoint: ReconSummary?
+    /// A summary whose points are open to choose one to remember. Opening
+    /// it looks again at which kept points are still in the notes.
+    @Published var choosingPoint: ReconSummary? {
+        didSet { if choosingPoint != nil { refreshRemembered() } }
+    }
     /// Points kept in memory from this screen, by `rememberKey`.
     @Published private(set) var remembered: Set<String> = []
     /// The summary, and so the task, each kept point came from.
     private var rememberedFrom: [String: String] = [:]
+    /// The note each kept point became, so a note deleted on the memory
+    /// screen no longer shows its point as kept.
+    private var rememberedAs: [String: UUID] = [:]
+    /// Watches the cloud setting, so a change withdraws Today's preview.
+    private var cloudWatch: AnyCancellable?
     /// What happened to the last Remember tap, such as "Saved. It stays on this device."
     @Published private(set) var rememberStatus: String? {
         didSet { if rememberStatus != nil { rememberTold += 1 } }
@@ -339,8 +348,12 @@ final class FeedModel: ObservableObject {
             if task.question != nil { review(task) } else { open(task) }
         case .lookInto(let topic):
             // A second tap while the first is under way, or once it is
-            // ready, starts nothing more: the card for it is already here.
-            if isLookingInto(topic) { return }
+            // ready, starts nothing more: the card for it is already here,
+            // and VoiceOver hears so, rather than nothing at all.
+            if isLookingInto(topic) {
+                announce(TaskAnnouncer.Line(text: ReconWords.alreadyOn, urgent: false))
+                return
+            }
             // Without a runner, the chat offers it instead, still one tap away.
             if recon == nil || !lookInto(topic) { talk(ReconWords.askLine(topic)) }
         case nil: break
@@ -365,6 +378,19 @@ final class FeedModel: ObservableObject {
 
     /// True while the only pages to read are examples, so the chat's offer says so.
     var readsExamples: Bool { recon?.provider.isSample == true }
+
+    /// True when a tap on Look into it could start anything. Only then may
+    /// a chat offer it.
+    var canLookInto: Bool { recon?.canLookInto == true }
+
+    /// Withdraws Today's preview each time the cloud setting changes, as
+    /// when another window turned it off. A Send could no longer go out,
+    /// so the person is never left being asked.
+    func follow(cloudSettings: AnyPublisher<CloudHelpSettings, Never>) {
+        cloudWatch = cloudSettings.dropFirst().removeDuplicates().sink { [weak self] _ in
+            MainActor.assumeIsolated { self?.cloudReview.cancelPending() }
+        }
+    }
 
     /// True when a recon for `topic` is going or done on Today. One that
     /// stopped or failed can be started again.
@@ -409,12 +435,14 @@ final class FeedModel: ObservableObject {
             rememberStatus = MemoryWords.couldNotOpen
             return false
         }
-        let publisher = point.sourceIDs.first.flatMap(summary.source)?.publisher ?? ""
         do {
-            switch try memory.remember(summary.note(for: point), source: .lookedUp(publisher)) {
-            case .saved:
+            // A point worded in the cloud says so in the note, and its
+            // label names no publisher (see `ReconSummary.note(for:)`).
+            switch try memory.remember(summary.note(for: point), source: summary.memorySource(for: point)) {
+            case .saved(let note):
                 remembered.insert(Self.rememberKey(summary, point))
                 rememberedFrom[Self.rememberKey(summary, point)] = summary.id
+                rememberedAs[Self.rememberKey(summary, point)] = note.id
                 rememberStatus = MemoryWords.saved(place)
                 return true
             case .tooLong:
@@ -436,15 +464,35 @@ final class FeedModel: ObservableObject {
         rememberStatus = nil
     }
 
+    /// Lets go of kept points whose notes are gone, as when the person
+    /// deleted one on the memory screen, so the point can be kept again.
+    /// Notes that can't be read right now change nothing.
+    func refreshRemembered() {
+        guard let memory, !rememberedAs.isEmpty, case .notes(let notes) = memory.contents() else { return }
+        let kept = Set(notes.map(\.id))
+        let goneKeys = rememberedAs.filter { !kept.contains($0.value) }.keys
+        guard !goneKeys.isEmpty else { return }
+        forgetKept(Set(goneKeys))
+    }
+
     /// Closes the sources and points of every summary whose task id matches,
     /// and lets go of which of its points were kept, since the card is gone.
+    /// The notes themselves stay: they are the person's (see
+    /// `ReconWords.rememberDetail`).
     private func closeSummaries(where gone: (String) -> Bool) {
         if let open = readingSources, gone(open.id) { readingSources = nil }
         if let open = choosingPoint, gone(open.id) { choosingPoint = nil }
         let goneKeys = rememberedFrom.filter { gone($0.value) }.keys
         guard !goneKeys.isEmpty else { return }
-        for key in goneKeys { rememberedFrom[key] = nil }
-        remembered.subtract(goneKeys)
+        forgetKept(Set(goneKeys))
+    }
+
+    private func forgetKept(_ keys: Set<String>) {
+        for key in keys {
+            rememberedFrom[key] = nil
+            rememberedAs[key] = nil
+        }
+        remembered.subtract(keys)
     }
 
     // MARK: Task cards
@@ -522,6 +570,11 @@ final class FeedModel: ObservableObject {
         // Asked before clearing: a summary going through the cloud may have
         // sent what it read already, and that can't be called back.
         let inCloud = (recon?.summariesMayLeaveDevice ?? 0) > 0
+        // A preview still waiting goes at once, with its sheet, so a Send
+        // tapped on it later sends nothing from a recon that is forgotten.
+        // Clearing cancels the work too, but that answers only on a later
+        // turn of the main actor.
+        cloudReview.cancelPending()
         let cleared = tasks.clear()
         refresh()
         if cleared.forgotten > 0 { tasksForgotten = true }

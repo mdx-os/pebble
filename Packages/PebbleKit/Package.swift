@@ -12,6 +12,8 @@ import PackageDescription
 //                Imports PebbleCore and PebbleModel.
 // SourceScan is not a layer. It lives under Tests, is in no product, and
 // only the test targets use it, to read Swift source for their guards.
+// ReconTestSupport is the same kind of thing: the test engines, gates and
+// waits that the core and UI tests share, kept in one copy.
 let package = Package(
     name: "PebbleKit",
     platforms: [.iOS(.v26), .macOS(.v26)],
@@ -29,9 +31,11 @@ let package = Package(
         .target(name: "PebbleUI", dependencies: ["PebbleCore", "PebbleModel"]),
         .executableTarget(name: "pulse", dependencies: ["PebbleCore", "PebblePulse"]),
         .target(name: "SourceScan", path: "Tests/SourceScan"),
-        .testTarget(name: "PebbleCoreTests", dependencies: ["PebbleCore", "SourceScan"]),
+        .target(name: "ReconTestSupport", dependencies: ["PebbleCore"], path: "Tests/ReconTestSupport"),
+        .testTarget(name: "PebbleCoreTests", dependencies: ["PebbleCore", "SourceScan", "ReconTestSupport"]),
         .testTarget(name: "PebblePulseTests", dependencies: ["PebblePulse", "PebbleCore"]),
         .testTarget(name: "PebbleModelTests", dependencies: ["PebbleModel", "PebbleCore"]),
-        .testTarget(name: "PebbleUITests", dependencies: ["PebbleUI", "PebbleModel", "PebbleCore", "SourceScan"]),
+        .testTarget(name: "PebbleUITests",
+                    dependencies: ["PebbleUI", "PebbleModel", "PebbleCore", "SourceScan", "ReconTestSupport"]),
     ]
 )

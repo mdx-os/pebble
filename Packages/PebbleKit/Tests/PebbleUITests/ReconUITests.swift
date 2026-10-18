@@ -2,6 +2,7 @@
 import Foundation
 import PebbleCore
 import PebbleModel
+import ReconTestSupport
 import SwiftUI
 import Testing
 @testable import PebbleUI
@@ -33,7 +34,7 @@ struct ReconUITests {
     }
 
     func settle(_ controller: ChatController) async throws {
-        for _ in 0..<500 where controller.isReplying { try await Task.sleep(for: .milliseconds(10)) }
+        await eventually { !controller.isReplying }
         #expect(!controller.isReplying)
     }
 
@@ -251,6 +252,32 @@ struct ReconUITests {
         #expect(!model.feed.groups.flatMap(\.items).contains { $0.id == id })
     }
 
+    /// What forgetting does to a kept point: it is the person's own note,
+    /// so it stays when the card goes and when every task is forgotten, as
+    /// the remember sheet and the forget question both say. Forget
+    /// everything, which erases the notes, takes it too.
+    @Test func aKeptPointStaysInTheNotesUntilTheyAreForgotten() throws {
+        let memory = scratchMemory()
+        defer { try? memory.forgetEverything() }
+        let (model, engine, runner) = feed(memory: memory)
+        #expect(model.lookInto(SampleSources.poolTopic))
+        engine.advance(by: 30)
+        let summary = try #require(runner.tasks.first.flatMap { runner.summary(for: $0.id) })
+        let point = try #require(summary.points.first)
+        #expect(model.remember(point, in: summary))
+        model.forgetTasks()
+        #expect(runner.tasks.isEmpty)
+        #expect(memory.notes().map(\.text) == [summary.note(for: point)])
+        // The words promise exactly that.
+        for place in [PrivacyPlace.onDevice, .mayLeaveDevice] {
+            #expect(ReconWords.rememberDetail(place).contains("It's still there after this card goes, until you delete it."))
+        }
+        #expect(TaskWords.forgetTasksDetail.contains("Your notes aren't touched."))
+        // Forget everything erases the notes, the kept point included.
+        try memory.forgetEverything()
+        #expect(memory.notes().isEmpty)
+    }
+
     @Test func dismissingAReadyCardClosesItsSheets() throws {
         let (model, engine, runner) = feed(memory: nil)
         #expect(model.lookInto(SampleSources.libraryTopic))
@@ -310,13 +337,8 @@ struct ReconUITests {
         // The card stays live while the question waits.
         #expect(runner.tasks.first?.state == .running)
         #expect(runner.tasks.first?.step == ReconWords.puttingTogether)
-        var pending: CloudPreview?
-        for _ in 0..<500 {
-            pending = review.pending
-            if pending != nil { break }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        let preview = try #require(pending)
+        await eventually { review.pending != nil }
+        let preview = try #require(review.pending)
         #expect(preview.request.text.contains("Riverside Pool reopens on November 10"))
         // A page names someone in the person's notes. The name is masked on
         // its way through Today too.
@@ -346,15 +368,84 @@ struct ReconUITests {
         #expect(review.pending == nil)
         runner.advance(by: 12)
         #expect(runner.tasks.first?.step == ReconWords.puttingTogether)
-        for _ in 0..<500 where review.pending == nil { try await Task.sleep(for: .milliseconds(10)) }
+        await eventually { review.pending != nil }
         #expect(review.pending != nil)
         let task = try #require(runner.tasks.first)
         model.stop(task)
-        for _ in 0..<500 where review.pending != nil { try await Task.sleep(for: .milliseconds(10)) }
+        await eventually { review.pending == nil }
         #expect(review.pending == nil)
         await runner.settle(id)
         #expect(maker.wire.sent.isEmpty)
         #expect(runner.summary(for: id) == nil)
+    }
+
+    /// Send, then Stop while the request is on its way. The reply still
+    /// comes back, and the summary is dropped all the same: the card says
+    /// stopped and keeps nothing.
+    @Test(.timeLimit(.minutes(1)))
+    func stoppingWhileTheSendIsOnItsWayKeepsNothing() async throws {
+        let wire = HeldWire(reply: """
+            POINT: The pool reopens on November 10. [2]
+            POINT: Family swim is on Saturdays. [2]
+            """)
+        let notes = scratchMemory()
+        defer { try? notes.forgetEverything() }
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+                              memory: notes, transport: { URLSessionCloudTransport(load: wire.load) })
+        let (model, _, runner) = feed(memory: nil)
+        let review = model.cloudReview
+        model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel(), review: review)) }
+        #expect(model.lookInto(SampleSources.poolTopic))
+        let id = try #require(runner.tasks.first?.id)
+        runner.advance(by: 12)
+        await eventually { review.pending != nil }
+        let preview = try #require(review.pending)
+        review.answer(.send, for: preview.id)
+        await eventually { wire.sentCount == 1 }
+        #expect(wire.sentCount == 1)
+        // On its way: Stop.
+        model.stop(try #require(runner.tasks.first))
+        #expect(runner.tasks.first?.state == .stopped)
+        await wire.gate.open()
+        await eventually { wire.answered }
+        #expect(wire.answered)
+        try await Task.sleep(for: .milliseconds(100))
+        runner.advance(by: 30)
+        model.refresh()
+        #expect(wire.sentCount == 1)
+        #expect(runner.summary(for: id) == nil)
+        #expect(runner.tasks.first { $0.id == id }?.state == .stopped)
+        #expect(model.feed.groups.flatMap(\.items).first { $0.id == id }?.task?.state == .stopped)
+        #expect(model.summary(for: try #require(runner.tasks.first)) == nil)
+    }
+
+    /// The control: the same send, with no Stop, lands as a summary worded
+    /// in the cloud. So the test above drops it because of Stop.
+    @Test(.timeLimit(.minutes(1)))
+    func theSameSendLandsWhenNothingIsStopped() async throws {
+        let wire = HeldWire(reply: """
+            POINT: The pool reopens on November 10. [2]
+            POINT: Family swim is on Saturdays. [2]
+            """)
+        let notes = scratchMemory()
+        defer { try? notes.forgetEverything() }
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+                              memory: notes, transport: { URLSessionCloudTransport(load: wire.load) })
+        let (model, _, runner) = feed(memory: nil)
+        let review = model.cloudReview
+        model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel(), review: review)) }
+        #expect(model.lookInto(SampleSources.poolTopic))
+        let id = try #require(runner.tasks.first?.id)
+        runner.advance(by: 12)
+        await eventually { review.pending != nil }
+        review.answer(.send, for: try #require(review.pending).id)
+        await eventually { wire.sentCount == 1 }
+        await wire.gate.open()
+        await runner.settle(id)
+        runner.advance(by: 30)
+        let summary = try #require(runner.summary(for: id))
+        #expect(!summary.madeOnDevice)
+        #expect(summary.note == ReconWords.wordedInCloud)
     }
 
     /// Turning the cloud off withdraws Today's preview too, unsent, as it
@@ -371,10 +462,10 @@ struct ReconUITests {
         #expect(model.lookInto(SampleSources.poolTopic))
         let id = try #require(runner.tasks.first?.id)
         runner.advance(by: 12)
-        for _ in 0..<500 where review.pending == nil { try await Task.sleep(for: .milliseconds(10)) }
+        await eventually { review.pending != nil }
         #expect(review.pending != nil)
         _ = cloud.setOn(false)
-        for _ in 0..<500 where review.pending != nil { try await Task.sleep(for: .milliseconds(10)) }
+        await eventually { review.pending == nil }
         #expect(review.pending == nil)
         await runner.settle(id)
         runner.advance(by: 30)
@@ -435,6 +526,31 @@ struct PagesNamingSomeone: SourceProvider {
                         url: URL(string: "https://swim.example.org/news")!, published: ShowcaseScene.morning - 86_400,
                         text: "Coach Priya runs the Saturday lessons when the pool reopens."),
         ]
+    }
+}
+
+/// Stands in for URLSession: records each request, then holds the answer
+/// back until the test opens the gate, so a test can act while a send is
+/// on its way. Never touches the network.
+final class HeldWire: @unchecked Sendable {
+    let gate = Gate()
+    private let reply: String
+    private let lock = NSLock()
+    private var sent = 0
+    private var done = false
+
+    init(reply: String) { self.reply = reply }
+
+    var sentCount: Int { lock.withLock { sent } }
+    /// The answer has gone back to whoever sent the request.
+    var answered: Bool { lock.withLock { done } }
+
+    @Sendable func load(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        lock.withLock { sent += 1 }
+        await gate.wait()
+        defer { lock.withLock { done = true } }
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [:])!
+        return (try JSONEncoder().encode(["reply": reply]), response)
     }
 }
 

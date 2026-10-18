@@ -650,18 +650,22 @@ final class ChatController: ObservableObject {
         guard let offer = reconOffer else { return }
         reconOffer = nil
         let started = lookInto?(offer.topic, model.runsOnDevice) ?? false
-        if let next = try? conversation.appendingAgent(started ? ReconWords.started : ReconWords.couldNotStart) {
-            conversation = next
-        }
+        say(started ? ReconWords.started : ReconWords.couldNotStart)
     }
 
     /// The person tapped Not now. Nothing starts.
     func declineReconOffer() {
         guard reconOffer != nil else { return }
         reconOffer = nil
-        if let next = try? conversation.appendingAgent(ReconWords.offerDeclined) {
-            conversation = next
-        }
+        say(ReconWords.offerDeclined)
+    }
+
+    /// Adds a line said on this device, waiting to be read aloud like any
+    /// reply, so the answer to a tap is heard as well as seen.
+    private func say(_ line: String) {
+        guard let next = try? conversation.appendingAgent(line) else { return }
+        unheardReply = next.turns.last?.text
+        conversation = next
     }
 
     /// What to say when no reply came. Choosing not to send is not a failure.

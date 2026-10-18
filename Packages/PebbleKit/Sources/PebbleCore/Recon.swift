@@ -77,7 +77,8 @@ public struct ReconSummary: Identifiable, Sendable, Equatable {
     public let id: String
     public let topic: String
     /// A short plain summary. It describes what was read and makes no claim
-    /// of its own, unless `overviewSourceIDs` says where it came from.
+    /// of its own, unless `overviewSourceIDs` says where it came from. Always
+    /// the plain one when the summary was put into words in the cloud.
     public let overview: String
     public let overviewSourceIDs: [String]
     public let points: [ReconPoint]
@@ -112,8 +113,11 @@ public struct ReconSummary: Identifiable, Sendable, Equatable {
             return ReconPoint(id: point.id, text: text, sourceIDs: ids, disagreement: disagreement)
         }.prefix(Self.maxPoints))
         let overviewIDs = Self.unique(overviewSourceIDs.filter(known.contains))
-        // An overview that names sources must name real ones.
-        if !overviewSourceIDs.isEmpty && overviewIDs.isEmpty {
+        // An overview that names sources must name real ones. One put into
+        // words in the cloud is never used at all: the card shows no source
+        // numbers beside it, so it would sit on top as a claim no one made.
+        // The plain one stands in, which only says what was read.
+        if !madeOnDevice || (!overviewSourceIDs.isEmpty && overviewIDs.isEmpty) {
             self.overview = ReconWords.overview(topic: topic, sources: sources.count,
                                                 backedTwice: self.points.filter { $0.sourceIDs.count > 1 && $0.disagreement == nil }.count,
                                                 disagreements: self.points.filter { $0.disagreement != nil }.count,
@@ -140,11 +144,33 @@ public struct ReconSummary: Identifiable, Sendable, Equatable {
     /// What a point becomes as a memory note: its words, the sources that
     /// say them, and, when the sources don't agree, that they don't and what
     /// each says. A disputed point is never kept as if it were settled.
+    ///
+    /// Words put into words in the cloud say so in the note, so a retelling
+    /// is never kept as the publisher's own words. When the whole
+    /// disagreement would make the note too long to keep, it names only the
+    /// sides, since the person can't shorten a note they didn't write.
     public func note(for point: ReconPoint) -> String {
         let from = point.sourceIDs.compactMap(source).map {
             "\($0.publisher), \($0.published.formatted(.dateTime.month(.abbreviated).day().year()))"
         }
-        return ReconWords.memoryNote(point.text, from: from, disagreement: point.disagreement?.text)
+        let full = ReconWords.memoryNote(point.text, from: from, disagreement: point.disagreement?.text,
+                                         wordedInCloud: !madeOnDevice)
+        guard let disagreement = point.disagreement, !Self.fits(full) else { return full }
+        let sides = disagreement.sourceIDs.compactMap(source).map(\.publisher)
+        return ReconWords.memoryNote(point.text, from: from, disagreement: ReconWords.disputedBy(sides),
+                                     wordedInCloud: !madeOnDevice)
+    }
+
+    /// Where a remembered point says it came from. A point worded on this
+    /// device is a sentence its first source says, so it names that source.
+    /// One worded in the cloud is a retelling, so it names no publisher.
+    public func memorySource(for point: ReconPoint) -> MemorySource {
+        guard madeOnDevice else { return .lookedUp("") }
+        return .lookedUp(point.sourceIDs.first.flatMap(source)?.publisher ?? "")
+    }
+
+    private static func fits(_ note: String) -> Bool {
+        note.count <= MemoryStore.maxLength && note.utf8.count <= MemoryStore.maxBytes
     }
 
     /// True when every source behind the point was more than a year old
@@ -229,10 +255,14 @@ public enum ReconIntent {
         // Kind openers come off first, any number of them, in any order, and
         // so does a name before a comma, as in "Hey Pip, look into ...".
         var trimmed = true
+        // "Would you mind" takes the verb as "looking into", so only after
+        // it do those forms count. On their own they start a statement.
+        var minding = false
         while trimmed {
             trimmed = false
             for opener in openers where lower().hasPrefix(opener + " ") || lower().hasPrefix(opener + ",") {
                 said = String(said.dropFirst(opener.count)).trimmingCharacters(in: CharacterSet(charactersIn: " ,"))
+                if opener == "would you mind" { minding = true }
                 trimmed = true
                 break
             }
@@ -242,7 +272,8 @@ public enum ReconIntent {
                 trimmed = true
             }
         }
-        guard let verb = verbs.first(where: { lower().hasPrefix($0 + " ") }) else { return nil }
+        let asked = minding ? gerunds + verbs : verbs
+        guard let verb = asked.first(where: { lower().hasPrefix($0 + " ") }) else { return nil }
         var topic = String(said.dropFirst(verb.count + 1))
         topic = topic.trimmingCharacters(in: CharacterSet(charactersIn: " ?.!,"))
         for ending in endings where topic.lowercased().hasSuffix(ending) {
@@ -254,13 +285,18 @@ public enum ReconIntent {
         return ReconTask(topic: topic)?.topic
     }
 
+    /// Longest first, so "would you mind" comes off whole rather than
+    /// leave "mind" behind as if it were the start of the request.
     private static let openers = [
         "hey", "hi", "ok", "okay", "so", "please", "pls", "can you", "could you", "would you",
         "will you", "i'd like you to", "i want you to", "i need you to", "would you mind",
         "help me", "go and", "go",
-    ]
+    ].sorted { $0.count > $1.count }
     private static let verbs = [
-        "look into", "research", "find out about", "find out more about", "dig into", "read up on",
+        "look into", "research", "find out more about", "find out about", "dig into", "read up on",
+    ]
+    private static let gerunds = [
+        "looking into", "researching", "finding out more about", "finding out about", "digging into", "reading up on",
     ]
     private static let endings = ["for me please", "for me", "please", "if you can", "when you can"]
     private static let notTopics: Set<String> = ["it", "this", "that", "them", "these", "those", "that for me", "something"]
@@ -499,20 +535,45 @@ public enum ReconWords {
     public static func followUpDraft(_ topic: String) -> String { "Tell me more about \(topic)." }
     public static let rememberQuestion = "Which point should I remember?"
     /// Promises the device only when `place` says every word stays here,
-    /// like `MemoryWords.saved`.
+    /// like `MemoryWords.saved`. A kept point is the person's own note: it
+    /// stays when the card goes, or when the tasks are forgotten, until
+    /// they delete it or forget everything.
     public static func rememberDetail(_ place: PrivacyPlace) -> String {
         place.staysOnDevice
-            ? "I'll keep it in your notes with where it came from. Notes stay on this device."
-            : "I'll keep it in your notes with where it came from."
+            ? "I'll keep it in your notes with where it came from. It's still there after this card goes, until you delete it. Notes stay on this device."
+            : "I'll keep it in your notes with where it came from. It's still there after this card goes, until you delete it."
     }
     public static let rememberThis = "Remember this"
     public static let remembered = "Remembered"
+    /// What VoiceOver says for one point's button, so a button heard on its
+    /// own still says which point it keeps.
+    public static func rememberThisLabel(_ point: String) -> String { "Remember this: \(point)" }
+    public static func rememberedLabel(_ point: String) -> String { "Remembered: \(point)" }
+    /// A second tap on Look into it, while that one is going or ready.
+    public static let alreadyOn = "I'm already on that one. Its card is here in Today."
     public static let pageLinkTitle = "Open the page"
-    /// The point, who says it, and any disagreement after it.
-    public static func memoryNote(_ point: String, from sources: [String], disagreement: String? = nil) -> String {
-        let said = sources.isEmpty ? point : "\(point) (\(sources.joined(separator: "; ")))"
+    /// The point, who says it, and any disagreement after it. When it was
+    /// `wordedInCloud`, the brackets say so, so the words are never kept as
+    /// the publisher's own.
+    public static func memoryNote(_ point: String, from sources: [String], disagreement: String? = nil,
+                                  wordedInCloud: Bool = false) -> String {
+        let said: String
+        if wordedInCloud {
+            said = sources.isEmpty ? "\(point) (put into words in the cloud)"
+                : "\(point) (put into words in the cloud from \(sources.joined(separator: "; ")))"
+        } else {
+            said = sources.isEmpty ? point : "\(point) (\(sources.joined(separator: "; ")))"
+        }
         guard let disagreement else { return said }
         return "\(said) \(disagreement)"
+    }
+    /// A disagreement cut down to its sides, for a note that would
+    /// otherwise be too long to keep.
+    public static func disputedBy(_ publishers: [String]) -> String {
+        var seen: Set<String> = []
+        let names = publishers.filter { seen.insert($0).inserted }
+        return names.count < 2 ? "Sources don't agree on this."
+            : "\(TaskWords.list(names, joiner: "and")) don't agree on this."
     }
 
     // A feed card that offers to look into something.
@@ -529,6 +590,10 @@ public enum ReconWords {
          planning, looking, reading(1), reading(4), checkingDates, puttingTogether, doneLine, nothingFoundLine,
          couldNotRead, wordedInCloud, forgotWhileInCloud,
          memoryNote("The pool opens.", from: ["A", "B"], disagreement: "Sources don't agree on this."),
+         memoryNote("The pool opens.", from: ["A", "B"], wordedInCloud: true),
+         memoryNote("The pool opens.", from: [], wordedInCloud: true),
+         disputedBy(["A", "B"]), disputedBy(["A"]), rememberThisLabel("The pool opens."), rememberedLabel("The pool opens."),
+         alreadyOn,
          planTodo, readTodo, datesTodo, summaryTodo, keptQuestions, keptSources(1), keptSources(4), keptSummary,
          overview(topic: "the pool", sources: 4, backedTwice: 2, disagreements: 1, old: 1),
          overview(topic: "the pool", sources: 1, backedTwice: 1, disagreements: 2, old: 2),

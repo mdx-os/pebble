@@ -52,9 +52,12 @@ struct PrivacyPlaceTests {
     /// device. "Without the cloud" says what was not used, not where words go.
     @Test func reconsCloudLinesNeverPromiseTheDevice() {
         for line in [ReconWords.declinedCloud, ReconWords.cloudUnreadable, ReconWords.cloudUnavailable,
-                     ReconWords.offer("the pool"), ReconWords.wordedInCloud, ReconWords.forgotWhileInCloud] {
+                     ReconWords.cloudWithdrawn, ReconWords.offer("the pool"), ReconWords.wordedInCloud,
+                     ReconWords.forgotWhileInCloud, ReconWords.alreadyOn,
+                     ReconWords.memoryNote("The pool opens.", from: ["A"], wordedInCloud: true)] {
             #expect(!Self.promisesTheDevice(line), "device promise in: \(line)")
         }
+        #expect(ReconWords.all.contains(ReconWords.cloudWithdrawn))
     }
 
     @Test func theFlagReadsBothWays() {
