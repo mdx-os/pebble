@@ -70,6 +70,46 @@ struct RedactorTests {
         #expect(curly.redact("Meet at Sam's place").text == "Meet at [private]")
     }
 
+    // MARK: Spacing and accents
+
+    /// A private phrase is saved with single spaces, but the text it hides
+    /// in can be spaced any way.
+    @Test(arguments: [
+        "Bring the lemon  cake",
+        "Bring the lemon\ncake",
+        "Bring the lemon\u{00A0}cake",
+        "Bring the lemon \t\r\n cake",
+    ])
+    func aPrivatePhraseMatchesAcrossAnySpacing(text: String) {
+        let out = Redactor(privateWords: ["lemon cake"]).redact(text)
+        #expect(out.text == "Bring the [private]")
+        #expect(out.hidden == [.privateWord: 1])
+    }
+
+    /// A name of more than one word, saved as a private word, is hidden
+    /// however the words are spaced, and the parts never match alone.
+    @Test func aMultiWordNameMatchesAcrossAnySpacing() {
+        let redactor = Redactor(privateWords: ["Mary Ann  Lee"])
+        #expect(redactor.redact("Call Mary Ann Lee").text == "Call [private]")
+        #expect(redactor.redact("Call mary  ann\nlee today").text == "Call [private] today")
+        #expect(redactor.redact("Call Mary\u{00A0}Ann\u{00A0}Lee").text == "Call [private]")
+        #expect(redactor.redact("Call Mary or Ann").isUnchanged)
+        #expect(redactor.redact("Call Mary AnnLee").isUnchanged)
+    }
+
+    @Test func accentsMatchEitherWay() {
+        let accented = Redactor(privateWords: ["Zoë"])
+        #expect(accented.redact("Text Zoe and ZOË").text == "Text [private] and [private]")
+        let plain = Redactor(privateWords: ["Zoe"])
+        #expect(plain.redact("Text Zoë now").text == "Text [private] now")
+        // Written with a combining mark, the whole letter goes.
+        #expect(plain.redact("Text Zoe\u{0308} now").text == "Text [private] now")
+        let names = Redactor(names: ["José"])
+        #expect(names.redact("Ask Jose, then José.").text == "Ask [name], then [name].")
+        // What comes after an accent is kept exactly as written.
+        #expect(Redactor(names: ["Sam"]).redact("Café with Sam, née Lee.").text == "Café with [name], née Lee.")
+    }
+
     @Test func aNameInsideAnotherWordStays() {
         let out = Redactor(names: ["Ana"]).redact("Bananas and Anastasia's analysis.")
         #expect(out.text == "Bananas and Anastasia's analysis.")

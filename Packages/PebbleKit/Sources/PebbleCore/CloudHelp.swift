@@ -19,16 +19,32 @@ public struct CloudHelpSettings: Sendable, Equatable, Codable {
     public static let maxPrivateWords = 50
     public static let maxPrivateWordLength = 60
 
+    /// Why a private word can't be added.
+    public enum Refusal: Sendable, Equatable {
+        case blank, tooLong, full, alreadyThere
+    }
+
     /// Adds a private word unless it is blank, too long, or already there.
     /// Returns false when nothing was added.
     @discardableResult
     public mutating func addPrivateWord(_ proposed: String) -> Bool {
-        let word = proposed.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
-        guard !word.isEmpty, word.count <= Self.maxPrivateWordLength,
-              privateWords.count < Self.maxPrivateWords,
-              !privateWords.contains(where: { Self.same($0, word) }) else { return false }
-        privateWords.append(word)
+        guard refusal(for: proposed) == nil else { return false }
+        privateWords.append(Self.tidied(proposed))
         return true
+    }
+
+    /// Why `proposed` wouldn't be added, or nil when it would.
+    public func refusal(for proposed: String) -> Refusal? {
+        let word = Self.tidied(proposed)
+        if word.isEmpty { return .blank }
+        if privateWords.contains(where: { Self.same($0, word) }) { return .alreadyThere }
+        if word.count > Self.maxPrivateWordLength { return .tooLong }
+        if privateWords.count >= Self.maxPrivateWords { return .full }
+        return nil
+    }
+
+    private static func tidied(_ proposed: String) -> String {
+        proposed.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
     }
 
     public mutating func removePrivateWord(_ word: String) {
@@ -248,6 +264,21 @@ public enum CloudWords {
     public static let privateUnreadable = "Sorry, I can't read your private words just now, so I've left them as they are. If the device is locked, unlock it and try again."
     /// A private word couldn't be saved, so the list is as it was.
     public static let privateNotSaved = "Sorry, I couldn't save that just now, so your private words are as they were. Please try again in a moment."
+    /// A word that wasn't added, and why.
+    public static let privateTooLong = "That's longer than I can hide. Please keep it to \(CloudHelpSettings.maxPrivateWordLength) characters or fewer."
+    public static let privateFull = "I'm already hiding \(CloudHelpSettings.maxPrivateWords) words, the most I can. Stop hiding one to add this."
+    public static let privateAlreadyThere = "I'm already hiding that one."
+
+    /// What to say when a word wasn't added, if anything. A blank one says
+    /// nothing, since there was nothing to add.
+    public static func privateRefused(_ refusal: CloudHelpSettings.Refusal) -> String? {
+        switch refusal {
+        case .blank: nil
+        case .tooLong: privateTooLong
+        case .full: privateFull
+        case .alreadyThere: privateAlreadyThere
+        }
+    }
 
     /// Turning off couldn't be saved, so the setting was erased to keep it
     /// off, and the private words went with it.
@@ -289,8 +320,11 @@ public enum CloudWords {
 
     /// After the person chose not to send.
     public static let notSent = "Okay, I didn't send it. What you wrote is still here."
-    /// The setting was turned off while this chat was using the cloud.
-    public static let turnedOff = "Help from the cloud is off now, so I didn't send that. Start a new chat and I'll answer on this device."
+    /// The setting was turned off while this chat was using the cloud. It
+    /// says only what the next chat won't do: where it does answer depends
+    /// on the local model, which this line can't see, so it makes no
+    /// device promise.
+    public static let turnedOff = "Help from the cloud is off now, so I didn't send that. A new chat won't use the cloud."
     /// Something earlier in this chat must stay on this device, so no part
     /// of the chat can be sent. Only a new chat can use the cloud again.
     public static let staysHere = "Part of this chat has to stay on this device, so I won't send any of it. A new chat starts fresh, and I can help there."
@@ -333,7 +367,8 @@ public enum CloudWords {
         title, toggleTitle, offDetail(.onDevice), offDetail(.mayLeaveDevice), onDetail, unavailable, couldNotOpen,
         rowTitle, rowOff, rowOn,
         askQuestion, askYes, askNo, privateTitle, privateDetail, privatePlaceholder, privateAdd,
-        privateRemove("Sam"), privateUnreadable, privateNotSaved, offButCleared, offForNow, onNotSaved,
+        privateRemove("Sam"), privateUnreadable, privateNotSaved, privateTooLong, privateFull, privateAlreadyThere,
+        offButCleared, offForNow, onNotSaved,
         previewTitle, previewDetail, previewDestination("example.com"),
         previewNothingHidden, previewHidden(["1 name"]), previewSend, previewCancel,
         spokenAddress("example.com"), spokenLabels(["Accept, application/json"]),

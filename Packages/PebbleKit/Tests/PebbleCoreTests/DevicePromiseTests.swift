@@ -134,10 +134,6 @@ enum DevicePromise {
                 reason: "The cloud preview's detail, shown only over a cloud request. \"This device\" names whose address "
                     + "the cloud sees, a disclosure, not a promise."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
-                literal: "Help from the cloud is off now, so I didn't send that. Start a new chat and I'll answer on this device.",
-                reason: "CloudWords.turnedOff, only for CloudModelError.off. With the setting off, CloudHelp.chatModel gives "
-                    + "a new chat the local model the app runs here, so the next new chat does answer on this device."),
-        Allowed(file: "PebbleCore/CloudHelp.swift",
                 literal: "Part of this chat has to stay on this device, so I won't send any of it. A new chat starts fresh, and I can help there.",
                 reason: "CloudWords.staysHere, said as CloudModel refuses to send a chat that promised the device. Nothing "
                     + "of that chat is sent, so it is true; it explains a refusal, not where other chats go."),
@@ -207,7 +203,6 @@ enum DevicePromise {
         CloudWords.offButCleared,
         CloudWords.previewTitle,
         CloudWords.previewDetail,
-        CloudWords.turnedOff,
         CloudWords.staysHere,
         CloudWords.notesUnreadable,
         CloudWords.forgetEverythingDetail,
@@ -339,6 +334,14 @@ struct DevicePromiseTests {
             if case .talk(let text) = item.action { words.append(text) }
             return words
         }
+    }
+
+    /// The line said when the cloud was turned off mid chat can't read the
+    /// next chat's place, so it promises nothing and needs no pass.
+    @Test func theTurnedOffLinePromisesNothing() {
+        #expect(DevicePromise.found(in: CloudWords.turnedOff).isEmpty)
+        #expect(!DevicePromise.allowedLines.contains(CloudWords.turnedOff))
+        #expect(!DevicePromise.allowed.contains { $0.literal == CloudWords.turnedOff })
     }
 
     /// The guard catches what it is for, and lets the right things by.

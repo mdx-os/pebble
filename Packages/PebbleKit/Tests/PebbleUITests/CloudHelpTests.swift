@@ -326,6 +326,52 @@ struct CloudHelpTests {
         #expect(help.newPrivateWord == "Sam")
     }
 
+    /// A word that isn't added says why, and is spoken like every other
+    /// status line, so VoiceOver never hears silence after the tap.
+    @Test func aRefusedPrivateWordSaysWhy() throws {
+        let store = InMemoryCloudHelpStore(CloudHelpSettings(privateWords: ["Zoë"]))
+        let help = cloud(store, maker: TransportMaker())
+        let tooLong = String(repeating: "a", count: CloudHelpSettings.maxPrivateWordLength + 1)
+        help.newPrivateWord = tooLong
+        var count = help.statusCount
+        help.addPrivateWord()
+        #expect(help.status == CloudWords.privateTooLong)
+        #expect(help.statusCount == count + 1)
+        #expect(help.newPrivateWord == tooLong)
+
+        help.newPrivateWord = "  zoë "
+        count = help.statusCount
+        help.addPrivateWord()
+        #expect(help.status == CloudWords.privateAlreadyThere)
+        #expect(help.statusCount == count + 1)
+        #expect(help.newPrivateWord.isEmpty)
+
+        let full = (0..<CloudHelpSettings.maxPrivateWords).map { "word\($0)" }
+        try store.save(CloudHelpSettings(privateWords: full))
+        help.newPrivateWord = "one more"
+        count = help.statusCount
+        help.addPrivateWord()
+        #expect(help.status == CloudWords.privateFull)
+        #expect(help.statusCount == count + 1)
+        #expect(help.newPrivateWord == "one more")
+        #expect(try store.load().privateWords == full)
+
+        // A good word afterwards clears the line.
+        try store.save(.off)
+        help.newPrivateWord = "Sam"
+        help.addPrivateWord()
+        #expect(help.status == nil)
+        #expect(help.settings.privateWords == ["Sam"])
+    }
+
+    @Test func eachRefusalHasItsOwnLine() {
+        #expect(CloudWords.privateRefused(.blank) == nil)
+        let lines = [CloudHelpSettings.Refusal.tooLong, .full, .alreadyThere].compactMap(CloudWords.privateRefused)
+        #expect(Set(lines).count == 3)
+        #expect(CloudWords.privateTooLong.contains("\(CloudHelpSettings.maxPrivateWordLength)"))
+        #expect(CloudWords.privateFull.contains("\(CloudHelpSettings.maxPrivateWords)"))
+    }
+
     /// VoiceOver speaks the same failure again when it happens again.
     @Test func theSameFailureTwiceIsCountedTwice() {
         let store = FailingCloudStore(.off)
@@ -625,8 +671,11 @@ struct CloudHelpTests {
         store.makeUnreadable()
         controller.submit("Bring the lemon cake")
         await controller.settled()
-        // Settings that can't be read count as off.
-        #expect(controller.failure == CloudWords.turnedOff)
+        // Settings that can't be read are not the same as off: the chat
+        // says it couldn't read them, and the setting still shows on.
+        #expect(controller.failure == CloudWords.notesUnreadable)
+        #expect(controller.failure != CloudWords.turnedOff)
+        #expect(cloud.settings.isOn)
         #expect(controller.review?.pending == nil)
         #expect(maker.wire.sent.isEmpty)
         // And nothing is saved over them while they can't be read.

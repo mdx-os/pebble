@@ -228,7 +228,7 @@ public struct CloudModel: ModelClient {
     private let reviewer: any CloudReviewing
     private let auth: any CloudAuth
     private let redactor: @Sendable () throws -> Redactor
-    private let isOn: @Sendable () -> Bool
+    private let isOn: @Sendable () throws -> Bool
     /// Shared by every copy of this model, so by the whole chat.
     private let hiddenSoFar = HiddenSoFar()
 
@@ -236,13 +236,15 @@ public struct CloudModel: ModelClient {
     /// words count right away; it throws when they can't be read. `isOn` is
     /// checked before building a request and again before sending, so
     /// turning the setting off stops a reply already waiting in the preview.
+    /// It throws when the setting can't be read, which is not the same as
+    /// off: nothing is sent, and the chat says it couldn't read them.
     public init(
         endpoint: URL,
         transport: any CloudTransport,
         reviewer: any CloudReviewing,
         auth: any CloudAuth = NoCloudAuth(),
         redactor: @escaping @Sendable () throws -> Redactor = { Redactor() },
-        isOn: @escaping @Sendable () -> Bool = { true }
+        isOn: @escaping @Sendable () throws -> Bool = { true }
     ) {
         self.endpoint = endpoint
         self.transport = transport
@@ -260,7 +262,7 @@ public struct CloudModel: ModelClient {
     public var runsOnDevice: Bool { Self.place.staysOnDevice }
 
     public func reply(to transcript: [ChatTurn]) async throws -> String {
-        guard isOn() else { throw CloudModelError.off }
+        try checkOn()
         let redactor: Redactor
         do {
             redactor = hiddenSoFar.widened(by: try self.redactor())
@@ -275,13 +277,25 @@ public struct CloudModel: ModelClient {
         )
         guard await reviewer.review(preview) == .send else { throw CloudModelError.notSent }
         try Task.checkCancellation()
-        guard isOn() else { throw CloudModelError.off }
+        try checkOn()
         // The very request the person saw, unchanged.
         let data = try await transport.send(preview.request)
         guard let reply = try? JSONDecoder().decode(CloudPayload.Reply.self, from: data) else {
             throw CloudModelError.unreadableReply
         }
         return reply.reply
+    }
+
+    /// Throws `off` when the setting is off, and `notesUnreadable` when it
+    /// can't be read, so a damaged file never reads as turned off.
+    private func checkOn() throws {
+        let on: Bool
+        do {
+            on = try isOn()
+        } catch {
+            throw CloudModelError.notesUnreadable
+        }
+        guard on else { throw CloudModelError.off }
     }
 
     public static func url(for endpoint: URL) -> URL {

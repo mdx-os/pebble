@@ -184,8 +184,9 @@ public final class CloudHelp: ObservableObject {
                     }
                 },
                 // On only when the file says so and the person hasn't
-                // switched it off since.
-                isOn: { !switchedOff.value && store.loadOrOff().isOn }
+                // switched it off since. A file that can't be read throws,
+                // so the chat says so rather than that it was turned off.
+                isOn: { try !switchedOff.value && store.load().isOn }
             )
         }
     }
@@ -271,7 +272,16 @@ public final class CloudHelp: ObservableObject {
 
     func addPrivateWord() {
         let word = newPrivateWord
-        switch update({ _ = $0.addPrivateWord(word) }) {
+        var refusal: CloudHelpSettings.Refusal?
+        let outcome = update { refusal = $0.refusal(for: word); _ = $0.addPrivateWord(word) }
+        if outcome.isDone, let refusal {
+            // Said out loud, so a refused word is never met with silence.
+            // One already hidden needs nothing more, so the field clears.
+            if refusal == .alreadyThere { newPrivateWord = "" }
+            status = CloudWords.privateRefused(refusal)
+            return
+        }
+        switch outcome {
         case .saved: newPrivateWord = ""; status = nil; withdrawPreviews()
         case .unchanged: break
         case .unreadable: status = CloudWords.privateUnreadable

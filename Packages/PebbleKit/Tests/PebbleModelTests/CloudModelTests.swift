@@ -49,7 +49,7 @@ struct CloudModelTests {
 
     func model(
         transport: RecordingTransport, reviewer: RecordingReviewer,
-        privateWords: [String] = [], isOn: @escaping @Sendable () -> Bool = { true }
+        privateWords: [String] = [], isOn: @escaping @Sendable () throws -> Bool = { true }
     ) -> CloudModel {
         let notes = notes
         return CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer,
@@ -304,6 +304,20 @@ struct CloudModelTests {
         let reviewer = RecordingReviewer(answer: .send)
         await #expect(throws: CloudModelError.off) {
             try await cloudChat().sending("Plan my week", with: model(transport: transport, reviewer: reviewer, isOn: { false }))
+        }
+        #expect(reviewer.seen.isEmpty)
+        #expect(transport.sent.isEmpty)
+    }
+
+    /// A setting that can't be read is not the same as off: nothing is
+    /// shown or sent, and the chat says it couldn't read them.
+    @Test func anUnreadableSettingIsNotReadAsOff() async {
+        struct Locked: Error {}
+        let transport = RecordingTransport()
+        let reviewer = RecordingReviewer(answer: .send)
+        await #expect(throws: CloudModelError.notesUnreadable) {
+            try await cloudChat().sending("Plan my week", with: model(
+                transport: transport, reviewer: reviewer, isOn: { throw Locked() }))
         }
         #expect(reviewer.seen.isEmpty)
         #expect(transport.sent.isEmpty)

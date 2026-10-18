@@ -76,9 +76,12 @@ public struct Redaction: Sendable, Equatable {
 /// It is a best effort, not a guarantee: the preview the person reads
 /// before anything is sent is the real safeguard.
 public struct Redactor: Sendable, Equatable {
-    /// Names to hide, matched as whole words in any case.
+    /// Names to hide, matched as whole words in any case, with or without
+    /// accents, so "Zoë" hides "Zoe" and the other way round.
     public let names: [String]
-    /// Words and phrases the person marked private, matched in any case.
+    /// Words and phrases the person marked private, matched the same way.
+    /// The words of a phrase match across any run of spaces, line breaks or
+    /// non-breaking spaces.
     public let privateWords: [String]
     /// One pattern per name and per private word, built once here rather
     /// than for every message of every request.
@@ -110,8 +113,9 @@ public struct Redactor: Sendable, Equatable {
     public func redact(_ text: String) -> Redaction {
         let source = text as NSString
         var found: [(range: NSRange, kind: Redaction.Kind)] = []
+        let folded = FoldedText(text)
         for kind in Redaction.Kind.allCases {
-            found += matches(of: kind, in: text).map { ($0, kind) }
+            found += matches(of: kind, in: text, folded: folded).map { ($0, kind) }
         }
         guard !found.isEmpty else { return Redaction(text: text) }
         // Matches that overlap become one mask over all of them, so no
@@ -144,11 +148,11 @@ public struct Redactor: Sendable, Equatable {
 
     // MARK: Finding each kind
 
-    private func matches(of kind: Redaction.Kind, in text: String) -> [NSRange] {
+    private func matches(of kind: Redaction.Kind, in text: String, folded: FoldedText) -> [NSRange] {
         switch kind {
-        case .privateWord: return Self.wholeWords(patterns.privateWords, in: text)
+        case .privateWord: return Self.wholeWords(patterns.privateWords, in: folded)
         // "Sam's" becomes "[name]'s", so the sentence still reads.
-        case .name: return Self.wholeWords(patterns.names, in: text)
+        case .name: return Self.wholeWords(patterns.names, in: folded)
         case .email: return Self.find(Self.email, in: text)
         case .card: return Self.find(Self.card, in: text)
         case .phone: return Self.find(Self.phone, in: text) + Self.nationalPhones(in: text)
@@ -426,14 +430,20 @@ public struct Redactor: Sendable, Equatable {
     /// Whole word matches in any case, one pattern per word, so overlapping
     /// matches, like a private "lemon cake" and "cake shop", are both found
     /// and then joined into one mask by `redact`.
-    private static func wholeWords(_ expressions: [NSRegularExpression], in text: String) -> [NSRange] {
-        expressions.flatMap { find($0, in: text) }
+    /// Matched in the text with its accents taken off, then mapped back, so
+    /// each range covers the original characters.
+    private static func wholeWords(_ expressions: [NSRegularExpression], in text: FoldedText) -> [NSRange] {
+        expressions.flatMap { find($0, in: text.text).map(text.original) }
     }
 
-    /// `word` as a whole word in any case, with straight and curly
-    /// apostrophes alike.
+    /// `word` as a whole word in any case and without its accents, with
+    /// straight and curly apostrophes alike, and any whitespace between its
+    /// parts: two spaces, a line break or a non-breaking space.
     fileprivate static func wholeWord(_ word: String) -> NSRegularExpression {
-        let escaped = NSRegularExpression.escapedPattern(for: word)
+        let escaped = FoldedText.fold(word)
+            .split(whereSeparator: { $0.isWhitespace || $0.isNewline })
+            .map { NSRegularExpression.escapedPattern(for: String($0)) }
+            .joined(separator: #"\s+"#)
             .replacingOccurrences(of: "'", with: "['\u{2019}\u{2018}\u{02BC}]")
         return regex(#"(?<![\p{L}\p{N}])"# + escaped + #"(?![\p{L}\p{N}])"#, caseInsensitive: true)
     }
@@ -445,6 +455,54 @@ public struct Redactor: Sendable, Equatable {
     private static func regex(_ pattern: String, caseInsensitive: Bool = false) -> NSRegularExpression {
         // The patterns are fixed or escaped, so they always compile.
         try! NSRegularExpression(pattern: pattern, options: caseInsensitive ? [.caseInsensitive] : [])
+    }
+}
+
+/// Text with its accents taken off one character at a time, so "Zoë" reads
+/// as "Zoe", and where each part came from, so a match found in it covers
+/// the same characters in the original.
+struct FoldedText {
+    let text: String
+    /// For each UTF-16 offset in `text`, the original character's start
+    /// and end. Nil when nothing changed, as for plain ASCII.
+    private let starts: [Int]?
+    private let ends: [Int]?
+
+    init(_ original: String) {
+        guard original.utf8.contains(where: { $0 >= 0x80 }) else {
+            text = original
+            starts = nil
+            ends = nil
+            return
+        }
+        var folded = ""
+        var starts: [Int] = []
+        var ends: [Int] = []
+        var offset = 0
+        for character in original {
+            let length = String(character).utf16.count
+            let piece = Self.fold(String(character))
+            folded += piece
+            for _ in 0..<piece.utf16.count {
+                starts.append(offset)
+                ends.append(offset + length)
+            }
+            offset += length
+        }
+        text = folded
+        self.starts = starts
+        self.ends = ends
+    }
+
+    static func fold(_ text: String) -> String {
+        text.folding(options: .diacriticInsensitive, locale: nil)
+    }
+
+    /// `range` in `text` as a range of whole characters in the original.
+    func original(_ range: NSRange) -> NSRange {
+        guard let starts, let ends, range.length > 0 else { return range }
+        let start = starts[range.location]
+        return NSRange(location: start, length: ends[range.location + range.length - 1] - start)
     }
 }
 

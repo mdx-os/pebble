@@ -64,6 +64,19 @@ final class CloudUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Stop hiding riverside clinic"].waitForExistence(timeout: 5))
     }
 
+    /// The back button of the stack `element` is in: of the bars above it,
+    /// the lowest one, which is the sheet's on iPhone and the detail's on
+    /// iPad, and its leftmost button.
+    private func backButton(over element: XCUIElement, in app: XCUIApplication) throws -> XCUIElement {
+        let midX = element.frame.midX
+        let bars = app.navigationBars.allElementsBoundByIndex.filter {
+            $0.frame.minX <= midX && midX <= $0.frame.maxX && $0.frame.maxY <= element.frame.minY
+        }
+        let bar = try XCTUnwrap(bars.max { $0.frame.minY < $1.frame.minY }, "no bar above the screen")
+        let buttons = bar.buttons.allElementsBoundByIndex
+        return try XCTUnwrap(buttons.min { $0.frame.minX < $1.frame.minX }, "no button in the bar")
+    }
+
     /// The cloud setting's only way in is the row at the foot of the memory
     /// screen. Here it is tapped in the app as people get it, not the
     /// showcase: the memory as a sheet on iPhone and in the sidebar's detail
@@ -89,7 +102,11 @@ final class CloudUITests: XCTestCase {
         XCTAssertTrue(toggle.waitForExistence(timeout: 5), isPad ? "iPad sidebar detail" : "iPhone memory sheet")
         XCTAssertTrue(app.staticTexts["Words I always hide"].exists)
         // Back to the memory screen the same way.
-        app.navigationBars.buttons["BackButton"].firstMatch.tap()
+        // Found by where it is, not by "BackButton", which isn't the same on
+        // every iOS version or in a stack shown in a sheet. The order of the
+        // bars isn't either: on iPhone the home screen's bar is still there
+        // under the sheet, and on iPad the sidebar has one of its own.
+        try backButton(over: toggle, in: app).tap()
         XCTAssertTrue(row.waitForExistence(timeout: 5))
         XCTAssertFalse(toggle.exists)
     }
