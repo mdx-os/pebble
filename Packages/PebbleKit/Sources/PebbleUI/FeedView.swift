@@ -1105,6 +1105,7 @@ struct FeedReader: View {
                 ToolbarItem(placement: .confirmationAction) {
                     DoneButton(title: FeedWords.doneTitle) { dismiss() }
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
         }
         .presentationDragIndicator(.visible)

@@ -49,9 +49,13 @@ build-release: generate
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath $(DERIVED) CODE_SIGNING_ALLOWED=NO
 
 ## screenshots: first screen on iPhone, iPad and Mac, written to build/screenshots,
-## with build/screenshots/STAMP naming the commit and working tree they show
+## plus the dark iPad sidebar and the sheets with Done, with
+## build/screenshots/STAMP naming the commit and working tree they show. Fails
+## unless the dark shots show the orange fill with white words on it
+## (scripts/check-screenshots.sh).
 screenshots: generate
 	sh scripts/screenshots.sh build/screenshots
+	sh scripts/check-screenshots.sh build/screenshots
 
 ## screenshots-check: fail if build/screenshots wasn't made from the working
 ## tree as it is now ("screenshots are stale, rerun make screenshots")

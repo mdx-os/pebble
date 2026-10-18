@@ -662,7 +662,7 @@ public final class CloudReview: ObservableObject, CloudReviewing {
 
     /// Puts a preview on screen with nothing waiting on it, for screenshots.
     package func show(_ preview: CloudPreview) {
-        assert(self !== Self.none, "the gate with no cloud chat never shows anything")
+        assert(self !== Self.none, "the gate no model asks through never shows anything")
         pending = preview
     }
 

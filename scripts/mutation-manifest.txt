@@ -171,7 +171,12 @@ perl: s~for session in sessions\.allObjects where session\.holdsAnything \{ sess
 test: forgetEverythingFirstEndsEveryOpenCloudChat afterSendingNoForgetLineSaysGone
 file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
 perl: s~let line = switch \(sent, notesGone, rest\)~let line = switch (false, notesGone, rest)~
-perl: s~return sent \? whole~return false ? whole~
+perl: s~let cloudCopy = sent \?~let cloudCopy = false ?~
+
+# After a send, the cloud's copy is named before any advice to try again.
+test: afterSendingNoForgetLineSaysGone afterSendingTheSummaryLinesStayHonest
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~return beforeRetry\(said, \[aboutSummaries, underway, cloudCopy\]\.compactMap \{ \$0 \}\)~return beforeRetry(said, [aboutSummaries, underway].compactMap { \$0 }) + (cloudCopy.map { " " + \$0 } ?? "")~
 
 test: forgetEverythingWithNothingSentEndsTheChatAndSaysGone
 file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
@@ -184,7 +189,7 @@ perl: s~let sent = endsCloudChats\?\(\) \?\? false~let sent = false~
 
 test: afterSendingTheSummaryLinesStayHonest
 file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
-perl: s~return sent \? whole \+ " " \+ CloudWords\.sentCantBeErased : whole~return whole~
+perl: s~let cloudCopy = sent \? CloudWords\.sentCantBeErased : nil~let cloudCopy: String? = nil~
 
 test: forgettingEndsAnOpenCloudChat
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
@@ -540,7 +545,7 @@ file: Packages/PebbleKit/Sources/PebbleCore/Redactor.swift
 perl: s~guard !parts\.isEmpty else \{ return nil \}~~
 
 # Hosted views: each test drives the live screen, so it can fail.
-test: rebuildingTheHomeScreenKeepsAnOpenCloudChatsPlace
+test: aLiveHomeScreenKeepsAnOpenCloudChatsPlaceThroughRebuilds
 file: Packages/PebbleKit/Sources/PebbleUI/HomeView.swift
 perl: s~HomeView\.surfacePlace\(chat: chat\?\.privacyPlace, newChat: newChatPlace\)~HomeView.surfacePlace(chat: nil, newChat: newChatPlace)~
 

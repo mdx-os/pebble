@@ -42,6 +42,14 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// The launch argument that picks a scene. No name in it, product or
     /// codename, as `make brand-check` asks of new code.
     public static let launchKey = "showcaseScreen"
+    /// `-showcaseStill YES` holds every gentle motion still, so the screen
+    /// settles and two screenshots of it match.
+    public static let stillKey = "showcaseStill"
+    /// `-snapshotSheet YES` has the Mac's snapshot draw the sheet the scene
+    /// presents, in a real window.
+    public static let sheetKey = "snapshotSheet"
+    /// `-snapshotDark YES` has the Mac's snapshot draw in dark mode.
+    public static let darkKey = "snapshotDark"
     /// Launch with this set to keep what `askLive` kept last time, as the
     /// app does after it is closed. Without it, `askLive` starts fresh.
     public static let keepAsksKey = "showcaseKeepAsks"
@@ -92,7 +100,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     store: InMemoryOnboardingStore(),
                     looks: looks,
                     // The showcase plays the on-device model, as the app does.
-                    onDevice: LocalStubModel().privacyPlace.staysOnDevice,
+                    place: LocalStubModel().privacyPlace,
                     startAt: page,
                     draftName: self == .name || self == .look || self == .ideas ? "Pip" : ""
                 ) { _ in }
@@ -494,26 +502,26 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
 
     /// The morning starter played through the on-device model.
     static func sampleFirstChat() -> Conversation {
-        var turns = Conversation.firstRun(named: "Pip", onDevice: true).turns
+        var turns = Conversation.firstRun(named: "Pip", place: LocalStubModel().privacyPlace).turns
         let prompt = FirstConversation.jobs.first { $0.id == "morning" }?.prompt ?? ""
         for said in [prompt, "school drop off, gym, answer Priya, groceries"] {
             turns.append(ChatTurn(id: UUID(), speaker: .person, text: said))
             let reply = (try? LocalStubModel.answer(to: turns)) ?? LocalStubModel.fallback
             turns.append(ChatTurn(id: UUID(), speaker: .agent, text: reply))
         }
-        return Conversation(turns: turns, onDevice: true)
+        return Conversation(turns: turns, place: LocalStubModel().privacyPlace)
     }
 
     /// The person has just asked for a morning plan and the dots are showing.
     /// Nothing is sent to the model; the reply never comes.
     @MainActor
     static func thinkingChat(brand: Brand) -> ChatController {
-        var turns = Conversation.firstRun(named: "Pip", onDevice: true).turns
+        var turns = Conversation.firstRun(named: "Pip", place: LocalStubModel().privacyPlace).turns
         let prompt = FirstConversation.jobs.first { $0.id == "morning" }?.prompt ?? ""
         turns.append(ChatTurn(id: UUID(), speaker: .person, text: prompt))
         let controller = ChatController.make(brand: brand, model: LocalStubModel(),
                                              names: InMemoryAgentNameStore(stored: "Pip"),
-                                             conversation: Conversation(turns: turns, onDevice: true))
+                                             conversation: Conversation(turns: turns, place: LocalStubModel().privacyPlace))
         controller.isReplying = true
         return controller
     }
@@ -587,9 +595,9 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         )
         let review = CloudReview()
         let model = help.chatModel(local: LocalStubModel(), review: review)
-        var turns = Conversation.firstRun(named: "Pip", onDevice: false).turns
+        var turns = Conversation.firstRun(named: "Pip", place: model.privacyPlace).turns
         turns.append(ChatTurn(id: UUID(), speaker: .person, text: "Help me write a note to Sam about Saturday. The party moved to 42 Maple Street. He can call me at 416 555 0199 or email jo.lee@example.com, and don't mention the lemon cake."))
-        let conversation = Conversation(turns: turns, onDevice: false)
+        let conversation = Conversation(turns: turns, place: model.privacyPlace)
         let redactor = Redactor(memory: memory.notes(), privateWords: help.settings.privateWords)
         if let preview = try? CloudModel.preview(for: turns, endpoint: sampleEndpoint, redactor: redactor,
                                                  headers: auth.headers(for: CloudModel.url(for: sampleEndpoint)),

@@ -818,7 +818,8 @@ final class MemoryModel: ObservableObject {
     ///
     /// With `sent`, something was handed to the cloud this session, and a
     /// copy of it may be there now. Nothing here can erase that, so the line
-    /// never says "I no longer have it", and it ends by saying so plainly.
+    /// never says "I no longer have it", and says so plainly, just before
+    /// any advice to try again.
     static func forgotLine(notesGone: Bool, rest: CloudHelp.Forgot??, tasksGone: Bool,
                            summaries: Summaries? = nil, underway: String? = nil, hadNotes: Bool = true,
                            sent: Bool = false) -> String {
@@ -848,8 +849,8 @@ final class MemoryModel: ObservableObject {
         case (.stayed?, false):
             said = line; aboutSummaries = MemoryWords.summariesStayed
         }
-        let whole = beforeRetry(said, [aboutSummaries, underway].compactMap { $0 })
-        return sent ? whole + " " + CloudWords.sentCantBeErased : whole
+        let cloudCopy = sent ? CloudWords.sentCantBeErased : nil
+        return beforeRetry(said, [aboutSummaries, underway, cloudCopy].compactMap { $0 })
     }
 
     /// `line` with `sentences` after it, but before its advice to try

@@ -28,4 +28,3 @@ Packages/PebbleKit/Tests/PebbleUITests/CloudHelpTests.swift: #expect(!name.conta
 Packages/PebbleKit/Tests/PebbleUITests/FirstRunScreensTests.swift: let suite = "pebble.ui.onboarding.\(UUID().uuidString)"
 Packages/PebbleKit/Tests/PebbleUITests/FirstRunScreensTests.swift: let suite = "pebble.ui.skip.\(UUID().uuidString)"
 Packages/PebbleKit/Tests/PebbleUITests/FirstRunScreensTests.swift: let url = FileManager.default.temporaryDirectory.appendingPathComponent("pebble-ui-\(UUID().uuidString).json")
-Packages/PebbleKit/Tests/PebbleUITests/FirstRunScreensTests.swift: looks: UserDefaults(suiteName: "pebble.ui.hidden")!, page: .hello, draftName: "", onFinish: { _ in })

@@ -283,7 +283,7 @@ struct BackgroundFeedTests {
 
     /// After sending, every way the summaries can land keeps the line
     /// honest: never "I no longer have it", the summaries named as before,
-    /// and the cloud's copy named last.
+    /// and the cloud's copy named last but for any advice to try again.
     @Test func afterSendingTheSummaryLinesStayHonest() {
         let rests: [CloudHelp.Forgot??] = [nil, .some(nil), .some(.some(.privateWords)),
                                           .some(.some(.privateWordsAndCloud))]
@@ -296,12 +296,15 @@ struct BackgroundFeedTests {
                         let unsent = MemoryModel.forgotLine(notesGone: notes, rest: rest, tasksGone: tasks,
                                                             summaries: summaries)
                         #expect(!line.contains("I no longer have it"), "\(line)")
-                        #expect(line.hasSuffix(" " + CloudWords.sentCantBeErased), "\(line)")
+                        let retry = MemoryWords.retryAdvice.first { unsent.hasSuffix(" " + $0) }
+                        let tail = " " + CloudWords.sentCantBeErased + (retry.map { " " + $0 } ?? "")
+                        #expect(line.hasSuffix(tail), "\(line)")
                         if summaries == .stayed {
                             #expect(line.contains("couldn't erase your morning summaries"), "\(line)")
                         }
                         if !unsent.contains("I no longer have it") {
-                            #expect(line == unsent + " " + CloudWords.sentCantBeErased, "\(line)")
+                            let body = retry.map { String(unsent.dropLast($0.count + 1)) } ?? unsent
+                            #expect(line == body + tail, "\(line)")
                         }
                     }
                 }

@@ -60,7 +60,7 @@ struct CloudModelTests {
     }
 
     func cloudChat() -> Conversation {
-        Conversation.firstRun(named: "Pip", onDevice: false)
+        Conversation.firstRun(named: "Pip", place: .mayLeaveDevice)
     }
 
     @Test func neverClaimsToRunOnDevice() {
@@ -1034,7 +1034,7 @@ struct CloudModelTests {
     @Test func aConversationThatPromisedOnDeviceIsNeverSent() async {
         let transport = RecordingTransport()
         let reviewer = RecordingReviewer(answer: .send)
-        let promised = Conversation.firstRun(named: "Pip", onDevice: true)
+        let promised = Conversation.firstRun(named: "Pip", place: .onDevice)
         #expect(promised.turns.first?.text.contains("stays here") == true)
         await #expect(throws: ConversationError.leavesDevice) {
             try await promised.sending("Write to Sam", with: model(transport: transport, reviewer: reviewer))
@@ -1044,7 +1044,7 @@ struct CloudModelTests {
     }
 
     @Test func aCloudChatNeverPromisesOnDevice() {
-        let opening = Conversation.firstRun(named: "Pip", onDevice: false).turns.first?.text ?? ""
+        let opening = Conversation.firstRun(named: "Pip", place: .mayLeaveDevice).turns.first?.text ?? ""
         #expect(!opening.contains("stays"))
     }
 

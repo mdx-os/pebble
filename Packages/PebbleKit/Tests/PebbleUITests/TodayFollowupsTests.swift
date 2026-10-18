@@ -358,7 +358,9 @@ struct TodayFollowupsTests {
     @MainActor
     @Test func anotherModelMakesTheHomeScreenAgain() throws {
         let engine = CountingEngine()
-        let looks = try #require(UserDefaults(suiteName: "swap-\(UUID().uuidString)"))
+        let suite = "swap-\(UUID().uuidString)"
+        let looks = try #require(UserDefaults(suiteName: suite))
+        defer { looks.removePersistentDomain(forName: suite) }
         func home(_ model: any ModelClient) -> HomeView {
             HomeView(brand: brand, model: model, names: InMemoryAgentNameStore(stored: "Pip"),
                      onboarding: InMemoryOnboardingStore(finished: true), memory: nil, looks: looks,
@@ -380,6 +382,61 @@ struct TodayFollowupsTests {
                                        model: RemoteModel(), now: { ShowcaseScene.morning })
         #expect(!FeedWords.sampleNote(today.place).contains("this device"))
         #expect(FeedWords.sampleNote(.onDevice).contains("this device"))
+    }
+
+    /// Switching models clears the chat, on purpose: see `PrivacyPlace`.
+    /// The new screen starts with only its own opening, nothing said to the
+    /// old model, and no Forget everything waiting for an answer. If a
+    /// change ever carries either one across, this fails loudly, so the
+    /// choice is made on purpose.
+    @MainActor
+    @Test func aNewModelStartsAFreshChat() throws {
+        let log = HomeScreenLog()
+        let store = ShowcaseScene.emptyMemory()
+        // Nothing outlives the test: not its defaults on disk, and not a
+        // window left open when a #require throws partway through.
+        let suite = "fresh-\(UUID().uuidString)"
+        let looks = try #require(UserDefaults(suiteName: suite))
+        defer { looks.removePersistentDomain(forName: suite) }
+        func home(_ model: any ModelClient) -> HomeView {
+            HomeView(brand: brand, model: model, names: InMemoryAgentNameStore(stored: "Pip"),
+                     onboarding: InMemoryOnboardingStore(finished: true), memory: store, looks: looks,
+                     conversation: nil, section: .memory, needsYou: NeedsYou(rule: .isolated()), log: log)
+        }
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 800), styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        // Under ARC a window released on close is released twice.
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: home(LocalStubModel()))
+        window.contentView = host
+        // Runs the window until `done`, or gives up after a few seconds,
+        // so a slow machine waits longer and a fast one doesn't wait at all.
+        func settle(until done: () -> Bool) {
+            let deadline = Date().addingTimeInterval(5)
+            host.layoutSubtreeIfNeeded()
+            while !done(), Date() < deadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+                host.layoutSubtreeIfNeeded()
+            }
+        }
+        settle { log.chats.last != nil && log.memories.last != nil }
+        let oldChat = try #require(log.chats.last)
+        let oldMemory = try #require(log.memories.last, "the memory screen is shown, so its model is made")
+        oldChat.conversation = try oldChat.conversation.appendingPerson("A secret for the model on this device")
+        oldMemory.askForgetEverything = true
+
+        host.rootView = home(RemoteModel())
+        settle { log.chats.last !== oldChat && log.memories.last !== oldMemory }
+        let newChat = try #require(log.chats.last)
+        #expect(newChat !== oldChat, "another model makes the chat again")
+        #expect(newChat.conversation.turns.map(\.text) == [FirstConversation.opening(named: "Pip", place: .mayLeaveDevice)],
+                "only the new opening, nothing said to the old model")
+        #expect(!newChat.conversation.turns.contains { $0.text.contains("secret") })
+        let newMemory = try #require(log.memories.last)
+        #expect(newMemory !== oldMemory, "another model makes the memory model again")
+        #expect(!newMemory.askForgetEverything, "no Forget everything is left waiting")
+        #expect(newMemory.pendingForget == nil)
     }
 
     /// The memory screen's model is made once, inside its StateObject,
@@ -407,6 +464,27 @@ struct TodayFollowupsTests {
         #expect(made == 1, "drawn again, never made again")
     }
     #endif
+
+    /// The log the tests read counts each chat the home screen showed once,
+    /// however often it appears, so a count of chats is a count of chats made.
+    @MainActor
+    @Test func aChatShownAgainIsLoggedOnce() throws {
+        let log = HomeScreenLog()
+        let first = ChatController(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore())
+        let second = ChatController(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore())
+        log.showed(first)
+        log.showed(first)
+        log.showed(second)
+        log.showed(first)
+        #expect(log.chats.count == 2)
+        #expect(log.chats.first === first && log.chats.last === second)
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        let text = try String(contentsOf: root.appendingPathComponent("Packages/PebbleKit/Sources/PebbleUI/HomeView.swift"),
+                              encoding: .utf8)
+        let code = String(SwiftSource(text).code)
+        #expect(code.contains(".onAppear { log?.showed(chat) }"))
+        #expect(!code.contains("log?.chats.append"), "the screen writes down a chat only through showed(_:)")
+    }
 
     // MARK: Closing a sheet, then moving on
 
@@ -642,6 +720,80 @@ struct TodayFollowupsTests {
                 #expect(home.arguments.contains("tasks: tasks(rule: rule)"), "line \(home.line)")
             }
         }
+    }
+
+    /// What each file may pass a `ConfirmationSheet` as `isExample:`, and
+    /// the request that flag must be about. Each one is tied to the sample
+    /// flag of where the question came from: Today's `isSample(request)`
+    /// reads the questions' and the tasks' own `isSample`, and the
+    /// showcase's sample sheet is made with `isExample: true`.
+    static let sheetExamples: [String: (request: String, isExample: String)] = [
+        "PebbleUI/HomeView.swift": ("request: request", "isExample: feed.isSample(request)"),
+        "PebbleUI/ShowcaseScene.swift": ("request: sheet.request", "isExample: sheet.isExample"),
+    ]
+
+    /// The problems with every `ConfirmationSheet(` call in `files`.
+    static func sheetProblems(in files: [(name: String, text: String)]) -> [String] {
+        var problems: [String] = []
+        for file in files {
+            let source = SwiftSource(file.text)
+            for call in source.calls(named: ["ConfirmationSheet"]) {
+                let arguments = call.arguments.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                guard let wanted = sheetExamples[file.name] else {
+                    problems.append("\(file.name):\(call.line): a ConfirmationSheet here has no isExample rule in sheetExamples")
+                    continue
+                }
+                // A missing isExample: is false, so a sample would pass as real.
+                if !arguments.contains(wanted.isExample) {
+                    problems.append("\(file.name):\(call.line): isExample must be \"\(wanted.isExample)\", got \(call.arguments)")
+                }
+                if !arguments.contains(wanted.request) {
+                    problems.append("\(file.name):\(call.line): the flag must be about \"\(wanted.request)\"")
+                }
+            }
+            // The showcase's sample sheet is always an example.
+            for sheet in source.calls(named: ["SampleSheet"])
+            where !sheet.arguments.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+                .contains("isExample: true") {
+                problems.append("\(file.name):\(sheet.line): a SampleSheet must be made with isExample: true")
+            }
+        }
+        return problems
+    }
+
+    /// PERMANENT GUARD. Every `ConfirmationSheet(` in the package sources
+    /// and the app is passed an `isExample:` that is the sample flag of
+    /// the very question it shows, rather than trusting each source's
+    /// `isSample` to reach the sheet on its own.
+    @Test func everySheetIsToldWhetherItIsAnExample() throws {
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        let package = try SwiftSource.files(under: root.appendingPathComponent("Packages/PebbleKit/Sources"))
+        let app = try SwiftSource.files(under: root.appendingPathComponent("App")).map { ("App/\($0.name)", $0.text) }
+        let files = package + app
+        let calling = files.filter { !SwiftSource($0.text).calls(named: ["ConfirmationSheet"]).isEmpty }.map(\.name)
+        #expect(Set(calling) == Set(Self.sheetExamples.keys), "each file that shows a sheet has its rule, and only those")
+        for problem in Self.sheetProblems(in: files) {
+            Issue.record(Comment(rawValue: problem))
+        }
+        let wrong: [(String, String)] = [
+            ("PebbleUI/HomeView.swift", "ConfirmationSheet(request: request, rule: feed.rule, onApprove: { _ in }, onDecline: {})"),
+            ("PebbleUI/HomeView.swift", "ConfirmationSheet(request: request, rule: feed.rule, isExample: false, onApprove: { _ in })"),
+            ("PebbleUI/HomeView.swift", "ConfirmationSheet(request: other, rule: r, isExample: feed.isSample(request))"),
+            ("PebbleUI/HomeView.swift", "ConfirmationSheet(request: request, isExample: !feed.isSample(request))"),
+            ("PebbleUI/ShowcaseScene.swift", "ConfirmationSheet(request: sheet.request, rule: sheet.rule, isExample: true)"),
+            ("PebbleUI/ShowcaseScene.swift", "SampleSheet(request: request, rule: rule, isExample: false)"),
+            ("PebbleUI/FeedView.swift", "ConfirmationSheet(request: request, rule: rule, isExample: model.isSample(request))"),
+        ]
+        for (name, text) in wrong {
+            #expect(!Self.sheetProblems(in: [(name, text)]).isEmpty, "missed: \(text)")
+        }
+        let right = "ConfirmationSheet(request: sheet.request, rule: sheet.rule, isExample: sheet.isExample,\n"
+            + "    onApprove: { _ in }, onDecline: {})\nSampleSheet(request: request, rule: rule, isExample: true)"
+        #expect(Self.sheetProblems(in: [("PebbleUI/ShowcaseScene.swift", right)]).isEmpty)
+        // Each argument wrapped onto a line of its own still reads the same.
+        let wrapped = "ConfirmationSheet(\n    request: sheet.request,\n    rule: sheet.rule,\n    isExample:\n"
+            + "        sheet.isExample\n)\nSampleSheet(\n    request: request,\n    isExample: true\n)"
+        #expect(Self.sheetProblems(in: [("PebbleUI/ShowcaseScene.swift", wrapped)]).isEmpty)
     }
 
     @Test func theShowcaseBakeryUsesAnExampleDomain() throws {

@@ -22,7 +22,11 @@ in lint, a skill, or CI.
 - `make comment-lint`: no review history ("fix round", "item 11", "round 4") or personal names in code comments, project.yml, the Makefile or the mutation manifest. Say what the code or test protects. The names it blocks are never committed in plain text: `Config/comment-lint-names.sha256` holds a salt and the SHA-256 of each name, and CI needs no secret. The plain list lives only in the git-ignored `Config/comment-lint-names.local.txt`; after changing it, run `make hash-names` and commit the hash file. A match prints the file and line, never the name. Never print, copy or quote the local list
 - `make build-release`: Release builds for macOS and the iOS Simulator (part of verify). Anything behind `#if DEBUG`, like the showcase, must only be used behind it too. Every build with a cloud address fails unless it is Debug and not an archive, whatever the configuration is called
 - `make pulse`: fetch the competitor watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
-- `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`, plus a `STAMP` with the commit and the working tree's hash. `make verify` makes them and then fails with "screenshots are stale, rerun make screenshots" if the stamp is missing or the tree has changed since. The tree hash is the contract: the same files make the same screenshots, so committing or amending them with nothing changed keeps them fresh. The commit line is only there to read. Screenshots always show the code as it is now
+- `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`, plus dark shots of the
+  orange fill that `scripts/check-screenshots.sh` checks. Worktrees share simulators and
+  the bundle ID, so when another session runs at once pass free ones:
+  `make verify PEBBLE_IPAD="iPad Air 13-inch (M4)" PEBBLE_IPHONE="iPhone 17e"`
+- The screenshots also get a `STAMP` with the commit and the working tree's hash. `make verify` makes them and then fails with "screenshots are stale, rerun make screenshots" if the stamp is missing or the tree has changed since. The tree hash is the contract: the same files make the same screenshots, so committing or amending them with nothing changed keeps them fresh. The commit line is only there to read. Screenshots always show the code as it is now
 - `make screenshots-check`: that check alone, and `make screenshots-check-test` its self-test
 - `make generate`: regenerate `Pebble.xcodeproj` after editing `project.yml`
 - `make secrets-check`: gitleaks over git history
@@ -140,3 +144,12 @@ Things no test here can reach. Check each on a real iPhone before a release.
 - Run untrusted PR code on a self-hosted runner. PR checks use GitHub's runners.
 - Copy code from MDx without reading it first; MDx carries enterprise
   assumptions and internal names that do not belong here.
+
+## Manual checks before release
+
+Some things can't be proven by an automated test. Check these by hand before a release and note the result in the release PR:
+
+- **Done's focus ring on the Mac:** turn on Full Keyboard Access, open a sheet, and Tab to Done. Exactly one ring shows around it, in light and in dark. If the system draws a second ring, add `.focusEffectDisabled()` to the button.
+- **Done's focus ring on iPad:** with a hardware keyboard, Tab to Done. The ring shows in light and in dark.
+- **Done's pointer hover on iPad:** with a trackpad or mouse, hover over Done. It shows the hover effect.
+- **Today's count on the Mac:** with something waiting and another row chosen, turn on VoiceOver and move to Today in the sidebar. It says the count as "3 waiting for you", not just "3". If it says only the number, the system badge is dropping the label.

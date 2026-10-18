@@ -506,10 +506,12 @@ public enum CloudWords {
     /// After the person chose not to send.
     public static let notSent = "Okay, I didn't send it. What you wrote is still here."
     /// The setting was turned off while this chat was using the cloud. It
-    /// says only what the next chat won't do: where it does answer depends
-    /// on the local model, which this line can't see, so it makes no
-    /// device promise.
-    public static let turnedOff = "Help from the cloud is off now, so I didn't send that. A new chat won't use the cloud."
+    /// names only the setting and what happened to this message. Where the
+    /// next chat answers depends on the local model, which this line can't
+    /// see, so it says nothing about the cloud or the device beyond that.
+    /// The words go back in the composer, so they are still here, and the
+    /// line goes once the person clears them.
+    public static let turnedOff = "Help from the cloud is off now, so I didn't send that. What you wrote is still here."
     /// Something earlier in this chat must stay on this device, so no part
     /// of the chat can be sent. Only a new chat can use the cloud again.
     public static let staysHere = "Part of this chat has to stay on this device, so I won't send any of it. A new chat starts fresh, and I can help there."
@@ -590,8 +592,10 @@ public enum CloudWords {
     /// the cloud this session.
     public static let sentCantBeErased = "What I already sent to the cloud can't be erased from here."
 
+    /// Every fixed line. `offDetail` follows a place, which only the model
+    /// decides, so the tests read it for each place themselves.
     public static let all: [String] = [
-        title, toggleTitle, offDetail(.onDevice), offDetail(.mayLeaveDevice), onDetail, unavailable, couldNotOpen,
+        title, toggleTitle, onDetail, unavailable, couldNotOpen,
         rowTitle, rowOff, rowOn,
         askQuestion, askYes, askNo, privateTitle, privateDetail, privatePlaceholder, privateAdd,
         privateRemove("Sam"), privateUnreadable, privateLocked, privateNotSaved, privateTooLong, privateFull,

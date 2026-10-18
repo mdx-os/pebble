@@ -8,7 +8,7 @@ struct CopyDashTests {
 
     /// The words people see on each screen.
     static let copy: [String] = [
-        FirstRunWords.hello, FirstRunWords.helloDetail(onDevice: true), FirstRunWords.helloDetail(),
+        FirstRunWords.hello, FirstRunWords.helloDetail(.onDevice), FirstRunWords.helloDetail(),
         FirstRunWords.beginTitle,
         FirstRunWords.nameQuestion, FirstRunWords.nameDetail, FirstRunWords.lookQuestion,
         FirstRunWords.lookDetail, FirstRunWords.ideasDetail, FirstRunWords.justChatTitle,
@@ -22,7 +22,7 @@ struct CopyDashTests {
         FirstConversation.nameInvitation, FirstConversation.giveNameTitle, FirstConversation.changeNameTitle,
         FirstConversation.namePlaceholder, FirstConversation.confirmNameTitle, FirstConversation.cancelNameTitle,
         FirstConversation.needsAName, FirstConversation.nameTooLong,
-        FirstConversation.opening(named: "Pip", onDevice: true), FirstConversation.opening(named: "Pip"),
+        FirstConversation.opening(named: "Pip", place: .onDevice), FirstConversation.opening(named: "Pip"),
         MemoryWords.title, MemoryWords.emptyTitle, MemoryWords.emptyActionTitle,
         MemoryWords.empty(.onDevice), MemoryWords.empty(.mayLeaveDevice),
         MemoryWords.saved(.onDevice), MemoryWords.saved(.mayLeaveDevice),
@@ -42,12 +42,12 @@ struct CopyDashTests {
         ConfirmationWords.expired, ConfirmationWords.closeTitle, ConfirmationWords.promise,
         ConfirmationWords.sharedLabel, ConfirmationWords.happensLabel,
         ProposedAction.yesTitle, ProposedAction.noTitle, ProposedAction.declined,
-        HomeWords.chatTitle, HomeWords.newChatTitle, HomeWords.goMenuTitle, HomeWords.shortcutsTitle,
         CareCheck.reply, CareCheck.followUp,
-    ] + FirstConversation.jobs.flatMap { [$0.title, $0.prompt] }
+    ] + PrivacyPlaceTests.everyPlace.map(CloudWords.offDetail)
+      + FirstConversation.jobs.flatMap { [$0.title, $0.prompt] }
       + Proactivity.allCases.flatMap { [$0.title, $0.detail] }
       + AgentLook.allCases.map(\.title)
-      + HomeWords.shortcuts.flatMap { [$0.keys, $0.action] }
+      + HomeWords.all
       + FeedWords.all
       + CloudWords.all
       + Redaction.Kind.allCases.flatMap { [$0.mask, $0.counted(1), $0.counted(2), $0.spoken] }
@@ -140,11 +140,11 @@ struct CopyDashTests {
 
     /// Promises the warmth pass must keep word for word.
     @Test func privacyAndCarePromisesStand() {
-        #expect(FirstConversation.opening(named: "Pip", onDevice: true).contains("so what you tell me stays here"))
-        #expect(!FirstConversation.opening(named: "Pip", onDevice: false).contains("stays"))
+        #expect(FirstConversation.opening(named: "Pip", place: .onDevice).contains("so what you tell me stays here"))
+        #expect(!FirstConversation.opening(named: "Pip", place: .mayLeaveDevice).contains("stays"))
         // The hello only promises it when the model runs here, like the opening.
-        #expect(FirstRunWords.helloDetail(onDevice: true).contains("Everything you tell me stays on this device."))
-        #expect(!FirstRunWords.helloDetail(onDevice: false).contains("stays"))
+        #expect(FirstRunWords.helloDetail(.onDevice).contains("Everything you tell me stays on this device."))
+        #expect(!FirstRunWords.helloDetail(.mayLeaveDevice).contains("stays"))
         #expect(!FirstRunWords.helloDetail().contains("stays"))
         #expect(MemoryWords.privacyNote(.onDevice) == "Kept only on this device. Removing a note erases it.")
         #expect(MemoryWords.forgotten == "Gone. I no longer have it.")
@@ -185,6 +185,17 @@ struct CopyDashTests {
         #expect(text.contains("(\"\(ProposedAction.yesTitle)\" and \"\(ProposedAction.noTitle)\""))
         // The name limit is referred to, not copied, so it can't drift.
         #expect(!text.contains("\(AgentName.maxLength) letters"))
+    }
+}
+
+extension HomeWords {
+    /// Every home screen line a person can see or hear, with sample counts
+    /// where a line takes one.
+    static var all: [String] {
+        [chatTitle, newChatTitle, goMenuTitle, shortcutsTitle, sendShortcut, newLineShortcut,
+         sendFromAnywhereShortcut, closeShortcut, newChatQuestion, newChatDetail, newChatConfirm, cancelTitle,
+         waiting(1), waiting(3)]
+        + shortcuts.flatMap { [$0.keys, $0.action] }
     }
 }
 
