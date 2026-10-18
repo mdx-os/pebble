@@ -7,7 +7,14 @@
 #   sh scripts/ui-test-reset.sh "iPad Pro 13-inch (M5)" "iPhone 17 Pro"
 set -eu
 
-bundle_id="com.mdxos.pebble"
+# The app's own identifier, from its build settings, so a changed one is
+# never left installed. Needs Pebble.xcodeproj, which `make ui-test` makes.
+bundle_id="$(xcodebuild -showBuildSettings -project Pebble.xcodeproj -target Pebble -sdk iphonesimulator 2>/dev/null \
+  | sed -n 's/^ *PRODUCT_BUNDLE_IDENTIFIER = //p' | head -n 1)"
+if [ -z "$bundle_id" ]; then
+  echo "ui-test-reset: couldn't read the app's bundle identifier from Pebble.xcodeproj. Run make generate first."
+  exit 1
+fi
 
 for name in "$@"; do
   udid="$(xcrun simctl list devices available -j | /usr/bin/python3 -c '

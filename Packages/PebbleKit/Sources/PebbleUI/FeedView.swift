@@ -72,6 +72,9 @@ final class FeedModel: ObservableObject {
     /// True from forgetting every task until a new one starts, so the
     /// memory screen can say the tasks are gone.
     @Published private(set) var tasksForgotten = false
+    /// Kept on Today after a file that couldn't be read was cleared, until
+    /// the person has read it.
+    @Published private(set) var clearedUnreadable: String?
     private let clock: () -> ContinuousClock.Instant
     /// Says a line to VoiceOver. Tests replace it to hear what would be said.
     var announce: @MainActor (TaskAnnouncer.Line) -> Void = FeedModel.post
@@ -108,6 +111,7 @@ final class FeedModel: ObservableObject {
             flow.store.restore(into: keeper, now: now())
         }
         feed = Feed.build(from: self.sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
+        if store?.clearedUnreadable == true { clearedUnreadable = ReceiptWords.unreadableCleared }
         flow?.pinned(Self.pinnedTasks(in: feed), rule: needsYou.rule, from: window)
         let list = tasks?.tasks ?? []
         track(list)
@@ -158,6 +162,7 @@ final class FeedModel: ObservableObject {
     /// yes to that was under way still gets its card and its receipt.
     private func storeChanged() {
         if let store, let keeper = tasks as? any KeepsTasks, store.hasLateTasks { store.keep(keeper, now: now()) }
+        if store?.clearedUnreadable == true, clearedUnreadable == nil { clearedUnreadable = ReceiptWords.unreadableCleared }
         rebuild()
     }
 
@@ -378,10 +383,12 @@ final class FeedModel: ObservableObject {
         }
     }
 
-    /// Takes a receipt away for good.
+    /// Takes a receipt away for good. Its card goes from under VoiceOver,
+    /// so what went is said.
     func clearReceipt(_ receipt: Receipt) {
-        flow?.store.clearReceipt(receipt.id)
+        let cleared = flow?.store.clearReceipt(receipt.id) == true
         rebuild()
+        if cleared { announce(TaskAnnouncer.Line(text: receipt.clearedLine, urgent: true)) }
     }
 
     // MARK: Task cards
@@ -480,11 +487,19 @@ final class FeedModel: ObservableObject {
         rebuild()
         if what.something { tasksForgotten = true }
         if let line = what.underway { forgotUnderway = line }
+        // What it said went is forgotten too.
+        clearedUnreadable = nil
     }
 
     /// The person has read the line kept after forgetting.
     func dismissForgotUnderway() {
         forgotUnderway = nil
+    }
+
+    /// The person has read that a file that couldn't be read was cleared.
+    func dismissClearedUnreadable() {
+        clearedUnreadable = nil
+        store?.saidUnreadableCleared()
     }
 
     /// The finished result, in the same reader as other results.
@@ -659,6 +674,11 @@ struct FeedView: View {
                     .padding(.bottom, -12)
                     if let line = model.forgotUnderway {
                         ForgotUnderwayNotice(line: line, onDismiss: model.dismissForgotUnderway)
+                            .transition(Motion.arrival(reduceMotion: reduceMotion))
+                    }
+                    if let line = model.clearedUnreadable {
+                        ForgotUnderwayNotice(line: line, onDismiss: model.dismissClearedUnreadable,
+                                             identifier: "clearedUnreadable")
                             .transition(Motion.arrival(reduceMotion: reduceMotion))
                     }
                     if model.feed.isEmpty {
@@ -956,10 +976,12 @@ struct FocusScroller: View {
 }
 
 /// What stays on Today after Forget everything, while a step the person
-/// said yes to may have happened. One plain line and a way to put it away.
+/// said yes to may have happened, or after a file that couldn't be read
+/// was cleared. One plain line and a way to put it away.
 struct ForgotUnderwayNotice: View {
     let line: String
     let onDismiss: () -> Void
+    var identifier = "forgotUnderway"
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
@@ -976,7 +998,7 @@ struct ForgotUnderwayNotice: View {
         .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("forgotUnderway")
+        .accessibilityIdentifier(identifier)
     }
 }
 

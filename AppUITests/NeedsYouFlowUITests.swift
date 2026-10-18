@@ -48,8 +48,10 @@ final class NeedsYouFlowUITests: XCTestCase {
     }
 
     /// The question is pinned once, the sheet says what happens, to whom
-    /// and what is shared, a yes goes on once, and the receipt can be cleared.
-    func testAYesGoesOnOnceAndLeavesAReceipt() throws {
+    /// and what is shared, a yes leaves one receipt, and the receipt can be
+    /// cleared. A second tap on the same yes is covered by the unit tests
+    /// on `ConfirmationState` and `usedYes`: the sheet is gone after one.
+    func testAYesLeavesOneReceiptThatCanBeCleared() throws {
         let app = launch()
         XCTAssertTrue(approve(in: app).waitForExistence(timeout: 15))
         XCTAssertTrue(app.staticTexts["Needs you"].exists)
@@ -77,7 +79,9 @@ final class NeedsYouFlowUITests: XCTestCase {
         XCTAssertTrue(receipt.label.contains("You said yes"), receipt.label)
         XCTAssertTrue(receipt.label.contains("Done, once, just as you said yes to it."), receipt.label)
 
-        element("clearReceipt", in: app).tap()
+        let clear = element("clearReceipt", in: app)
+        XCTAssertEqual(clear.label, "Clear your details for Maple Dental", "Clear says which receipt it clears")
+        clear.tap()
         XCTAssertTrue(receipt.waitForNonExistence(timeout: 5))
     }
 

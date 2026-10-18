@@ -73,10 +73,29 @@ private final class FakeCenter: NudgeCenter, @unchecked Sendable {
     private var shown: [UNNotificationRequest] = []
     private var holding = false
     private var held: [CheckedContinuation<Void, Never>] = []
+    private var status: UNAuthorizationStatus
+    private let grants: Bool
+    private var asked = 0
 
-    init(pending: [UNNotificationRequest] = [], delivered: [UNNotificationRequest] = []) {
+    init(pending: [UNNotificationRequest] = [], delivered: [UNNotificationRequest] = [],
+         status: UNAuthorizationStatus = .notDetermined, grants: Bool = true) {
         waiting = pending
         shown = delivered
+        self.status = status
+        self.grants = grants
+    }
+
+    /// Times the system's own question was asked.
+    var requests: Int { lock.lock(); defer { lock.unlock() }; return asked }
+
+    func authorization() async -> UNAuthorizationStatus { currentStatus() }
+    func requestAuthorization() async -> Bool { ask() }
+    private func currentStatus() -> UNAuthorizationStatus { lock.lock(); defer { lock.unlock() }; return status }
+    private func ask() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        asked += 1
+        status = grants ? .authorized : .denied
+        return grants
     }
 
     var pendingIDs: [String] { lock.lock(); defer { lock.unlock() }; return waiting.map(\.identifier) }
@@ -657,7 +676,8 @@ struct NeedsYouFlowModelTests {
     @Test func aYesFromBeforeForgetEverythingDoesNothingAfterIt() async throws {
         let store = TaskStore.inMemory()
         let heard = StoreChanges()
-        _ = store.observe { heard.add() }
+        let watching = store.observe { heard.add() }
+        defer { store.stopObserving(watching) }
         let (model, engine, _) = today(store: store)
         engine.advance(by: 42)
         let task = try #require(pinned(model))
@@ -677,6 +697,9 @@ struct NeedsYouFlowModelTests {
         #expect(store.tasks.isEmpty)
         #expect(heard.count == changes, "nothing was written")
         #expect(!model.usedYes.contains(approval.id))
+        // The count moves with a write, so the line above could fail.
+        store.setNudges(.declined)
+        #expect(heard.count == changes + 1)
     }
 
     /// PERMANENT GUARD. Forget everything in one window forgets in every
@@ -733,7 +756,8 @@ struct NeedsYouFlowModelTests {
         await second.settled()
         #expect(second.reviewing == nil, "its sheet closed with the forget")
         let heard = StoreChanges()
-        _ = store.observe { heard.add() }
+        let watching = store.observe { heard.add() }
+        defer { store.stopObserving(watching) }
         // A tap on Yes in the sheet as it goes. Whatever the sheet makes of
         // it, nothing may come of it.
         _ = state.tapPrimary()
@@ -747,6 +771,9 @@ struct NeedsYouFlowModelTests {
         #expect(store.receipts.isEmpty)
         #expect(store.tasks.isEmpty)
         #expect(heard.count == 0, "nothing was written")
+        // The count moves with a write, so the line above could fail.
+        store.setNudges(.declined)
+        #expect(heard.count == 1)
     }
 
     /// Forget everything in one window shows the same lines in the other:
@@ -937,6 +964,60 @@ struct NeedsYouFlowModelTests {
         #expect(store.receipts.isEmpty)
     }
 
+    /// PERMANENT GUARD. A file that couldn't be understood, as one from a
+    /// later version, is cleared, and Today says so, since it may have held
+    /// a yes under way. Said once: put away, it stays away, in this window
+    /// and the next.
+    @Test func aFileThatCouldNotBeReadIsSaidToBeClearedOnToday() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("flow-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appendingPathComponent("tasks.json")
+        try Data(#"{"tasks":[{"phase":"teleporting"}],"receipts":[],"nudges":"allowed"}"#.utf8).write(to: url)
+        let store = TaskStore(fileURL: url, forgetMarker: folder.appendingPathComponent("pending/tasks-forgotten"))
+        let (model, _, _) = today(store: store, start: false)
+        #expect(!FileManager.default.fileExists(atPath: url.path), "cleared")
+        #expect(model.clearedUnreadable == ReceiptWords.unreadableCleared)
+        model.dismissClearedUnreadable()
+        #expect(model.clearedUnreadable == nil)
+        let (next, _, _) = today(store: store, start: false)
+        #expect(next.clearedUnreadable == nil, "said once")
+        // A file that reads says nothing.
+        let (plain, _, _) = today(start: false)
+        #expect(plain.clearedUnreadable == nil)
+    }
+
+    /// Clear on a receipt says which receipt it clears, so with several on
+    /// Today VoiceOver's list of buttons tells them apart, and once the card
+    /// goes from under VoiceOver, what went is said.
+    @Test func clearingAReceiptSaysWhichAndThatItWent() async throws {
+        let (model, engine, _) = today()
+        var heard: [String] = []
+        model.announce = { heard.append($0.text) }
+        engine.advance(by: 42)
+        #expect(try sheet(model, try #require(pinned(model))).tapPrimary() == .approved)
+        engine.advance(by: 4)
+        await model.settled()
+        let receipt = try #require(receipts(model).first)
+        #expect(receipt.clearLabel == "Clear your details for Maple Dental")
+        #expect(ReceiptWords.clearLabel(.send, "Sam") == "Clear a message to Sam")
+        #expect(ReceiptWords.clearLabel(.purchase, "Sam") == "Clear a payment to Sam")
+        heard = []
+        model.clearReceipt(receipt)
+        #expect(heard == ["Cleared your details for Maple Dental."])
+        model.clearReceipt(receipt)
+        #expect(heard.count == 1, "nothing was there to clear the second time, so nothing is said")
+        // The card's Clear button is labelled with it.
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        let text = try String(contentsOf: root.appendingPathComponent("Packages/PebbleKit/Sources/PebbleUI/NeedsYouFlow.swift"),
+                              encoding: .utf8)
+        let code = String(SwiftSource(text).code)
+        let card = try #require(code.range(of: "struct ReceiptCard: View {"))
+        let button = try #require(code[card.upperBound...].range(of: "Button(TaskWords.dismissTitle, action: onClear)"))
+        let rest = code[button.upperBound...].prefix(400)
+        #expect(rest.contains(".accessibilityLabel(receipt.clearLabel)"), "\(rest)")
+    }
+
     // MARK: A nudge opened
 
     @Test func openingANudgeBringsItsCardIntoView() async throws {
@@ -974,12 +1055,12 @@ struct NeedsYouFlowModelTests {
         model.refresh()
         #expect(pinned(model) == nil)
         notifier.tap(task.id)
+        #expect(flow.focus == nil, "a question that timed out is never brought into view")
         #expect(model.reviewing == nil)
         let ended = try #require(engine.task(task.id))
         #expect(!model.canApprove(ended))
         model.review(ended)
         #expect(model.reviewing == nil, "its card opens nothing either")
-        flow.focus = nil
         notifier.tap("task:404")
         #expect(flow.focus == nil, "a task never pinned is never brought into view")
         #expect(model.reviewing == nil)
@@ -1220,7 +1301,7 @@ struct NeedsYouFlowModelTests {
         #expect(content.categoryIdentifier.isEmpty)
         #expect(content.targetContentIdentifier == task.id)
         #expect(content.threadIdentifier == LocalQuestionNotifier.thread)
-        for carried in [content.categoryIdentifier, content.targetContentIdentifier ?? "", content.threadIdentifier] {
+        for carried in [nudge.id, content.categoryIdentifier, content.targetContentIdentifier ?? "", content.threadIdentifier] {
             for held in [task.title, "Maple", "mapledental", "Saturday", "dentist", "visit"] {
                 #expect(!carried.localizedCaseInsensitiveContains(held), "\(carried) holds \(held)")
             }
@@ -1332,6 +1413,70 @@ struct NeedsYouFlowModelTests {
         notifier.post(nudge, after: 30)
         await notifier.posting?.value
         #expect(center.pendingIDs == [nudge.id], "posted again afterwards, it stays")
+    }
+
+    /// PERMANENT GUARD. Forget everything, or every nudge taken away at
+    /// launch, while a nudge is still on its way to the system takes it
+    /// away once it lands. Otherwise it would show 30 seconds on, on the
+    /// lock screen, carrying a forgotten task's id.
+    @Test(arguments: [true, false])
+    func everyNudgeTakenAwayTakesOneStillOnItsWay(byForgetting: Bool) async throws {
+        let center = FakeCenter()
+        let notifier = LocalQuestionNotifier(center: center)
+        let question = try #require(AskFirst.isolated().ask(SampleTasks.holdVisit))
+        let nudge = QuestionNudge(question: question, taskID: "task:1", agentName: "Pip")
+        center.hold()
+        notifier.post(nudge, after: 30)
+        let posting = try #require(notifier.posting)
+        if byForgetting { notifier.forget() } else { notifier.removeAll() }
+        let clearing = try #require(notifier.clearing)
+        center.release()
+        await posting.value
+        await clearing.value
+        #expect(center.pendingIDs.isEmpty, "it landed after every nudge was taken away, so it went then")
+        #expect(center.deliveredIDs.isEmpty)
+        // A nudge posted after that is a new one, and stays.
+        notifier.post(nudge, after: 30)
+        await notifier.posting?.value
+        #expect(center.pendingIDs == [nudge.id])
+    }
+
+    /// The notifier asks and reads the system only through its center, so
+    /// a test's center covers all of it, and a notifier with none never
+    /// reaches for the system's, which a test process doesn't have.
+    @Test func permissionGoesThroughTheCenter() async throws {
+        let center = FakeCenter(status: .notDetermined, grants: true)
+        let notifier = LocalQuestionNotifier(center: center)
+        #expect(await notifier.permission() == .notDetermined)
+        #expect(await notifier.requestPermission())
+        #expect(center.requests == 1)
+        #expect(await notifier.permission() == .allowed)
+        let refused = LocalQuestionNotifier(center: FakeCenter(status: .notDetermined, grants: false))
+        #expect(await !refused.requestPermission())
+        #expect(await refused.permission() == .denied)
+        for (status, permission) in [(UNAuthorizationStatus.provisional, NudgePermission.allowed),
+                                     (.authorized, .allowed), (.denied, .denied)] {
+            #expect(await LocalQuestionNotifier(center: FakeCenter(status: status)).permission() == permission)
+        }
+        let none = LocalQuestionNotifier()
+        #expect(await none.permission() == .notDetermined)
+        #expect(await !none.requestPermission())
+    }
+
+    /// PERMANENT GUARD. The moment more in the background is asked for in
+    /// `post` itself, as the app goes away, not after the hop into the
+    /// task that hands the nudge over.
+    @Test func theBackgroundMomentBeginsBeforeTheHop() throws {
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        let text = try String(contentsOf: root.appendingPathComponent("Packages/PebbleKit/Sources/PebbleUI/NeedsYouFlow.swift"),
+                              encoding: .utf8)
+        let code = String(SwiftSource(text).code)
+        let post = try #require(code.range(of: "public func post(_ nudge: QuestionNudge, after delay: TimeInterval) {"))
+        let body = code[post.upperBound...]
+        let begun = try #require(body.range(of: "BackgroundMoment.begunHere()"))
+        let hop = try #require(body.range(of: "Task { @MainActor in"))
+        #expect(begun.lowerBound < hop.lowerBound, "begun before the hop")
+        #expect(body[hop.upperBound...].range(of: "moment.end()") != nil, "and ended once the nudge has landed")
     }
     #endif
 
@@ -1537,13 +1682,13 @@ struct NeedsYouFlowModelTests {
         model.approved(approval)
         notes += model.cardState(late.id).note.map { [$0] } ?? []
         // A question that timed out under its card: the card says so.
-        engine.advance(by: 30)
+        engine.start(SampleTasks.dentist)
+        engine.advance(by: 42)
         await model.settled()
-        if let waiting = pinned(model) {
-            clock.advance(AskFirst.defaultWindow + 1)
-            model.review(waiting)
-            notes += model.cardState(waiting.id).note.map { [$0] } ?? []
-        }
+        let waiting = try #require(pinned(model), "a question waits, to time out under its card")
+        clock.advance(AskFirst.defaultWindow + 1)
+        model.review(waiting)
+        notes += model.cardState(waiting.id).note.map { [$0] } ?? []
         // The flow's lines, the offer refused by the system.
         engine.start(SampleTasks.dentist)
         engine.advance(by: 42)
@@ -1552,13 +1697,13 @@ struct NeedsYouFlowModelTests {
         await flow.settled()
         flow.declineNudges()
         // A yes under way, then Forget everything.
-        if let asking = pinned(model) {
-            _ = try sheet(model, asking).tapPrimary()
-        }
+        let asking = try #require(pinned(model), "a question waits, to say yes to")
+        #expect(try sheet(model, asking).tapPrimary() == .approved)
         model.forgetTasks()
         await model.settled()
-        notes += model.forgotUnderway.map { [$0] } ?? []
+        notes.append(try #require(model.forgotUnderway, "the line kept after Forget everything"))
         #expect(notes.contains(TaskWords.yesNotUsed))
+        #expect(notes.contains(TaskWords.questionTimedOut))
         #expect(heard.contains(NudgeWords.offBySystem))
         #expect(heard.contains(NudgeWords.off))
         #expect(heard.count > 8, "\(heard)")
@@ -1599,6 +1744,18 @@ struct NeedsYouFlowModelTests {
         try smokeRender(scene.view(brand: Brand(name: "Nova"))
             .environment(\.colorScheme, scheme)
             .frame(width: 393, height: 852))
+    }
+
+    /// The live ask scene has every sample script once, the dentist search
+    /// as `liveDentist`, wherever the dentist sits in the list.
+    @Test func theLiveAskSceneHasEachScriptOnce() {
+        let all = SampleTasks.all
+        #expect(all.contains { $0.title == SampleTasks.dentist.title })
+        for order in [all, all.reversed(), Array(all.dropFirst()) + all.prefix(1)] {
+            let titles = ShowcaseScene.liveScripts(order).map(\.title)
+            #expect(titles.sorted() == all.map(\.title).sorted(), "\(titles)")
+            #expect(titles.first == SampleTasks.dentist.title)
+        }
     }
 
     @Test func eachAskSceneShowsItsMoment() throws {

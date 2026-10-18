@@ -118,9 +118,6 @@ final class NeedsYouFlow: ObservableObject {
     private var previewWaiting: Bool { windows.values.contains(where: \.previewWaiting) }
     /// Every question nudged already, so none is nudged twice.
     private(set) var told: Set<String> = []
-    /// Tasks whose question was pinned this launch, so a nudge for one can
-    /// bring its card into view. A tap for any other task does nothing.
-    private var knownTasks: Set<String> = []
     /// Nudges posted and not yet taken away, with when each was posted.
     private var posted: [String: Date] = [:]
     /// The system's answer, while it is being asked.
@@ -187,9 +184,14 @@ final class NeedsYouFlow: ObservableObject {
     /// Brings the card for `id` into view in `window`, a beat after its
     /// nudge was opened, then lets go. Only if it is still the one to bring
     /// in, so a nudge `takesOpened` let go in the meantime never scrolls
-    /// Today or moves VoiceOver to a card behind the first run or a cover.
+    /// Today or moves VoiceOver to a card behind the first run or a cover,
+    /// and only while its question is still pinned.
     func bringIntoView(_ id: String, in window: UUID, scroll: (String) -> Void, focusCard: (String) -> Void) {
         guard focus == id, opens(in: window) else { return }
+        guard isWaiting(id) else {
+            focus = nil
+            return
+        }
         scroll(id)
         focusCard(id)
         focus = nil
@@ -205,7 +207,6 @@ final class NeedsYouFlow: ObservableObject {
 
     private func update() {
         let waiting = waiting
-        knownTasks.formUnion(waiting.map(\.taskID))
         let open = Set(waiting.map(\.id))
         let closed = Set(posted.keys).subtracting(open)
         if !closed.isEmpty {
@@ -303,12 +304,19 @@ final class NeedsYouFlow: ObservableObject {
     }
 
     /// The person opened a nudge: bring its task into view. Only a task
-    /// whose question was pinned this launch; a tap for any other does
-    /// nothing. Either way nothing becomes answerable: a question opens
-    /// only from its card, while it is still pinned.
+    /// whose question is pinned now; a tap for one that timed out, was
+    /// answered, or was never pinned does nothing, so Today never jumps to
+    /// a card that has nothing to ask. Either way nothing becomes
+    /// answerable: a question opens only from its card, while it is still
+    /// pinned.
     func opened(_ taskID: String) {
-        guard knownTasks.contains(taskID) else { return }
+        guard isWaiting(taskID) else { return }
         focus = taskID
+    }
+
+    /// True while `taskID`'s question is pinned in some window.
+    private func isWaiting(_ taskID: String) -> Bool {
+        windows.values.contains { $0.waiting.contains { $0.taskID == taskID } }
     }
 
     /// What Forget everything took, as every window is told.
@@ -327,7 +335,6 @@ final class NeedsYouFlow: ObservableObject {
         notifier?.forget()
         posted = [:]
         told = []
-        knownTasks = []
         focus = nil
         store.forget()
         for hook in forgetHooks.values { hook(forgotten) }
@@ -355,6 +362,10 @@ final class NeedsYouFlow: ObservableObject {
 /// tests can stand in for it. Shown notifications are given as their
 /// requests, which is all that is read of them.
 protocol NudgeCenter: AnyObject, Sendable {
+    /// What the system allows now, without asking.
+    func authorization() async -> UNAuthorizationStatus
+    /// Asks the system, which shows its own question the first time.
+    func requestAuthorization() async -> Bool
     func add(_ request: UNNotificationRequest) async
     func pending() async -> [UNNotificationRequest]
     func delivered() async -> [UNNotificationRequest]
@@ -365,6 +376,11 @@ protocol NudgeCenter: AnyObject, Sendable {
 /// The system's own notification center.
 final class SystemNudgeCenter: NudgeCenter, @unchecked Sendable {
     private var center: UNUserNotificationCenter { .current() }
+
+    func authorization() async -> UNAuthorizationStatus { await center.notificationSettings().authorizationStatus }
+    func requestAuthorization() async -> Bool {
+        (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
+    }
 
     func add(_ request: UNNotificationRequest) async { try? await center.add(request) }
     func pending() async -> [UNNotificationRequest] { await center.pendingNotificationRequests() }
@@ -420,16 +436,20 @@ public final class LocalQuestionNotifier: NSObject, QuestionNotifying, UNUserNot
         lock.unlock()
     }
 
+    /// Through the center, like everything else here, so a notifier with
+    /// none never reaches for the system's.
     public func permission() async -> NudgePermission {
-        switch await UNUserNotificationCenter.current().notificationSettings().authorizationStatus {
-        case .notDetermined: .notDetermined
-        case .denied: .denied
-        default: .allowed
+        guard let center = currentCenter else { return .notDetermined }
+        switch await center.authorization() {
+        case .notDetermined: return .notDetermined
+        case .denied: return .denied
+        default: return .allowed
         }
     }
 
     public func requestPermission() async -> Bool {
-        (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])) ?? false
+        guard let center = currentCenter else { return false }
+        return await center.requestAuthorization()
     }
 
     /// What a nudge shows: only that the agent has a question. No body, so
@@ -448,16 +468,19 @@ public final class LocalQuestionNotifier: NSObject, QuestionNotifying, UNUserNot
     public func post(_ nudge: QuestionNudge, after delay: TimeInterval) {
         guard let center = currentCenter else { return }
         let stamp = stamp(for: nudge.id)
+        #if os(iOS)
+        // Posted as the app goes to the background, so it asks for a moment
+        // more, or it could be suspended before the system has the nudge.
+        // Asked for here, while the move to the background is still being
+        // handled, not after a hop. If the moment runs out first, it is
+        // given back all the same.
+        let moment = BackgroundMoment.begunHere()
+        #endif
         let adding = Task { @MainActor in
             let trigger = delay > 0 ? UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false) : nil
             let request = UNNotificationRequest(identifier: nudge.id, content: Self.content(for: nudge), trigger: trigger)
             #if os(iOS)
-            // Posted as the app goes to the background, so it asks for a
-            // moment more, or it could be suspended before the system has
-            // the nudge. If the moment runs out first, it is given back all
-            // the same.
-            let moment = BackgroundMoment()
-            moment.begin()
+            let moment = moment ?? BackgroundMoment.begun()
             #endif
             await center.add(request)
             self.takeBackIfCleared(nudge.id, postedAt: stamp)
@@ -602,6 +625,19 @@ public final class LocalQuestionNotifier: NSObject, QuestionNotifying, UNUserNot
 @MainActor
 private final class BackgroundMoment {
     private var id = UIBackgroundTaskIdentifier.invalid
+
+    /// A moment begun now, when called on the main thread, as the flow
+    /// always calls. Nil anywhere else, for the caller to begin one there.
+    nonisolated static func begunHere() -> BackgroundMoment? {
+        guard Thread.isMainThread else { return nil }
+        return MainActor.assumeIsolated { begun() }
+    }
+
+    static func begun() -> BackgroundMoment {
+        let moment = BackgroundMoment()
+        moment.begin()
+        return moment
+    }
 
     func begin() {
         id = UIApplication.shared.beginBackgroundTask(withName: "nudge") { [weak self] in
@@ -778,8 +814,13 @@ struct ReceiptCard: View {
                     .accessibilityElement(children: .combine)
                 }
             }
+            // Says which receipt it clears, so with several on Today the
+            // buttons aren't all just "Clear". Voice Control still takes
+            // the word on the button.
             Button(TaskWords.dismissTitle, action: onClear)
                 .buttonStyle(CardButtonStyle(kind: .quiet))
+                .accessibilityLabel(receipt.clearLabel)
+                .accessibilityInputLabels([Text(TaskWords.dismissTitle), Text(receipt.clearLabel)])
                 .accessibilityHint(ReceiptWords.clearHint)
                 .accessibilityIdentifier("clearReceipt")
         }

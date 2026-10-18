@@ -1,5 +1,6 @@
 import Foundation
 @testable import PebbleCore
+import SourceScan
 import Testing
 
 /// A question at a consequential step, end to end in the engine and the
@@ -33,12 +34,16 @@ struct NeedsYouFlowTests {
         let request = try #require(rule.askAgain(SampleTasks.holdVisit, askedAgo: 200))
         clock.advance(99)
         #expect(!rule.isClosed(request))
-        clock.advance(2)
-        #expect(rule.isClosed(request), "200 seconds before plus 101 now is past the five minutes")
+        clock.advance(1)
+        #expect(!rule.isClosed(request), "200 seconds before plus 100 now is exactly five minutes, still open")
+        clock.advance(0.001)
+        #expect(rule.isClosed(request), "a moment past the five minutes, it closes")
     }
 
     @Test func askingAgainNeverOpensALapsedQuestion() {
         let rule = AskFirst.isolated()
+        #expect(rule.askAgain(SampleTasks.holdVisit, askedAgo: 300) != nil, "exactly five minutes is still open")
+        #expect(rule.askAgain(SampleTasks.holdVisit, askedAgo: 300.001) == nil)
         #expect(rule.askAgain(SampleTasks.holdVisit, askedAgo: 301) == nil)
         #expect(rule.askAgain(SampleTasks.holdVisit, askedAgo: -1) == nil, "a clock moved back opens nothing")
         #expect(rule.askAgain(SampleTasks.holdVisit, askedAgo: .infinity) == nil)
@@ -324,11 +329,11 @@ struct NeedsYouFlowTests {
                          json.replacingOccurrences(of: #""kind":"sharePersonalInfo""#, with: #""kind":"purchase""#),
                          // The kind kept, the recipient's id changed.
                          json.replacingOccurrences(of: #""recipientID":"\#(honest.recipientID)""#,
-                                                   with: #""recipientID":"\#(honest.recipientID)​""#),
+                                                   with: #""recipientID":"\#(honest.recipientID)\#u{200B}""#),
                          json.replacingOccurrences(of: #""recipientID":"\#(honest.recipientID)""#,
                                                    with: #""recipientID":"""#),
                          json.replacingOccurrences(of: #""recipientName":"Maple Dental""#,
-                                                   with: #""recipientName":"Maple‮Dental""#)] {
+                                                   with: #""recipientName":"Maple\#u{202E}Dental""#)] {
             #expect(tampered != json)
             let action = try JSONDecoder().decode(SavedAction.self, from: Data(tampered.utf8))
             #expect(action.action == nil, "\(tampered)")
@@ -337,6 +342,28 @@ struct NeedsYouFlowTests {
             #expect(after.takeReceipts().isEmpty)
             #expect(after.task(saved.id)?.step == TaskWords.interrupted)
         }
+    }
+
+    /// PERMANENT GUARD. No source file holds a hidden or reordering
+    /// character as itself, where a reader can't see it and an editor can
+    /// drop it without a trace. Tests that need one write it as an escape,
+    /// such as `\u{202E}`.
+    @Test func noSourceHoldsAHiddenCharacterAsItself() throws {
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        var scanned = 0
+        for folder in ["Packages/PebbleKit/Sources", "Packages/PebbleKit/Tests", "App", "AppUITests"] {
+            for file in try SwiftSource.files(under: root.appendingPathComponent(folder)) {
+                scanned += 1
+                for (number, line) in file.text.split(separator: "\n", omittingEmptySubsequences: false).enumerated()
+                where AskFirst.hasHiddenScalars(String(line)) {
+                    Issue.record("\(folder)/\(file.name):\(number + 1) holds a hidden character as itself")
+                }
+            }
+        }
+        #expect(scanned > 50)
+        // The check sees one when it is there.
+        #expect(AskFirst.hasHiddenScalars("Maple\u{202E}Dental"))
+        #expect(AskFirst.hasHiddenScalars("id\u{200B}"))
     }
 
     /// A waiting question whose words carry hidden characters is never
@@ -440,13 +467,14 @@ struct NeedsYouFlowTests {
         let again = TaskStore(fileURL: url, forgetMarker: marker)
         #expect(again.receipts == store.receipts)
         #expect(again.nudges == .declined)
+        #expect(FileManager.default.fileExists(atPath: url.path), "a receipt is kept, so there is a file")
         again.forget()
+        #expect(!FileManager.default.fileExists(atPath: url.path), "only the choice is left, and it is kept apart")
         let after = TaskStore(fileURL: url, forgetMarker: marker)
         #expect(after.receipts.isEmpty)
         #expect(after.tasks.isEmpty)
         #expect(after.nudges == .declined)
-        after.setNudges(.notAsked)
-        #expect(!FileManager.default.fileExists(atPath: url.path), "nothing to keep, so no file")
+        #expect(!FileManager.default.fileExists(atPath: url.path), "reading the choice back writes no file")
     }
 
     /// A file that is read but can't be understood is deleted: nothing
@@ -462,6 +490,11 @@ struct NeedsYouFlowTests {
         let store = TaskStore(fileURL: url, forgetMarker: marker)
         #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty, "gone, not moved aside")
         #expect(!FileManager.default.fileExists(atPath: marker.path), "nothing is owed")
+        // It may have held a yes under way, so Today is told something went,
+        // once.
+        #expect(store.clearedUnreadable)
+        store.saidUnreadableCleared()
+        #expect(!store.clearedUnreadable)
         let rule = AskFirst.isolated()
         let (engine, task) = Self.atQuestion(rule: rule)
         _ = engine.resume(task.id, with: try Self.yes(try #require(task.question), rule: rule))
@@ -470,7 +503,86 @@ struct NeedsYouFlowTests {
         let next = TaskStore(fileURL: url, forgetMarker: marker)
         #expect(next.tasks.map(\.phase) == [.approved], "the yes is on disk")
         #expect(next.nudges == .allowed)
+        #expect(!next.clearedUnreadable, "a file that reads clears nothing")
         #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["tasks.json"])
+    }
+
+    /// PERMANENT GUARD. A receipt changed on disk into one no question could
+    /// have shown is dropped as it is read, the same checks a kept yes
+    /// gets, so a card that says "You said yes" never shows hidden or
+    /// reordering characters. The honest one stays, and the file is written
+    /// again without the rest.
+    @Test func aReceiptChangedOnDiskIsDropped() throws {
+        let folder = try Self.folder()
+        let marker = try Self.marker()
+        defer { Self.cleanUp(folder, marker.deletingLastPathComponent()) }
+        let url = folder.appendingPathComponent("tasks.json")
+        let honest = Receipt(action: SampleTasks.holdVisit, taskTitle: SampleTasks.dentistTitle,
+                             approvedAt: Self.base, endedAt: Self.base, outcome: .done, isSample: true)
+        #expect(honest.couldHaveBeenAsked)
+        let json = String(decoding: try JSONEncoder().encode(honest), as: UTF8.self)
+        let changes = [
+            ("mapledental.example", "mapledental.example\\u200B"),
+            ("mapledental.example", "maple\\u202Edental.example"),
+            ("mapledental.example", " mapledental.example"),
+            ("Maple Dental", "Maple\\u202EDental"),
+            ("Maple Dental", "Maple  Dental"),
+            ("Saturday at 10:30", "Saturday at 10:30\\u202E"),
+            (SampleTasks.dentistTitle, SampleTasks.dentistTitle + "\\u2066"),
+            (#""kind":"sharePersonalInfo""#, #""kind":"purchase""#),
+        ]
+        var all = [honest]
+        for (from, to) in changes {
+            // Each a receipt of its own, as a changed file would hold them.
+            let changed = json.replacingOccurrences(of: from, with: to)
+                .replacingOccurrences(of: honest.id.uuidString, with: UUID().uuidString)
+            #expect(json.contains(from), "the change to \(from) is made")
+            let receipt = try JSONDecoder().decode(Receipt.self, from: Data(changed.utf8))
+            #expect(!receipt.couldHaveBeenAsked, "\(changed)")
+            all.append(receipt)
+        }
+        #expect(Set(all.map(\.id)).count == all.count)
+        try JSONEncoder().encode(TaskStore.State(receipts: all)).write(to: url)
+        let store = TaskStore(fileURL: url, forgetMarker: marker)
+        #expect(store.receipts.map(\.id) == [honest.id])
+        let written = try JSONDecoder().decode(TaskStore.State.self, from: Data(contentsOf: url))
+        #expect(written.receipts.map(\.id) == [honest.id], "written again without them")
+    }
+
+    /// PERMANENT GUARD. The file holds receipts, which name who a yes went
+    /// to, so where the system protects files it can't be read until the
+    /// device is first unlocked, or something stricter. The nudge choice and
+    /// the marker hold nothing of the person's and must be read and written
+    /// while it may still be locked, so they have no protection.
+    @Test func eachFileIsWrittenWithTheProtectionItNeeds() throws {
+        let mask = Data.WritingOptions.fileProtectionMask
+        let strongEnough: [Data.WritingOptions] = [.completeFileProtection, .completeFileProtectionUnlessOpen,
+                                                   .completeFileProtectionUntilFirstUserAuthentication]
+        let file = TaskStore.fileWriting(protected: true).intersection(mask)
+        #expect(strongEnough.contains(file), "the file is written with \(file.rawValue)")
+        #expect(TaskStore.fileWriting(protected: true).contains(.withoutOverwriting))
+        #expect(TaskStore.choiceWriting(protected: true).intersection(mask) == .noFileProtection)
+        #expect(TaskStore.markerWriting(protected: true).intersection(mask) == .noFileProtection)
+        // Where nothing is protected, nothing asks for it.
+        for options in [TaskStore.fileWriting(protected: false), TaskStore.choiceWriting(protected: false),
+                        TaskStore.markerWriting(protected: false)] {
+            #expect(options.intersection(mask).isEmpty)
+        }
+        #if os(macOS)
+        #expect(!TaskStore.protectsFiles)
+        #else
+        #expect(TaskStore.protectsFiles)
+        #endif
+        // Every write in the store goes through these.
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        let text = try String(contentsOf: root.appendingPathComponent("Packages/PebbleKit/Sources/PebbleCore/TaskStore.swift"),
+                              encoding: .utf8)
+        let writes = SwiftSource(text).calls(named: ["write"]).filter { $0.arguments.hasPrefix("to:") }
+        #expect(writes.count == 3, "\(writes.map(\.arguments))")
+        for call in writes {
+            #expect(["Self.fileWriting()", "Self.choiceWriting()", "Self.markerWriting()"].contains { call.arguments.contains($0) },
+                    "\(call.arguments)")
+        }
     }
 
     /// A file that can't be understood and won't go is owed a forget, so
@@ -921,7 +1033,10 @@ private final class Heard: @unchecked Sendable {
 extension ReceiptWords {
     /// Every receipt line a person can see or hear.
     static var all: [String] {
-        [label, done, mayBeDone, clearHint] + ConsequentialAction.allCases.map { title($0, "Maple Dental") }
+        [label, done, mayBeDone, clearHint, unreadableCleared]
+            + ConsequentialAction.allCases.flatMap { kind in
+                [title(kind, "Maple Dental"), clearLabel(kind, "Maple Dental"), cleared(kind, "Maple Dental")]
+            }
     }
 }
 

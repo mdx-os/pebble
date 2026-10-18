@@ -105,7 +105,13 @@ struct CopyDashTests {
         #expect(MemoryWords.forgetEverythingDetail.contains("every task"))
         #expect(MemoryWords.forgetEverythingDetail.contains("stops any task still going"))
         #expect(TaskWords.forgetTasksDetail.contains("stops any task still going"))
-        #expect(TaskWords.forgetTasksDetail.hasSuffix("Your notes aren't touched."))
+        #expect(TaskWords.forgetTasksDetail.contains("Your notes aren't touched"))
+        // Forget everything keeps the nudge choice, so every way it is
+        // offered says so, and "everything" never misleads.
+        for detail in [MemoryWords.forgetEverythingDetail, CloudWords.forgetEverythingDetail,
+                       TaskWords.forgetTasksDetail, CloudWords.forgetTasksAndWordsDetail] {
+            #expect(detail.localizedCaseInsensitiveContains("your choice about nudges stays as it is."), "\(detail)")
+        }
         #expect(CareCheck.reply.contains("988"))
         #expect(CareCheck.followUp.contains("988"))
         #expect(ConfirmationWords.promise.contains("once, exactly as shown"))

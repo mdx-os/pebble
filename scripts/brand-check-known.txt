@@ -12,7 +12,11 @@ Packages/PebbleKit/Tests/PebbleCoreTests/AgentLookTests.swift: let suite = "pebb
 Packages/PebbleKit/Tests/PebbleCoreTests/AgentNameTests.swift: #expect(AgentName.storageKey == "pebble.agent.displayName")
 Packages/PebbleKit/Tests/PebbleCoreTests/AgentNameTests.swift: let suite = "pebble.agent-name.\(UUID().uuidString)"
 Packages/PebbleKit/Tests/PebbleCoreTests/CloudHelpSettingsTests.swift: #expect(UserDefaults.standard.object(forKey: "pebble.cloudHelp") == nil)
+Packages/PebbleKit/Tests/PebbleCoreTests/DiskNameTests.swift: "PebbleCore/AgentLook.swift: pebble.agent.look",
+Packages/PebbleKit/Tests/PebbleCoreTests/DiskNameTests.swift: "PebbleCore/AgentName.swift: pebble.agent.displayName",
 Packages/PebbleKit/Tests/PebbleCoreTests/DiskNameTests.swift: "PebbleCore/Memory.swift: pebble",
+Packages/PebbleKit/Tests/PebbleCoreTests/DiskNameTests.swift: "PebbleCore/Onboarding.swift: pebble.agent.proactivity",
+Packages/PebbleKit/Tests/PebbleCoreTests/DiskNameTests.swift: "PebbleCore/Onboarding.swift: pebble.onboarding.finished",
 Packages/PebbleKit/Tests/PebbleCoreTests/DiskNameTests.swift: return [brand.lowercased(), "pebble"]
 Packages/PebbleKit/Tests/PebbleCoreTests/MemorySourceTests.swift: let folder = FileManager.default.temporaryDirectory.appendingPathComponent("pebble-src-\(UUID().uuidString)")
 Packages/PebbleKit/Tests/PebbleCoreTests/MemoryStoreTests.swift: .appendingPathComponent("pebble-memory-\(UUID().uuidString)", isDirectory: true)

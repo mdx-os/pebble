@@ -210,8 +210,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         let rule = AskFirst.isolated()
         // Played to the moment the dentist search asks, so the question
         // opens as the app does. Kept tasks come back instead, when there are any.
-        let engine = LocalFakeEngine(rule: rule, scripts: [Self.liveDentist] + SampleTasks.all.dropFirst(),
-                                     origin: Date() - 42)
+        let engine = LocalFakeEngine(rule: rule, scripts: Self.liveScripts(), origin: Date() - 42)
         if store.tasks.isEmpty && store.receipts.isEmpty {
             engine.start(liveDentist)
         }
@@ -224,6 +223,12 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// Launch with this many seconds to make the held visit take that long
     /// after a yes, so a UI test can close the app while it is under way.
     public static let holdSecondsKey = "showcaseHoldSeconds"
+
+    /// Every sample script for `askLive`, the dentist search swapped for
+    /// `liveDentist` wherever it is in `all`.
+    static func liveScripts(_ all: [TaskScript] = SampleTasks.all) -> [TaskScript] {
+        [liveDentist] + all.filter { $0.title != SampleTasks.dentist.title }
+    }
 
     /// The dentist search for `askLive`, its held visit as long as asked.
     static var liveDentist: TaskScript {

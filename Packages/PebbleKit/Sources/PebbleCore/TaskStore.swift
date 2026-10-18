@@ -158,6 +158,25 @@ public struct Receipt: Codable, Sendable, Equatable, Identifiable {
 
     /// What came of it.
     public var line: String { outcome == .done ? ReceiptWords.done : ReceiptWords.mayBeDone }
+
+    /// "Clear your details for Maple Dental", for VoiceOver.
+    public var clearLabel: String { ReceiptWords.clearLabel(kind, recipientName) }
+
+    /// "Cleared your details for Maple Dental."
+    public var clearedLine: String { ReceiptWords.cleared(kind, recipientName) }
+
+    /// False when the file was changed into something no question could
+    /// have shown, the same as `SavedAction.action`: no exact handle, a name
+    /// the question would have tidied, hidden or reordering characters in
+    /// anything the card shows, or a purchase with no price.
+    var couldHaveBeenAsked: Bool {
+        let recipient = Recipient(id: "receipt", displayName: recipientName, handle: handle)
+        return recipient.handle == handle && recipient.displayName == recipientName
+            && !AskFirst.hasHiddenScalars(taskTitle) && !AskFirst.hasHiddenScalars(details)
+            && !(outcomeLine.map(AskFirst.hasHiddenScalars) ?? false)
+            && (priceMinorUnits == nil && priceCurrency == nil) == (price == nil)
+            && (kind != .purchase || price != nil)
+    }
 }
 
 /// Whether the person wants a nudge when a question is waiting. Asked in
@@ -298,6 +317,9 @@ public final class TaskStore: @unchecked Sendable {
     private var arrivedLate: [SavedTask] = []
     /// A late read brought something in, so watchers hear of it.
     private var tellWatchers = false
+    /// A file that couldn't be understood was cleared, and Today hasn't
+    /// said so yet.
+    private var unreadableCleared = false
     private var observers: [UUID: @Sendable () -> Void] = [:]
 
     /// `forgetMarker` is where a forget still owed is written down. Nil
@@ -388,6 +410,11 @@ public final class TaskStore: @unchecked Sendable {
         var folder = file.deletingLastPathComponent()
         try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
         try MemoryStore.excludeFromBackup(&folder)
+        // The marker's folder, with the nudge choice, is left out too. It
+        // holds nothing of the person's, but nothing kept here is backed up.
+        var pending = marker.deletingLastPathComponent()
+        try fileManager.createDirectory(at: pending, withIntermediateDirectories: true)
+        try MemoryStore.excludeFromBackup(&pending)
         return TaskStore(fileURL: file, forgetMarker: marker)
     }
 
@@ -411,6 +438,26 @@ public final class TaskStore: @unchecked Sendable {
     /// True while there is a receipt or a saved task, for Forget everything.
     /// Read as kept, without the sorting `receipts` does.
     public var holdsSomething: Bool { read(\.holdsSomething) }
+
+    /// True once a file that couldn't be understood, as one from a later
+    /// version, was cleared, until `saidUnreadableCleared`. What it held may
+    /// have been a yes under way, so Today says something went.
+    public var clearedUnreadable: Bool {
+        lock.lock()
+        loadIfNeeded()
+        let cleared = unreadableCleared
+        let hooks = takeHooks()
+        lock.unlock()
+        for hook in hooks { hook() }
+        return cleared
+    }
+
+    /// Today has said that an unreadable file was cleared.
+    public func saidUnreadableCleared() {
+        lock.lock()
+        unreadableCleared = false
+        lock.unlock()
+    }
 
     // MARK: Changes
 
@@ -500,6 +547,7 @@ public final class TaskStore: @unchecked Sendable {
         state.tasks = []
         state.receipts = []
         arrivedLate = []
+        unreadableCleared = false
         dirty = false
         if knownURL != nil {
             mustDelete = true
@@ -600,15 +648,22 @@ public final class TaskStore: @unchecked Sendable {
             return
         }
         guard let data = try? Data(contentsOf: fileURL) else { return }
-        guard let saved = try? JSONDecoder().decode(State.self, from: data) else {
+        guard var saved = try? JSONDecoder().decode(State.self, from: data) else {
             // Gone as Forget everything would take it, so a file that won't
-            // go is still never read and goes as soon as it can.
+            // go is still never read and goes as soon as it can. Today says
+            // something was cleared.
             mustDelete = true
+            unreadableCleared = true
+            tellWatchers = true
             writeMarker()
             deleteIfOwed()
             return
         }
         loaded = true
+        let decoded = saved
+        // A receipt changed into one no question could have shown never
+        // reaches a card that says "You said yes".
+        saved.receipts = saved.receipts.filter(\.couldHaveBeenAsked)
         let here = changedTasks ? state.tasks : []
         let late = saved.tasks.filter { task in !here.contains { $0.id == task.id } }
         var merged = saved
@@ -625,7 +680,7 @@ public final class TaskStore: @unchecked Sendable {
         state = merged
         changedTasks = false
         changedNudges = false
-        if merged != saved { save(merged) }
+        if merged != decoded { save(merged) }
     }
 
     /// Deletes the file and its half written next one. Once both are gone,
@@ -657,12 +712,33 @@ public final class TaskStore: @unchecked Sendable {
     private func writeMarker() {
         guard let markerURL else { return }
         try? FileManager.default.createDirectory(at: markerURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        #if os(macOS)
-        let options: Data.WritingOptions = []
-        #else
-        let options: Data.WritingOptions = [.noFileProtection]
-        #endif
-        try? Data().write(to: markerURL, options: options)
+        try? Data().write(to: markerURL, options: Self.markerWriting())
+    }
+
+    /// Files are protected only where the system protects them. A Mac's
+    /// files are kept by FileVault and the login instead.
+    #if os(macOS)
+    package static let protectsFiles = false
+    #else
+    package static let protectsFiles = true
+    #endif
+
+    /// How the file is written. It holds receipts, which name who a yes went
+    /// to, so it can't be read until the device is first unlocked.
+    package static func fileWriting(protected: Bool = protectsFiles) -> Data.WritingOptions {
+        protected ? [.withoutOverwriting, .completeFileProtectionUntilFirstUserAuthentication] : [.withoutOverwriting]
+    }
+
+    /// How the nudge choice is written. One word and nothing of the
+    /// person's, read while the device may still be locked.
+    package static func choiceWriting(protected: Bool = protectsFiles) -> Data.WritingOptions {
+        protected ? [.atomic, .noFileProtection] : [.atomic]
+    }
+
+    /// How the marker is written: empty, and written while the device may
+    /// still be locked.
+    package static func markerWriting(protected: Bool = protectsFiles) -> Data.WritingOptions {
+        protected ? [.noFileProtection] : []
     }
 
     /// Reads the nudge choice kept apart, when there is one. Called with
@@ -686,12 +762,7 @@ public final class TaskStore: @unchecked Sendable {
             return
         }
         try? manager.createDirectory(at: choiceURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        #if os(macOS)
-        let options: Data.WritingOptions = [.atomic]
-        #else
-        let options: Data.WritingOptions = [.atomic, .noFileProtection]
-        #endif
-        choiceKnown = (try? Data(choice.rawValue.utf8).write(to: choiceURL, options: options)) != nil
+        choiceKnown = (try? Data(choice.rawValue.utf8).write(to: choiceURL, options: Self.choiceWriting())) != nil
     }
 
     /// Every file a store at `url` may leave.
@@ -740,12 +811,7 @@ public final class TaskStore: @unchecked Sendable {
             return
         }
         try? manager.removeItem(at: stagingURL)
-        #if os(macOS)
-        let options: Data.WritingOptions = [.withoutOverwriting]
-        #else
-        let options: Data.WritingOptions = [.withoutOverwriting, .completeFileProtectionUntilFirstUserAuthentication]
-        #endif
-        guard (try? data.write(to: stagingURL, options: options)) != nil,
+        guard (try? data.write(to: stagingURL, options: Self.fileWriting())) != nil,
               rename(stagingURL.path, fileURL.path) == 0 else {
             try? manager.removeItem(at: stagingURL)
             dirty = true
@@ -786,6 +852,24 @@ public enum ReceiptWords {
     public static let done = "Done, once, just as you said yes to it."
     public static let mayBeDone = "I'd started this when I stopped, so it may be done."
     public static let clearHint = "Takes this away."
+    /// What VoiceOver reads for a receipt's Clear, so each says which it is.
+    public static func clearLabel(_ kind: ConsequentialAction, _ name: String) -> String {
+        "Clear \(what(kind, name))"
+    }
+    /// Said once a receipt is cleared, since its card goes from under VoiceOver.
+    public static func cleared(_ kind: ConsequentialAction, _ name: String) -> String {
+        "Cleared \(what(kind, name))."
+    }
+    private static func what(_ kind: ConsequentialAction, _ name: String) -> String {
+        switch kind {
+        case .send: "a message to \(name)"
+        case .purchase: "a payment to \(name)"
+        case .sharePersonalInfo: "your details for \(name)"
+        }
+    }
+    /// On Today after a file that couldn't be read was cleared. It may have
+    /// held a yes under way, so it says that may be done.
+    public static let unreadableCleared = "I couldn't read what I'd kept from before, so I cleared it. If you'd said yes to something, it may be done."
 }
 
 /// Words for nudges about waiting questions.

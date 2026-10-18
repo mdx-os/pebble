@@ -14,18 +14,43 @@ struct DiskNameTests {
     static let allowed: Set<String> = [
         // The notes folder, shipped before this guard.
         "PebbleCore/Memory.swift: pebble",
+        // Settings keys people's choices are under, shipped before this
+        // guard looked at keys.
+        "PebbleCore/AgentLook.swift: pebble.agent.look",
+        "PebbleCore/AgentName.swift: pebble.agent.displayName",
+        "PebbleCore/Onboarding.swift: pebble.agent.proactivity",
+        "PebbleCore/Onboarding.swift: pebble.onboarding.finished",
     ]
 
-    /// The calls that name a place on disk or a settings suite. A call
-    /// listed with a first label counts only when written with it, so
-    /// `URL(string:)` is never taken for a path.
+    /// The calls that name a place on disk, a settings suite or a settings
+    /// key. A call listed with labels counts only when one of them is
+    /// written in it, so `URL(string:)` is never taken for a path.
     static let calls: [String: [String]?] = [
         "appendingPathComponent": nil,
         "appending": nil,
         "createDirectory": nil,
+        "createFile": nil,
+        "fileExists": ["atPath:"],
+        "write": ["to:"],
         "URL": ["fileURLWithPath:", "filePath:"],
         "UserDefaults": ["suiteName:"],
+        // Settings keys outlive a rename too.
+        "set": ["forKey:"],
+        "object": ["forKey:"],
+        "string": ["forKey:"],
+        "bool": ["forKey:"],
+        "integer": ["forKey:"],
+        "double": ["forKey:"],
+        "data": ["forKey:"],
+        "array": ["forKey:"],
+        "dictionary": ["forKey:"],
+        "removeObject": ["forKey:"],
     ]
+
+    /// True when `call` is written with `label`, first or after a comma.
+    static func writes(_ call: SwiftSource.Call, _ label: String) -> Bool {
+        call.arguments.hasPrefix(label) || call.arguments.contains(", " + label) || call.arguments.contains("," + label)
+    }
 
     static func names(root: URL) throws -> [String] {
         let config = try String(contentsOf: root.appendingPathComponent("Config/Brand.xcconfig"), encoding: .utf8)
@@ -46,7 +71,7 @@ struct DiskNameTests {
         }
         let watched = source.calls(named: Set(calls.keys)).filter { call in
             guard let labels = calls[call.name] ?? nil else { return true }
-            return labels.contains(where: call.arguments.hasPrefix)
+            return labels.contains { writes(call, $0) }
         }
         let bound = bindings(in: source).filter { spells($0.literal) }
         var found: [SwiftSource.Literal] = []
@@ -134,6 +159,14 @@ struct DiskNameTests {
                 "let url = URL(filePath: \"/tmp/\(name)\")",
                 "try FileManager.default.createDirectory(atPath: \"/tmp/\(name)\", withIntermediateDirectories: true)",
                 "let looks = UserDefaults(suiteName: \"\(name).looks\")",
+                "FileManager.default.createFile(atPath: \"/tmp/\(name)\", contents: nil)",
+                "try data.write(to: base.appendingPathComponent(\"\(name).json\"))",
+                "try data.write(to: URL(filePath: \"/tmp/\(name).json\"), options: .atomic)",
+                "let there = FileManager.default.fileExists(atPath: \"/tmp/\(name)\")",
+                "defaults.set(true, forKey: \"\(name).seen\")",
+                "let seen = defaults.bool(forKey: \"\(name).seen\")",
+                "defaults.removeObject(forKey: \"\(name).seen\")",
+                "static let key = \"\(name).seen\"\nlet seen = defaults.string(forKey: Self.key)",
                 // A literal bound to a name first, then passed in.
                 "let dir = \"\(name)\"\nlet url = base.appendingPathComponent(dir)",
                 "static let folder: String = \"\(name.uppercased())\"\nlet url = base.appendingPathComponent(Self.folder)",
@@ -146,6 +179,8 @@ struct DiskNameTests {
                 "let title = \"\(name)\"",
                 "let dir = \"\(name)\"\nlet url = base.appendingPathComponent(\"kept\")\nprint(dir)",
                 "let url = base.appendingPathComponent(\"kept\") // \(name)",
+                "let text = String(data: data, encoding: .utf8) ?? \"\(name)\"",
+                "let choice = [\"\(name)\"].set(at: 0)",
             ]
             for snippet in left {
                 #expect(Self.hits(in: SwiftSource(snippet), names: names).isEmpty, "\(snippet)")
@@ -218,5 +253,20 @@ struct DiskNameTests {
         #expect(fallback == file)
         // Only the plain folder is made there.
         #expect(try FileManager.default.contentsOfDirectory(atPath: base.path) == [TaskStore.appFolder])
+    }
+
+    /// Nothing the store keeps is backed up: not the file's folder, and not
+    /// the folder with the marker and the nudge choice.
+    @Test func theStoresFoldersAreLeftOutOfBackups() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("support-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let store = try TaskStore.opened(fileManager: Support(base: base))
+        let file = try #require(store.fileURL)
+        let (_, marker) = TaskStore.location(base: base, app: TaskStore.appFolder)
+        for folder in [file.deletingLastPathComponent(), marker.deletingLastPathComponent()] {
+            let values = try folder.resourceValues(forKeys: [.isExcludedFromBackupKey])
+            #expect(values.isExcludedFromBackup == true, "\(folder.lastPathComponent) is backed up")
+        }
     }
 }

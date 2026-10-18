@@ -551,7 +551,7 @@ public enum TaskWords {
     /// model too. Any line that promises words stay here must be gated.
     public static let forgetTasksTitle = "Forget all tasks"
     public static let forgetTasksQuestion = "Forget all tasks?"
-    public static let forgetTasksDetail = "This stops any task still going, and removes every task and what you told me for it from this device. It can't be undone. Your notes aren't touched."
+    public static let forgetTasksDetail = "This stops any task still going, and removes every task and what you told me for it from this device. It can't be undone. Your notes aren't touched, and your choice about nudges stays as it is."
     /// Said and shown once the tasks are gone.
     public static let tasksForgotten = "Your tasks are forgotten."
     /// Kept on Today after forgetting, while a step the person said yes to
