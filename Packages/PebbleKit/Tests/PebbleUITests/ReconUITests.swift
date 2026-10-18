@@ -278,7 +278,8 @@ struct ReconUITests {
         let cloud = CloudHelp(store: InMemoryCloudHelpStore(.off), endpoint: endpoint, memory: nil,
                               transport: { maker.make() })
         let (model, engine, runner) = feed(memory: nil)
-        model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel())) }
+        let review = model.cloudReview
+        model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel(), review: review)) }
         #expect(model.lookInto(SampleSources.poolTopic))
         engine.advance(by: 30)
         let id = try #require(runner.tasks.first?.id)
@@ -287,8 +288,8 @@ struct ReconUITests {
         #expect(summary.madeOnDevice)
         #expect(summary.note == nil)
         #expect(maker.made == 0)
-        #expect(maker.transport.sent.isEmpty)
-        #expect(cloud.review.pending == nil)
+        #expect(maker.wire.sent.isEmpty)
+        #expect(review.pending == nil)
     }
 
     @Test func withTheCloudOnThePersonSeesItFirstAndCanKeepItHere() async throws {
@@ -299,7 +300,9 @@ struct ReconUITests {
         let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let (model, engine, runner) = feed(memory: nil)
-        model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel())) }
+        // Today's own gate, as the home screen wires it.
+        let review = model.cloudReview
+        model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel(), review: review)) }
         #expect(model.lookInto(SampleSources.poolTopic))
         engine.advance(by: 30)
         let id = try #require(runner.tasks.first?.id)
@@ -308,42 +311,71 @@ struct ReconUITests {
         #expect(runner.tasks.first?.step == ReconWords.puttingTogether)
         var pending: CloudPreview?
         for _ in 0..<500 {
-            pending = cloud.review.pending
+            pending = review.pending
             if pending != nil { break }
             try await Task.sleep(for: .milliseconds(10))
         }
         let preview = try #require(pending)
         #expect(preview.request.text.contains("Riverside Pool reopens on November 10"))
-        #expect(maker.transport.sent.isEmpty)
-        cloud.review.answer(.cancel)
+        #expect(maker.wire.sent.isEmpty)
+        review.answer(.cancel, for: preview.id)
         await runner.settle(id)
         let summary = try #require(runner.summary(for: id))
         #expect(summary.madeOnDevice)
         #expect(summary.note == ReconWords.declinedCloud)
-        #expect(maker.transport.sent.isEmpty)
+        #expect(maker.wire.sent.isEmpty)
     }
 
     @Test func stoppingWhileThePreviewWaitsSendsNothing() async throws {
         let maker = TransportMaker()
+        let notes = scratchMemory()
+        defer { try? notes.forgetEverything() }
         let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
-                              memory: nil, transport: { maker.make() })
+                              memory: notes, transport: { maker.make() })
         let (model, _, runner) = feed(memory: nil)
-        model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel())) }
+        let review = model.cloudReview
+        model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel(), review: review)) }
         #expect(model.lookInto(SampleSources.poolTopic))
         let id = try #require(runner.tasks.first?.id)
         // The preview comes only once the card says it is putting it together.
-        #expect(cloud.review.pending == nil)
+        #expect(review.pending == nil)
         runner.advance(by: 12)
         #expect(runner.tasks.first?.step == ReconWords.puttingTogether)
-        for _ in 0..<500 where cloud.review.pending == nil { try await Task.sleep(for: .milliseconds(10)) }
-        #expect(cloud.review.pending != nil)
+        for _ in 0..<500 where review.pending == nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(review.pending != nil)
         let task = try #require(runner.tasks.first)
         model.stop(task)
-        for _ in 0..<500 where cloud.review.pending != nil { try await Task.sleep(for: .milliseconds(10)) }
-        #expect(cloud.review.pending == nil)
+        for _ in 0..<500 where review.pending != nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(review.pending == nil)
         await runner.settle(id)
-        #expect(maker.transport.sent.isEmpty)
+        #expect(maker.wire.sent.isEmpty)
         #expect(runner.summary(for: id) == nil)
+    }
+
+    /// Turning the cloud off withdraws Today's preview too, unsent, as it
+    /// does a chat's: the setting knows Today's gate once it made a model for it.
+    @Test func turningTheCloudOffWithdrawsTodaysPreview() async throws {
+        let maker = TransportMaker()
+        let notes = scratchMemory()
+        defer { try? notes.forgetEverything() }
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+                              memory: notes, transport: { maker.make() })
+        let (model, _, runner) = feed(memory: nil)
+        let review = model.cloudReview
+        model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel(), review: review)) }
+        #expect(model.lookInto(SampleSources.poolTopic))
+        let id = try #require(runner.tasks.first?.id)
+        runner.advance(by: 12)
+        for _ in 0..<500 where review.pending == nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(review.pending != nil)
+        _ = cloud.setOn(false)
+        for _ in 0..<500 where review.pending != nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(review.pending == nil)
+        await runner.settle(id)
+        runner.advance(by: 30)
+        #expect(maker.wire.sent.isEmpty)
+        let summary = try #require(runner.summary(for: id))
+        #expect(summary.madeOnDevice)
     }
 
     // MARK: Rendering

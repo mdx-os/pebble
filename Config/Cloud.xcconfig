@@ -1,6 +1,12 @@
 // The cloud model's address. Empty means there is no cloud model: the
 // setting stays off and can't be turned on, and no network code runs.
-// It must be an https address. xcconfig reads // as a comment, so write
-// the slashes as https:/$()/example.com when you set it.
-// Never put keys or tokens here. Sign-in goes through CloudAuth.
+// Leave it empty here. To try a real address, put it in
+// Config/Cloud.local.xcconfig, which git ignores, so it is never committed:
+//   PEBBLE_CLOUD_ENDPOINT = https:/$()/example.com
+// It must be a plain https address: a user name, password, query (?) or
+// fragment (#) is refused. xcconfig reads // as a comment, so write the
+// slashes as https:/$()/ as above.
+// Never put keys or tokens here or in the address. Sign-in goes through CloudAuth.
 PEBBLE_CLOUD_ENDPOINT =
+
+#include? "Cloud.local.xcconfig"

@@ -84,7 +84,8 @@ struct ReconFeedTests {
         let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
                               memory: nil, transport: { maker.make() })
         let (model, engine, runner) = feed()
-        model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel())) }
+        let review = model.cloudReview
+        model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel(), review: review)) }
         // Asked from a chat that said it stays on this device.
         #expect(model.lookInto(SampleSources.poolTopic, onDevice: true))
         engine.advance(by: 30)
@@ -92,9 +93,53 @@ struct ReconFeedTests {
         let summary = try #require(runner.summary(for: id))
         #expect(summary.madeOnDevice)
         #expect(summary.note == nil)
-        #expect(cloud.review.pending == nil)
+        #expect(review.pending == nil)
         #expect(maker.made == 0)
-        #expect(maker.transport.sent.isEmpty)
+        #expect(maker.wire.sent.isEmpty)
+    }
+
+    // MARK: The home screen's wiring
+
+    /// Today, as the home screen makes it, asks the cloud through its own
+    /// gate, never a chat's, and its first chat can offer to look into things.
+    @Test func theHomeScreensTodayAsksThroughItsOwnGate() async throws {
+        let maker = TransportMaker()
+        let notes = ShowcaseScene.emptyMemory()
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+                              memory: notes, transport: { maker.make() })
+        let model = HomeView.reconFeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: nil,
+                                            drivesTasks: false, reading: ReconTestData.sources, place: .mayLeaveDevice,
+                                            memory: notes, model: LocalStubModel(), cloud: cloud, now: { [morning] in morning })
+        #expect(model.summarizer().mayLeaveDevice)
+        let chat = HomeView.wired(HomeView.newChat(brand: brand, model: LocalStubModel(),
+                                                   names: InMemoryAgentNameStore(stored: "Pip"), cloud: cloud,
+                                                   conversation: nil), to: model)
+        #expect(chat.lookInto != nil)
+        #expect(chat.reconReadsExamples == model.readsExamples)
+        chat.submit("look into the Riverside pool reopening")
+        chat.acceptReconOffer()
+        let runner = try #require(model.recon)
+        let id = try #require(runner.tasks.first?.id)
+        runner.advance(by: 12)
+        for _ in 0..<500 where model.cloudReview.pending == nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(model.cloudReview.pending != nil)
+        #expect(chat.review?.pending == nil)
+        model.cloudReview.cancelPending()
+        await runner.settle(id)
+        #expect(maker.wire.sent.isEmpty)
+    }
+
+    /// Two previews waiting at once: the first to come shows, the other
+    /// waits. One alone never waits.
+    @Test func onlyOnePreviewShowsAtATime() {
+        #expect(!PreviewTurn(chatPending: true, todayPending: false, todayFirst: false).chatWaits)
+        #expect(!PreviewTurn(chatPending: false, todayPending: true, todayFirst: true).todayWaits)
+        #expect(!PreviewTurn(chatPending: false, todayPending: true, todayFirst: false).todayWaits)
+        for todayFirst in [true, false] {
+            let both = PreviewTurn(chatPending: true, todayPending: true, todayFirst: todayFirst)
+            #expect(both.chatWaits != both.todayWaits)
+            #expect(both.todayWaits == !todayFirst)
+        }
     }
 
     // MARK: Updates land on the main thread

@@ -17,12 +17,13 @@ struct PrivacyPlaceTests {
             ReconWords.offer("the pool", examples: true, place: place),
             ReconWords.rememberDetail(place),
             CloudWords.offDetail(place),
-            CloudWords.turnedOff(place),
         ]
     }
 
+    /// Reads the one phrase list, `DevicePromise.phrases`. A line allowed
+    /// with a written reason there is not a promise about the device.
     static func promisesTheDevice(_ line: String) -> Bool {
-        line.contains("this device") || line.contains("stays here")
+        !DevicePromise.found(in: line).isEmpty && !DevicePromise.allowedLines.contains(line)
     }
 
     @Test func onDeviceEveryLineMakesThePromise() {
@@ -45,10 +46,10 @@ struct PrivacyPlaceTests {
         #expect(FirstConversation.presence(.mayLeaveDevice) == "Here with you.")
         #expect(ReconWords.offer("the pool", examples: true, place: .mayLeaveDevice).contains("example pages"))
         #expect(ReconWords.rememberDetail(.mayLeaveDevice).contains("where it came from"))
-        #expect(CloudWords.offDetail(.mayLeaveDevice) == "Off.")
     }
 
-    /// Lines shown only after the cloud was asked name the cloud, never the device.
+    /// Lines shown only after the cloud was asked name the cloud, never the
+    /// device. "Without the cloud" says what was not used, not where words go.
     @Test func reconsCloudLinesNeverPromiseTheDevice() {
         for line in [ReconWords.declinedCloud, ReconWords.cloudUnreadable, ReconWords.cloudUnavailable,
                      ReconWords.offer("the pool"), ReconWords.wordedInCloud, ReconWords.forgotWhileInCloud] {

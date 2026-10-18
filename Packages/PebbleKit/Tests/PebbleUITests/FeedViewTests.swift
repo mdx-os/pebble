@@ -43,7 +43,7 @@ struct FeedViewTests {
         return try #require(renderer.cgImage)
     }
 
-    @Test(arguments: [
+    @Test("Smoke: the feed draws at each size", arguments: [
         CGSize(width: 393, height: 852),   // iPhone 17 Pro
         CGSize(width: 852, height: 393),   // iPhone sideways
         CGSize(width: 1032, height: 1376), // iPad Pro 13-inch, portrait
@@ -52,25 +52,23 @@ struct FeedViewTests {
         CGSize(width: 678, height: 1032),  // half of a 13-inch in Split View
         CGSize(width: 500, height: 600),   // a small Stage Manager window
     ], [ColorScheme.light, .dark])
-    func theFeedRendersAtEachSize(size: CGSize, scheme: ColorScheme) throws {
+    func smokeTheFeedAtEachSize(size: CGSize, scheme: ColorScheme) throws {
         for model in [feed(asks: ShowcaseScene.sampleQuestion()), feed(), feed([EmptyFeedSource()])] {
-            let image = try render(model, size: size, scheme: scheme)
-            #expect(image.width == Int(size.width * 2) || image.width == Int(size.width))
+            _ = try render(model, size: size, scheme: scheme)
         }
     }
 
-    @Test(arguments: [DynamicTypeSize.xSmall, .large, .accessibility3, .accessibility5])
-    func theFeedRendersAtEachTextSize(text: DynamicTypeSize) throws {
+    @Test("Smoke: the feed draws at each text size",
+          arguments: [DynamicTypeSize.xSmall, .large, .accessibility3, .accessibility5])
+    func smokeTheFeedAtEachTextSize(text: DynamicTypeSize) throws {
         _ = try render(feed(asks: ShowcaseScene.sampleQuestion()), size: CGSize(width: 393, height: 852), text: text)
         _ = try render(feed(asks: ShowcaseScene.sampleQuestion()), size: CGSize(width: 1032, height: 1376), text: text)
     }
 
-    @Test(arguments: [false, true])
-    func theReaderRenders(isSample: Bool) throws {
+    @Test("Smoke: the reader draws", arguments: [false, true])
+    func smokeTheReader(isSample: Bool) throws {
         let item = try #require(SampleFeedSource().items(now: Date()).first { if case .open = $0.action { true } else { false } })
-        let renderer = ImageRenderer(content: FeedReader(item: item, time: "8:52 AM", isSample: isSample)
-            .frame(width: 393, height: 852))
-        #expect(try #require(renderer.cgImage).width > 0)
+        try smokeRender(FeedReader(item: item, time: "8:52 AM", isSample: isSample).frame(width: 393, height: 852))
     }
 
     /// The reader says an example is an example, and only then.

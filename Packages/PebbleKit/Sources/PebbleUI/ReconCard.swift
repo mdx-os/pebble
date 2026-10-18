@@ -353,8 +353,7 @@ struct ReconSourcesSheet: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(FeedWords.doneTitle) { dismiss() }
-                        .keyboardShortcut(.cancelAction)
+                    DoneButton(title: FeedWords.doneTitle) { dismiss() }
                 }
             }
         }
@@ -419,8 +418,7 @@ struct ReconRememberSheet: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(FeedWords.doneTitle) { dismiss() }
-                        .keyboardShortcut(.cancelAction)
+                    DoneButton(title: FeedWords.doneTitle) { dismiss() }
                 }
             }
         }

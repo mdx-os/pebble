@@ -46,7 +46,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     looks: looks, conversation: Self.sampleFirstChat(),
                     section: self == .home ? .chat : .memory,
                     // Its own rule, so the showcase never touches the app's.
-                    needsYou: NeedsYou(rule: .isolated())
+                    needsYou: needsYou(at: morning) ?? NeedsYou(rule: .isolated())
                 )
             case .today, .todayNeedsYou, .todayEmpty:
                 HomeView(
@@ -54,7 +54,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     onboarding: InMemoryOnboardingStore(finished: true), memory: Self.sampleMemory(),
                     looks: looks, conversation: Self.sampleFirstChat(), section: .today,
                     feed: self == .todayEmpty ? [EmptyFeedSource()] : [SampleFeedSource()],
-                    needsYou: self == .todayNeedsYou ? Self.sampleQuestion(at: morning) : NeedsYou(rule: .isolated()),
+                    needsYou: needsYou(at: morning) ?? NeedsYou(rule: .isolated()),
                     now: { morning }
                 )
             case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive:
@@ -64,18 +64,11 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
                     onboarding: InMemoryOnboardingStore(finished: true), memory: Self.sampleMemory(),
                     looks: looks, conversation: Self.sampleFirstChat(), section: .chat,
-                    feed: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()),
+                    feed: [SampleFeedSource()], needsYou: needsYou(at: morning) ?? NeedsYou(rule: .isolated()),
                     now: { morning }, chatLine: Self.reconRequest
                 )
             case .reconRunning, .reconReady:
-                HomeView(
-                    brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
-                    onboarding: InMemoryOnboardingStore(finished: true), memory: Self.sampleMemory(),
-                    looks: looks, conversation: Self.sampleFirstChat(), section: .today,
-                    feed: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()),
-                    tasks: Self.sampleRecon(ready: self == .reconReady),
-                    now: { morning }
-                )
+                reconHome(brand: brand, looks: looks)
             case .shortcuts:
                 KeyboardShortcutsView()
             case .hello, .name, .look, .ideas:
@@ -113,27 +106,88 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                            place: LocalStubModel().privacyPlace)
             case .cloudOff, .cloudAsk:
                 NavigationStack {
-                    CloudHelpView(help: Self.sampleCloud(asking: self == .cloudAsk),
-                                  local: LocalStubModel().privacyPlace)
+                    // With the cloud off and no cloud chat open, the flag
+                    // is the on-device model's, as `HomeView` would give it.
+                    CloudHelpView(help: Self.sampleCloud(),
+                                  place: HomeView.surfacePlace(chat: LocalStubModel().privacyPlace,
+                                                               newChat: LocalStubModel().privacyPlace),
+                                  asking: self == .cloudAsk)
                 }
             case .cloudPreview:
                 Self.cloudPreviewChat(brand: brand, looks: looks)
             case .confirm, .confirmTimedOut:
                 ZStack {
                     Backdrop()
-                    // The timed out scene uses a window that has already passed.
-                    let rule = AskFirst.isolated(window: self == .confirmTimedOut ? -1 : AskFirst.defaultWindow)
-                    if let request = rule.ask(ProposedAction(
-                            kind: .purchase,
-                            recipient: Recipient(id: "merchant:sample-bakery", displayName: "Rise Bakery", handle: "risebakery.example"),
-                            details: "Sourdough loaf and two croissants, pickup at 9",
-                            price: Price(minorUnits: 1450, currency: "CAD")
-                        )) {
-                        ConfirmationSheet(request: request, rule: rule, onApprove: { _ in }, onDecline: {})
+                    if let sheet = sampleSheet {
+                        ConfirmationSheet(request: sheet.request, rule: sheet.rule, isExample: sheet.isExample,
+                                          onApprove: { _ in }, onDecline: {})
                     }
                 }
             }
         }
+    }
+
+    /// A sample question shown in a confirmation sheet of its own.
+    struct SampleSheet {
+        let request: ConfirmationRequest
+        let rule: AskFirst
+        /// Always true: a sample sheet says it is an example.
+        let isExample: Bool
+    }
+
+    /// The sheet the question scenes show, asked through a rule of its own.
+    /// The timed out scene uses a window that has already passed.
+    var sampleSheet: SampleSheet? {
+        guard self == .confirm || self == .confirmTimedOut else { return nil }
+        let rule = AskFirst.isolated(window: self == .confirmTimedOut ? -1 : AskFirst.defaultWindow)
+        guard let request = rule.ask(ProposedAction(
+            kind: .purchase,
+            recipient: Recipient(id: "merchant:sample-bakery", displayName: "Rise Bakery", handle: "risebakery.example"),
+            details: "Sourdough loaf and two croissants, pickup at 9",
+            price: Price(minorUnits: 1450, currency: "CAD")
+        )) else { return nil }
+        return SampleSheet(request: request, rule: rule, isExample: true)
+    }
+
+    /// The questions a home screen scene has waiting, which Today's cards
+    /// open in the confirmation sheet. Nil for scenes without a home screen.
+    /// The task scenes ask through `rule`, the one their tasks share.
+    func needsYou(at now: Date = morning, rule: AskFirst = .isolated()) -> NeedsYou? {
+        switch self {
+        case .todayNeedsYou: Self.sampleQuestion(at: now)
+        case .today, .todayEmpty, .home, .homeMemory: NeedsYou(rule: .isolated())
+        case .reconOffer: NeedsYou(rule: .isolated())
+        case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive, .reconRunning, .reconReady:
+            NeedsYou(rule: rule)
+        default: nil
+        }
+    }
+
+    /// The scripted tasks a scene shows, asking through `rule`. Nil for
+    /// scenes without tasks.
+    @MainActor
+    func tasks(rule: AskFirst) -> (any TaskEngine)? {
+        switch self {
+        case .tasksLive: Self.liveTasks(rule: rule)
+        case .taskRunning, .taskRetrying, .taskWaiting, .taskDone: Self.sampleTasks(self, rule: rule)
+        case .reconRunning, .reconReady: Self.sampleRecon(ready: self == .reconReady, rule: rule)
+        default: nil
+        }
+    }
+
+    /// Whether every confirmation sheet this scene can show says it is an
+    /// example: its own sample sheet, the sheet a waiting question opens
+    /// from Today, which follows `NeedsYou.isSample`, or the sheet a task's
+    /// Approve opens, which follows the engine's `isSample`. Any task may
+    /// come to ask, so a scene with tasks counts even before one does. Nil
+    /// when the scene can show no question at all.
+    @MainActor
+    var confirmationSheetsAreExamples: Bool? {
+        if let sheet = sampleSheet { return sheet.isExample }
+        var examples: [Bool] = []
+        if let asks = needsYou(), !asks.items(now: Self.morning).isEmpty { examples.append(asks.isSample) }
+        if let tasks = tasks(rule: .isolated()), !tasks.tasks.isEmpty { examples.append(tasks.isSample) }
+        return examples.isEmpty ? nil : !examples.contains(false)
     }
 
     /// Today at 9:40, so the feed's times sit just before the 9:41 the
@@ -162,14 +216,31 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     private func taskHome(brand: Brand, looks: UserDefaults) -> HomeView {
         let rule = AskFirst.isolated()
         let live = self == .tasksLive
+        let morning = Self.morning
         return HomeView(
             brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
             onboarding: InMemoryOnboardingStore(finished: true), memory: Self.sampleMemory(),
             looks: looks, conversation: Self.sampleFirstChat(), section: .today,
-            feed: [SampleFeedSource()], needsYou: NeedsYou(rule: rule),
-            tasks: live ? Self.liveTasks(rule: rule) : Self.sampleTasks(self, rule: rule),
+            feed: [SampleFeedSource()], needsYou: needsYou(at: morning, rule: rule) ?? NeedsYou(rule: rule),
+            tasks: tasks(rule: rule),
             drivesTasks: live,
-            now: live ? { Date() } : { Self.morning }
+            now: live ? { Date() } : { morning }
+        )
+    }
+
+    /// Today looking into the pool reopening. The recon and the feed share
+    /// one rule of their own, as the task scenes do.
+    @MainActor
+    private func reconHome(brand: Brand, looks: UserDefaults) -> HomeView {
+        let rule = AskFirst.isolated()
+        let morning = Self.morning
+        return HomeView(
+            brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
+            onboarding: InMemoryOnboardingStore(finished: true), memory: Self.sampleMemory(),
+            looks: looks, conversation: Self.sampleFirstChat(), section: .today,
+            feed: [SampleFeedSource()], needsYou: needsYou(at: morning, rule: rule) ?? NeedsYou(rule: rule),
+            tasks: tasks(rule: rule),
+            now: { morning }
         )
     }
 
@@ -224,9 +295,9 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// sample sources, played to the moment the scene shows: reading the
     /// sources, or done. The engine's clock lands on 9:40.
     @MainActor
-    static func sampleRecon(ready: Bool) -> ReconRunner {
+    static func sampleRecon(ready: Bool, rule: AskFirst) -> ReconRunner {
         let at: TimeInterval = ready ? 16 : 4
-        let engine = LocalFakeEngine(rule: .isolated(), origin: morning - at)
+        let engine = LocalFakeEngine(rule: rule, origin: morning - at)
         // Pages dated by the engine's clock, so they read as days old at 9:40.
         let runner = ReconRunner(engine: engine, provider: SampleSources(now: { [engine] in engine.currentDate }))
         runner.lookInto(SampleSources.poolTopic)
@@ -271,42 +342,44 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// from the showcase: its transport refuses every request.
     static let sampleEndpoint = URL(string: "https://cloud.example.com")!
 
-    /// The cloud setting, off, with one private word. `asking` opens on the
-    /// question before turning it on.
+    /// The cloud setting, off, with one private word.
     @MainActor
-    static func sampleCloud(asking: Bool = false) -> CloudHelp {
-        let help = CloudHelp(
+    static func sampleCloud() -> CloudHelp {
+        CloudHelp(
             store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: false, privateWords: ["lemon cake"])),
             endpoint: sampleEndpoint, memory: sampleMemory(), transport: { NoSendTransport() }
         )
-        if asking { help.setOn(true) }
-        return help
     }
 
-    /// A chat on the cloud model with its preview showing. The preview is
-    /// built by the same code a real reply uses.
+    /// A chat on the cloud model with its preview showing, presented the
+    /// way `HomeView` presents it. The preview is built by the same code a
+    /// real reply uses.
     @MainActor
     static func cloudPreviewChat(brand: Brand, looks: UserDefaults) -> some View {
+        let memory = sampleMemory()
+        let auth = SampleSignIn()
         let help = CloudHelp(
             store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"])),
-            endpoint: sampleEndpoint, memory: sampleMemory(), transport: { NoSendTransport() }
+            endpoint: sampleEndpoint, memory: memory, auth: auth, transport: { NoSendTransport() }
         )
-        let model = help.chatModel(local: LocalStubModel())
+        let review = CloudReview()
+        let model = help.chatModel(local: LocalStubModel(), review: review)
         var turns = Conversation.firstRun(named: "Pip", onDevice: false).turns
         turns.append(ChatTurn(id: UUID(), speaker: .person, text: "Help me write a note to Sam about Saturday. The party moved to 42 Maple Street. He can call me at 416 555 0199 or email jo.lee@example.com, and don't mention the lemon cake."))
         let conversation = Conversation(turns: turns, onDevice: false)
-        let redactor = Redactor(memory: sampleMemory().notes(), privateWords: help.settings.privateWords)
-        if let preview = try? CloudModel.preview(for: turns, endpoint: sampleEndpoint, redactor: redactor) {
-            help.review.show(preview)
+        let redactor = Redactor(memory: memory.notes(), privateWords: help.settings.privateWords)
+        if let preview = try? CloudModel.preview(for: turns, endpoint: sampleEndpoint, redactor: redactor,
+                                                 headers: auth.headers(for: CloudModel.url(for: sampleEndpoint))) {
+            review.show(preview)
         }
         let controller = ChatController.make(brand: brand, model: model, names: InMemoryAgentNameStore(stored: "Pip"),
-                                             conversation: conversation)
+                                             conversation: conversation, review: review)
         controller.isReplying = true
         return ZStack {
             Backdrop()
-            ChatView(controller: controller, look: AgentLook.load(from: looks), firstMessage: nil)
-                .cloudPreview(help.review)
+            ChatView(controller: controller, look: AgentLook.load(from: looks), firstMessage: nil, covered: true)
         }
+        .cloudPreview(review)
     }
 
     static func emptyMemory() -> MemoryStore {
@@ -361,5 +434,11 @@ struct NoSendTransport: CloudTransport {
     func send(_ request: CloudRequest) async throws -> Data {
         throw CloudModelError.notSent
     }
+}
+
+/// The showcase's sign-in: one made-up header, so the preview shows how a
+/// sign-in label looks and VoiceOver can be heard leaving its value out.
+struct SampleSignIn: CloudAuth {
+    func headers(for url: URL) -> [String: String] { ["X-Sample-Sign-In": "made-up-sample"] }
 }
 #endif

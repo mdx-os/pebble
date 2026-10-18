@@ -75,12 +75,10 @@ when the code makes them true.
   takes it: `FirstConversation.opening` and `presence`,
   `FirstRunWords.helloDetail`, `MemoryWords.empty`, `saved` and
   `privacyNote`, `FeedWords.sampleNote`, `ReconWords.offer` (for example
-  pages) and `rememberDetail`, and `CloudWords.offDetail` and `turnedOff`.
-  Memory lines follow it too: notes never reach a model,
+  pages) and `rememberDetail`, and `CloudWords.offDetail`. Memory lines
+  follow it too: notes never reach a model,
   but with a cloud model the chat does leave the device, so a promise on
   the memory screen would mislead. `PrivacyPlaceTests` pins every line.
-  The cloud setting can change it while the app runs: a chat keeps the
-  model it started with, and Today and the memory follow `HomeView.place`.
 - When the flag is off, say nothing about the device. Drop the sentence
   rather than replace it with a claim about the cloud.
 - Never soften a promise that is true ("mostly private") and never stretch
@@ -91,9 +89,11 @@ when the code makes them true.
 - A promise about what happens next must have a button or a behavior
   behind it. "I'll look again" needs a Try again or a re-check.
 - Help from the cloud (`CloudWords`) is off until the person says yes to
-  a question that names what changes. Before anything leaves, the person
-  sees "Here is exactly what leaves your device" with the very bytes that
-  will be sent. A chat on the cloud never says "on this device".
+  a question that names what changes. Before anything from a chat leaves,
+  the person sees "Here is exactly what leaves your device" with the very
+  bytes that will be sent. `CloudModel` reports `.mayLeaveDevice`, so a
+  chat on the cloud, and every line that reads the flag from it, never
+  says "on this device".
 
 ## When someone may be in danger
 
@@ -133,9 +133,10 @@ action.
 - Bad: "No data."
 
 An empty state promises only what exists today. Today's empty state says
-"It's just us for now. Write to me below, and we'll start a chat." with the
-composer under it, and says nothing about work done in the background until
-a real feed source ships.
+"It's just us for now. Write to me below, and I'll answer in the chat." with
+the composer under it. It is true whether or not a chat is already going, so
+it never promises a new one, and it says nothing about work done in the
+background until a real feed source ships.
 
 Examples are always labeled. Sample cards start with "Example" for
 VoiceOver, and a sample opened to read or a sample question says "This is
@@ -145,8 +146,11 @@ an example. Nothing here was really done."
 
 Words a person reads clear 4.5 to 1 against what they sit on, in light and
 dark. Use `Theme.accentText` for words in the accent's warmth,
-`Theme.secondaryText` for quieter words, and `Theme.onAccent` on the accent
-fill. The raw accent and the system grays are too faint for words.
+`Theme.secondaryText` for quieter words and placeholders, and `Theme.onAccent`
+on the accent fill. A system control that fills with the tint and writes
+white on it (the selected sidebar row, Done) takes `Theme.tintFill`, and only
+those: it is a fill, never words, and the sidebar's icons in it clear 3 to 1. The raw
+accent and the system grays are too faint for words.
 `ContrastGuardTests` checks every pair in `Theme.textPairs` and scans the
 screens for colors outside them.
 

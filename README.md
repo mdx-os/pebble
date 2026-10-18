@@ -69,13 +69,19 @@ A real adapter is another `Sendable` type in `PebbleModel` that implements
 `PebbleCore` does not do networking. A cloud model stays off until the person
 chooses one.
 
-- Cloud: `CloudModel` sends to the address in `Config/Cloud.xcconfig`, which
-  is empty by default, so the setting can't be turned on. Turning it on
-  (What I remember, then Help from the cloud) asks first and counts from the
-  next new chat. Every request is redacted on the device by `Redactor` and
-  shown to the person, byte for byte, before it is sent. Words of crisis and
-  chats that promised to stay on the device are never sent. Sign-in is a
-  `CloudAuth` hook that adds nothing by default; no keys live in the repo.
+- Cloud: `CloudModel` sends to the address in `Config/Cloud.local.xcconfig`,
+  which git ignores and which doesn't exist by default, so the setting can't
+  be turned on. Turning it on (What I remember, then Help from the cloud)
+  asks first and counts from the next new chat. Every request is redacted on
+  the device by `Redactor` and shown to the person in full, method, address,
+  headers and body, before it is sent. Redirects are refused. Words of crisis
+  and chats that promised to stay on the device are never sent, and nothing
+  is sent when the notes or private words can't be read. The setting and the
+  private words are kept next to the notes, out of backups. Sign-in is a
+  `CloudAuth` hook that adds nothing by default and may only use the network
+  after the person says yes; no keys live in the repo. `CloudModel` reports
+  `PrivacyPlace.mayLeaveDevice`, so a chat started with the cloud on makes
+  no device promise anywhere.
 
 ## Looking into things
 

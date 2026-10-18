@@ -34,6 +34,10 @@ final class FeedModel: ObservableObject {
     /// Chooses how the next summary is put together: on this device, or
     /// through the cloud's preview when the person turned the cloud on.
     var summarizer: @MainActor () -> any ReconSummarizer = { LocalReconSummarizer() }
+    /// The preview gate for a summary put together in the cloud. It belongs
+    /// to Today alone, as each cloud chat's belongs to that chat, and
+    /// `HomeView` shows it over whichever screen is in front.
+    let cloudReview = CloudReview()
     /// Long work shown on live task cards. Nil when nothing is running. Its
     /// questions reach the feed only when it asks through the rule of
     /// `needsYou`.
@@ -41,8 +45,8 @@ final class FeedModel: ObservableObject {
     /// Moves a scripted engine's clock with real time, for the live showcase.
     let drivesTasks: Bool
     /// Where the person's words go, passed down from the model so copy that
-    /// mentions the device never drifts from it. `HomeView` sets it again
-    /// when the cloud setting changes where words go.
+    /// mentions the device never drifts from it. `HomeView` keeps it up to
+    /// date as chats start and the cloud setting changes.
     @Published var place: PrivacyPlace
     private let sources: [any FeedSource]
     /// This model's watch on `needsYou`, ended when the model goes, so a
@@ -124,13 +128,23 @@ final class FeedModel: ObservableObject {
         // Each model watches for itself, so every window's Today updates.
         // A task's question is asked through the rule, not `NeedsYou`, so
         // its card moves with the engine's own snapshots above.
+        //
+        // The change can come from inside a view update, such as a sheet's
+        // yes. Publishing then is undefined behavior in SwiftUI, so the
+        // refresh always waits for the next turn of the main actor.
+        let hops = pendingRefreshes
         observation = needsYou.observe { [weak self] in
-            if Thread.isMainThread {
-                MainActor.assumeIsolated { self?.refresh() }
-            } else {
-                Task { @MainActor in self?.refresh() }
-            }
+            hops.add { self?.refresh() }
         }
+    }
+
+    /// Refreshes asked for by `needsYou` and not yet run.
+    private let pendingRefreshes = PendingRefreshes()
+
+    /// Returns once every refresh `needsYou` has asked for so far has run,
+    /// so tests wait for exactly that and nothing rests on timing.
+    func settled() async {
+        await pendingRefreshes.last?.value
     }
 
     /// Plain, not isolated: the observation and `needsYou` are Sendable and
@@ -593,6 +607,30 @@ final class FeedModel: ObservableObject {
     }
 }
 
+/// The refreshes a `FeedModel` has queued for the main actor, kept as one
+/// chain: each waits for the one before, so only the newest is held and
+/// waiting for it waits for them all. The watch on `NeedsYou` may call from
+/// any thread, so the chain takes its own lock.
+private final class PendingRefreshes: @unchecked Sendable {
+    private let lock = NSLock()
+    private var newest: Task<Void, Never>?
+
+    func add(_ refresh: @escaping @MainActor @Sendable () -> Void) {
+        lock.lock()
+        let before = newest
+        newest = Task { @MainActor in
+            await before?.value
+            refresh()
+        }
+        lock.unlock()
+    }
+
+    var last: Task<Void, Never>? {
+        lock.lock(); defer { lock.unlock() }
+        return newest
+    }
+}
+
 /// The home screen after the first run: a calm feed of what the agent did,
 /// made and noticed, with anything that needs a yes pinned on top.
 struct FeedView: View {
@@ -789,6 +827,8 @@ struct FeedCard: View {
             .accessibilityHint(action.hint)
             // Voice Control users can say the words they see on the card.
             .accessibilityInputLabels([Text(action.title), Text(item.title)])
+            // Not redundant: `children: .ignore` makes a new element without
+            // the button's trait. The UI tests find these cards as buttons.
             .accessibilityAddTraits(.isButton)
         } else {
             content(actionTitle: nil)
@@ -948,8 +988,7 @@ struct FeedReader: View {
             .background(Backdrop())
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(FeedWords.doneTitle) { dismiss() }
-                        .keyboardShortcut(.cancelAction)
+                    DoneButton(title: FeedWords.doneTitle) { dismiss() }
                 }
             }
         }

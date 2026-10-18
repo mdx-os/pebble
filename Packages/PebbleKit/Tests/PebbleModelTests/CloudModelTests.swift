@@ -49,7 +49,7 @@ struct CloudModelTests {
 
     func model(
         transport: RecordingTransport, reviewer: RecordingReviewer,
-        privateWords: [String] = [], isOn: @escaping @Sendable () -> Bool = { true }
+        privateWords: [String] = [], isOn: @escaping @Sendable () throws -> Bool = { true }
     ) -> CloudModel {
         let notes = notes
         return CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer,
@@ -111,11 +111,178 @@ struct CloudModelTests {
           "version" : 1
         }
         """)
-        #expect(preview.request.headers == ["Content-Type": "application/json"])
+        #expect(preview.request.method == "POST")
+        #expect(preview.request.headers == CloudHeaders.fixed)
+        #expect(preview.request.headers["User-Agent"] == "pebble")
+        #expect(preview.request.headers["Accept-Language"] == "en")
     }
 
-    @Test func authHeadersAreAddedAndNothingByDefault() async {
-        #expect(await NoCloudAuth().headers(for: endpoint).isEmpty)
+    @Test func theShownRequestHasTheMethodFullAddressEveryHeaderAndTheBody() throws {
+        var turns = cloudChat().turns
+        turns.append(ChatTurn(id: UUID(), speaker: .person, text: "Plan my week"))
+        let preview = try CloudModel.preview(for: turns, endpoint: endpoint, redactor: Redactor(),
+                                             headers: ["X-Sample-Sign-In": "made-up"])
+        let shown = preview.request.shownText
+        #expect(shown.hasPrefix("""
+        POST https://cloud.example.com/v1/reply
+        Accept: application/json
+        Accept-Encoding: identity
+        Accept-Language: en
+        Content-Type: application/json
+        User-Agent: pebble
+        X-Sample-Sign-In: made-up
+
+        {
+        """))
+        #expect(shown.hasSuffix(preview.request.text))
+    }
+
+    /// The preview and the wire are the same: what the transport hands to
+    /// URLSession is exactly the request the person read, headers included.
+    @Test func theShownRequestIsTheURLRequestTheTransportReceives() async throws {
+        let loader = RecordingLoader()
+        let reviewer = RecordingReviewer(answer: .send)
+        let cloud = CloudModel(
+            endpoint: endpoint, transport: URLSessionCloudTransport(load: loader.load), reviewer: reviewer,
+            auth: SampleAuth(headers: ["X-Sample-Sign-In": "made-up", "user-agent": "something else", "Host": "elsewhere"]),
+            redactor: { Redactor(names: ["Sam"]) }
+        )
+        let next = try await cloudChat().sending("Call Sam", with: cloud)
+        #expect(next.turns.last?.text == "Here's a short note you can send.")
+        let preview = try #require(reviewer.seen.first)
+        let wire = try #require(loader.requests.first)
+        #expect(loader.requests.count == 1)
+        #expect(wire.httpMethod == preview.request.method)
+        #expect(wire.url == preview.request.url)
+        #expect(wire.allHTTPHeaderFields == preview.request.headers)
+        #expect(wire.httpBody == preview.request.body)
+        #expect(wire.httpShouldHandleCookies == false)
+        let fromWire = CloudRequest.shownText(method: try #require(wire.httpMethod), url: try #require(wire.url),
+                                              headers: wire.allHTTPHeaderFields ?? [:], body: wire.httpBody ?? Data())
+        #expect(fromWire == preview.request.shownText)
+        // The sign-in header is shown and sent; it can't replace the fixed
+        // User-Agent or set the host.
+        #expect(wire.value(forHTTPHeaderField: "X-Sample-Sign-In") == "made-up")
+        #expect(wire.value(forHTTPHeaderField: "User-Agent") == "pebble")
+        #expect(wire.value(forHTTPHeaderField: "Accept-Language") == "en")
+        #expect(wire.value(forHTTPHeaderField: "Host") == nil)
+    }
+
+    // MARK: Redirects
+
+    @Test func everyRedirectIsRefused() async throws {
+        let session = URLSessionCloudTransport.makeSession()
+        defer { session.invalidateAndCancel() }
+        #expect(session.delegate is RefusesRedirects)
+        // Made but never started, so nothing touches the network.
+        let task = session.dataTask(with: endpoint)
+        let moved = try #require(HTTPURLResponse(url: endpoint, statusCode: 307, httpVersion: "HTTP/1.1",
+                                                 headerFields: ["Location": "http://elsewhere.example.org/"]))
+        let elsewhere = URLRequest(url: try #require(URL(string: "http://elsewhere.example.org/")))
+        let followed = await RefusesRedirects().urlSession(session, task: task, willPerformHTTPRedirection: moved,
+                                                           newRequest: elsewhere)
+        #expect(followed == nil)
+    }
+
+    @Test func aRefusedRedirectIsNotAReply() async {
+        let loader = RecordingLoader(status: 308)
+        let transport = URLSessionCloudTransport(load: loader.load)
+        let request = CloudRequest(url: CloudModel.url(for: endpoint), headers: CloudHeaders.fixed, body: Data("{}".utf8))
+        await #expect(throws: URLError.self) { try await transport.send(request) }
+        #expect(loader.requests.count == 1)
+    }
+
+    /// The transport never lets the system fill in a User-Agent or
+    /// Accept-Language the person didn't see.
+    @Test(arguments: [
+        [:],
+        ["Content-Type": "application/json"],
+        CloudHeaders.fixed.filter { $0.key != "User-Agent" },
+        CloudHeaders.fixed.filter { $0.key != "Accept-Language" },
+        CloudHeaders.fixed.merging(["Host": "elsewhere.example.org"]) { $1 },
+    ])
+    func aRequestWithoutTheFixedHeadersIsRefused(headers: [String: String]) async {
+        let loader = RecordingLoader()
+        let transport = URLSessionCloudTransport(load: loader.load)
+        let request = CloudRequest(url: CloudModel.url(for: endpoint), headers: headers, body: Data("{}".utf8))
+        await #expect(throws: CloudTransportError.headersNotShown) { try await transport.send(request) }
+        #expect(loader.requests.isEmpty)
+    }
+
+    @Test func theSessionKeepsNothingAndAddsNothing() {
+        let session = URLSessionCloudTransport.makeSession()
+        defer { session.invalidateAndCancel() }
+        let configuration = session.configuration
+        #expect(configuration.httpCookieStorage == nil)
+        #expect(configuration.httpShouldSetCookies == false)
+        #expect(configuration.urlCache == nil)
+        #expect(configuration.urlCredentialStorage == nil)
+        #expect(configuration.httpAdditionalHeaders == nil)
+    }
+
+    // MARK: Sign-in
+
+    @Test func signInHeadersAreShownAndNothingByDefault() throws {
+        #expect(NoCloudAuth().headers(for: endpoint).isEmpty)
+        var turns = cloudChat().turns
+        turns.append(ChatTurn(id: UUID(), speaker: .person, text: "Plan my week"))
+        let preview = try CloudModel.preview(for: turns, endpoint: endpoint, redactor: Redactor(),
+                                             headers: SampleAuth(headers: ["X-Sample-Sign-In": "made-up"]).headers(for: endpoint))
+        #expect(preview.request.shownText.contains("X-Sample-Sign-In: made-up"))
+    }
+
+    // MARK: Notes that can't be read
+
+    @Test func unreadableNotesSendNothingAndShowNothing() async {
+        let transport = RecordingTransport()
+        let reviewer = RecordingReviewer(answer: .send)
+        let cloud = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer,
+                               redactor: { throw MemoryStore.Unavailable() })
+        await #expect(throws: CloudModelError.notesUnreadable) {
+            try await cloudChat().sending("Write to Sam", with: cloud)
+        }
+        #expect(reviewer.seen.isEmpty)
+        #expect(transport.sent.isEmpty)
+    }
+
+    // MARK: A chat never gets less private
+
+    /// After Forget everything, or a private word taken off the list, the
+    /// next request in the same chat still hides what earlier ones hid.
+    @Test func whatOneRequestHidThePrivacyActionsAfterItNeverUnhide() async throws {
+        let transport = RecordingTransport()
+        let reviewer = RecordingReviewer(answer: .send)
+        let forgotten = Flag(false)
+        let cloud = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer, redactor: {
+            forgotten.value ? Redactor() : Redactor(names: ["Sam"], privateWords: ["lemon cake"])
+        })
+        let first = try await cloudChat().sending("Ask Sam to bring the lemon cake.", with: cloud)
+        forgotten.value = true
+        _ = try await first.sending("And remind Sam again tomorrow.", with: cloud)
+        #expect(transport.sent.count == 2)
+        for sent in transport.sent {
+            #expect(!sent.text.contains("Sam"), "a name came back")
+            #expect(!sent.text.contains("lemon cake"), "a private word came back")
+        }
+        #expect(transport.sent[1].text.contains("Ask [name] to bring the [private]."))
+        #expect(transport.sent[1].text.contains("And remind [name] again tomorrow."))
+        // A new chat starts from the list as it is now.
+        let fresh = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer, redactor: { Redactor() })
+        _ = try await cloudChat().sending("Sam", with: fresh)
+        #expect(transport.sent.last?.text.contains("\"Sam\"") == true)
+    }
+
+    @Test func aRedactorUnionHidesEverythingEitherHides() {
+        let both = Redactor(names: ["Sam"], privateWords: ["lemon cake"])
+            .union(Redactor(names: ["Priya", "sam"], privateWords: ["Riverside Clinic"]))
+        #expect(both.names == ["Sam", "Priya"])
+        #expect(both.privateWords == ["lemon cake", "Riverside Clinic"])
+    }
+
+    @Test func aTurnCanBeTakenBack() throws {
+        let id = UUID()
+        let chat = try cloudChat().appendingPerson("Don't send this", id: id)
+        #expect(chat.removingTurn(id) == cloudChat())
     }
 
     // MARK: Cancel sends nothing
@@ -137,6 +304,20 @@ struct CloudModelTests {
         let reviewer = RecordingReviewer(answer: .send)
         await #expect(throws: CloudModelError.off) {
             try await cloudChat().sending("Plan my week", with: model(transport: transport, reviewer: reviewer, isOn: { false }))
+        }
+        #expect(reviewer.seen.isEmpty)
+        #expect(transport.sent.isEmpty)
+    }
+
+    /// A setting that can't be read is not the same as off: nothing is
+    /// shown or sent, and the chat says it couldn't read them.
+    @Test func anUnreadableSettingIsNotReadAsOff() async {
+        struct Locked: Error {}
+        let transport = RecordingTransport()
+        let reviewer = RecordingReviewer(answer: .send)
+        await #expect(throws: CloudModelError.notesUnreadable) {
+            try await cloudChat().sending("Plan my week", with: model(
+                transport: transport, reviewer: reviewer, isOn: { throw Locked() }))
         }
         #expect(reviewer.seen.isEmpty)
         #expect(transport.sent.isEmpty)
@@ -169,6 +350,23 @@ struct CloudModelTests {
             CloudModel(endpoint: url, transport: RecordingTransport(), reviewer: RecordingReviewer(answer: .cancel))
         }
         #expect(!on.runsOnDevice)
+    }
+
+    /// The onboarding hello asks this on every redraw, so it must agree
+    /// with the model a chat would get without making one.
+    @Test(arguments: [false, true], [false, true])
+    func knowingWhetherANewChatRunsOnDeviceMakesNoModel(isOn: Bool, hasAddress: Bool) {
+        let settings = CloudHelpSettings(isOn: isOn)
+        let address = hasAddress ? endpoint : nil
+        let made = Flag(false)
+        let runsHere = ModelChoice.runsOnDevice(settings: settings, endpoint: address, local: LocalStubModel())
+        #expect(!made.value)
+        let model = ModelChoice.model(settings: settings, endpoint: address, local: LocalStubModel()) { url in
+            made.value = true
+            return CloudModel(endpoint: url, transport: RecordingTransport(), reviewer: RecordingReviewer(answer: .cancel))
+        }
+        #expect(runsHere == model.runsOnDevice)
+        #expect(ModelChoice.usesCloud(settings: settings, endpoint: address) == (isOn && hasAddress))
     }
 
     // MARK: The on-device promise
@@ -269,4 +467,46 @@ struct TurningOffReviewer: CloudReviewing {
 
 struct BrokenTransport: CloudTransport {
     func send(_ request: CloudRequest) async throws -> Data { Data("not json".utf8) }
+}
+
+/// Stands in for URLSession: records each URLRequest and answers with a
+/// fixed status. Never touches the network.
+final class RecordingLoader: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _requests: [URLRequest] = []
+    let status: Int
+
+    init(status: Int = 200) { self.status = status }
+
+    var requests: [URLRequest] {
+        lock.lock(); defer { lock.unlock() }
+        return _requests
+    }
+
+    @Sendable func load(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        lock.withLock { _requests.append(request) }
+        let headers = (300..<400).contains(status) ? ["Location": "http://elsewhere.example.org/"] : [:]
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
+        return (try JSONEncoder().encode(["reply": "Here's a short note you can send."]), response)
+    }
+}
+
+/// Sign-in that hands back made-up headers and counts sign-ins.
+final class SampleAuth: CloudAuth, @unchecked Sendable {
+    private let lock = NSLock()
+    private let fixed: [String: String]
+    private var _signIns = 0
+
+    init(headers: [String: String] = [:]) { fixed = headers }
+
+    var signIns: Int {
+        lock.lock(); defer { lock.unlock() }
+        return _signIns
+    }
+
+    func headers(for url: URL) -> [String: String] { fixed }
+
+    func signIn() async {
+        lock.withLock { _signIns += 1 }
+    }
 }

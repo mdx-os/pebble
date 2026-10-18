@@ -10,14 +10,11 @@ import Testing
 struct FirstRunScreensTests {
     let brand = Brand(name: "Nova")
 
-    @Test(arguments: ShowcaseScene.allCases, [ColorScheme.light, .dark])
-    func everyScreenRendersInLightAndDark(scene: ShowcaseScene, scheme: ColorScheme) throws {
-        let size = CGSize(width: 393, height: 852)
-        let renderer = ImageRenderer(content: scene.view(brand: brand)
+    @Test("Smoke: every showcase screen draws in light and dark", arguments: ShowcaseScene.allCases, [ColorScheme.light, .dark])
+    func smokeEveryScreenInLightAndDark(scene: ShowcaseScene, scheme: ColorScheme) throws {
+        try smokeRender(scene.view(brand: brand)
             .environment(\.colorScheme, scheme)
-            .frame(width: size.width, height: size.height))
-        let image = try #require(renderer.cgImage)
-        #expect(image.width == Int(size.width * renderer.scale))
+            .frame(width: 393, height: 852))
     }
 
     @Test func finishingTheFirstRunSavesNameLookAndFlag() throws {
@@ -114,10 +111,10 @@ struct FirstRunScreensTests {
         #expect(!FileManager.default.fileExists(atPath: url.path))
     }
 
-    @Test(arguments: [MemorySource.toldMe, .fromApp("Calendar"), .inferred], [ColorScheme.light, .dark])
-    func sourceLabelsRender(source: MemorySource, scheme: ColorScheme) throws {
-        let renderer = ImageRenderer(content: SourceLabel(source: source).environment(\.colorScheme, scheme))
-        #expect(try #require(renderer.cgImage).width > 0)
+    @Test("Smoke: the source labels draw",
+          arguments: [MemorySource.toldMe, .fromApp("Calendar"), .inferred], [ColorScheme.light, .dark])
+    func smokeSourceLabels(source: MemorySource, scheme: ColorScheme) throws {
+        try smokeRender(SourceLabel(source: source).environment(\.colorScheme, scheme))
     }
 
     @Test func theMemoryScreenShowsWhereEachNoteCameFrom() {
