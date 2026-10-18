@@ -202,6 +202,64 @@ struct RedactorTests {
         #expect(out.isUnchanged)
     }
 
+    // MARK: Overlaps
+
+    /// Two matches that overlap become one mask over both, so no piece of
+    /// either is left in what is sent.
+    @Test(arguments: [
+        (["Maple Street party"], "The 42 Maple Street party is on.", "The [private] is on."),
+        (["lemon cake", "cake shop"], "Meet at the lemon cake shop.", "Meet at the [private]."),
+        (["Sam Lee"], "Ask Sam Lee.", "Ask [private]."),
+    ])
+    func overlappingMatchesAreHiddenWhole(words: [String], input: String, expected: String) {
+        let out = Redactor(names: ["Sam"], privateWords: words).redact(input)
+        #expect(out.text == expected)
+        #expect(out.hidden == [.privateWord: 1])
+    }
+
+    @Test func aNameInsideAnEmailIsHiddenAsTheEmail() {
+        let out = Redactor(names: ["Sam"]).redact("Write to sam.lee@example.com or Sam.")
+        #expect(out.text == "Write to [email] or [name].")
+        #expect(out.hidden == [.email: 1, .name: 1])
+    }
+
+    // MARK: Words after a family word
+
+    /// After "my boss" or "my friend", a word like "hates" or "called" is
+    /// what they did, not their name.
+    @Test(arguments: [
+        "my boss hates mondays",
+        "my friend called about dinner",
+        "our neighbour moved away",
+        "my sister texted twice",
+    ])
+    func verbsAfterAFamilyWordAreNotNames(note: String) {
+        #expect(Redactor.names(in: [MemoryNote(text: note, source: .toldMe)]).isEmpty)
+    }
+
+    // MARK: Long numbers
+
+    @Test(arguments: [
+        ("Call 020 7946 0958 2 times", "Call [phone number] 2 times"),
+        ("Call 06221 54321 later", "Call [phone number] later"),
+    ])
+    func homeNumbersBesideOtherNumbersAreStillHidden(input: String, expected: String) {
+        #expect(Redactor().redact(input).text == expected)
+    }
+
+    /// Every run of digits is read one way only, so a very long one is
+    /// handled whole and left alone, since it is not a phone number.
+    @Test func veryLongRunsOfDigitsAreReadOnce() {
+        let digits = "0" + String(repeating: "1234567890", count: 2_000)
+        #expect(Redactor().redact(digits).hidden[.phone] == nil)
+        let groups = "0" + String(repeating: " 12", count: 5_000)
+        #expect(Redactor().redact(groups).hidden[.phone] == nil)
+        // The same for the part of an email before the @.
+        let letters = String(repeating: "a1", count: 10_000)
+        #expect(Redactor().redact(letters + "@example.com").text == "[email]")
+        #expect(Redactor().redact(letters).isUnchanged)
+    }
+
     @Test func blankPrivateWordsAndDuplicatesAreIgnored() {
         let redactor = Redactor(names: ["Sam", "sam", " "], privateWords: ["", "  "])
         #expect(redactor.names == ["Sam"])

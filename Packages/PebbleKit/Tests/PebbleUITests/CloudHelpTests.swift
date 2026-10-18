@@ -61,6 +61,50 @@ final class CountingAuth: CloudAuth, @unchecked Sendable {
     }
 }
 
+/// A settings store whose saves and erases can be made to fail, as a full
+/// disk or a failed rename would.
+final class FailingCloudStore: CloudHelpStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var settings: CloudHelpSettings?
+    private var _savesToFail = 0
+    private var _eraseFails = false
+
+    init(_ settings: CloudHelpSettings) { self.settings = settings }
+
+    /// How many of the next saves fail. `Int.max` for all of them.
+    var savesToFail: Int {
+        get { lock.withLock { _savesToFail } }
+        set { lock.withLock { _savesToFail = newValue } }
+    }
+
+    var eraseFails: Bool {
+        get { lock.withLock { _eraseFails } }
+        set { lock.withLock { _eraseFails = newValue } }
+    }
+
+    /// What is on disk: nil when there is no file.
+    var saved: CloudHelpSettings? { lock.withLock { settings } }
+
+    func load() throws -> CloudHelpSettings { lock.withLock { settings ?? .off } }
+
+    func save(_ next: CloudHelpSettings) throws {
+        try lock.withLock {
+            if _savesToFail > 0 {
+                if _savesToFail != .max { _savesToFail -= 1 }
+                throw CocoaError(.fileWriteOutOfSpace)
+            }
+            settings = next
+        }
+    }
+
+    func erase() throws {
+        try lock.withLock {
+            if _eraseFails { throw CocoaError(.fileWriteNoPermission) }
+            settings = nil
+        }
+    }
+}
+
 @MainActor
 struct CloudHelpTests {
     let brand = Brand(name: "Nova")
@@ -155,15 +199,152 @@ struct CloudHelpTests {
         #expect(auth.signIns == 1)
     }
 
+    // MARK: Turning it off fails closed
+
+    func cloud(_ store: any CloudHelpStoring, maker: TransportMaker) -> CloudHelp {
+        CloudHelp(store: store, endpoint: endpoint, memory: scratchMemory(), transport: { maker.make() })
+    }
+
+    /// The save fails twice, so the file is erased: off now, in chats
+    /// already open, on this screen, and on the next launch.
+    @Test func aSwitchOffThatCantBeSavedErasesTheFileAndStaysOff() async throws {
+        let maker = TransportMaker()
+        let store = FailingCloudStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"]))
+        let help = cloud(store, maker: maker)
+        let controller = chat(help)
+        store.savesToFail = .max
+        help.setOn(false)
+        #expect(help.status == CloudWords.offButCleared)
+        #expect(!help.settings.isOn)
+        #expect(store.saved == nil)
+        controller.submit("Plan my week")
+        await controller.settled()
+        #expect(controller.failure == CloudWords.turnedOff)
+        #expect(controller.review?.pending == nil)
+        help.refresh()
+        #expect(!help.settings.isOn)
+        // The next launch reads it fresh, and it is off.
+        #expect(!cloud(store, maker: maker).settings.isOn)
+        #expect(maker.wire.sent.isEmpty)
+    }
+
+    /// Neither saved nor erased: off for every chat until the app closes,
+    /// the switch never flips back on, and the person is told plainly.
+    @Test func aSwitchOffThatCantBeSavedOrErasedStaysOffForTheSession() async throws {
+        let maker = TransportMaker()
+        let store = FailingCloudStore(CloudHelpSettings(isOn: true))
+        let help = cloud(store, maker: maker)
+        let controller = chat(help)
+        store.savesToFail = .max
+        store.eraseFails = true
+        help.setOn(false)
+        #expect(help.status == CloudWords.offForNow)
+        #expect(store.saved?.isOn == true)
+        controller.submit("Plan my week")
+        await controller.settled()
+        #expect(controller.failure == CloudWords.turnedOff)
+        // Coming back to the screen reads the file, which still says on.
+        help.refresh()
+        #expect(!help.settings.isOn)
+        #expect(!help.usesCloudForNewChats)
+        #expect(help.chatModel(local: LocalStubModel(), review: CloudReview()).runsOnDevice)
+        // Once saving works again, the switch off is saved then.
+        store.savesToFail = 0
+        help.refresh()
+        #expect(store.saved?.isOn == false)
+        #expect(maker.wire.sent.isEmpty)
+    }
+
+    @Test func aSaveThatFailsOnceIsTriedAgain() {
+        let store = FailingCloudStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"]))
+        let help = cloud(store, maker: TransportMaker())
+        store.savesToFail = 1
+        help.setOn(false)
+        #expect(help.status == nil)
+        #expect(store.saved == CloudHelpSettings(isOn: false, privateWords: ["lemon cake"]))
+    }
+
+    /// Settings locked away when it is switched off are erased, so a later
+    /// unlock can't bring it back on.
+    @Test func aSwitchOffWhileTheSettingsCantBeReadErasesThem() throws {
+        let store = InMemoryCloudHelpStore(CloudHelpSettings(isOn: true))
+        let help = cloud(store, maker: TransportMaker())
+        store.makeUnreadable()
+        help.setOn(false)
+        #expect(help.status == CloudWords.offButCleared)
+        #expect(try store.load() == .off)
+    }
+
+    /// A private word saved later keeps the switch off, too.
+    @Test func laterChangesKeepTheSwitchOff() {
+        let store = FailingCloudStore(CloudHelpSettings(isOn: true))
+        let help = cloud(store, maker: TransportMaker())
+        store.savesToFail = .max
+        store.eraseFails = true
+        help.setOn(false)
+        store.savesToFail = 0
+        help.newPrivateWord = "Sam"
+        help.addPrivateWord()
+        #expect(store.saved == CloudHelpSettings(isOn: false, privateWords: ["Sam"]))
+    }
+
+    @Test func aYesThatCantBeSavedLeavesItOffAndSaysSo() async {
+        let auth = CountingAuth()
+        let store = FailingCloudStore(.off)
+        let help = CloudHelp(store: store, endpoint: endpoint, memory: scratchMemory(), auth: auth,
+                             transport: { TransportMaker().make() })
+        store.savesToFail = .max
+        help.setOn(true)
+        help.confirmTurnOn()
+        #expect(help.status == CloudWords.onNotSaved)
+        #expect(!help.settings.isOn)
+        #expect(help.signingIn == nil)
+        #expect(auth.signIns == 0)
+        // Trying again once it can be saved turns it on.
+        store.savesToFail = 0
+        help.setOn(true)
+        help.confirmTurnOn()
+        #expect(help.status == nil)
+        #expect(help.settings.isOn)
+    }
+
+    @Test func aPrivateWordThatCantBeSavedSaysSo() {
+        let store = FailingCloudStore(.off)
+        let help = cloud(store, maker: TransportMaker())
+        store.savesToFail = .max
+        help.newPrivateWord = "Sam"
+        help.addPrivateWord()
+        #expect(help.status == CloudWords.privateNotSaved)
+        #expect(help.newPrivateWord == "Sam")
+    }
+
+    /// VoiceOver speaks the same failure again when it happens again.
+    @Test func theSameFailureTwiceIsCountedTwice() {
+        let store = FailingCloudStore(.off)
+        let help = cloud(store, maker: TransportMaker())
+        store.savesToFail = .max
+        help.newPrivateWord = "Sam"
+        help.addPrivateWord()
+        let first = help.statusCount
+        help.addPrivateWord()
+        #expect(help.status == CloudWords.privateNotSaved)
+        #expect(help.statusCount == first + 1)
+    }
+
     @Test func theQuestionSaysWhatChangesWithoutOverclaiming() {
         let words = CloudWords.askPoints.joined(separator: " ")
         for promise in ["not on this device", "exactly what goes", "names", "emails", "phone numbers",
                         "addresses", "card numbers", "private words", "never leave this device",
-                        "send nothing", "turn this off anytime"] {
+                        "send nothing", "turn this off anytime", "The name you gave me goes too",
+                        "internet address"] {
             #expect(words.contains(promise), "missing: \(promise)")
         }
         // Taking things out is a best effort; the preview is the safeguard.
         #expect(CloudWords.askPoints[2].hasPrefix("I try to take out"))
+        // The preview doesn't claim nothing else goes: the server sees the
+        // device's internet address.
+        #expect(!CloudWords.previewDetail.contains("Nothing else"))
+        #expect(CloudWords.previewDetail.contains("internet address"))
     }
 
     // MARK: The preview
@@ -400,6 +581,77 @@ struct CloudHelpTests {
         #expect(try store.load() == CloudHelpSettings(isOn: true, privateWords: []))
     }
 
+    /// Each half is erased whatever happens to the other, and the line says
+    /// what actually went.
+    @Test func forgetEverythingErasesTheWordsEvenWhenTheNotesCantBeErased() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("cloud-forget-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let memory = MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
+        _ = try memory.remember("Sam's birthday is May 14.", source: .toldMe)
+        // A folder that can't be changed, so the notes can't be removed.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let store = InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"]))
+        let help = help(endpoint: endpoint, maker: TransportMaker(), memory: memory, store: store)
+        let model = MemoryModel(store: memory, alsoForget: { try help.forgetPrivateWords() })
+        model.forgetEverything()
+        #expect(model.status == CloudWords.forgotWordsNotNotes)
+        #expect(try store.load().privateWords.isEmpty)
+        #expect(memory.notes().count == 1)
+    }
+
+    @Test func forgetEverythingErasesTheNotesEvenWhenTheWordsCantBeErased() throws {
+        let memory = scratchMemory("Sam's birthday is May 14.")
+        let store = FailingCloudStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"]))
+        store.savesToFail = .max
+        store.eraseFails = true
+        let help = cloud(store, maker: TransportMaker())
+        let model = MemoryModel(store: memory, alsoForget: { try help.forgetPrivateWords() })
+        model.forgetEverything()
+        #expect(model.status == CloudWords.forgotNotesNotWords)
+        #expect(memory.notes().isEmpty)
+    }
+
+    /// Words that can't be saved without them are erased with the file,
+    /// which also turns the cloud off.
+    @Test func privateWordsThatCantBeSavedAwayAreErasedWithTheFile() throws {
+        let memory = scratchMemory("Sam's birthday is May 14.")
+        let store = FailingCloudStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"]))
+        store.savesToFail = .max
+        let help = cloud(store, maker: TransportMaker())
+        let model = MemoryModel(store: memory, alsoForget: { try help.forgetPrivateWords() })
+        model.forgetEverything()
+        #expect(model.status == MemoryWords.forgotten)
+        #expect(store.saved == nil)
+        #expect(help.settings == .off)
+    }
+
+    /// Forget everything in the middle of a cloud chat never puts what was
+    /// hidden back in the clear in that chat's next request.
+    @Test func forgettingNeverUnhidesWordsInAnOpenChat() async throws {
+        let maker = TransportMaker()
+        let memory = scratchMemory("Sam's birthday is May 14.")
+        let store = InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"]))
+        let help = help(endpoint: endpoint, maker: maker, memory: memory, store: store)
+        let controller = chat(help)
+        let review = try #require(controller.review)
+        controller.submit("Ask Sam about the lemon cake")
+        review.answer(.send, for: await review.shown().id)
+        await controller.settled()
+        MemoryModel(store: memory, alsoForget: { try help.forgetPrivateWords() }).forgetEverything()
+        #expect(memory.notes().isEmpty && help.settings.privateWords.isEmpty)
+        controller.submit("Thanks")
+        let next = await review.shown()
+        #expect(next.request.text.contains("Ask [name] about the [private]"))
+        review.answer(.send, for: next.id)
+        await controller.settled()
+        #expect(maker.wire.sent.count == 2)
+        #expect(maker.wire.sentText.allSatisfy { !$0.contains("Sam") && !$0.contains("lemon cake") })
+    }
+
     @Test func addingAPrivateWordKeepsWordsSavedElsewhere() throws {
         let store = InMemoryCloudHelpStore(CloudHelpSettings(privateWords: ["lemon cake"]))
         let cloud = help(endpoint: endpoint, maker: TransportMaker(), store: store)
@@ -495,6 +747,32 @@ struct CloudHelpTests {
         #expect(lines.contains("I said: \(FirstConversation.opening(named: "Pip"))"))
         #expect(!lines.joined().contains("{"))
         #expect(!lines.joined().contains("["))
+    }
+
+    /// A sign-in value is shown on the card but never spoken: VoiceOver
+    /// says its name and how long it is.
+    @Test func voiceOverNeverReadsASignInValue() throws {
+        var turns = Conversation.firstRun(named: "Pip").turns
+        turns.append(ChatTurn(id: UUID(), speaker: .person, text: "Plan my week"))
+        let preview = try CloudModel.preview(for: turns, endpoint: endpoint, redactor: Redactor(),
+                                             headers: ["X-Sample-Sign-In": "made-up"])
+        #expect(CloudPreviewSheet.shownText(preview).contains("X-Sample-Sign-In: made-up"))
+        let spoken = CloudPreviewSheet.spokenLines(preview).joined(separator: " ")
+        #expect(spoken.contains("X-Sample-Sign-In, sign-in value, 7 characters"))
+        #expect(!spoken.contains("made-up"))
+        // The fixed labels say nothing secret, so they are read in full.
+        #expect(spoken.contains("User-Agent, pebble"))
+    }
+
+    /// The card's text can't be selected, so a long press never puts a
+    /// sign-in value on the clipboard.
+    @Test func thePayloadCantBeSelectedOrCopied() throws {
+        let source = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/PebbleUI/CloudHelpView.swift")
+        let text = try String(contentsOf: source, encoding: .utf8)
+        #expect(!text.contains(".textSelection(.enabled)"))
+        #expect(text.contains(".textSelection(.disabled)"))
     }
 
     /// Marked private, the payload and the word list vanish when the system

@@ -389,16 +389,23 @@ final class MemoryModel: ObservableObject {
         refresh()
     }
 
+    /// Erases the notes and, whatever happens to them, everything else
+    /// Forget everything covers, then says what actually went.
     func forgetEverything() {
         cancelEdit()
-        do {
-            try store.forgetEverything()
-            try alsoForget?()
+        let notesGone = (try? store.forgetEverything()) != nil
+        let restGone = alsoForget.map { forget in (try? forget()) != nil }
+        switch (notesGone, restGone) {
+        case (true, nil), (true, true?):
             status = MemoryWords.forgotten
-            forgottenCount += 1
-        } catch {
+        case (true, false?):
+            status = CloudWords.forgotNotesNotWords
+        case (false, true?):
+            status = CloudWords.forgotWordsNotNotes
+        case (false, _):
             status = MemoryWords.couldNotForget
         }
+        if notesGone || restGone == true { forgottenCount += 1 }
         refresh()
     }
 

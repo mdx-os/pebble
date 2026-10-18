@@ -25,11 +25,26 @@ final class CloudUITests: XCTestCase {
         let labels = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Sent with these labels:")).firstMatch
         XCTAssertTrue(labels.exists)
         XCTAssertTrue(labels.label.contains("User-Agent, pebble"))
+        // The sign-in label is named, but its value is never spoken.
+        XCTAssertTrue(labels.label.contains("X-Sample-Sign-In, sign-in value, 14 characters"))
+        XCTAssertFalse(labels.label.contains("made-up-sample"))
         let said = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "You said: Help me write a note to hidden name")).firstMatch
         XCTAssertTrue(said.exists)
         XCTAssertFalse(said.label.contains("["))
         app.buttons["Don't send"].tap()
         XCTAssertTrue(app.staticTexts["Here is exactly what leaves your device"].waitForNonExistence(timeout: 5))
+    }
+
+    /// A long press on the request offers no Copy, so a sign-in value never
+    /// reaches the clipboard.
+    func testThePreviewTextCantBeCopied() throws {
+        let app = launch("cloudPreview")
+        let said = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "You said:")).firstMatch
+        XCTAssertTrue(said.waitForExistence(timeout: 10))
+        said.press(forDuration: 1.2)
+        XCTAssertFalse(app.menuItems["Copy"].waitForExistence(timeout: 2))
+        XCTAssertFalse(app.buttons["Copy"].exists)
+        XCTAssertTrue(app.staticTexts["Here is exactly what leaves your device"].exists)
     }
 
     /// The private word field never learns words, its add button is big

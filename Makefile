@@ -1,9 +1,9 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test build build-release screenshots ui-screenshots device-screenshots ui-test brand-check secrets-check pulse clean
+.PHONY: verify generate test build build-release screenshots ui-screenshots device-screenshots ui-test brand-check local-config-check secrets-check pulse clean
 
 ## verify: everything CI runs. Run this before every PR.
-verify: brand-check test build build-release screenshots
+verify: brand-check local-config-check test build build-release screenshots
 
 ## generate: create Pebble.xcodeproj from project.yml (the project file is not committed)
 generate:
@@ -59,8 +59,14 @@ ui-test: generate
 brand-check:
 	sh scripts/brand-check.sh
 
-## secrets-check: scan git history for leaked secrets
+## local-config-check: fail if Config/Cloud.local.xcconfig is tracked by git
+local-config-check:
+	sh scripts/local-config-check.sh
+
+## secrets-check: scan git history for leaked secrets, and fail if the
+## one-machine Config/Cloud.local.xcconfig is ever tracked
 secrets-check:
+	sh scripts/local-config-check.sh
 	gitleaks git --no-banner --redact .
 
 clean:

@@ -22,8 +22,19 @@ print(match[0]["udid"])
 ' "$1" "${2:-}"
 }
 
+# The app itself, picked by bundle id. Products also holds the UI test
+# runner once `make ui-test` has run, so the first .app is not always it.
 built_app() {
-  find "$derived/Build/Products/$1" -maxdepth 1 -name '*.app' | head -n 1
+  for app in "$derived/Build/Products/$1"/*.app; do
+    plist="$app/Info.plist"
+    [ -f "$plist" ] || plist="$app/Contents/Info.plist"
+    if [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist" 2>/dev/null)" = "$bundle_id" ]; then
+      echo "$app"
+      return
+    fi
+  done
+  echo "screenshots: no app with bundle id $bundle_id in $derived/Build/Products/$1" >&2
+  exit 1
 }
 
 echo "screenshots: building for iOS Simulator"

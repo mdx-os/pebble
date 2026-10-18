@@ -15,8 +15,13 @@ public final class CloudHelp: ObservableObject {
     /// The turn on question is showing.
     @Published var asksToTurnOn = false
     @Published var newPrivateWord = ""
-    /// What to say about the last change that couldn't be made.
-    @Published private(set) var status: String?
+    /// What to say about the last change that couldn't be made. Every new
+    /// line, even one the same as before, bumps statusCount so it is spoken
+    /// again.
+    @Published private(set) var status: String? {
+        didSet { if status != nil { statusCount += 1 } }
+    }
+    @Published private(set) var statusCount = 0
 
     public let endpoint: URL?
     /// The same store the memory screen uses, so the redactor always reads
@@ -29,6 +34,11 @@ public final class CloudHelp: ObservableObject {
     private let reviews = NSHashTable<CloudReview>.weakObjects()
     /// Sign-in after the person's yes. Tests wait on it.
     private(set) var signingIn: Task<Void, Never>?
+    /// Set when the person turns the cloud off, and cleared only by their
+    /// yes to turning it on again. While set, nothing is sent from any
+    /// chat whatever the saved file says, so a save that fails can never
+    /// leave it on.
+    private let switchedOff = SwitchedOff()
 
     public init(
         store: any CloudHelpStoring,
@@ -66,6 +76,7 @@ public final class CloudHelp: ObservableObject {
             reviews.add(review)
             let store = self.store
             let memory = self.memory
+            let switchedOff = self.switchedOff
             return CloudModel(
                 endpoint: url, transport: makeTransport(), reviewer: review, auth: auth,
                 // Read fresh for each reply, on this device, so new notes
@@ -79,14 +90,22 @@ public final class CloudHelp: ObservableObject {
                     case .unavailable: throw MemoryStore.Unavailable()
                     }
                 },
-                isOn: { store.loadOrOff().isOn }
+                // On only when the file says so and the person hasn't
+                // switched it off since.
+                isOn: { !switchedOff.value && store.loadOrOff().isOn }
             )
         }
     }
 
     /// Reads the settings again, as after the device was locked at launch.
+    /// A switch off that couldn't be saved before is saved now, if it can be.
     func refresh() {
-        if let fresh = try? store.load() { settings = fresh }
+        guard var fresh = try? store.load() else { return }
+        if switchedOff.value, fresh.isOn {
+            fresh.isOn = false
+            try? store.save(fresh)
+        }
+        settings = fresh
     }
 
     /// The toggle. Turning on asks first; turning off never does.
@@ -102,7 +121,17 @@ public final class CloudHelp: ObservableObject {
     /// only now, after the yes.
     func confirmTurnOn() {
         asksToTurnOn = false
-        guard isAvailable, update({ $0.isOn = true }) else { return }
+        guard isAvailable else { return }
+        let wasSwitchedOff = switchedOff.value
+        switchedOff.value = false
+        guard update({ $0.isOn = true }).isDone else {
+            // Still off, and still off for chats already open.
+            switchedOff.value = wasSwitchedOff
+            settings.isOn = false
+            status = CloudWords.onNotSaved
+            return
+        }
+        status = nil
         let auth = auth
         signingIn = Task { await auth.signIn() }
     }
@@ -111,60 +140,97 @@ public final class CloudHelp: ObservableObject {
         asksToTurnOn = false
     }
 
+    /// Off at once for every chat, before anything is saved. Then it is
+    /// saved, tried twice; if that fails the file is erased, since no file
+    /// reads as off on the next launch. Only if even that fails could it
+    /// read as on next time, and the person is told so.
     func turnOff() {
-        // Settings that can't be read already count as off, so this never
-        // waits on a save to stop sending.
-        if !update({ $0.isOn = false }) { settings.isOn = false }
+        switchedOff.value = true
+        settings.isOn = false
         // Anything waiting for a yes is not sent.
         for review in reviews.allObjects { review.cancelPending() }
+        if update({ $0.isOn = false }).isDone || update({ $0.isOn = false }).isDone {
+            status = nil
+        } else if (try? store.erase()) != nil {
+            settings = .off
+            status = CloudWords.offButCleared
+        } else {
+            status = CloudWords.offForNow
+        }
     }
 
     func addPrivateWord() {
         let word = newPrivateWord
-        if update({ _ = $0.addPrivateWord(word) }) { newPrivateWord = "" }
+        switch update({ _ = $0.addPrivateWord(word) }) {
+        case .saved: newPrivateWord = ""; status = nil
+        case .unchanged: break
+        case .unreadable: status = CloudWords.privateUnreadable
+        case .notSaved: status = CloudWords.privateNotSaved
+        }
     }
 
     func removePrivateWord(_ word: String) {
-        update { $0.removePrivateWord(word) }
+        switch update({ $0.removePrivateWord(word) }) {
+        case .saved: status = nil
+        case .unchanged: break
+        case .unreadable: status = CloudWords.privateUnreadable
+        case .notSaved: status = CloudWords.privateNotSaved
+        }
     }
 
     /// Erases the private words, as Forget everything does. The setting
-    /// itself stays as it was.
+    /// itself stays as it was, unless the words can't be read or saved
+    /// without them: then the whole file is erased, which also turns the
+    /// cloud off. Throws only when even that fails.
     func forgetPrivateWords() throws {
         if var current = try? store.load() {
             current.privateWords = []
-            try store.save(current)
-            settings = current
-        } else {
-            try store.erase()
-            settings = .off
+            if switchedOff.value { current.isOn = false }
+            if (try? store.save(current)) != nil {
+                settings = current
+                return
+            }
         }
+        try store.erase()
+        settings = .off
+    }
+
+    enum Outcome {
+        case saved, unchanged, unreadable, notSaved
+        /// The file now says what was asked.
+        var isDone: Bool { self == .saved || self == .unchanged }
     }
 
     /// Changes the saved settings, read fresh so words saved elsewhere or
-    /// unreadable at launch are never written over. Returns false when
-    /// nothing changed.
-    @discardableResult
-    private func update(_ change: (inout CloudHelpSettings) -> Void) -> Bool {
-        guard var next = try? store.load() else {
-            status = CloudWords.privateUnreadable
-            return false
-        }
-        let before = next
+    /// unreadable at launch are never written over. A switch off made in
+    /// this session is kept in whatever is saved.
+    private func update(_ change: (inout CloudHelpSettings) -> Void) -> Outcome {
+        guard let before = try? store.load() else { return .unreadable }
+        var next = before
+        if switchedOff.value { next.isOn = false }
         change(&next)
         guard next != before else {
             settings = next
-            return false
+            return .unchanged
         }
         do {
             try store.save(next)
         } catch {
-            status = CloudWords.privateUnreadable
-            return false
+            return .notSaved
         }
         settings = next
-        status = nil
-        return true
+        return .saved
+    }
+}
+
+/// The session's switch off, read by every chat off the main actor.
+final class SwitchedOff: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value = false
+
+    var value: Bool {
+        get { lock.withLock { _value } }
+        set { lock.withLock { _value = newValue } }
     }
 }
 
@@ -264,8 +330,9 @@ public struct CloudHelpView: View {
             }
         }
         .onAppear { help.refresh() }
-        .onChange(of: help.status) { _, status in
-            if let status { AccessibilityNotification.Announcement(status).post() }
+        // Counted, so the same line twice in a row is spoken twice.
+        .onChange(of: help.statusCount) {
+            if let status = help.status { AccessibilityNotification.Announcement(status).post() }
         }
         .sheet(isPresented: $help.asksToTurnOn) {
             CloudTurnOnSheet(onYes: { help.confirmTurnOn() }, onNo: { help.declineTurnOn() })
@@ -463,7 +530,8 @@ struct CloudTurnOnSheet: View {
         .presentationDragIndicator(.visible)
     }
 
-    private static let symbols = ["cloud", "eye", "eye.slash", "lock", "heart", "arrow.uturn.backward"]
+    private static let symbols = ["cloud", "eye", "eye.slash", "person.crop.circle", "lock", "network", "heart",
+                                  "arrow.uturn.backward"]
 }
 
 /// "Here is exactly what leaves your device": the whole request, its
@@ -490,7 +558,13 @@ struct CloudPreviewSheet: View {
     static func spokenLines(_ preview: CloudPreview) -> [String] {
         let request = preview.request
         var lines = [CloudWords.spokenAddress(request.url.absoluteString)]
-        let labels = request.headers.sorted { $0.key.lowercased() < $1.key.lowercased() }.map { "\($0.key), \($0.value)" }
+        // A fixed label is read in full. Any other is sign-in, whose value
+        // is a secret: VoiceOver says only how long it is, so it is never
+        // spoken aloud.
+        let labels = request.headers.sorted { $0.key.lowercased() < $1.key.lowercased() }.map { name, value in
+            CloudHeaders.fixed[name] == value
+                ? "\(name), \(value)" : CloudWords.spokenSignIn(name, characters: value.count)
+        }
         if !labels.isEmpty { lines.append(CloudWords.spokenLabels(labels)) }
         if let payload = try? JSONDecoder().decode(CloudPayload.self, from: request.body) {
             lines += payload.messages.map {
@@ -541,6 +615,10 @@ struct CloudPreviewSheet: View {
 
 /// The request itself, as plain text, with what was taken out marked.
 /// VoiceOver reads it message by message instead of as raw text.
+///
+/// The text can't be selected or copied. A sign-in label's value is shown
+/// so the person sees everything that goes, but it is one long press from
+/// the clipboard, and from there Universal Clipboard, if it can be selected.
 struct CloudPayloadCard: View {
     let preview: CloudPreview
     @Environment(\.colorScheme) private var scheme
@@ -549,7 +627,7 @@ struct CloudPayloadCard: View {
     var body: some View {
         Text(highlighted)
             .font(.system(.footnote, design: .monospaced))
-            .textSelection(.enabled)
+            .textSelection(.disabled)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
             .card(scheme)

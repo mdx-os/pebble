@@ -2,6 +2,20 @@ import Foundation
 import PebbleCore
 import Testing
 
+/// A file manager whose Application Support is a scratch folder.
+final class ScratchSupportFileManager: FileManager, @unchecked Sendable {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("support-\(UUID().uuidString)")
+
+    override func url(for directory: FileManager.SearchPathDirectory, in domain: FileManager.SearchPathDomainMask,
+                      appropriateFor url: URL?, create shouldCreate: Bool) throws -> URL {
+        guard directory == .applicationSupportDirectory else {
+            return try super.url(for: directory, in: domain, appropriateFor: url, create: shouldCreate)
+        }
+        if shouldCreate { try createDirectory(at: root, withIntermediateDirectories: true) }
+        return root
+    }
+}
+
 struct CloudHelpSettingsTests {
     /// A scratch folder per test, removed afterwards.
     func scratchStore() throws -> (CloudHelpFileStore, URL) {
@@ -42,9 +56,14 @@ struct CloudHelpSettingsTests {
         #expect(UserDefaults.standard.object(forKey: "pebble.cloudHelp") == nil)
     }
 
+    /// Run against a scratch Application Support, so the test never makes
+    /// the real folder on a developer's Mac or in CI.
     @Test func theAppKeepsThemInTheNotesFolderLeftOutOfBackups() throws {
-        let folder = try MemoryStore.onDeviceFolder()
-        let store = try CloudHelpFileStore.onDevice()
+        let files = ScratchSupportFileManager()
+        defer { try? FileManager.default.removeItem(at: files.root) }
+        let folder = try MemoryStore.onDeviceFolder(fileManager: files)
+        let store = try CloudHelpFileStore.onDevice(fileManager: files)
+        #expect(folder.path.hasPrefix(files.root.path))
         #expect(store.fileURL.deletingLastPathComponent().standardizedFileURL == folder.standardizedFileURL)
         #if canImport(Darwin)
         let values = try folder.resourceValues(forKeys: [.isExcludedFromBackupKey])
@@ -120,6 +139,36 @@ struct CloudHelpSettingsTests {
         let value = line.split(separator: "=", maxSplits: 1).dropFirst().first ?? ""
         #expect(value.trimmingCharacters(in: .whitespaces).isEmpty)
     }
+
+    #if os(macOS)
+    /// `make secrets-check` fails once the local file is tracked, even when
+    /// it was forced past .gitignore. Run against a scratch repository.
+    @Test func theSecretsCheckFailsWhenTheLocalAddressFileIsTracked() throws {
+        let repo = FileManager.default.temporaryDirectory.appendingPathComponent("local-config-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repo.appendingPathComponent("Config"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repo) }
+        func run(_ arguments: [String]) throws -> Int32 {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = arguments
+            process.currentDirectoryURL = repo
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus
+        }
+        let check = Self.root.appendingPathComponent("scripts/local-config-check.sh").path
+        #expect(try run(["git", "init", "--quiet"]) == 0)
+        try Data("Config/Cloud.local.xcconfig\n".utf8).write(to: repo.appendingPathComponent(".gitignore"))
+        try Data("PEBBLE_CLOUD_ENDPOINT =\n".utf8).write(to: repo.appendingPathComponent("Config/Cloud.local.xcconfig"))
+        #expect(try run(["sh", check, repo.path]) == 0)
+        #expect(try run(["git", "add", "-f", "Config/Cloud.local.xcconfig"]) == 0)
+        #expect(try run(["sh", check, repo.path]) == 1)
+        let makefile = try String(contentsOf: Self.root.appendingPathComponent("Makefile"), encoding: .utf8)
+        #expect(makefile.contains("secrets-check:\n\tsh scripts/local-config-check.sh"))
+    }
+    #endif
 
     /// A real address goes in a local file git ignores, so it is never committed.
     @Test func aRealAddressLivesInAnIgnoredLocalFile() throws {

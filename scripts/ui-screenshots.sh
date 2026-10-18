@@ -11,7 +11,18 @@ derived="build/DerivedData"
 bundle_id="com.mdxos.pebble"
 mkdir -p "$out"
 
-app="$(find "$derived/Build/Products/Debug-iphonesimulator" -maxdepth 1 -name '*.app' | head -n 1)"
+# The app itself, picked by bundle id: Products also holds the UI test
+# runner once `make ui-test` has run.
+app=""
+for candidate in "$derived/Build/Products/Debug-iphonesimulator"/*.app; do
+  if [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$candidate/Info.plist" 2>/dev/null)" = "$bundle_id" ]; then
+    app="$candidate"
+  fi
+done
+if [ -z "$app" ]; then
+  echo "ui-screenshots: no app with bundle id $bundle_id in $derived/Build/Products/Debug-iphonesimulator" >&2
+  exit 1
+fi
 udid="$(xcrun simctl list devices available -j | python3 -c '
 import json, sys
 wanted = sys.argv[1]

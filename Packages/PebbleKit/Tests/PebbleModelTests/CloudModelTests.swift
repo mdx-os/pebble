@@ -245,6 +245,40 @@ struct CloudModelTests {
         #expect(transport.sent.isEmpty)
     }
 
+    // MARK: A chat never gets less private
+
+    /// After Forget everything, or a private word taken off the list, the
+    /// next request in the same chat still hides what earlier ones hid.
+    @Test func whatOneRequestHidThePrivacyActionsAfterItNeverUnhide() async throws {
+        let transport = RecordingTransport()
+        let reviewer = RecordingReviewer(answer: .send)
+        let forgotten = Flag(false)
+        let cloud = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer, redactor: {
+            forgotten.value ? Redactor() : Redactor(names: ["Sam"], privateWords: ["lemon cake"])
+        })
+        let first = try await cloudChat().sending("Ask Sam to bring the lemon cake.", with: cloud)
+        forgotten.value = true
+        _ = try await first.sending("And remind Sam again tomorrow.", with: cloud)
+        #expect(transport.sent.count == 2)
+        for sent in transport.sent {
+            #expect(!sent.text.contains("Sam"), "a name came back")
+            #expect(!sent.text.contains("lemon cake"), "a private word came back")
+        }
+        #expect(transport.sent[1].text.contains("Ask [name] to bring the [private]."))
+        #expect(transport.sent[1].text.contains("And remind [name] again tomorrow."))
+        // A new chat starts from the list as it is now.
+        let fresh = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer, redactor: { Redactor() })
+        _ = try await cloudChat().sending("Sam", with: fresh)
+        #expect(transport.sent.last?.text.contains("\"Sam\"") == true)
+    }
+
+    @Test func aRedactorUnionHidesEverythingEitherHides() {
+        let both = Redactor(names: ["Sam"], privateWords: ["lemon cake"])
+            .union(Redactor(names: ["Priya", "sam"], privateWords: ["Riverside Clinic"]))
+        #expect(both.names == ["Sam", "Priya"])
+        #expect(both.privateWords == ["lemon cake", "Riverside Clinic"])
+    }
+
     @Test func aTurnCanBeTakenBack() throws {
         let id = UUID()
         let chat = try cloudChat().appendingPerson("Don't send this", id: id)

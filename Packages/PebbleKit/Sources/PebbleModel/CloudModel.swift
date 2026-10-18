@@ -195,7 +195,8 @@ public struct CloudPayload: Codable, Sendable, Equatable {
 /// 1. Words of crisis stop here. `Conversation` answers them with care, and
 ///    this checks again before and after redaction, so they are never sent.
 /// 2. Personal details are taken out on this device by `Redactor`. If the
-///    notes or private words can't be read, nothing is sent.
+///    notes or private words can't be read, nothing is sent. A chat never
+///    gets less private: see `HiddenSoFar`.
 /// 3. The person sees the exact request and chooses to send it or not.
 /// 4. Only then do those same bytes go to the transport, once.
 public struct CloudModel: ModelClient {
@@ -208,6 +209,8 @@ public struct CloudModel: ModelClient {
     private let auth: any CloudAuth
     private let redactor: @Sendable () throws -> Redactor
     private let isOn: @Sendable () -> Bool
+    /// Shared by every copy of this model, so by the whole chat.
+    private let hiddenSoFar = HiddenSoFar()
 
     /// `redactor` is asked for each reply, so newly saved notes and private
     /// words count right away; it throws when they can't be read. `isOn` is
@@ -235,7 +238,7 @@ public struct CloudModel: ModelClient {
         guard isOn() else { throw CloudModelError.off }
         let redactor: Redactor
         do {
-            redactor = try self.redactor()
+            redactor = hiddenSoFar.widened(by: try self.redactor())
         } catch {
             // Without the notes and private words it isn't known what to
             // take out, so nothing goes.
@@ -288,6 +291,33 @@ public struct CloudModel: ModelClient {
             request: CloudRequest(url: url(for: endpoint), headers: CloudHeaders.merged(with: headers), body: body),
             hidden: hidden
         )
+    }
+}
+
+/// Every name and private word one chat has hidden so far.
+///
+/// Each request re-sends the earlier turns, redacted again with the notes
+/// and private words as they are now. If the person then asks for more
+/// privacy, by Forget everything, removing a private word or deleting a
+/// note, a plain re-redaction would send those earlier turns with "Sam" or
+/// "lemon cake" back in the clear. So each request is redacted with the
+/// union of everything this chat has hidden before and everything the
+/// current list hides: a privacy action never makes a later request in an
+/// open chat less private. A new chat starts from the current list alone.
+///
+/// The union is held in memory only, for as long as the chat is open. It is
+/// never written anywhere and never sent; it is only used to hide words.
+/// Closing the chat, or starting a new one, lets it go.
+final class HiddenSoFar: @unchecked Sendable {
+    private let lock = NSLock()
+    private var redactor = Redactor()
+
+    /// Adds `current` to what has been hidden so far and returns the whole.
+    func widened(by current: Redactor) -> Redactor {
+        lock.withLock {
+            redactor = redactor.union(current)
+            return redactor
+        }
     }
 }
 

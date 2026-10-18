@@ -177,8 +177,10 @@ public enum CloudEndpoint {
 
     /// The address, or nil when it is empty, still an unexpanded build
     /// setting, or not a plain secure web address. A user name, password,
-    /// query or fragment is refused, so a key can never ride along in the
-    /// address or in Info.plist.
+    /// query or fragment is refused, the usual places a key rides along.
+    /// That is not a guarantee: a key put in the path, as in `/sk-abc`, still
+    /// passes. Keys belong in `CloudAuth`, and whatever the address holds is
+    /// shown in full in every preview.
     public static func url(from raw: String?) -> URL? {
         guard let raw else { return nil }
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -211,7 +213,9 @@ public enum CloudWords {
         "Your next new chat will use a bigger model on a computer somewhere else, not on this device.",
         "Before anything leaves, I show you exactly what goes. You can send it or keep it here.",
         "I try to take out names from your notes, emails, phone numbers, addresses, card numbers and your private words first. Check what I show you, since I can miss things.",
+        "The name you gave me goes too, in my first line of each chat.",
         "Your notes themselves never leave this device.",
+        "Like any website, the computer it goes to can see this device's internet address.",
         "If you tell me you might be in danger, I answer here and send nothing.",
         "You can turn this off anytime.",
     ]
@@ -225,9 +229,20 @@ public enum CloudWords {
     public static func privateRemove(_ word: String) -> String { "Stop hiding \(word)" }
     /// The private words couldn't be read, so they are left as they are.
     public static let privateUnreadable = "Sorry, I can't read your private words just now, so I've left them as they are. If the device is locked, unlock it and try again."
+    /// A private word couldn't be saved, so the list is as it was.
+    public static let privateNotSaved = "Sorry, I couldn't save that just now, so your private words are as they were. Please try again in a moment."
+
+    /// Turning off couldn't be saved, so the setting was erased to keep it
+    /// off, and the private words went with it.
+    public static let offButCleared = "Sorry, I couldn't save that. Help from the cloud is off, and to make sure it stays off I cleared the cloud setting, along with your private words. You can add them again anytime."
+    /// Turning off couldn't be saved or erased. It is off until the app
+    /// closes, and may read as on after that.
+    public static let offForNow = "Sorry, I couldn't save that. Help from the cloud is off until you close the app, but it may be on again when you come back, so please check here then."
+    /// Turning on couldn't be saved, so it is still off.
+    public static let onNotSaved = "Sorry, I couldn't save that, so help from the cloud is still off. Please try again in a moment."
 
     public static let previewTitle = "Here is exactly what leaves your device"
-    public static let previewDetail = "This is all of it: where it goes, the labels sent with it, and the words. I took out the personal details I found. Nothing else goes, and only once."
+    public static let previewDetail = "This is everything I send: where it goes, the labels sent with it, and the words. I took out the personal details I found. It goes only once, and like any website, the computer it goes to also sees this device's internet address."
     public static func previewDestination(_ host: String) -> String { "Going to \(host)" }
     public static let previewNothingHidden = "I didn't find anything personal to take out."
     public static func previewHidden(_ parts: [String]) -> String {
@@ -240,6 +255,10 @@ public enum CloudWords {
     public static func spokenAddress(_ address: String) -> String { "Going to \(address)." }
     public static func spokenLabels(_ labels: [String]) -> String {
         "Sent with these labels: " + labels.joined(separator: ". ") + "."
+    }
+    /// A sign-in label, read without its value, which is a secret.
+    public static func spokenSignIn(_ name: String, characters: Int) -> String {
+        "\(name), sign-in value, \(characters) \(characters == 1 ? "character" : "characters")"
     }
     public static func spokenMessage(role: String, text: String) -> String {
         switch role {
@@ -260,16 +279,23 @@ public enum CloudWords {
     public static let notesUnreadable = "Sorry, I can't read your notes or private words just now, so I can't tell what to take out. I didn't send anything. If the device is locked, unlock it and try again."
     /// The question before Forget everything, when private words go too.
     public static let forgetEverythingDetail = "This removes every note, and every word you asked me to hide, from this device. It can't be undone."
+    /// Forget everything erased the notes but not the private words.
+    public static let forgotNotesNotWords = "Your notes are gone, but I couldn't erase your private words just now. Please try Forget everything again in a moment."
+    /// Forget everything erased the private words but not the notes.
+    public static let forgotWordsNotNotes = "Your private words are gone, but I couldn't erase your notes just now. Please try Forget everything again in a moment."
     /// The chat header when the model is not on this device.
     public static let presence = "Here with you."
 
     public static let all: [String] = [
         title, toggleTitle, offDetail, onDetail, unavailable, rowTitle, rowOff, rowOn,
         askQuestion, askYes, askNo, privateTitle, privateDetail, privatePlaceholder, privateAdd,
-        privateRemove("Sam"), privateUnreadable, previewTitle, previewDetail, previewDestination("example.com"),
+        privateRemove("Sam"), privateUnreadable, privateNotSaved, offButCleared, offForNow, onNotSaved,
+        previewTitle, previewDetail, previewDestination("example.com"),
         previewNothingHidden, previewHidden(["1 name"]), previewSend, previewCancel,
         spokenAddress("example.com"), spokenLabels(["Accept, application/json"]),
+        spokenSignIn("X-Sample", characters: 8),
         spokenMessage(role: "person", text: "Hi"), spokenMessage(role: "agent", text: "Hi"),
-        notSent, turnedOff, staysHere, notesUnreadable, forgetEverythingDetail, presence,
+        notSent, turnedOff, staysHere, notesUnreadable, forgetEverythingDetail,
+        forgotNotesNotWords, forgotWordsNotNotes, presence,
     ] + askPoints + Redaction.Kind.allCases.map(\.spoken)
 }

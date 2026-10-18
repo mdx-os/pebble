@@ -172,9 +172,10 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     @MainActor
     static func cloudPreviewChat(brand: Brand, looks: UserDefaults) -> some View {
         let memory = sampleMemory()
+        let auth = SampleSignIn()
         let help = CloudHelp(
             store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"])),
-            endpoint: sampleEndpoint, memory: memory, transport: { NoSendTransport() }
+            endpoint: sampleEndpoint, memory: memory, auth: auth, transport: { NoSendTransport() }
         )
         let review = CloudReview()
         let model = help.chatModel(local: LocalStubModel(), review: review)
@@ -182,7 +183,8 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         turns.append(ChatTurn(id: UUID(), speaker: .person, text: "Help me write a note to Sam about Saturday. The party moved to 42 Maple Street. He can call me at 416 555 0199 or email jo.lee@example.com, and don't mention the lemon cake."))
         let conversation = Conversation(turns: turns, onDevice: false)
         let redactor = Redactor(memory: memory.notes(), privateWords: help.settings.privateWords)
-        if let preview = try? CloudModel.preview(for: turns, endpoint: sampleEndpoint, redactor: redactor) {
+        if let preview = try? CloudModel.preview(for: turns, endpoint: sampleEndpoint, redactor: redactor,
+                                                 headers: auth.headers(for: CloudModel.url(for: sampleEndpoint))) {
             review.show(preview)
         }
         let controller = ChatController.make(brand: brand, model: model, names: InMemoryAgentNameStore(stored: "Pip"),
@@ -230,5 +232,11 @@ struct NoSendTransport: CloudTransport {
     func send(_ request: CloudRequest) async throws -> Data {
         throw CloudModelError.notSent
     }
+}
+
+/// The showcase's sign-in: one made-up header, so the preview shows how a
+/// sign-in label looks and VoiceOver can be heard leaving its value out.
+struct SampleSignIn: CloudAuth {
+    func headers(for url: URL) -> [String: String] { ["X-Sample-Sign-In": "made-up-sample"] }
 }
 #endif

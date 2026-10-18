@@ -2,8 +2,8 @@ import Foundation
 
 /// What `Redactor` left of a piece of text, and what it took out.
 public struct Redaction: Sendable, Equatable {
-    /// The kinds of personal detail the redactor hides, in the order it
-    /// claims them when two overlap.
+    /// The kinds of personal detail the redactor hides. When two overlap,
+    /// the one that comes first names the mask over both.
     public enum Kind: String, CaseIterable, Sendable, Hashable {
         case privateWord, email, card, phone, address, name
 
@@ -92,18 +92,34 @@ public struct Redactor: Sendable, Equatable {
         self.init(names: Self.names(in: notes), privateWords: privateWords)
     }
 
+    /// This redactor and `other` together: every name and private word
+    /// either one hides. Hiding more is always safe.
+    public func union(_ other: Redactor) -> Redactor {
+        Redactor(names: names + other.names, privateWords: privateWords + other.privateWords)
+    }
+
     public func redact(_ text: String) -> Redaction {
         let source = text as NSString
-        var claimed: [(range: NSRange, kind: Redaction.Kind)] = []
+        var found: [(range: NSRange, kind: Redaction.Kind)] = []
         for kind in Redaction.Kind.allCases {
-            for range in matches(of: kind, in: text) {
-                // The first kind to claim a stretch of text keeps it.
-                guard !claimed.contains(where: { NSIntersectionRange($0.range, range).length > 0 }) else { continue }
-                claimed.append((range, kind))
+            found += matches(of: kind, in: text).map { ($0, kind) }
+        }
+        guard !found.isEmpty else { return Redaction(text: text) }
+        // Matches that overlap become one mask over all of them, so no
+        // part of either is left behind: a private "Maple Street party"
+        // and the address "42 Maple Street" hide "42 Maple Street party"
+        // whole. The kind that comes first in `Kind` names the mask.
+        found.sort { $0.range.location < $1.range.location }
+        var claimed: [(range: NSRange, kind: Redaction.Kind)] = []
+        for match in found {
+            if let last = claimed.last, NSIntersectionRange(last.range, match.range).length > 0 {
+                let kinds = Redaction.Kind.allCases
+                let kind = kinds.firstIndex(of: match.kind)! < kinds.firstIndex(of: last.kind)! ? match.kind : last.kind
+                claimed[claimed.count - 1] = (NSUnionRange(last.range, match.range), kind)
+            } else {
+                claimed.append(match)
             }
         }
-        guard !claimed.isEmpty else { return Redaction(text: text) }
-        claimed.sort { $0.range.location < $1.range.location }
         var out = ""
         var cursor = 0
         var hidden: [Redaction.Kind: Int] = [:]
@@ -126,8 +142,7 @@ public struct Redactor: Sendable, Equatable {
         case .name: return Self.wholeWords(names, in: text)
         case .email: return Self.find(Self.email, in: text)
         case .card: return Self.find(Self.card, in: text)
-        case .phone: return Self.find(Self.phone, in: text)
-            + Self.find(Self.nationalPhone, in: text).filter { (10...11).contains(Self.digits(in: $0, of: text)) }
+        case .phone: return Self.find(Self.phone, in: text) + Self.nationalPhones(in: text)
         case .address: return Self.find(Self.street, in: text).filter { Self.isStreet($0, in: text) }
             + Self.find(Self.streetNameAfter, in: text)
             + Self.find(Self.postalCode, in: text).filter { !Self.readsAsWords($0, in: text) }
@@ -135,7 +150,12 @@ public struct Redactor: Sendable, Equatable {
         }
     }
 
-    private static let email = regex(#"[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}"#)
+    /// Starts only where a word starts and never gives back the part before
+    /// the @, so a long run of letters or digits is read once, not over and
+    /// over from every position.
+    private static let email = regex(
+        #"(?<![A-Za-z0-9._%+\-])[A-Za-z0-9._%+\-]++@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}"#
+    )
     /// 13 to 19 digits, as card numbers are, with spaces or dashes between.
     /// A comma or full stop after it is punctuation, unless a digit follows.
     private static let card = regex(#"(?<!\d)(?<!\d[.,])\d(?:[ \-]?\d){12,18}(?!\d)(?![.,]\d)"#)
@@ -149,8 +169,43 @@ public struct Redactor: Sendable, Equatable {
     )
     /// Numbers written the way most countries outside North America write
     /// them at home, starting with 0: 020 7946 0958, 07700 900123,
-    /// 01 23 45 67 89. Only 10 or 11 digits count, so dates stay.
-    private static let nationalPhone = regex(#"(?<![\w.+])\(?0\d{1,4}\)?(?:[ .\-]?\d{2,4}){1,5}(?![\w])"#)
+    /// 01 23 45 67 89. Each run of digits is taken whole and never given
+    /// back, so the pattern has one way to read any text and its work
+    /// grows only with the length of the text, however long the digits run.
+    private static let nationalRuns = regex(#"(?<![\w.+])\(?0\d++\)?(?:[ .\-]\d{2,}+)*+"#)
+
+    /// The longest run of groups from `nationalRuns` that holds 10 or 11
+    /// digits, so dates stay and "020 7946 0958 2 times" still hides the
+    /// number.
+    private static func nationalPhones(in text: String) -> [NSRange] {
+        let source = text as NSString
+        return find(nationalRuns, in: text).compactMap { found in
+            var digits = 0
+            var best: NSRange?
+            var index = found.location
+            let end = found.location + found.length
+            while index < end {
+                let character = source.character(at: index)
+                if (48...57).contains(character) {
+                    digits += 1
+                    let next = index + 1
+                    let groupEnds = next == end || !(48...57).contains(source.character(at: next))
+                    if groupEnds, (10...11).contains(digits), !continuesWord(source, at: next) {
+                        best = NSRange(location: found.location, length: next - found.location)
+                    }
+                }
+                index += 1
+            }
+            return best
+        }
+    }
+
+    /// True when the character at `index` is a letter, digit or underscore.
+    private static func continuesWord(_ source: NSString, at index: Int) -> Bool {
+        guard index < source.length else { return false }
+        let scalar = Unicode.Scalar(source.character(at: index)).map(Character.init)
+        return scalar.map { $0.isLetter || $0.isNumber || $0 == "_" } ?? false
+    }
     /// A house number, one to four words, and a street word.
     private static let street = regex(
         #"\b\d{1,6}[A-Za-z]?\s+((?:[A-Za-z][A-Za-z'’.\-]*\s+){1,4})"#
@@ -205,10 +260,6 @@ public struct Redactor: Sendable, Equatable {
         let found = (text as NSString).substring(with: range)
         guard found == found.lowercased() else { return false }
         return ["st", "nd", "rd", "th", "am", "pm"].contains { found.hasSuffix($0) }
-    }
-
-    private static func digits(in range: NSRange, of text: String) -> Int {
-        (text as NSString).substring(with: range).filter(\.isNumber).count
     }
 
     // MARK: Names in notes
@@ -289,7 +340,9 @@ public struct Redactor: Sendable, Equatable {
     ]
 
     /// Words that are never taken as names, even where a name could be.
-    private static let notNames: Set<String> = capitalizedAnyway.union([
+    /// Every word in `nameFollowers` is one, so "my boss hates mondays"
+    /// never makes "hates" a name.
+    private static let notNames: Set<String> = capitalizedAnyway.union(nameFollowers).union([
         "is", "was", "and", "or", "but", "so", "also", "just", "really", "always", "never", "too", "who",
         "has", "had", "have", "loves", "likes", "lives", "works", "said", "says", "will", "can", "from",
         "at", "in", "on", "to", "for", "with", "of", "a", "an", "my", "our", "your", "his", "her", "their",
@@ -362,21 +415,15 @@ public struct Redactor: Sendable, Equatable {
     }
 
     /// Whole word matches in any case, with straight and curly apostrophes
-    /// alike. Longer words go first, so a private "lemon cake" wins over a
-    /// private "lemon".
+    /// alike. Overlapping matches, like a private "lemon cake" and "cake
+    /// shop", are joined into one mask by `redact`.
     private static func wholeWords(_ words: [String], in text: String) -> [NSRange] {
-        let sorted = words.sorted { $0.count > $1.count }
-        var ranges: [NSRange] = []
-        for word in sorted {
+        words.flatMap { word in
             let escaped = NSRegularExpression.escapedPattern(for: word)
                 .replacingOccurrences(of: "'", with: "['\u{2019}\u{2018}\u{02BC}]")
             let pattern = #"(?<![\p{L}\p{N}])"# + escaped + #"(?![\p{L}\p{N}])"#
-            for range in find(regex(pattern, caseInsensitive: true), in: text)
-            where !ranges.contains(where: { NSIntersectionRange($0, range).length > 0 }) {
-                ranges.append(range)
-            }
+            return find(regex(pattern, caseInsensitive: true), in: text)
         }
-        return ranges
     }
 
     private static func find(_ expression: NSRegularExpression, in text: String) -> [NSRange] {
