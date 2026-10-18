@@ -1,6 +1,6 @@
 import Foundation
 import PebbleCore
-import PebbleModel
+@testable import PebbleModel
 import Testing
 
 /// Plenty of memory, so only the rule under test decides.
@@ -249,9 +249,30 @@ struct OnDeviceModelTests {
         let chat = OnDeviceChat(model)
         let opening = Conversation.firstRun(named: "Pip", place: chat.privacyPlace)
         #expect(opening.place.staysOnDevice)
-        await #expect(throws: MLXChatModelError.unavailable) {
-            _ = try await opening.sending("Hi.", with: chat)
-        }
+        // The empty folder fails to load, so the reply is the placeholder's
+        // honest line, not a refusal for leaving the device.
+        let answered = try await opening.sending("Hi.", with: chat)
+        #expect(answered.turns.last?.text == OnDeviceModelWords.notReadyReply(.couldNotLoad))
+        #expect((chat.active as? LocalStubModel)?.notReady == .couldNotLoad)
+    }
+
+    /// A folder that fails to load moves the chat back to the placeholder,
+    /// tells the listener once, and a model put in since is never replaced.
+    @Test func aModelThatFailsToLoadFallsBackAndSaysSo() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bad-config-\(UUID().uuidString)", isDirectory: true)
+        try writeModelFiles(in: folder, weightBytes: 16)
+        try Data("not json".utf8).write(to: folder.appendingPathComponent("config.json"))
+        defer { remove(folder) }
+        let chat = OnDeviceChat(MLXChatModel(directory: folder))
+        let heard = FailedFolders()
+        chat.onLoadFailure(heard.add)
+        let turns = [ChatTurn(id: UUID(), speaker: .person, text: "What should I cook tonight?")]
+        #expect(try await chat.reply(to: turns) == OnDeviceModelWords.notReadyReply(.couldNotLoad))
+        #expect((chat.active as? LocalStubModel)?.notReady == .couldNotLoad)
+        #expect(heard.all == [folder])
+        #expect(try await chat.reply(to: turns) == OnDeviceModelWords.notReadyReply(.couldNotLoad))
+        #expect(heard.all == [folder])
     }
 
     @Test func theClientMovesToTheModelAndRefusesOneThatLeavesTheDevice() async throws {
@@ -291,6 +312,66 @@ struct OnDeviceModelTests {
         #expect(lines.first?.text == OnDeviceTranscript.instructions)
         #expect(lines.dropFirst().first?.text == "t6")
         #expect(lines.last?.text == "t29")
+    }
+
+    // MARK: The token budget
+
+    /// One token a character, so the test can see what fits.
+    private static func characters(_ lines: [OnDeviceTranscriptLine]) -> Int {
+        lines.reduce(0) { $0 + $1.text.count }
+    }
+
+    /// A pasted document inside the turn limit would still fill the cache
+    /// past the headroom. The oldest turns go until the prompt fits; the
+    /// system line and the latest message stay.
+    @Test func aLongPasteIsLeftOutOldestFirstAndTheLatestMessageStays() async throws {
+        let budget = OnDeviceModel.promptTokens
+        let pasted = String(repeating: "a", count: budget * 4)
+        let turns = [
+            ChatTurn(id: UUID(), speaker: .person, text: "Read this for me."),
+            ChatTurn(id: UUID(), speaker: .person, text: pasted),
+            ChatTurn(id: UUID(), speaker: .agent, text: "I read it."),
+            ChatTurn(id: UUID(), speaker: .person, text: "What was the main point?"),
+        ]
+        let all = OnDeviceTranscript.lines(for: turns)
+        #expect(all.count == turns.count + 1)
+        #expect(Self.characters(all) > budget)
+        let kept = try await OnDeviceTranscript.fitting(all, budget: budget, count: Self.characters)
+        #expect(Self.characters(kept) <= budget)
+        #expect(kept.first == all.first)
+        #expect(kept.map(\.text) == [OnDeviceTranscript.instructions, "I read it.", "What was the main point?"])
+    }
+
+    @Test func aTranscriptThatFitsIsSentWhole() async throws {
+        let turns = (0..<6).map { ChatTurn(id: UUID(), speaker: $0.isMultiple(of: 2) ? .person : .agent, text: "t\($0)") }
+        let all = OnDeviceTranscript.lines(for: turns)
+        let kept = try await OnDeviceTranscript.fitting(all, budget: OnDeviceModel.promptTokens, count: Self.characters)
+        #expect(kept == all)
+    }
+
+    /// The latest message alone too long is a plain error the chat can say, never a crash.
+    @Test func aLatestMessageTooLongAloneIsRefused() async throws {
+        let budget = OnDeviceModel.promptTokens
+        for earlier in [0, 3] {
+            var turns = (0..<earlier).map { ChatTurn(id: UUID(), speaker: .person, text: "t\($0)") }
+            turns.append(ChatTurn(id: UUID(), speaker: .person, text: String(repeating: "b", count: budget + 1)))
+            await #expect(throws: MLXChatModelError.tooLong) {
+                try await OnDeviceTranscript.fitting(OnDeviceTranscript.lines(for: turns), budget: budget,
+                                                     count: Self.characters)
+            }
+        }
+        #expect(!MLXChatModelError.tooLong.isLoadFailure)
+    }
+
+    /// The cache is bounded to the budget, and the budget's cache fits the headroom.
+    @Test func theCacheIsBoundedInsideTheHeadroom() {
+        let parameters = MLXChatModel.parameters
+        #expect(parameters.maxKVSize == OnDeviceModel.contextTokens)
+        #expect(parameters.maxTokens == OnDeviceTranscript.maxReplyTokens)
+        #expect(OnDeviceModel.promptTokens + OnDeviceTranscript.maxReplyTokens == OnDeviceModel.contextTokens)
+        let measuredOverWeights: UInt64 = 490_000_000
+        #expect(UInt64(OnDeviceModel.contextTokens) * OnDeviceModel.cacheBytesPerToken + measuredOverWeights
+            <= OnDeviceModel.headroomBytes)
     }
 
     @Test func emptyTranscriptDoesNotNeedWeights() async {
@@ -370,6 +451,23 @@ struct OnDeviceModelTests {
 }
 
 /// A model that says its words leave the device.
+private final class FailedFolders: @unchecked Sendable {
+    private let lock = NSLock()
+    private var folders: [URL] = []
+
+    func add(_ folder: URL) {
+        lock.lock()
+        folders.append(folder)
+        lock.unlock()
+    }
+
+    var all: [URL] {
+        lock.lock()
+        defer { lock.unlock() }
+        return folders
+    }
+}
+
 private struct LeavesDevice: ModelClient {
     func reply(to transcript: [ChatTurn]) async throws -> String { "remote" }
 }

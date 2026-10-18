@@ -41,6 +41,21 @@ public enum OnDeviceModel {
     /// model that runs there at about 26 tokens a second.
     public static let headroomBytes: UInt64 = 1 << 30
 
+    /// The key and value cache for one token of the pinned model: 36
+    /// layers, 8 key and value heads of 128 numbers each, two bytes a number.
+    public static let cacheBytesPerToken: UInt64 = 2 * 36 * 8 * 128 * 2
+
+    /// The most tokens one reply may hold in the cache, the prompt and the
+    /// reply together. The cache is bounded to this. At 3,072 tokens it is
+    /// about 450 MB, which with the 0.49 GB measured on short chats stays
+    /// inside `headroomBytes`. The turn limit alone did not bound this: one
+    /// pasted document could fill the cache past the headroom, and the
+    /// system would end the app and the chat with it.
+    public static let contextTokens = 3072
+
+    /// The most tokens the prompt may take, so the longest reply still fits.
+    public static let promptTokens = contextTokens - OnDeviceTranscript.maxReplyTokens
+
     public static func kind(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         defaults: UserDefaults = .standard,

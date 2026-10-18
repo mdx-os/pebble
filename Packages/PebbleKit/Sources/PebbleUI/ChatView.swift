@@ -649,7 +649,8 @@ final class ChatController: ObservableObject {
 
     /// What to say when no reply came. Choosing not to send is not a failure.
     nonisolated static func failureLine(for error: Error?) -> String {
-        switch error as? CloudModelError {
+        if error as? MLXChatModelError == .tooLong { return OnDeviceModelWords.tooLong }
+        return switch error as? CloudModelError {
         case .notSent: CloudWords.notSent
         case .off: CloudWords.turnedOff
         case .staysHere: CloudWords.staysHere
@@ -661,7 +662,8 @@ final class ChatController: ObservableObject {
     /// True for a line that says the words are back in the composer, so it
     /// goes once the person clears them.
     nonisolated static func pointsAtTheDraft(_ failure: String) -> Bool {
-        [FirstConversation.couldNotAnswer, CloudWords.notSent, CloudWords.turnedOff, CloudWords.notesUnreadable]
+        [FirstConversation.couldNotAnswer, CloudWords.notSent, CloudWords.turnedOff, CloudWords.notesUnreadable,
+         OnDeviceModelWords.tooLong]
             .contains(failure)
     }
 
@@ -694,9 +696,11 @@ final class ChatController: ObservableObject {
     /// from its own check right after the yes, before the transport is
     /// called; URLSession reports a send cut short as a `URLError`, which
     /// is not counted here. Any other transport failure may have come
-    /// after the bytes went, so the turn stays.
+    /// after the bytes went, so the turn stays. A message too long for the
+    /// on-device model was never read, so it goes back to be shortened.
     nonisolated static func nothingWasSent(_ error: Error) -> Bool {
         if error is CancellationError { return true }
+        if error as? MLXChatModelError == .tooLong { return true }
         if error as? CloudTransportError == .headersNotShown { return true }
         return switch error as? CloudModelError {
         case .notSent, .off, .staysHere, .notesUnreadable: true

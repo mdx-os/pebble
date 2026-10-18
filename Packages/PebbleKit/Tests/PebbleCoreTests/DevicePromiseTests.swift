@@ -111,6 +111,9 @@ enum DevicePromise {
                 literal: "Sorry, I can't really answer that yet. Some of my on-device model's files are missing. Open What I remember to download it again.",
                 reason: onDeviceModelName + " Only the placeholder says it, while the downloaded folder isn't whole."),
         Allowed(file: "PebbleCore/OnDeviceModelWords.swift",
+                literal: "Sorry, I can't really answer that yet. My on-device model's files didn't open. Open What I remember to download it again.",
+                reason: onDeviceModelName + " Only the placeholder says it, after the model's folder failed to load."),
+        Allowed(file: "PebbleCore/OnDeviceModelWords.swift",
                 literal: "Sorry, I can't really answer that here. There isn't enough memory free for my on-device model.",
                 reason: onDeviceModelName + " Only the placeholder says it, when the weights are too big for the memory "
                     + "here."),

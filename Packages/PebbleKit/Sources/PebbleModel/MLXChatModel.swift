@@ -49,6 +49,40 @@ public enum OnDeviceTranscript {
         }
         return lines
     }
+
+    /// The lines whose prompt fits in `budget` tokens, as `count` measures
+    /// them. The oldest turns go first; the system line and the latest
+    /// message always stay. Throws `MLXChatModelError.tooLong` when those
+    /// two alone don't fit.
+    public static func fitting(
+        _ lines: [OnDeviceTranscriptLine],
+        budget: Int,
+        count: ([OnDeviceTranscriptLine]) async throws -> Int
+    ) async throws -> [OnDeviceTranscriptLine] {
+        guard lines.count > 2 else {
+            guard try await count(lines) <= budget else { throw MLXChatModelError.tooLong }
+            return lines
+        }
+        let system = lines[0]
+        let turns = Array(lines.dropFirst())
+        func keeping(_ dropped: Int) -> [OnDeviceTranscriptLine] {
+            [system] + turns.dropFirst(dropped)
+        }
+        if try await count(keeping(0)) <= budget { return keeping(0) }
+        // Fewer turns never take more tokens, so search for the fewest to drop.
+        var tooFew = 0
+        var enough = turns.count - 1
+        guard try await count(keeping(enough)) <= budget else { throw MLXChatModelError.tooLong }
+        while enough - tooFew > 1 {
+            let middle = (tooFew + enough) / 2
+            if try await count(keeping(middle)) <= budget {
+                enough = middle
+            } else {
+                tooFew = middle
+            }
+        }
+        return keeping(enough)
+    }
 }
 
 /// Why an on-device model folder could not be loaded.
@@ -60,6 +94,18 @@ public enum MLXChatModelError: Error, Equatable, Sendable {
     case unavailable
     /// `config.json` is present but is not usable model configuration.
     case invalidConfiguration
+    /// The latest message alone is more than the model can read at once.
+    /// Nothing was generated, and a shorter message can still be answered.
+    case tooLong
+
+    /// True when the folder itself could not be loaded, so no reply from it
+    /// will work until it is replaced.
+    public var isLoadFailure: Bool {
+        switch self {
+        case .unavailable, .invalidConfiguration: true
+        case .tooLong: false
+        }
+    }
 }
 
 /// On-device MLX adapter for `ModelClient`.
@@ -92,12 +138,25 @@ public actor MLXChatModel: ModelClient {
             throw ModelClientError.noPersonTurn
         }
         let container = try await container()
-        let prepared = try await container.prepare(input: UserInput(chat: Self.messages(for: transcript)))
-        let stream = try await container.generate(
-            input: prepared,
-            parameters: GenerateParameters(maxTokens: OnDeviceTranscript.maxReplyTokens)
-        )
+        let lines = try await Self.fitted(OnDeviceTranscript.lines(for: transcript), in: container)
+        let prepared = try await container.prepare(input: UserInput(chat: Self.messages(for: lines)))
+        let stream = try await container.generate(input: prepared, parameters: Self.parameters)
         return await Self.text(from: stream)
+    }
+
+    /// The reply's length and the cache's size, both inside `OnDeviceModel.contextTokens`.
+    static var parameters: GenerateParameters {
+        GenerateParameters(maxTokens: OnDeviceTranscript.maxReplyTokens, maxKVSize: OnDeviceModel.contextTokens)
+    }
+
+    /// The lines that fit `OnDeviceModel.promptTokens`, counted with the model's own tokenizer and chat template.
+    private static func fitted(_ lines: [OnDeviceTranscriptLine],
+                               in container: ModelContainer) async throws -> [OnDeviceTranscriptLine] {
+        try await container.perform { context in
+            try await OnDeviceTranscript.fitting(lines, budget: OnDeviceModel.promptTokens) { candidate in
+                try await context.processor.prepare(input: UserInput(chat: messages(for: candidate))).text.tokens.size
+            }
+        }
     }
 
     private func container() async throws -> ModelContainer {
@@ -180,8 +239,8 @@ public actor MLXChatModel: ModelClient {
         }
     }
 
-    private static func messages(for transcript: [ChatTurn]) -> [Chat.Message] {
-        OnDeviceTranscript.lines(for: transcript).map { line in
+    private static func messages(for lines: [OnDeviceTranscriptLine]) -> [Chat.Message] {
+        lines.map { line in
             switch line.role {
             case .system:
                 Chat.Message.system(line.text)

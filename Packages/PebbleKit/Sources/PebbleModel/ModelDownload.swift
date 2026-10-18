@@ -11,7 +11,17 @@ import Foundation
 /// redirect is followed only to the hub's own file hosts, as a fresh
 /// request with the same fixed headers.
 public struct URLSessionModelFetcher: ModelFetching {
-    public init() {}
+    /// Handlers that answer before the network. Empty in the app; tests
+    /// put their own here so nothing they fetch leaves the machine.
+    let handlers: [URLProtocol.Type]
+
+    public init() {
+        handlers = []
+    }
+
+    init(handlers: [URLProtocol.Type]) {
+        self.handlers = handlers
+    }
 
     /// Ephemeral, with nothing kept and nothing added.
     public static func configuration() -> URLSessionConfiguration {
@@ -29,12 +39,16 @@ public struct URLSessionModelFetcher: ModelFetching {
         return configuration
     }
 
-    public func fetch(_ request: URLRequest, to destination: URL,
+    /// Writes the body to `destination` as it arrives, and stops as soon as
+    /// the server says, or sends, more than `bytes`.
+    public func fetch(_ request: URLRequest, to destination: URL, bytes: Int64,
                       progress: @escaping @Sendable (Int64) -> Void) async throws {
-        let delegate = FetchDelegate(destination: destination, progress: progress)
-        let session = URLSession(configuration: Self.configuration(), delegate: delegate, delegateQueue: nil)
+        let configuration = Self.configuration()
+        if !handlers.isEmpty { configuration.protocolClasses = handlers }
+        let delegate = FetchDelegate(destination: destination, limit: bytes, progress: progress)
+        let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
         defer { session.finishTasksAndInvalidate() }
-        let task = session.downloadTask(with: request)
+        let task = session.dataTask(with: request)
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 delegate.start(continuation)
@@ -54,17 +68,22 @@ extension ModelInstaller {
     }
 }
 
-/// One file's download. Moves the finished file to its place inside the
-/// delegate call, before the system removes it.
-private final class FetchDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+/// One file's download. Each piece is written as it arrives, and only
+/// while the total stays inside the pinned size, so a body larger than
+/// the pin never reaches the disk. Any failure removes the file.
+private final class FetchDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let destination: URL
+    private let limit: Int64
     private let progress: @Sendable (Int64) -> Void
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Void, Error>?
-    private var outcome: Result<Void, Error>?
+    private var file: FileHandle?
+    private var received: Int64 = 0
+    private var failure: Error?
 
-    init(destination: URL, progress: @escaping @Sendable (Int64) -> Void) {
+    init(destination: URL, limit: Int64, progress: @escaping @Sendable (Int64) -> Void) {
         self.destination = destination
+        self.limit = limit
         self.progress = progress
     }
 
@@ -84,44 +103,90 @@ private final class FetchDelegate: NSObject, URLSessionDownloadDelegate, @unchec
         completionHandler(ModelDownloadRequest.make(url))
     }
 
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64,
-                    totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-        progress(totalBytesWritten)
-    }
-
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
-                    didFinishDownloadingTo location: URL) {
-        guard let response = downloadTask.response as? HTTPURLResponse, response.statusCode == 200 else {
-            record(.failure(URLError(.badServerResponse)))
+    /// Refuses a status other than 200, or a stated length over the pin,
+    /// before any of the body is taken.
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let response = response as? HTTPURLResponse, response.statusCode == 200 else {
+            fail(URLError(.badServerResponse))
+            completionHandler(.cancel)
+            return
+        }
+        if response.expectedContentLength > limit {
+            fail(URLError(.dataLengthExceedsMaximum))
+            completionHandler(.cancel)
             return
         }
         do {
             try? FileManager.default.removeItem(at: destination)
-            try FileManager.default.moveItem(at: location, to: destination)
-            record(.success(()))
+            guard FileManager.default.createFile(atPath: destination.path, contents: nil) else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            let handle = try FileHandle(forWritingTo: destination)
+            lock.lock()
+            file = handle
+            lock.unlock()
+            completionHandler(.allow)
         } catch {
-            record(.failure(error))
+            fail(error)
+            completionHandler(.cancel)
+        }
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        lock.lock()
+        guard failure == nil, let file else {
+            lock.unlock()
+            return
+        }
+        guard received + Int64(data.count) <= limit else {
+            lock.unlock()
+            fail(URLError(.dataLengthExceedsMaximum))
+            dataTask.cancel()
+            return
+        }
+        do {
+            try file.write(contentsOf: data)
+            received += Int64(data.count)
+            let total = received
+            lock.unlock()
+            progress(total)
+        } catch {
+            lock.unlock()
+            fail(error)
+            dataTask.cancel()
         }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         lock.lock()
+        try? file?.close()
+        file = nil
         let result: Result<Void, Error>
-        if let error {
+        if let failure {
+            // Ours comes first: stopping the task reports a cancel of its own.
+            result = .failure(failure)
+        } else if let error {
             result = .failure(error)
+        } else if (task.response as? HTTPURLResponse)?.statusCode != 200 {
+            // A redirect refused ends here with no body and no error.
+            result = .failure(URLError(.badServerResponse))
         } else {
-            // A redirect refused ends here with no file and no error.
-            result = outcome ?? .failure(URLError(.badServerResponse))
+            result = .success(())
         }
         let waiting = continuation
         continuation = nil
         lock.unlock()
+        if case .failure = result { try? FileManager.default.removeItem(at: destination) }
         waiting?.resume(with: result)
     }
 
-    private func record(_ result: Result<Void, Error>) {
+    private func fail(_ error: Error) {
         lock.lock()
-        outcome = result
+        if failure == nil { failure = error }
+        try? file?.close()
+        file = nil
         lock.unlock()
+        try? FileManager.default.removeItem(at: destination)
     }
 }

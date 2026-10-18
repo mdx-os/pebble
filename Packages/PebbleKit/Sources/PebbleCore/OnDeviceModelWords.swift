@@ -8,6 +8,8 @@ public enum OnDeviceModelNotReady: Sendable, Equatable, CaseIterable {
     case incomplete
     /// The weights are more than this device can hold in memory.
     case needsMoreMemory
+    /// The files are all there, but the model couldn't be opened from them.
+    case couldNotLoad
 }
 
 /// Words for getting the on-device model, on the memory screen and in the
@@ -48,6 +50,12 @@ public enum OnDeviceModelWords {
     public static let couldNotSave = "Sorry, I couldn't save the model just now."
     public static let incomplete = "Some of the model's files are missing, so I'm not using them."
     public static let needsMoreMemory = "There isn't enough memory free here for the model, so I can't use it."
+    public static let couldNotLoad = "Sorry, the model's files are here but they didn't open, so I'm not using them. Download it again to fix that."
+    public static let downloadAgainTitle = "Download again"
+
+    /// The chat's line when the latest message is more than the model can
+    /// read at once. The words go back to the composer.
+    public static let tooLong = "That's too long for me to read at once. What you wrote is still here, so you can send a shorter part of it."
 
     /// What the chat says instead of pretending to answer. Each names the
     /// memory screen as `MemoryWords.title` says it; the tests hold them
@@ -60,6 +68,8 @@ public enum OnDeviceModelWords {
             "Sorry, I can't really answer that yet. Some of my on-device model's files are missing. Open What I remember to download it again."
         case .needsMoreMemory:
             "Sorry, I can't really answer that here. There isn't enough memory free for my on-device model."
+        case .couldNotLoad:
+            "Sorry, I can't really answer that yet. My on-device model's files didn't open. Open What I remember to download it again."
         }
     }
 
@@ -67,7 +77,8 @@ public enum OnDeviceModelWords {
     public static var all: [String] {
         [title, downloadTitle(bytes: 2_274_455_727), notDownloadedDetail,
          downloading(received: 1_200_000_000, total: 2_274_455_727), stopTitle, verifying, ready, tryAgainTitle,
-         couldNotFetch, didNotMatch, noRoom(bytes: 2_274_455_727), couldNotSave, incomplete, needsMoreMemory]
+         couldNotFetch, didNotMatch, noRoom(bytes: 2_274_455_727), couldNotSave, incomplete, needsMoreMemory,
+         couldNotLoad, downloadAgainTitle, tooLong]
             + OnDeviceModelNotReady.allCases.map(notReadyReply)
     }
 

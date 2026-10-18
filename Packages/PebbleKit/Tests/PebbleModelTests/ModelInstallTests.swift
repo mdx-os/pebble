@@ -93,7 +93,7 @@ final class FakeFetcher: ModelFetching, @unchecked Sendable {
         lock.unlock()
     }
 
-    func fetch(_ request: URLRequest, to destination: URL,
+    func fetch(_ request: URLRequest, to destination: URL, bytes: Int64,
                progress: @escaping @Sendable (Int64) -> Void) async throws {
         record(request)
         let name = request.url!.lastPathComponent

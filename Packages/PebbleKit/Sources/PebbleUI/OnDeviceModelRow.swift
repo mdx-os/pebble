@@ -18,6 +18,8 @@ public final class OnDeviceModelSetup: ObservableObject {
     private let chat: OnDeviceChat
     private let availableMemory: @Sendable () -> UInt64
     private var running: Task<Void, Never>?
+    /// The folder the chat could not load, until the person repairs it.
+    private var failedFolder: URL?
 
     /// Starts from what `chat` answers with now, which `OnDeviceModel.client`
     /// worked out from the same folders.
@@ -27,6 +29,10 @@ public final class OnDeviceModelSetup: ObservableObject {
         self.chat = chat
         self.availableMemory = availableMemory
         state = Self.state(of: chat.active)
+        // A model that fails to load, found on the first reply, shows here.
+        chat.onLoadFailure { [weak self] folder in
+            Task { @MainActor in self?.couldNotLoad(folder) }
+        }
         // What a download cut short by the app closing left behind.
         Task { await installer.removeLeftovers() }
     }
@@ -57,8 +63,33 @@ public final class OnDeviceModelSetup: ObservableObject {
         switch (model as? LocalStubModel)?.notReady {
         case .incomplete?: return .failed(.incomplete)
         case .needsMoreMemory?: return .failed(.needsMoreMemory)
+        case .couldNotLoad?: return .failed(.couldNotLoad)
         case .notDownloaded?, nil: return .notDownloaded
         }
+    }
+
+    /// The chat found `folder` would not load and went back to the placeholder.
+    private func couldNotLoad(_ folder: URL) {
+        guard running == nil, !state.isUnderWay else { return }
+        failedFolder = folder
+        state = .failed(.couldNotLoad)
+    }
+
+    /// Removes the folder that would not load, when it is the downloaded
+    /// one, and downloads the model again. A developer's own folder is
+    /// never removed.
+    public func repair() {
+        guard running == nil, state == .failed(.couldNotLoad) else { return }
+        let installer = installer
+        let removes = failedFolder.map { Self.same($0, installer.folders.ready(for: pin)) } ?? false
+        failedFolder = nil
+        state = .downloading(received: 0, total: pin.totalBytes)
+        start { if removes { await installer.removeReady() } }
+    }
+
+    private static func same(_ one: URL, _ other: URL) -> Bool {
+        one.resolvingSymlinksInPath().standardizedFileURL.path
+            == other.resolvingSymlinksInPath().standardizedFileURL.path
     }
 
     /// The person asked for the model. Does nothing while one is coming,
@@ -66,12 +97,19 @@ public final class OnDeviceModelSetup: ObservableObject {
     public func download() {
         guard running == nil, !state.isReady else { return }
         if case .failed(let problem) = state, !problem.canTryAgain { return }
+        if state == .failed(.couldNotLoad) { return repair() }
         state = .downloading(received: 0, total: pin.totalBytes)
+        start {}
+    }
+
+    /// Runs `first`, then the install, and takes where it ends.
+    private func start(after first: @escaping @Sendable () async -> Void) {
         let installer = installer
         let progress = Progress(total: pin.totalBytes) { [weak self] step in
             Task { @MainActor in self?.heard(step) }
         }
         running = Task { [weak self] in
+            await first()
             let end = await installer.install(report: { progress.send($0) })
             self?.finish(end)
         }
@@ -168,6 +206,10 @@ struct OnDeviceModelRow: View {
                 Button(OnDeviceModelWords.downloadTitle(bytes: setup.pin.totalBytes)) { setup.download() }
                     .buttonStyle(PrimaryButtonStyle())
                     .accessibilityIdentifier("downloadModel")
+            case .failed(.couldNotLoad):
+                Button(OnDeviceModelWords.downloadAgainTitle) { setup.repair() }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .accessibilityIdentifier("downloadModel")
             case .failed(let problem) where problem.canTryAgain:
                 Button(OnDeviceModelWords.tryAgainTitle) { setup.download() }
                     .buttonStyle(PrimaryButtonStyle())
@@ -198,6 +240,7 @@ struct OnDeviceModelRow: View {
         case .failed(.couldNotSave): OnDeviceModelWords.couldNotSave
         case .failed(.incomplete): OnDeviceModelWords.incomplete
         case .failed(.needsMoreMemory): OnDeviceModelWords.needsMoreMemory
+        case .failed(.couldNotLoad): OnDeviceModelWords.couldNotLoad
         }
     }
 

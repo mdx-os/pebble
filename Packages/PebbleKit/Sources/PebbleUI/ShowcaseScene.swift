@@ -549,7 +549,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
 
     /// Fails every request, for the showcase.
     private struct NoFetch: ModelFetching {
-        func fetch(_ request: URLRequest, to destination: URL,
+        func fetch(_ request: URLRequest, to destination: URL, bytes: Int64,
                    progress: @escaping @Sendable (Int64) -> Void) async throws {
             throw URLError(.notConnectedToInternet)
         }

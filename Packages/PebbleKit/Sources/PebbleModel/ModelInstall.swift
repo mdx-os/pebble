@@ -39,6 +39,9 @@ public enum ModelDownloadProblem: Sendable, Equatable {
     /// The weights are more than this device can hold in memory. Trying
     /// again won't help, so there is no Try again.
     case needsMoreMemory
+    /// Every file is there at its size, but the model couldn't be opened
+    /// from them. Downloading again replaces the folder.
+    case couldNotLoad
 
     public var canTryAgain: Bool { self != .needsMoreMemory }
 }
@@ -47,8 +50,9 @@ public enum ModelDownloadProblem: Sendable, Equatable {
 /// `ModelDownload.swift`; tests pass their own, so no test reaches the network.
 public protocol ModelFetching: Sendable {
     /// Writes the body to `destination`, reporting the bytes so far. Throws
-    /// on any failure, a status other than 200, or cancellation.
-    func fetch(_ request: URLRequest, to destination: URL,
+    /// on any failure, a status other than 200, cancellation, or a body
+    /// longer than `bytes`, the file's pinned size, and then keeps no file.
+    func fetch(_ request: URLRequest, to destination: URL, bytes: Int64,
                progress: @escaping @Sendable (Int64) -> Void) async throws
 }
 
@@ -126,6 +130,12 @@ public actor ModelInstaller {
         }
     }
 
+    /// Removes the finished folder, so the next `install` fetches it again
+    /// instead of taking it as ready.
+    public func removeReady() {
+        try? FileManager.default.removeItem(at: folders.ready(for: pin))
+    }
+
     /// Removes what an interrupted download left, such as when the app was
     /// closed part way through.
     public func removeLeftovers() {
@@ -169,7 +179,8 @@ public actor ModelInstaller {
             let arriving = Self.arriving(file, in: partial)
             let before = done
             do {
-                try await fetcher.fetch(ModelDownloadRequest.make(pin.url(for: file)), to: arriving) { bytes in
+                try await fetcher.fetch(ModelDownloadRequest.make(pin.url(for: file)), to: arriving,
+                                        bytes: file.bytes) { bytes in
                     report(.downloading(received: before + min(bytes, file.bytes), total: total))
                 }
             } catch {

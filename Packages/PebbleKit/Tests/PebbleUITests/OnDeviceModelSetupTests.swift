@@ -54,7 +54,7 @@ private final class TinyFetcher: ModelFetching, @unchecked Sendable {
         lock.unlock()
     }
 
-    func fetch(_ request: URLRequest, to destination: URL,
+    func fetch(_ request: URLRequest, to destination: URL, bytes: Int64,
                progress: @escaping @Sendable (Int64) -> Void) async throws {
         counted()
         var data = Tiny.contents[request.url!.lastPathComponent]!
@@ -126,6 +126,71 @@ struct OnDeviceModelSetupTests {
         #expect(fetcher.fetched == before)
     }
 
+    /// A downloaded folder whose files are all there at their sizes but
+    /// won't load (here, config.json isn't JSON) first reads as ready. The
+    /// first reply finds it out: the chat says the model isn't ready, the
+    /// row shows it failed with Download again, and that removes the bad
+    /// folder, fetches it again, and moves the chat to the new model.
+    @Test func aModelThatWontLoadShowsFailedAndDownloadAgainRepairsIt() async throws {
+        let folders = try Tiny.folders()
+        defer { try? FileManager.default.removeItem(at: folders.root) }
+        let ready = folders.ready(for: Tiny.pin)
+        try FileManager.default.createDirectory(at: ready, withIntermediateDirectories: true)
+        for (name, data) in Tiny.contents {
+            let written = name == "config.json" ? Data(repeating: UInt8(ascii: "x"), count: data.count) : data
+            try written.write(to: ready.appendingPathComponent(name))
+        }
+        let fetcher = TinyFetcher()
+        let chat = OnDeviceModel.client(environment: [:], folders: folders, pin: Tiny.pin,
+                                        availableMemory: 64 << 30)
+        let failing = try #require(chat.active as? MLXChatModel)
+        let setup = OnDeviceModelSetup(installer: ModelInstaller(pin: Tiny.pin, folders: folders, fetcher: fetcher,
+                                                                 freeSpace: { _ in nil }),
+                                       chat: chat, availableMemory: { 64 << 30 })
+        #expect(setup.state == .ready(ready))
+
+        let turns = [ChatTurn(id: UUID(), speaker: .person, text: "What should I cook tonight?")]
+        #expect(try await chat.reply(to: turns) == OnDeviceModelWords.notReadyReply(.couldNotLoad))
+        #expect((chat.active as? LocalStubModel)?.notReady == .couldNotLoad)
+        for _ in 0..<20 where setup.state != .failed(.couldNotLoad) { await Task.yield() }
+        #expect(setup.state == .failed(.couldNotLoad))
+        #expect(OnDeviceModelRow.detail(for: setup.state, pin: Tiny.pin) == OnDeviceModelWords.couldNotLoad)
+        #expect(ModelDownloadProblem.couldNotLoad.canTryAgain)
+
+        setup.repair()
+        #expect(setup.state.isUnderWay)
+        await setup.underway?.value
+        #expect(fetcher.fetched == Tiny.contents.count)
+        #expect(setup.state == .ready(ready))
+        #expect(try Data(contentsOf: ready.appendingPathComponent("config.json")) == Tiny.contents["config.json"])
+        let repaired = try #require(chat.active as? MLXChatModel)
+        #expect(repaired !== failing)
+    }
+
+    /// A developer's own folder that won't load is never removed by Download again.
+    @Test func downloadAgainLeavesADevelopersFolder() async throws {
+        let folders = try Tiny.folders()
+        defer { try? FileManager.default.removeItem(at: folders.root) }
+        let own = folders.root.appendingPathComponent("own-model", isDirectory: true)
+        try FileManager.default.createDirectory(at: own, withIntermediateDirectories: true)
+        for (name, data) in Tiny.contents {
+            try (name == "config.json" ? Data("not json".utf8) : data).write(to: own.appendingPathComponent(name))
+        }
+        let chat = OnDeviceModel.client(environment: [OnDeviceModel.environmentKey: own.path], folders: folders,
+                                        pin: Tiny.pin, availableMemory: 64 << 30)
+        #expect(chat.active is MLXChatModel)
+        let setup = OnDeviceModelSetup(installer: ModelInstaller(pin: Tiny.pin, folders: folders,
+                                                                 fetcher: TinyFetcher(), freeSpace: { _ in nil }),
+                                       chat: chat, availableMemory: { 64 << 30 })
+        _ = try await chat.reply(to: [ChatTurn(id: UUID(), speaker: .person, text: "Hello there.")])
+        for _ in 0..<20 where setup.state != .failed(.couldNotLoad) { await Task.yield() }
+        #expect(setup.state == .failed(.couldNotLoad))
+        setup.repair()
+        await setup.underway?.value
+        #expect(FileManager.default.fileExists(atPath: own.appendingPathComponent("config.json").path))
+        #expect(setup.state == .ready(folders.ready(for: Tiny.pin)))
+    }
+
     /// The app finds the model the download put in its own folder, with no
     /// environment variable or defaults key, and starts the setup from it.
     @Test func theAppUsesTheDownloadedModelWithNothingElseSet() throws {
@@ -168,7 +233,7 @@ struct OnDeviceModelSetupTests {
         let states: [ModelDownloadState] = [
             .notDownloaded, .downloading(received: 0, total: pin.totalBytes), .verifying,
             .ready(URL(fileURLWithPath: "/tmp")), .failed(.couldNotFetch), .failed(.didNotMatch), .failed(.noRoom),
-            .failed(.couldNotSave), .failed(.incomplete), .failed(.needsMoreMemory),
+            .failed(.couldNotSave), .failed(.incomplete), .failed(.needsMoreMemory), .failed(.couldNotLoad),
         ]
         let words = states.map { OnDeviceModelRow.detail(for: $0, pin: pin) }
         #expect(Set(words).count == states.count)

@@ -8,9 +8,14 @@ import PebbleCore
 ///
 /// It only ever holds a model whose `runsOnDevice` is true, so it says true
 /// too, and every line that reads its place stays honest.
+///
+/// When the model's folder can't be loaded, it moves back to the
+/// placeholder, which says the model isn't ready, and tells whoever
+/// listens through `onLoadFailure` which folder failed.
 public final class OnDeviceChat: ModelClient, @unchecked Sendable {
     private let lock = NSLock()
     private var current: any ModelClient
+    private var loadFailureListener: (@Sendable (URL) -> Void)?
 
     public init(_ initial: any ModelClient) {
         precondition(initial.runsOnDevice, "OnDeviceChat takes only a model whose runsOnDevice is true")
@@ -37,7 +42,35 @@ public final class OnDeviceChat: ModelClient, @unchecked Sendable {
         return true
     }
 
+    /// Called with the folder each time a model's folder fails to load.
+    public func onLoadFailure(_ listener: @escaping @Sendable (URL) -> Void) {
+        lock.lock()
+        loadFailureListener = listener
+        lock.unlock()
+    }
+
     public func reply(to transcript: [ChatTurn]) async throws -> String {
-        try await active.reply(to: transcript)
+        let model = active
+        do {
+            return try await model.reply(to: transcript)
+        } catch let error as MLXChatModelError where error.isLoadFailure {
+            guard let failed = model as? MLXChatModel else { throw error }
+            let placeholder = OnDeviceModel.model(for: .stub(.couldNotLoad))
+            let (replaced, listener) = replace(failed, with: placeholder)
+            // Another model put in place since this reply began stays, and answers.
+            guard replaced else { return try await reply(to: transcript) }
+            listener?(failed.folder)
+            return try await placeholder.reply(to: transcript)
+        }
+    }
+
+    /// Puts `placeholder` in for `failed`, unless another model is in place now.
+    private func replace(_ failed: MLXChatModel, with placeholder: any ModelClient)
+        -> (replaced: Bool, listener: (@Sendable (URL) -> Void)?) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard (current as? MLXChatModel) === failed else { return (false, nil) }
+        current = placeholder
+        return (true, loadFailureListener)
     }
 }
