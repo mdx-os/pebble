@@ -17,6 +17,35 @@ struct AskFirstTests {
         #expect(rule.decide(action, approval: nil) == .stop)
     }
 
+    /// Once a question closes, however it closes, the rule keeps nothing of
+    /// what it asked about, so Forget everything leaves no note's words in
+    /// it. Only ids and times, read from everything the rule holds.
+    @Test func aClosedQuestionLeavesNoWordsInTheRule() {
+        let rule = AskFirst.isolated()
+        let words = ["Sam's birthday is May 14", "Door code 4417", "Dentist on Thursday at 3"]
+        let asked = words.map { rule.ask(DigestTask.keep(DigestWords.heading + ".\n• " + $0))! }
+        // Withdrawn, spent by a yes, and left open: each read back.
+        rule.withdraw(asked[0])
+        guard case .approved(let yes) = rule.sayYes(to: asked[1]) else { Issue.record("no approval"); return }
+        #expect(rule.decide(asked[1].action, approval: yes) == .proceed)
+        rule.withdraw(asked[2])
+        #expect(asked.allSatisfy(rule.isClosed))
+        #expect(rule.wasWithdrawn(asked[0]))
+        // The probe does find words where they are.
+        #expect(Self.strings(in: asked[0]).contains { $0.contains(words[0]) })
+        let held = Self.strings(in: rule)
+        for word in words + [DigestWords.heading] {
+            #expect(!held.contains { $0.contains(word) }, "\(word) is still in the rule")
+        }
+    }
+
+    /// Every string reachable from `value`'s stored properties.
+    static func strings(in value: Any, depth: Int = 0) -> [String] {
+        if let text = value as? String { return [text] }
+        guard depth < 10 else { return [] }
+        return Mirror(reflecting: value).children.flatMap { strings(in: $0.value, depth: depth + 1) }
+    }
+
     @Test func aYesForTheAskedActionLetsItHappenOnce() {
         let rule = AskFirst.isolated()
         let approval = rule.ask(note)!.approve()

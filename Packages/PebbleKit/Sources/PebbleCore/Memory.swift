@@ -271,63 +271,119 @@ public final class MemoryStore: @unchecked Sendable {
     /// at, and the file is never touched.
     @discardableResult
     public func remember(_ proposed: String, at date: Date = Date(), source: MemorySource) throws -> Decision {
-        lock.lock()
-        defer { lock.unlock() }
-        var all = try load()
-        let text: String
-        switch Self.clean(proposed) {
-        case .success(let t): text = t
-        case .failure(let refusal): return refusal.decision
+        try add(proposed, at: date, source: source, once: false).decision
+    }
+
+    /// Like `remember`, except that when a note from the same source
+    /// already has exactly these words, nothing is added: that note comes
+    /// back, with `isNew` false. Checked and added in one go, so two
+    /// writers can't both add it.
+    public func rememberOnce(_ proposed: String, at date: Date = Date(),
+                             source: MemorySource) throws -> (decision: Decision, isNew: Bool) {
+        try add(proposed, at: date, source: source, once: true)
+    }
+
+    private func add(_ proposed: String, at date: Date, source: MemorySource,
+                     once: Bool) throws -> (decision: Decision, isNew: Bool) {
+        let added = try locked { () throws -> (decision: Decision, isNew: Bool) in
+            var all = try load()
+            let text: String
+            switch Self.clean(proposed) {
+            case .success(let t): text = t
+            case .failure(let refusal): return (refusal.decision, false)
+            }
+            if once, let there = all.first(where: { $0.text == text && $0.source == source }) {
+                return (.saved(there), false)
+            }
+            let note = MemoryNote(text: text, savedAt: date, source: source)
+            all.append(note)
+            try save(all)
+            return (.saved(note), true)
         }
-        let note = MemoryNote(text: text, savedAt: date, source: source)
-        all.append(note)
-        try save(all)
-        return .saved(note)
+        if added.isNew { changed() }
+        return added
     }
 
     /// Replace a note's words. The old words do not stay in storage.
     @discardableResult
     public func edit(_ id: UUID, to proposed: String) throws -> Decision {
-        lock.lock()
-        defer { lock.unlock() }
-        var all = try load()
-        let text: String
-        switch Self.clean(proposed) {
-        case .success(let t): text = t
-        case .failure(let refusal): return refusal.decision
+        let decision = try locked { () throws -> Decision in
+            var all = try load()
+            let text: String
+            switch Self.clean(proposed) {
+            case .success(let t): text = t
+            case .failure(let refusal): return refusal.decision
+            }
+            guard let index = all.firstIndex(where: { $0.id == id }) else { return .notFound }
+            // Editing keeps where the note came from.
+            let old = all[index]
+            let note = MemoryNote(id: id, text: text, savedAt: old.savedAt, source: old.source)
+            all[index] = note
+            try save(all)
+            return .saved(note)
         }
-        guard let index = all.firstIndex(where: { $0.id == id }) else { return .notFound }
-        // Editing keeps where the note came from.
-        let old = all[index]
-        let note = MemoryNote(id: id, text: text, savedAt: old.savedAt, source: old.source)
-        all[index] = note
-        try save(all)
-        return .saved(note)
+        if case .saved = decision { changed() }
+        return decision
     }
 
     /// Remove one note from storage. Returns false when there was no such note.
     @discardableResult
     public func forget(_ id: UUID) throws -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        var all = try load()
-        let before = all.count
-        all.removeAll { $0.id == id }
-        guard all.count != before else { return false }
-        if all.isEmpty {
-            try removeFile()
-        } else {
-            try save(all)
+        let gone = try locked { () throws -> Bool in
+            var all = try load()
+            let before = all.count
+            all.removeAll { $0.id == id }
+            guard all.count != before else { return false }
+            if all.isEmpty {
+                try removeFile()
+            } else {
+                try save(all)
+            }
+            return true
         }
-        return true
+        if gone { changed() }
+        return gone
     }
 
     /// Remove every note and the file that held them, even an unreadable
     /// one, along with any staged copy from an interrupted save.
     public func forgetEverything() throws {
+        try locked { try removeFile() }
+        changed()
+    }
+
+    // MARK: Watching
+
+    /// Calls `onChange` after every change any writer makes to the notes,
+    /// on the writer's thread and outside this store's lock, so anything
+    /// showing a note's words can look again. The calls stop once the
+    /// observation is cancelled or let go.
+    public func observeChanges(_ onChange: @escaping @Sendable () -> Void) -> TaskObservation {
+        let key = UUID()
+        lock.lock()
+        watchers[key] = onChange
+        lock.unlock()
+        return TaskObservation { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            self.watchers[key] = nil
+            self.lock.unlock()
+        }
+    }
+
+    private var watchers: [UUID: @Sendable () -> Void] = [:]
+
+    private func changed() {
+        lock.lock()
+        let all = Array(watchers.values)
+        lock.unlock()
+        for watcher in all { watcher() }
+    }
+
+    private func locked<T>(_ body: () throws -> T) rethrows -> T {
         lock.lock()
         defer { lock.unlock() }
-        try removeFile()
+        return try body()
     }
 
     // MARK: Storage

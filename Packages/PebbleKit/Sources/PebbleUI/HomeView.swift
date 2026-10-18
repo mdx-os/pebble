@@ -114,15 +114,18 @@ public struct HomeView: View {
     /// The same, from a place already worked out. With `cloud`, Forget
     /// everything erases the words always hidden too. `othersChanged` says
     /// when to look again at what else is stored, and `onNotesChanged` runs
-    /// after a note is changed or forgotten, so Today's cards follow.
+    /// after a note is changed or forgotten, so Today's cards follow, and
+    /// `forgetQuotes` takes a forgotten note out of what tasks kept.
     static func memoryModel(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp? = nil,
                             onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none },
                             othersStored: @escaping @MainActor () -> Bool = { false },
                             othersChanged: AnyPublisher<Void, Never>? = nil,
-                            onNotesChanged: @escaping @MainActor () -> Void = {}) -> MemoryModel {
+                            onNotesChanged: @escaping @MainActor () -> Void = {},
+                            forgetQuotes: @escaping @MainActor (MemoryNote) -> QuotesForgotten = { _ in .notQuoted })
+        -> MemoryModel {
         MemoryModel(store: store, place: place, alsoForget: MemoryView.alsoForget(cloud),
                     onForgetEverything: onForgetEverything, othersStored: othersStored,
-                    othersChanged: othersChanged, onNotesChanged: onNotesChanged)
+                    othersChanged: othersChanged, onNotesChanged: onNotesChanged, forgetQuotes: forgetQuotes)
     }
 
     /// The send itself, apart from moving, so tests can drive it.
@@ -552,7 +555,8 @@ struct HomeScreen: View {
                                                    onForgetEverything: { feed.forgetTasks() },
                                                    othersStored: { feed.tasksStored },
                                                    othersChanged: feed.$tasksSeen.map { _ in () }.eraseToAnyPublisher(),
-                                                   onNotesChanged: { feed.refresh() }),
+                                                   onNotesChanged: { feed.refresh() },
+                                                   forgetQuotes: { feed.forgetQuotes(of: $0) }),
                        place: surfacePlace, cloud: cloud)
         } else {
             // The store couldn't be opened. Say so rather than hide memory.

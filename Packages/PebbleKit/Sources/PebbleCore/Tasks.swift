@@ -327,12 +327,29 @@ public protocol TaskEngine: AnyObject, Sendable {
     /// True while the engine keeps a file of its tasks on disk, so Forget
     /// everything is offered while there is anything to erase.
     var hasStoredFile: Bool { get }
+
+    /// Called once `note` is forgotten, so nothing the engine kept still
+    /// quotes it. Says whether every copy of its words is gone.
+    func forgetQuotes(of note: MemoryNote) -> QuotesForgotten
 }
 
 extension TaskEngine {
     public var isSample: Bool { false }
     public var builtIns: [TaskRequest] { [] }
     public var hasStoredFile: Bool { false }
+    public func forgetQuotes(of note: MemoryNote) -> QuotesForgotten { .notQuoted }
+}
+
+/// What became of a forgotten note's words in what a task kept, such as a
+/// weekly digest.
+public enum QuotesForgotten: Sendable, Equatable {
+    /// Nothing a task kept quoted it.
+    case notQuoted
+    /// Every copy is gone: the line was taken out, or the digest removed.
+    case forgotten
+    /// Some of its words are still in a kept note, as when the person
+    /// changed the digest or it couldn't be written just now.
+    case stayed
 }
 
 /// What forgetting every task left behind: counts only, so nothing a task
@@ -440,6 +457,10 @@ public struct TaskAnnouncer: Sendable {
             heard[task.id] = current
             guard primed else { continue }
             guard before != current else { continue }
+            // A task that already ended says nothing more when only its
+            // line changes, as when the person removes what it kept: they
+            // did it, so they know.
+            if let before, before.state == task.state, task.state.isFinished { continue }
             let line = Self.line(for: task)
             if Self.isUrgent(task.state) && before?.state != task.state {
                 waiting[task.id] = nil

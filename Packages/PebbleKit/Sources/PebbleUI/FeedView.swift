@@ -219,6 +219,13 @@ final class FeedModel: ObservableObject {
         }
     }
 
+    /// Takes a forgotten note out of what the tasks kept, then looks again.
+    func forgetQuotes(of note: MemoryNote) -> QuotesForgotten {
+        let outcome = tasks?.forgetQuotes(of: note) ?? .notQuoted
+        refresh()
+        return outcome
+    }
+
     /// True while the engine keeps a file of its tasks, so Forget
     /// everything is offered even with no notes left.
     var tasksStored: Bool { tasks?.hasStoredFile == true }

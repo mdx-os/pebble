@@ -514,6 +514,9 @@ final class MemoryModel: ObservableObject {
     /// Runs after a note is changed or forgotten, so anything showing its
     /// words, such as a kept digest on Today, looks again.
     private let onNotesChanged: @MainActor () -> Void
+    /// Runs after a note is forgotten, so whatever else holds its words,
+    /// such as a kept digest, lets them go too.
+    private let forgetQuotes: @MainActor (MemoryNote) -> QuotesForgotten
     private var watchingOthers: AnyCancellable?
 
     /// With `othersChanged`, the screen looks again each time it fires, as
@@ -523,13 +526,15 @@ final class MemoryModel: ObservableObject {
          onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none },
          othersStored: @escaping @MainActor () -> Bool = { false },
          othersChanged: AnyPublisher<Void, Never>? = nil,
-         onNotesChanged: @escaping @MainActor () -> Void = {}) {
+         onNotesChanged: @escaping @MainActor () -> Void = {},
+         forgetQuotes: @escaping @MainActor (MemoryNote) -> QuotesForgotten = { _ in .notQuoted }) {
         self.store = store
         self.place = place
         self.alsoForget = alsoForget
         self.onForgetEverything = onForgetEverything
         self.othersStored = othersStored
         self.onNotesChanged = onNotesChanged
+        self.forgetQuotes = forgetQuotes
         refresh()
         watchingOthers = othersChanged?.sink { [weak self] in
             MainActor.assumeIsolated { self?.refresh() }
@@ -576,8 +581,10 @@ final class MemoryModel: ObservableObject {
 
     func saveEdit() {
         guard let id = editingID else { return }
-        report(try store.edit(id, to: editDraft)) { self.cancelEdit() }
-        onNotesChanged()
+        report(try store.edit(id, to: editDraft)) {
+            self.cancelEdit()
+            self.onNotesChanged()
+        }
     }
 
     func forget(_ note: MemoryNote) {
@@ -585,7 +592,8 @@ final class MemoryModel: ObservableObject {
         cancelEdit()
         do {
             if try store.forget(note.id) {
-                status = MemoryWords.forgotten
+                // "Gone" only once no kept digest still holds its words.
+                status = forgetQuotes(note) == .stayed ? DigestWords.stillInDigest : MemoryWords.forgotten
                 forgottenCount += 1
             } else {
                 status = nil

@@ -141,6 +141,51 @@ struct MemoryStoreTests {
         #expect(!FileManager.default.fileExists(atPath: store.fileURL.path))
     }
 
+    /// The same words from the same source are kept once. The same words
+    /// the person typed are theirs, so they don't count.
+    @Test func rememberOnceKeepsTheSameWordsOnce() throws {
+        let typed = try saved(store.remember("Tea at four", source: .toldMe))
+        let first = try store.rememberOnce("Tea at four", source: .inferred)
+        #expect(first.isNew)
+        let again = try store.rememberOnce(" Tea at four ", source: .inferred)
+        #expect(!again.isNew)
+        #expect(again.decision == first.decision)
+        #expect(store.notes().count == 2)
+        #expect(store.notes().first == typed)
+        #expect(try store.rememberOnce("  ", source: .inferred) == (.needsWords, false))
+        #expect(try store.rememberOnce(String(repeating: "a", count: MemoryStore.maxLength + 1),
+                                       source: .inferred) == (.tooLong, false))
+    }
+
+    /// Every change, from any writer, is told to whoever watches, and only
+    /// changes are. Nothing is told once the watch is let go.
+    @Test func everyChangeIsTold() throws {
+        final class Count: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = 0
+            func add() { lock.lock(); value += 1; lock.unlock() }
+            var now: Int { lock.lock(); defer { lock.unlock() }; return value }
+        }
+        let count = Count()
+        var watch: TaskObservation? = store.observeChanges { count.add() }
+        let note = try saved(store.remember("Prefers tea", source: .toldMe))
+        #expect(count.now == 1)
+        _ = try store.edit(note.id, to: "Prefers green tea")
+        #expect(count.now == 2)
+        _ = try store.edit(note.id, to: " ")
+        _ = try store.rememberOnce("Prefers green tea", source: .toldMe)
+        #expect(try !store.forget(UUID()))
+        #expect(count.now == 2)
+        #expect(try store.forget(note.id))
+        #expect(count.now == 3)
+        try store.forgetEverything()
+        #expect(count.now == 4)
+        _ = watch
+        watch = nil
+        _ = try store.remember("Later", source: .toldMe)
+        #expect(count.now == 4)
+    }
+
     private func saved(_ decision: MemoryStore.Decision) throws -> MemoryNote {
         guard case .saved(let note) = decision else {
             Issue.record("expected a saved note, got \(decision)")

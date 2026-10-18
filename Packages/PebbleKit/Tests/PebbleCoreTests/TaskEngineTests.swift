@@ -977,4 +977,14 @@ struct TaskAnnouncerTests {
         _ = announcer.lines(for: [], at: start)
         #expect(announcer.lines(for: [task("One")], at: start + .seconds(1)).count == 1)
     }
+
+    /// An ended task whose line changes, as when the person removes what
+    /// it kept, says nothing: they did it themselves.
+    @Test func anEndedTaskSaysNothingWhenOnlyItsLineChanges() {
+        var announcer = TaskAnnouncer()
+        _ = announcer.lines(for: [task("One")], at: start)
+        #expect(announcer.lines(for: [task(DigestWords.done, .done)], at: start + .seconds(10)).count == 1)
+        #expect(announcer.lines(for: [task(DigestWords.removed, .done)], at: start + .seconds(20)).isEmpty)
+        #expect(announcer.lines(for: [task(DigestWords.removed, .done)], at: start + .seconds(30)).isEmpty)
+    }
 }

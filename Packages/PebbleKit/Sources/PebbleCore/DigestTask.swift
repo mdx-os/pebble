@@ -40,21 +40,92 @@ public enum DigestTask {
     /// from, and a count of any left out. Hidden characters are taken out,
     /// so the question shows exactly what is kept.
     package static func digest(of week: [MemoryNote], now: Date) -> String {
+        write(week, now: now).text
+    }
+
+    /// A digest as written: its words, the notes with a line in it in the
+    /// order of their lines, and the notes its last line counts.
+    package struct Written: Equatable, Sendable {
+        package let text: String
+        package let quoted: [UUID]
+        package let more: [UUID]
+
+        package init(text: String, quoted: [UUID], more: [UUID]) {
+            self.text = text
+            self.quoted = quoted
+            self.more = more
+        }
+    }
+
+    /// The same as `digest(of:now:)`, saying which note each line is from.
+    package static func write(_ week: [MemoryNote], now: Date) -> Written {
         var lines = [DigestWords.heading + "."]
-        var left = week.count
-        for note in week {
-            let text = tidy(note.text)
-            guard !text.isEmpty else { left -= 1; continue }
-            let line = "• " + (text.count > lineLimit ? String(text.prefix(lineLimit)) + "..." : text)
-                + " (\(note.source.label))"
-            let more = left - 1 > 0 ? "\n" + DigestWords.andMore(left - 1) : ""
+        var quoted: [UUID] = []
+        var rest = week.filter { !tidy($0.text).isEmpty }
+        while let note = rest.first {
+            let line = line(for: note)
+            let more = rest.count - 1 > 0 ? "\n" + DigestWords.andMore(rest.count - 1) : ""
             let next = (lines + [line]).joined(separator: "\n")
             guard (next + more).count <= MemoryStore.maxLength, (next + more).utf8.count <= MemoryStore.maxBytes else { break }
             lines.append(line)
-            left -= 1
+            quoted.append(note.id)
+            rest.removeFirst()
         }
-        if left > 0 { lines.append(DigestWords.andMore(left)) }
-        return lines.joined(separator: "\n")
+        if !rest.isEmpty { lines.append(DigestWords.andMore(rest.count)) }
+        return Written(text: lines.joined(separator: "\n"), quoted: quoted, more: rest.map(\.id))
+    }
+
+    /// A note's line in a digest, shortened, ending with where it came from.
+    static func line(for note: MemoryNote) -> String {
+        let text = tidy(note.text)
+        return "• " + (text.count > lineLimit ? String(text.prefix(lineLimit)) + "..." : text)
+            + " (\(note.source.label))"
+    }
+
+    /// What taking one forgotten note out of a kept digest leaves.
+    package enum Dropped: Equatable, Sendable {
+        /// The digest without that note: its line gone, or its count
+        /// lowered. Never longer than it was.
+        case edited(Written)
+        /// No line would be left, so the digest goes too.
+        case emptied
+        /// The digest never held the note's words.
+        case notThere
+        /// The digest isn't as it was written, as when the person changed
+        /// it, and still seems to hold the note's words, so it is left for
+        /// them.
+        case cantTell
+    }
+
+    /// Takes `note` out of `written`, the digest whose words are now
+    /// `text`. Only takes words away: nothing new is added, so nothing is
+    /// kept that the person didn't say yes to. With no `written`, which
+    /// line is whose isn't known, so it is only looked for.
+    package static func dropping(_ note: MemoryNote, from text: String, as written: Written?) -> Dropped {
+        let quoted = written?.quoted ?? [], more = written?.more ?? []
+        var lines = text.components(separatedBy: "\n")
+        let shape = written != nil
+            && lines.count == 1 + quoted.count + (more.isEmpty ? 0 : 1)
+            && lines.first == DigestWords.heading + "."
+            && lines.dropFirst().prefix(quoted.count).allSatisfy { $0.hasPrefix("• ") }
+            && (more.isEmpty || lines.last == DigestWords.andMore(more.count))
+        guard shape else {
+            let words = tidy(note.text)
+            return words.isEmpty || !tidy(text).contains(String(words.prefix(lineLimit))) ? .notThere : .cantTell
+        }
+        var keptQuoted = quoted, keptMore = more
+        if let index = quoted.firstIndex(of: note.id) {
+            lines.remove(at: index + 1)
+            keptQuoted.remove(at: index)
+        } else if let index = more.firstIndex(of: note.id) {
+            keptMore.remove(at: index)
+        } else {
+            return .notThere
+        }
+        guard !keptQuoted.isEmpty else { return .emptied }
+        if !more.isEmpty { lines.removeLast() }
+        if !keptMore.isEmpty { lines.append(DigestWords.andMore(keptMore.count)) }
+        return .edited(Written(text: lines.joined(separator: "\n"), quoted: keptQuoted, more: keptMore))
     }
 
     private static func tidy(_ text: String) -> String {
@@ -86,6 +157,18 @@ public enum DigestWords {
     public static let nothingThisWeek = "There were no notes from this week to tidy, so I didn't write a digest."
     public static let couldNotRead = "Sorry, I couldn't read your notes just now, so I stopped. Nothing was changed."
     public static let couldNotSave = "Sorry, I couldn't keep the digest in your notes just now. Nothing was saved."
+    /// The same digest was kept before, so it isn't kept twice.
+    public static let alreadyKept = "This digest is already in your notes, so I didn't keep it twice."
+    public static let tooLongToKeep = "Sorry, the digest came out too long for one note, so nothing was saved."
+    public static let emptyDigest = "Sorry, the digest came out empty, so nothing was saved."
+    /// A kept digest that still quotes a note the person has forgotten,
+    /// as when they changed the digest themselves. Its words are hidden
+    /// here, and the line says why.
+    public static let hiddenQuote = "Your weekly digest is in your notes. I'm not showing it here, because it quotes a note you removed."
+    /// A kept digest while the notes can't be opened, as on a locked device.
+    public static let notesLocked = "Your weekly digest is in your notes. I can't open them just now to show it here."
+    /// Forgetting a note whose words are still in a kept digest.
+    public static let stillInDigest = "I forgot that note, but its words are still in your weekly digest. You can change or remove the digest here too."
     public static let cantSteer = "Thanks. I can't change how I tidy this one yet, so I'm going on as I was."
     public static let cantDoThatYet = "Sorry, I can't do that one yet."
     /// A task that was going when the app closed. It is never called done.
