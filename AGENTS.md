@@ -30,6 +30,7 @@ in lint, a skill, or CI.
   - `PebbleCore`: plain types. No SwiftUI, no networking.
   - `PebblePulse`: competitor watch fetching and snapshots. Imports PebbleCore.
   - `PebbleModel`: model adapter. `ModelClient` and the on-device placeholder. Imports PebbleCore. MLX and Ollama adapters plug in here.
+  - `PebbleBackground`: gives the background runner time (`BGTaskScheduler` on iOS, `NSBackgroundActivityScheduler` on the Mac). Imports PebbleCore. The runner and every scheduling decision live in PebbleCore (`Background.swift`) as pure functions.
   - `PebbleUI`: SwiftUI views shared by every platform. Imports PebbleCore and PebbleModel.
 - New code goes in a package, not in `App/`. New layers get added to
   `Package.swift` with their place in the order written down.

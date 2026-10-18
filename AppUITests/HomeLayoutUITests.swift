@@ -143,6 +143,42 @@ final class HomeLayoutUITests: XCTestCase {
         XCTAssertFalse((field.value as? String ?? "").contains("Pack lunches"))
     }
 
+    /// Work done while the app was closed shows in Today: this morning's
+    /// summary opens to read, and a morning that never ran says why. Both
+    /// are examples here, and say so first.
+    func testTheMorningSummaryShowsInToday() throws {
+        let app = launch("todaySummary")
+        let summary = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Example. Ready for you. Your morning summary")).firstMatch
+        XCTAssertTrue(summary.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Needs you"].exists, "the question it counted still waits")
+        let missed = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Example. Noticed. I couldn't make")).firstMatch
+        XCTAssertTrue(missed.exists)
+        XCTAssertTrue(missed.label.contains("Low Power Mode"))
+        summary.tap()
+        let detail = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Anything still waiting")).firstMatch
+        XCTAssertTrue(detail.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["sampleLabel"].exists)
+        app.buttons["Done"].firstMatch.tap()
+        XCTAssertTrue(summary.waitForExistence(timeout: 5))
+    }
+
+    /// Background work is off until the person turns it on, and then the
+    /// screen says when the next summary is due.
+    func testBackgroundWorkIsOffUntilTurnedOn() throws {
+        let app = launch("memory")
+        let toggle = app.switches["backgroundSwitch"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        for _ in 0..<3 where !toggle.isHittable { app.swipeUp() }
+        XCTAssertEqual(toggle.value as? String, "0")
+        XCTAssertFalse(app.staticTexts["backgroundNext"].exists)
+        // The switch itself sits at the trailing end of the row.
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        XCTAssertTrue(app.staticTexts["backgroundNext"].waitForExistence(timeout: 5))
+        XCTAssertEqual(toggle.value as? String, "1")
+    }
+
     /// Typing on Today and pressing Command 2 still goes to the chat, and
     /// the words come along.
     func testCommandTwoGoesToTheChatFromTodaysComposer() throws {

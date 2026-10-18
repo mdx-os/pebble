@@ -3,7 +3,7 @@
 How the agent talks, everywhere: the first run, the chat, memory, and the
 questions it asks before it acts. Read this before writing any words a
 person will see. The words themselves live in `PebbleCore` (`FirstRunWords`,
-`FirstConversation`, `MemoryWords`, `ConfirmationWords`, `FeedWords`, `TaskWords` and friends), so a
+`FirstConversation`, `MemoryWords`, `ConfirmationWords`, `FeedWords`, `TaskWords`, `BackgroundWords` and friends), so a
 change here usually means a change there.
 
 ## Who the agent is
@@ -127,8 +127,9 @@ action.
 An empty state promises only what exists today. Today's empty state says
 "It's just us for now. Write to me below, and I'll answer in the chat." with
 the composer under it. It is true whether or not a chat is already going, so
-it never promises a new one, and it says nothing about work done in the
-background until a real feed source ships.
+it never promises a new one. Background work is a real feed source now, and
+the line still holds: it shows only while nothing has been made, so it never
+hides a card, and it never promises a summary the system may not give time for.
 
 Examples are always labeled. Sample cards start with "Example" for
 VoiceOver, and a sample opened to read or a sample question says "This is
@@ -171,6 +172,24 @@ Approve tapped after its question timed out. Forget everything says it
 stops tasks still going. If a step said yes to was under way, a short line
 stays on Today to say it may be done, naming nothing the task held. A
 scripted task's card says "Example", like every other example.
+
+### Work while you're away
+
+Background work is off until the person turns it on, from the switch on the
+memory screen, and the line under the switch says what it does and when:
+"in the background when I can, or as soon as you open the app" on iPhone and
+iPad, where the system decides, and "while the app is open" on the Mac. It
+always ends by saying nothing is sent, bought or shared without asking.
+
+The morning summary only counts what is really there, and says so in the
+past tense ("One thing was waiting for you."), since a question may have
+timed out by the time it is read. Opened, it says where to look ("at the top
+of Today, under Needs you") and from when it counted. A summary made late
+says why, once: "I waited until you unlocked, so this came later than
+planned." A morning that never ran gets its own card that names the day and
+the reason, and promises nothing about the next one. None of these lines
+mention the device: they are about time and power, not where words go.
+The words live in `BackgroundWords`.
 
 ### Confirmations
 

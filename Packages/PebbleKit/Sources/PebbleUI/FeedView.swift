@@ -26,6 +26,11 @@ final class FeedModel: ObservableObject {
     /// Where the person's words go, passed down from the model so copy that
     /// mentions the device never drifts from it.
     let place: PrivacyPlace
+    /// Work done while the app was closed. Its cards join the feed as a
+    /// source, and Today runs whatever is due each time it refreshes, so a
+    /// summary the system never woke the app for is made once it opens.
+    let background: BackgroundRunner?
+    private var backgroundWatch: BackgroundRunner.Observation?
     private let sources: [any FeedSource]
     /// This model's watch on `needsYou`, ended when the model goes, so a
     /// closed window leaves nothing behind.
@@ -72,10 +77,12 @@ final class FeedModel: ObservableObject {
     var announce: @MainActor (TaskAnnouncer.Line) -> Void = FeedModel.post
 
     init(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)? = nil,
-         drivesTasks: Bool = false, place: PrivacyPlace, calendar: Calendar = .current,
+         drivesTasks: Bool = false, place: PrivacyPlace, background: BackgroundRunner? = nil,
+         calendar: Calendar = .current,
          now: @escaping () -> Date = { Date() },
          clock: @escaping () -> ContinuousClock.Instant = { ContinuousClock.now }) {
-        self.sources = sources
+        self.sources = sources + (background.map { [BackgroundFeed(runner: $0, calendar: calendar)] } ?? [])
+        self.background = background
         self.needsYou = needsYou
         self.tasks = tasks
         self.drivesTasks = drivesTasks
@@ -83,7 +90,7 @@ final class FeedModel: ObservableObject {
         self.calendar = calendar
         self.now = now
         self.clock = clock
-        feed = Feed.build(from: sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
+        feed = Feed.build(from: self.sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
         let list = tasks?.tasks ?? []
         track(list)
         sections = Self.sections(of: feed)
@@ -111,6 +118,10 @@ final class FeedModel: ObservableObject {
         observation = needsYou.observe { [weak self] in
             hops.add { self?.refresh() }
         }
+        // A card made in the background, or the cards forgotten, show at once.
+        backgroundWatch = background?.observe { [weak self] in
+            hops.add { self?.rebuild() }
+        }
     }
 
     /// Refreshes asked for by `needsYou` and not yet run.
@@ -127,6 +138,7 @@ final class FeedModel: ObservableObject {
     /// The task watch ends on its own as `watching` is released.
     deinit {
         if let observation { needsYou.stopObserving(observation) }
+        if let backgroundWatch { background?.stopObserving(backgroundWatch) }
     }
 
     var isSample: Bool { needsYou.isSample || sources.contains { $0.isSample } || tasks?.isSample == true }
@@ -178,11 +190,19 @@ final class FeedModel: ObservableObject {
     /// The rule for every question in the sheet, a task's included.
     var rule: AskFirst { needsYou.rule }
 
-    /// Builds the feed again. Questions that timed out drop away here.
+    /// Builds the feed again. Questions that timed out drop away here, and
+    /// background work that is due runs, with the person here.
     func refresh() {
         tasks?.refresh()
+        if inFront { background?.runDue(now: now(), conditions: .foreground) }
         rebuild()
     }
+
+    /// True while the app is active, so the person is here and the device
+    /// unlocked. `keepFresh` may tick once more as the app leaves the
+    /// screen, perhaps as it locks; background work then waits for the
+    /// platform's own run, which knows whether it is locked.
+    var inFront = true
 
     private func rebuild() {
         let next = Feed.build(from: sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
@@ -364,6 +384,21 @@ final class FeedModel: ObservableObject {
             forgotUnderway = line
             announce(TaskAnnouncer.Line(text: line, urgent: true))
         }
+        return cleared
+    }
+
+    /// Forget everything, from the memory screen: every task goes, as in
+    /// `forgetTasks`, and background work turns off, with its queue and
+    /// its cards. What the runner held in memory goes even if its file
+    /// can't be erased just now; the file holds only counts and times.
+    @discardableResult
+    func forgetEverything() -> ClearedTasks {
+        if let background {
+            try? background.forget()
+            if let reading, reading.id.hasPrefix("background:") { self.reading = nil }
+        }
+        let cleared = forgetTasks()
+        rebuild()
         return cleared
     }
 

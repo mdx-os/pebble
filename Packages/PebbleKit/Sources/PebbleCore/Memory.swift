@@ -129,8 +129,9 @@ public enum MemoryWords {
     // engine on this device, whatever the model is, so this is true even
     // with a cloud model. It makes no promise about the chat. Don't gate it
     // like the lines above. Forget everything forgets tasks too, so it says
-    // running ones stop.
-    public static let forgetEverythingDetail = "This removes every note and every task from this device, and stops any task still going. It can't be undone."
+    // running ones stop, and it turns background work off and erases its
+    // summaries, kept in the same folder as the notes.
+    public static let forgetEverythingDetail = "This removes every note, every task and every morning summary from this device, stops any task still going, and turns off work while you're away. It can't be undone."
     /// See the note above `empty`.
     public static func privacyNote(_ place: PrivacyPlace) -> String {
         place.staysOnDevice ? "Kept only on this device. Removing a note erases it." : "Removing a note erases it."
@@ -206,6 +207,14 @@ public final class MemoryStore: @unchecked Sendable {
         sharedLock.lock()
         defer { sharedLock.unlock() }
         if let shared { return shared }
+        let store = MemoryStore(fileURL: try folder(fileManager: fileManager).appendingPathComponent("memory.json"))
+        shared = store
+        return store
+    }
+
+    /// The notes' folder inside Application Support, made if need be and
+    /// left out of backups. The background runner keeps its file here too.
+    public static func folder(fileManager: FileManager = .default) throws -> URL {
         let base = try fileManager.url(
             for: .applicationSupportDirectory, in: .userDomainMask,
             appropriateFor: nil, create: true
@@ -214,9 +223,7 @@ public final class MemoryStore: @unchecked Sendable {
             .appendingPathComponent("memory", isDirectory: true)
         try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
         try excludeFromBackup(&folder)
-        let store = MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
-        shared = store
-        return store
+        return folder
     }
 
     /// Marks a folder so backups skip it. Notes stay on this device only.

@@ -22,7 +22,9 @@ public struct HomeView: View {
 
     /// `feed` is where finished work comes from. Questions come only from
     /// `needsYou` and `tasks`, which both ask through `AskFirst`. `tasks`
-    /// shows long work on live cards.
+    /// shows long work on live cards. `background` is work done while the
+    /// app was closed: its cards join Today, its switch sits on the memory
+    /// screen, and Forget everything turns it off and clears it.
     public init(
         brand: Brand,
         model: any ModelClient,
@@ -32,10 +34,12 @@ public struct HomeView: View {
         looks: UserDefaults = .standard,
         feed: [any FeedSource] = [EmptyFeedSource()],
         needsYou: NeedsYou = NeedsYou(),
-        tasks: (any TaskEngine)? = nil
+        tasks: (any TaskEngine)? = nil,
+        background: BackgroundRunner? = nil
     ) {
         self.init(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
-                  looks: looks, conversation: nil, section: .today, feed: feed, needsYou: needsYou, tasks: tasks)
+                  looks: looks, conversation: nil, section: .today, feed: feed, needsYou: needsYou, tasks: tasks,
+                  background: background)
     }
 
     /// Opens on a given conversation, section and feed, for screenshots and tests.
@@ -54,11 +58,13 @@ public struct HomeView: View {
         needsYou: NeedsYou,
         tasks: (any TaskEngine)? = nil,
         drivesTasks: Bool = false,
+        background: BackgroundRunner? = nil,
         now: @escaping () -> Date = { Date() }
     ) {
         screen = HomeScreen(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                             looks: looks, conversation: conversation, section: section, feed: feed,
-                            needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, now: now)
+                            needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, background: background,
+                            now: now)
     }
 
     /// Which model the screen was made for: its kind and where its words
@@ -81,17 +87,19 @@ public struct HomeView: View {
     /// Today's model, which takes its privacy place from the active model,
     /// so the example note never promises the device when words may leave.
     static func feedModel(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)? = nil,
-                          drivesTasks: Bool = false, model: any ModelClient,
+                          drivesTasks: Bool = false, background: BackgroundRunner? = nil, model: any ModelClient,
                           now: @escaping () -> Date) -> FeedModel {
         FeedModel(sources: sources, needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
-                  place: model.privacyPlace, now: now)
+                  place: model.privacyPlace, background: background, now: now)
     }
 
     /// The memory screen's model, with its privacy place from the active
-    /// model, the same way. Forget everything forgets the tasks too.
-    static func memoryModel(store: MemoryStore, model: any ModelClient,
+    /// model, the same way. Forget everything forgets the tasks and the
+    /// background work too, and the switch for background work sits here.
+    static func memoryModel(store: MemoryStore, model: any ModelClient, background: BackgroundRunner? = nil,
                             onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) -> MemoryModel {
-        MemoryModel(store: store, place: model.privacyPlace, onForgetEverything: onForgetEverything)
+        MemoryModel(store: store, place: model.privacyPlace, background: background,
+                    onForgetEverything: onForgetEverything)
     }
 
     /// The send itself, apart from moving, so tests can drive it.
@@ -109,6 +117,7 @@ struct HomeScreen: View {
     let onboarding: any OnboardingStoring
     let memory: MemoryStore?
     let looks: UserDefaults
+    let background: BackgroundRunner?
 
     @State private var finished: Bool
     @State private var firstMessage: String?
@@ -140,6 +149,7 @@ struct HomeScreen: View {
         needsYou: NeedsYou,
         tasks: (any TaskEngine)?,
         drivesTasks: Bool,
+        background: BackgroundRunner?,
         now: @escaping () -> Date
     ) {
         self.brand = brand
@@ -148,8 +158,10 @@ struct HomeScreen: View {
         self.onboarding = onboarding
         self.memory = memory
         self.looks = looks
+        self.background = background
         _feed = StateObject(wrappedValue: HomeView.feedModel(sources: feed, needsYou: needsYou, tasks: tasks,
-                                                             drivesTasks: drivesTasks, model: model, now: now))
+                                                             drivesTasks: drivesTasks, background: background,
+                                                             model: model, now: now))
         let needed = OnboardingFlow.isNeeded(store: onboarding, names: names)
         // People who named their agent before the first run existed count as finished.
         if !needed, !onboarding.hasFinished() { onboarding.markFinished() }
@@ -207,6 +219,7 @@ struct HomeScreen: View {
         // so the count beside Today stays true from any place.
         .task { await feed.keepFresh() }
         .onChange(of: scenePhase) { _, phase in
+            feed.inFront = phase == .active
             if phase == .active { feed.refresh() }
         }
         // A question or any sheet, the memory on a narrow window included,
@@ -418,8 +431,8 @@ struct HomeScreen: View {
         if let memory {
             // Built inside MemoryView's StateObject, once per screen, never
             // on each pass through here.
-            MemoryView(model: HomeView.memoryModel(store: memory, model: model,
-                                                   onForgetEverything: { feed.forgetTasks() }))
+            MemoryView(model: HomeView.memoryModel(store: memory, model: model, background: background,
+                                                   onForgetEverything: { feed.forgetEverything() }))
         } else {
             // The store couldn't be opened. Say so rather than hide memory.
             // Tasks can still be forgotten here, since Forget everything isn't.

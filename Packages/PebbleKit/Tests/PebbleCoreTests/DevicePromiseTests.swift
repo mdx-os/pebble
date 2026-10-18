@@ -40,10 +40,11 @@ enum DevicePromise {
 
     static let allowed: [Allowed] = [
         Allowed(file: "PebbleCore/Memory.swift",
-                literal: "This removes every note and every task from this device, and stops any task still going. It can't be undone.",
-                reason: "MemoryWords.forgetEverythingDetail is about where the notes and tasks are, not where the chat goes. "
-                    + "Notes live only in MemoryStore's local file and tasks only in the engine in this process, "
-                    + "whatever the model is, so it is true with a cloud model too."),
+                literal: "This removes every note, every task and every morning summary from this device, stops any task still going, and turns off work while you're away. It can't be undone.",
+                reason: "MemoryWords.forgetEverythingDetail is about where the notes, tasks and summaries are, not where "
+                    + "the chat goes. Notes live only in MemoryStore's local file, tasks only in the engine in this "
+                    + "process, and summaries only in BackgroundStore's file beside the notes, whatever the model is, "
+                    + "so it is true with a cloud model too."),
         Allowed(file: "PebbleCore/Tasks.swift",
                 literal: "This stops any task still going, and removes every task and what you told me for it from this device. It can't be undone. Your notes aren't touched.",
                 reason: "TaskWords.forgetTasksDetail names where the tasks are erased from, not that nothing left. "

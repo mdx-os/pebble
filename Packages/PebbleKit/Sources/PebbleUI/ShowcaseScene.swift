@@ -21,6 +21,10 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// moment: working, trying another way, waiting on the person, and done.
     /// `tasksLive` plays the same tasks in real time.
     case taskRunning, taskRetrying, taskWaiting, taskDone, tasksLive
+    /// Today after background work: this morning's summary, made late
+    /// because the device was locked, and yesterday's, which never ran.
+    /// `memoryBackground` is the memory screen with background work on.
+    case todaySummary, memoryBackground
 
     public static let launchKey = "pebbleScreen"
 
@@ -53,6 +57,8 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                 )
             case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive:
                 taskHome(brand: brand, looks: looks)
+            case .todaySummary:
+                summaryHome(brand: brand, looks: looks, at: morning)
             case .shortcuts:
                 KeyboardShortcutsView()
             case .hello, .name, .look, .ideas:
@@ -81,8 +87,9 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                                                        names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil),
                              look: AgentLook.load(from: looks), firstMessage: nil)
                 }
-            case .memory:
-                MemoryView(store: Self.sampleMemory(), place: LocalStubModel().privacyPlace)
+            case .memory, .memoryBackground:
+                MemoryView(store: Self.sampleMemory(), place: LocalStubModel().privacyPlace,
+                           background: Self.sampleBackground(on: self == .memoryBackground, at: morning))
             case .memoryEmpty:
                 MemoryView(store: Self.emptyMemory(), place: LocalStubModel().privacyPlace)
             case .memorySaved:
@@ -126,7 +133,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// The task scenes ask through `rule`, the one their tasks share.
     func needsYou(at now: Date = morning, rule: AskFirst = .isolated()) -> NeedsYou? {
         switch self {
-        case .todayNeedsYou: Self.sampleQuestion(at: now)
+        case .todayNeedsYou, .todaySummary: Self.sampleQuestion(at: now)
         case .today, .todayEmpty, .home, .homeMemory: NeedsYou(rule: .isolated())
         case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive: NeedsYou(rule: rule)
         default: nil
@@ -239,6 +246,46 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
             engine.advance(by: at - 30)
         }
         return engine
+    }
+
+    /// Today with the cards background work left. The summary counted a
+    /// copy of the sample question Today shows, asked through a rule of
+    /// its own, so the showcase never touches the app's.
+    @MainActor
+    private func summaryHome(brand: Brand, looks: UserDefaults, at morning: Date) -> HomeView {
+        HomeView(
+            brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
+            onboarding: InMemoryOnboardingStore(finished: true), memory: Self.sampleMemory(),
+            looks: looks, conversation: Self.sampleFirstChat(), section: .today,
+            needsYou: needsYou(at: morning) ?? NeedsYou(rule: .isolated()),
+            background: Self.sampleBackground(on: true, needsYou: Self.sampleQuestion(at: morning), played: true,
+                                              at: morning),
+            now: { morning }
+        )
+    }
+
+    /// A runner on a scratch file of its own, marked as an example, so
+    /// nothing here touches the person's own. `played` runs it through
+    /// two mornings: yesterday's held back by Low Power Mode until its day
+    /// ended, and today's held back while locked, then made at `morning`.
+    static func sampleBackground(on: Bool, needsYou: NeedsYou? = nil, played: Bool = false,
+                                 at morning: Date) -> BackgroundRunner {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("showcase-background-\(UUID().uuidString).json")
+        let runner = BackgroundRunner(store: BackgroundStore(fileURL: url), toggle: InMemoryBackgroundSwitch(),
+                                      needsYou: needsYou, sample: true)
+        guard on else { return runner }
+        let calendar = Calendar.current
+        let today = BackgroundPlan.morning(of: morning, calendar: calendar)
+        guard played, let yesterday = calendar.date(byAdding: .day, value: -1, to: today) else {
+            runner.turnOn(now: morning)
+            return runner
+        }
+        runner.turnOn(now: yesterday - 60 * 60)
+        runner.runDue(now: yesterday + 60, conditions: BackgroundConditions(moment: .background, lowPower: true))
+        runner.runDue(now: today + 60, conditions: BackgroundConditions(moment: .background, locked: true))
+        runner.runDue(now: morning - 5 * 60, conditions: .foreground)
+        return runner
     }
 
     /// Every sample task from the start, played in real time.

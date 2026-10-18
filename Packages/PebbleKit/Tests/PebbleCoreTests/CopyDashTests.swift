@@ -47,6 +47,7 @@ struct CopyDashTests {
       + HomeWords.shortcuts.flatMap { [$0.keys, $0.action] }
       + FeedWords.all
       + TaskWords.all
+      + BackgroundWordsTests.all
 
     @Test func noScreenWordsUseADash() {
         for line in Self.copy {
@@ -99,6 +100,8 @@ struct CopyDashTests {
         // says the notes are left alone.
         #expect(MemoryWords.forgetEverythingDetail.contains("every task"))
         #expect(MemoryWords.forgetEverythingDetail.contains("stops any task still going"))
+        // And it says background work stops too, as `BackgroundRunner.forget` does.
+        #expect(MemoryWords.forgetEverythingDetail.contains("turns off work while you're away"))
         #expect(TaskWords.forgetTasksDetail.contains("stops any task still going"))
         #expect(TaskWords.forgetTasksDetail.hasSuffix("Your notes aren't touched."))
         #expect(CareCheck.reply.contains("988"))

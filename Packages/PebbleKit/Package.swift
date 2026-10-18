@@ -7,6 +7,10 @@ import PackageDescription
 //   PebblePulse  competitor watch: fetching and snapshots. Imports PebbleCore.
 //   PebbleModel  model adapter. ModelClient and the on-device placeholder.
 //                Imports PebbleCore. A later MLX or Ollama adapter lives here.
+//   PebbleBackground  gives the background runner time: BGTaskScheduler on
+//                iPhone and iPad, NSBackgroundActivityScheduler on the Mac.
+//                Imports PebbleCore. The runner and every decision it
+//                makes live in PebbleCore; this is only the platform's door.
 //   PebbleUI     SwiftUI views shared by Mac, iPhone and iPad.
 //                Imports PebbleCore and PebbleModel.
 // SourceScan is not a layer. It lives under Tests, is in no product, and
@@ -18,6 +22,7 @@ let package = Package(
         .library(name: "PebbleCore", targets: ["PebbleCore"]),
         .library(name: "PebblePulse", targets: ["PebblePulse"]),
         .library(name: "PebbleModel", targets: ["PebbleModel"]),
+        .library(name: "PebbleBackground", targets: ["PebbleBackground"]),
         .library(name: "PebbleUI", targets: ["PebbleUI"]),
         .executable(name: "pulse", targets: ["pulse"]),
     ],
@@ -25,6 +30,7 @@ let package = Package(
         .target(name: "PebbleCore"),
         .target(name: "PebblePulse", dependencies: ["PebbleCore"]),
         .target(name: "PebbleModel", dependencies: ["PebbleCore"]),
+        .target(name: "PebbleBackground", dependencies: ["PebbleCore"]),
         .target(name: "PebbleUI", dependencies: ["PebbleCore", "PebbleModel"]),
         .executableTarget(name: "pulse", dependencies: ["PebbleCore", "PebblePulse"]),
         .target(name: "SourceScan", path: "Tests/SourceScan"),

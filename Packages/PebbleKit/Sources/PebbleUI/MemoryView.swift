@@ -17,9 +17,12 @@ public struct MemoryView: View {
     /// `onForgetEverything` runs with Forget everything, so whatever else the
     /// agent holds about the person, such as its tasks, goes too. It says
     /// what it forgot, so the status line can be honest about it.
-    public init(store: MemoryStore, place: PrivacyPlace,
+    ///
+    /// `background` puts its switch here, off until the person turns it on.
+    public init(store: MemoryStore, place: PrivacyPlace, background: BackgroundRunner? = nil,
                 onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) {
-        _model = StateObject(wrappedValue: MemoryModel(store: store, place: place, onForgetEverything: onForgetEverything))
+        _model = StateObject(wrappedValue: MemoryModel(store: store, place: place, background: background,
+                                                       onForgetEverything: onForgetEverything))
     }
 
     /// Takes a model built from the active model, as `HomeView` does, or
@@ -68,6 +71,11 @@ public struct MemoryView: View {
                                 ))
                             }
                         }
+                    }
+                    if model.background != nil {
+                        BackgroundRow(isOn: Binding(get: { model.backgroundOn }, set: { model.setBackground($0) }),
+                                      nextDue: model.backgroundNext)
+                            .padding(.top, 8)
                     }
                     if model.hasStoredFile {
                         Button(role: .destructive) { model.askForgetEverything = true } label: {
@@ -122,6 +130,8 @@ public struct MemoryView: View {
         .onChange(of: scenePhase) { _, phase in
             // Back from a locked screen, look again rather than leave the note up.
             if phase == .active, model.isUnavailable { model.refresh() }
+            // And the next summary's day may have moved on meanwhile.
+            if phase == .active { model.refreshBackground() }
         }
         .haptic(.saved, trigger: model.savedCount)
         .haptic(.forgotten, trigger: model.forgottenCount)
@@ -247,6 +257,53 @@ struct MemoryUnavailableView: View {
     /// What the dialog's button does.
     func forgetTasks() {
         onForgetTasks()
+    }
+}
+
+/// The switch for background work: what it does in a plain line, and when
+/// the next summary is due while it is on.
+struct BackgroundRow: View {
+    @Binding var isOn: Bool
+    let nextDue: String?
+    @Environment(\.colorScheme) private var scheme
+
+    /// True where the system may give the app time while it is closed.
+    /// On the Mac it runs while the app is open, so the line says that.
+    static var runsWhileClosed: Bool {
+        #if os(macOS)
+        false
+        #else
+        true
+        #endif
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle(isOn: $isOn) {
+                Text(BackgroundWords.settingTitle)
+                    .font(.body.weight(.medium))
+            }
+            // The brand's warmth, as everywhere else, wherever this screen is shown.
+            .tint(Theme.accentText)
+            .accessibilityIdentifier("backgroundSwitch")
+            .accessibilityHint(BackgroundWords.settingDetail(whileClosed: Self.runsWhileClosed))
+            Text(BackgroundWords.settingDetail(whileClosed: Self.runsWhileClosed))
+                .font(.footnote)
+                .foregroundStyle(Theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+                // Read as the switch's hint, so not twice.
+                .accessibilityHidden(true)
+            if let nextDue {
+                Text(nextDue)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(Theme.secondaryText)
+                    .accessibilityIdentifier("backgroundNext")
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
     }
 }
 
@@ -380,12 +437,38 @@ final class MemoryModel: ObservableObject {
     /// Forgets what lives outside the memory file, such as tasks.
     private let onForgetEverything: @MainActor () -> ClearedTasks
 
-    init(store: MemoryStore, place: PrivacyPlace,
+    /// Background work, whose switch sits on this screen. Nil hides it.
+    let background: BackgroundRunner?
+    @Published private(set) var backgroundOn = false
+    /// "The next one is due at 7:00 AM tomorrow." while it is on.
+    @Published private(set) var backgroundNext: String?
+    private let now: () -> Date
+
+    init(store: MemoryStore, place: PrivacyPlace, background: BackgroundRunner? = nil,
+         now: @escaping () -> Date = { Date() },
          onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) {
         self.store = store
         self.place = place
+        self.background = background
+        self.now = now
         self.onForgetEverything = onForgetEverything
         refresh()
+    }
+
+    /// Turns background work on or off. On, the summary is due the next morning.
+    func setBackground(_ on: Bool) {
+        guard let background else { return }
+        if on { background.turnOn(now: now()) } else { background.turnOff() }
+        refreshBackground()
+    }
+
+    func refreshBackground() {
+        guard let background else { return }
+        let on = background.isOn
+        if backgroundOn != on { backgroundOn = on }
+        let now = now()
+        let next = on ? background.queue.map(\.due).min().map { BackgroundWords.nextDue($0, now: now) } : nil
+        if backgroundNext != next { backgroundNext = next }
     }
 
     func refresh() {
@@ -398,6 +481,8 @@ final class MemoryModel: ObservableObject {
             notes = []; isUnreadable = false; isUnavailable = true
         }
         hasStoredFile = store.hasStoredFile
+        // Forget everything turns background work off, so the switch follows.
+        refreshBackground()
     }
 
     /// False while the saved notes can't be read or opened, so they stay untouched.
