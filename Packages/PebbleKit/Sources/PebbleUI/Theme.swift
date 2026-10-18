@@ -116,6 +116,8 @@ enum Theme {
                 ("field on \(name)", ink.over(base, opacity: fieldTint)),
                 ("field on the card on \(name)", ink.over(card, opacity: fieldTint)),
                 ("disabled button on \(name)", ink.over(base, opacity: disabledTint)),
+                // A task card's Send before there are words to send.
+                ("disabled button on the card on \(name)", ink.over(card, opacity: disabledTint)),
             ]
         }
         let inks: [(String, RGB)] = [

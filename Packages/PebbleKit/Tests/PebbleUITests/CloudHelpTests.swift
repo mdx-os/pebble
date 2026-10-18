@@ -669,6 +669,93 @@ struct CloudHelpTests {
         #expect(try store.load() == CloudHelpSettings(isOn: true, privateWords: []))
     }
 
+    /// Forget everything as the app wires it: the notes, the private words
+    /// and the tasks all go, from one tap.
+    @Test func forgetEverythingErasesNotesWordsAndTasks() throws {
+        let store = InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"]))
+        let memory = scratchMemory("Sam's birthday is May 14.")
+        let cloud = help(endpoint: endpoint, maker: TransportMaker(), memory: memory, store: store)
+        let engine = LocalFakeEngine(rule: .isolated())
+        engine.start(SampleTasks.plan)
+        let feed = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: engine.rule), tasks: engine,
+                             place: .mayLeaveDevice)
+        let model = MemoryModel(store: memory, place: .mayLeaveDevice, alsoForget: { try cloud.forgetPrivateWords() },
+                                onForgetEverything: { feed.forgetTasks() })
+        model.forgetEverything()
+        #expect(model.status == MemoryWords.forgotten)
+        #expect(memory.notes().isEmpty)
+        #expect(cloud.settings.privateWords.isEmpty)
+        #expect(engine.tasks.isEmpty)
+    }
+
+    /// The notes couldn't be erased, but the tasks and the private words
+    /// went, and the line says exactly that.
+    @Test func forgetEverythingSaysTheTasksAndWordsWentWhenTheNotesStayed() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("cloud-forget-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let memory = MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
+        _ = try memory.remember("Sam's birthday is May 14.", source: .toldMe)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let store = InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"]))
+        let help = help(endpoint: endpoint, maker: TransportMaker(), memory: memory, store: store)
+        let engine = LocalFakeEngine(rule: .isolated())
+        engine.start(SampleTasks.plan)
+        let feed = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: engine.rule), tasks: engine,
+                             place: .onDevice)
+        let model = MemoryModel(store: memory, place: .onDevice, alsoForget: { try help.forgetPrivateWords() },
+                                onForgetEverything: { feed.forgetTasks() })
+        model.forgetEverything()
+        #expect(model.status == CloudWords.forgotTasksAndWordsNotNotes)
+        #expect(engine.tasks.isEmpty)
+        #expect(try store.load().privateWords.isEmpty)
+        #expect(memory.notes().count == 1)
+    }
+
+    /// The private words couldn't be erased, but the notes and tasks went.
+    @Test func forgetEverythingSaysTheNotesAndTasksWentWhenTheWordsStayed() throws {
+        let memory = scratchMemory("Sam's birthday is May 14.")
+        let store = FailingCloudStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"]))
+        store.savesToFail = .max
+        store.eraseFails = true
+        let help = cloud(store, maker: TransportMaker())
+        let engine = LocalFakeEngine(rule: .isolated())
+        engine.start(SampleTasks.plan)
+        let feed = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: engine.rule), tasks: engine,
+                             place: .onDevice)
+        let model = MemoryModel(store: memory, place: .onDevice, alsoForget: { try help.forgetPrivateWords() },
+                                onForgetEverything: { feed.forgetTasks() })
+        model.forgetEverything()
+        #expect(model.status == CloudWords.forgotNotesAndTasksNotWords)
+        #expect(memory.notes().isEmpty)
+        #expect(engine.tasks.isEmpty)
+    }
+
+    /// Every way the three parts can land has its own honest line. Tasks
+    /// can't fail to go, so they are named only when something stayed.
+    @Test func everyForgetOutcomeHasItsOwnLine() {
+        let line = MemoryModel.forgotLine
+        #expect(line(true, nil, true) == MemoryWords.forgotten)
+        #expect(line(true, .privateWords, true) == MemoryWords.forgotten)
+        #expect(line(true, .privateWordsAndCloud, true) == CloudWords.forgotAndCloudOff)
+        #expect(line(true, .some(nil), false) == CloudWords.forgotNotesNotWords)
+        #expect(line(true, .some(nil), true) == CloudWords.forgotNotesAndTasksNotWords)
+        #expect(line(false, .privateWords, false) == CloudWords.forgotWordsNotNotes)
+        #expect(line(false, .privateWords, true) == CloudWords.forgotTasksAndWordsNotNotes)
+        #expect(line(false, .privateWordsAndCloud, false) == CloudWords.forgotWordsAndCloudNotNotes)
+        #expect(line(false, .privateWordsAndCloud, true) == CloudWords.forgotTasksAndWordsAndCloudNotNotes)
+        #expect(line(false, .some(nil), false) == MemoryWords.couldNotForget)
+        #expect(line(false, .some(nil), true) == CloudWords.forgotTasksNotNotesOrWords)
+        #expect(line(false, nil, false) == MemoryWords.couldNotForget)
+        #expect(line(false, nil, true) == MemoryWords.couldNotForgetNotes)
+        // The cloud's question says tasks go and stop, like the plain one.
+        #expect(CloudWords.forgetEverythingDetail.contains("every task"))
+        #expect(CloudWords.forgetEverythingDetail.contains("stops any task still going"))
+    }
+
     /// Each half is erased whatever happens to the other, and the line says
     /// what actually went.
     @Test func forgetEverythingErasesTheWordsEvenWhenTheNotesCantBeErased() throws {

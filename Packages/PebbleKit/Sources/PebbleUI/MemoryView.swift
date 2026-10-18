@@ -18,11 +18,17 @@ public struct MemoryView: View {
     /// while the screen is open, as when the cloud is turned on from here,
     /// and the words follow it. With `cloud`, the screen ends with a way
     /// into the cloud setting.
-    public init(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp? = nil) {
+    ///
+    /// `onForgetEverything` runs with Forget everything, so whatever else the
+    /// agent holds about the person, such as its tasks, goes too. It says
+    /// what it forgot, so the status line can be honest about it.
+    public init(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp? = nil,
+                onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) {
         // Forget everything erases the words always hidden too.
         var alsoForget: (@MainActor () throws -> CloudHelp.Forgot)?
         if let cloud { alsoForget = { try cloud.forgetPrivateWords() } }
-        _model = StateObject(wrappedValue: MemoryModel(store: store, place: place, alsoForget: alsoForget))
+        _model = StateObject(wrappedValue: MemoryModel(store: store, place: place, alsoForget: alsoForget,
+                                                       onForgetEverything: onForgetEverything))
         self.place = place
         self.cloud = cloud
     }
@@ -219,6 +225,75 @@ private struct CloudWatcher<Content: View>: View {
     var body: some View { content(help) }
 }
 
+/// The memory screen when the notes couldn't be opened. It says so rather
+/// than hide memory; they are only opened again at launch, so the words say
+/// that. Forget everything needs the notes, so tasks can be forgotten here
+/// on their own, with words that are honest that the notes stay.
+struct MemoryUnavailableView: View {
+    let hasTasks: Bool
+    /// True once every task was forgotten here, until a new one starts.
+    var forgotten = false
+    /// The line kept while a step said yes to may have happened.
+    var underway: String?
+    let onForgetTasks: @MainActor () -> Void
+    @State private var asking = false
+    /// The button goes once the tasks do, so VoiceOver goes to the line
+    /// that says what happened rather than nowhere.
+    @AccessibilityFocusState private var statusFocused: Bool
+
+    /// What the screen says once the tasks are gone. Nil before then.
+    var status: String? {
+        guard forgotten, !hasTasks else { return nil }
+        return [TaskWords.tasksForgotten, underway].compactMap { $0 }.joined(separator: " ")
+    }
+
+    var body: some View {
+        ZStack {
+            Backdrop()
+            VStack(spacing: 18) {
+                GentleNotice(text: MemoryWords.couldNotOpen)
+                if hasTasks {
+                    Button(role: .destructive) { asking = true } label: {
+                        Text(TaskWords.forgetTasksTitle)
+                            .font(.subheadline.weight(.semibold))
+                            // The system red is about 3.6 to 1 on white.
+                            .foregroundStyle(Theme.dangerText)
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                    .accessibilityIdentifier("forgetTasks")
+                } else if let status {
+                    Text(status)
+                        .font(.footnote)
+                        .foregroundStyle(Theme.secondaryText)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity)
+                        .accessibilityIdentifier("tasksForgotten")
+                        .accessibilityFocused($statusFocused)
+                        .onAppear {
+                            // A beat later, once it is on screen; set in
+                            // the same pass that adds it, SwiftUI drops it.
+                            Task { @MainActor in statusFocused = true }
+                        }
+                }
+            }
+            .padding(Theme.gutter)
+            .frame(maxWidth: Theme.readableWidth)
+        }
+        .confirmationDialog(TaskWords.forgetTasksQuestion, isPresented: $asking, titleVisibility: .visible) {
+            Button(TaskWords.forgetTasksTitle, role: .destructive, action: forgetTasks)
+            Button(MemoryWords.cancelTitle, role: .cancel) {}
+        } message: {
+            Text(TaskWords.forgetTasksDetail)
+        }
+    }
+
+    /// What the dialog's button does.
+    func forgetTasks() {
+        onForgetTasks()
+    }
+}
+
 struct MemoryRow: View {
     let note: MemoryNote
     let isEditing: Bool
@@ -325,7 +400,6 @@ struct SourceLabel: View {
 @MainActor
 final class MemoryModel: ObservableObject {
     let store: MemoryStore
-    /// Whether the words here may promise the device.
     /// Whether the words here may promise the device. The screen keeps it
     /// up to date, since turning the cloud on or starting a cloud chat
     /// changes it while the notes stay open.
@@ -358,10 +432,15 @@ final class MemoryModel: ObservableObject {
     /// sometimes the cloud setting with them.
     private let alsoForget: (@MainActor () throws -> CloudHelp.Forgot)?
 
-    init(store: MemoryStore, place: PrivacyPlace, alsoForget: (@MainActor () throws -> CloudHelp.Forgot)? = nil) {
+    /// Forgets what lives outside the memory file, such as tasks.
+    private let onForgetEverything: @MainActor () -> ClearedTasks
+
+    init(store: MemoryStore, place: PrivacyPlace, alsoForget: (@MainActor () throws -> CloudHelp.Forgot)? = nil,
+         onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) {
         self.store = store
         self.place = place
         self.alsoForget = alsoForget
+        self.onForgetEverything = onForgetEverything
         refresh()
     }
 
@@ -428,26 +507,39 @@ final class MemoryModel: ObservableObject {
     /// Forget everything covers, then says what actually went.
     func forgetEverything() {
         cancelEdit()
+        // First, and even if the file can't be erased: the person asked to
+        // forget, and nothing here depends on the file.
+        let tasks = onForgetEverything()
         let notesGone = (try? store.forgetEverything()) != nil
         // nil when there is nothing else; .some(nil) when it couldn't go.
         let rest = alsoForget.map { forget in try? forget() }
+        // A step said yes to may have happened, so the line says so here too.
+        let underway = tasks.underwayLine.map { " " + $0 } ?? ""
+        status = Self.forgotLine(notesGone: notesGone, rest: rest, tasksGone: tasks.forgotten > 0) + underway
+        let restGone = rest.map { $0 != nil } == true
+        if notesGone || restGone || tasks.forgotten > 0 { forgottenCount += 1 }
+        refresh()
+    }
+
+    /// What Forget everything says went, from what each part did. Tasks
+    /// can't fail to go, so they are named only when something else stayed.
+    static func forgotLine(notesGone: Bool, rest: CloudHelp.Forgot??, tasksGone: Bool) -> String {
         switch (notesGone, rest) {
         case (true, nil), (true, .privateWords?):
-            status = MemoryWords.forgotten
+            MemoryWords.forgotten
         case (true, .privateWordsAndCloud?):
-            status = CloudWords.forgotAndCloudOff
+            CloudWords.forgotAndCloudOff
         case (true, nil?):
-            status = CloudWords.forgotNotesNotWords
+            tasksGone ? CloudWords.forgotNotesAndTasksNotWords : CloudWords.forgotNotesNotWords
         case (false, .privateWords?):
-            status = CloudWords.forgotWordsNotNotes
+            tasksGone ? CloudWords.forgotTasksAndWordsNotNotes : CloudWords.forgotWordsNotNotes
         case (false, .privateWordsAndCloud?):
-            status = CloudWords.forgotWordsAndCloudNotNotes
-        case (false, _):
-            status = MemoryWords.couldNotForget
+            tasksGone ? CloudWords.forgotTasksAndWordsAndCloudNotNotes : CloudWords.forgotWordsAndCloudNotNotes
+        case (false, nil?):
+            tasksGone ? CloudWords.forgotTasksNotNotesOrWords : MemoryWords.couldNotForget
+        case (false, nil):
+            tasksGone ? MemoryWords.couldNotForgetNotes : MemoryWords.couldNotForget
         }
-        let restGone = rest.map { $0 != nil } == true
-        if notesGone || restGone { forgottenCount += 1 }
-        refresh()
     }
 
     private func report(_ decision: @autoclosure () throws -> MemoryStore.Decision, onSaved: () -> Void) {

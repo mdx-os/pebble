@@ -126,10 +126,13 @@ public enum MemoryWords {
     public static let addTitle = "Remember"
     public static let forgetEverythingQuestion = "Forget everything I remember?"
     // Says "this device" without asking `place`, and that is on purpose.
-    // It is about where the notes are, not where the chat goes: notes live
-    // only in `MemoryStore`'s local file whatever the model is, so this is
-    // true even with a cloud model. Don't gate it like the lines above.
-    public static let forgetEverythingDetail = "This removes every note from this device. It can't be undone."
+    // It is about where the notes and tasks are, not where the chat goes:
+    // notes live only in `MemoryStore`'s local file and tasks only in the
+    // engine on this device, whatever the model is, so this is true even
+    // with a cloud model. It makes no promise about the chat. Don't gate it
+    // like the lines above. Forget everything forgets tasks too, so it says
+    // running ones stop.
+    public static let forgetEverythingDetail = "This removes every note and every task from this device, and stops any task still going. It can't be undone."
     /// See the note above `empty`.
     public static func privacyNote(_ place: PrivacyPlace) -> String {
         place.staysOnDevice ? "Kept only on this device. Removing a note erases it." : "Removing a note erases it."
@@ -144,6 +147,8 @@ public enum MemoryWords {
     public static let forgetOneQuestion = "Forget this note?"
     public static let editPlaceholder = "What should I remember instead?"
     public static let couldNotForget = "Sorry, I couldn't erase that just now. Please try again in a moment."
+    /// Forget everything when the tasks went but the notes couldn't be erased.
+    public static let couldNotForgetNotes = "I forgot your tasks, but I couldn't erase your notes just now. Please try again in a moment."
 }
 
 /// Notes the agent keeps, stored only on this device.

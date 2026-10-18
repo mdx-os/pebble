@@ -47,7 +47,8 @@ public struct HomeView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     /// `feed` is where finished work comes from. Questions come only from
-    /// `needsYou`, which asks through `AskFirst`.
+    /// `needsYou` and `tasks`, which both ask through `AskFirst`. `tasks`
+    /// shows long work on live cards.
     public init(
         brand: Brand,
         model: any ModelClient,
@@ -57,10 +58,11 @@ public struct HomeView: View {
         looks: UserDefaults = .standard,
         feed: [any FeedSource] = [EmptyFeedSource()],
         needsYou: NeedsYou = NeedsYou(),
+        tasks: (any TaskEngine)? = nil,
         cloud: CloudHelp? = nil
     ) {
         self.init(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
-                  looks: looks, conversation: nil, section: .today, feed: feed, needsYou: needsYou,
+                  looks: looks, conversation: nil, section: .today, feed: feed, needsYou: needsYou, tasks: tasks,
                   cloud: cloud)
     }
 
@@ -78,6 +80,8 @@ public struct HomeView: View {
         // No default: screenshots and tests pass their own rule, so they
         // never touch the app's `AskFirst.shared`.
         needsYou: NeedsYou,
+        tasks: (any TaskEngine)? = nil,
+        drivesTasks: Bool = false,
         now: @escaping () -> Date = { Date() },
         cloud: CloudHelp? = nil
     ) {
@@ -103,7 +107,8 @@ public struct HomeView: View {
         _newChatPlace = State(initialValue: newChatPlace)
         let place = Self.surfacePlace(chat: chat?.privacyPlace, newChat: newChatPlace)
         cloud?.place = place
-        _feed = StateObject(wrappedValue: FeedModel(sources: feed, needsYou: needsYou, place: place, now: now))
+        _feed = StateObject(wrappedValue: FeedModel(sources: feed, needsYou: needsYou, tasks: tasks,
+                                                    drivesTasks: drivesTasks, place: place, now: now))
         _section = State(initialValue: section)
     }
 
@@ -226,7 +231,7 @@ public struct HomeView: View {
         // asked. Closing it any way but yes withdraws the question.
         .sheet(item: $feed.reviewing, onDismiss: { feed.refresh() }) { request in
             ConfirmationSheet(request: request, look: AgentLook.load(from: looks), rule: feed.rule,
-                              isExample: feed.needsYou.isSample,
+                              isExample: feed.isSample(request),
                               onApprove: { feed.approved($0) },
                               onDecline: { feed.closedQuestion(request) })
                 .onDisappear { feed.closedQuestion(request) }
@@ -421,10 +426,11 @@ public struct HomeView: View {
     @ViewBuilder
     private var memoryScreen: some View {
         if let memory {
-            MemoryView(store: memory, place: surfacePlace, cloud: cloud)
+            MemoryView(store: memory, place: surfacePlace, cloud: cloud,
+                       onForgetEverything: { feed.forgetTasks() })
         } else {
             // The store couldn't be opened. Say so rather than hide memory.
-            // It is only opened again at launch, so the words say that.
+            // Tasks can still be forgotten here, since Forget everything isn't.
             //
             // The cloud setting is reached only through the memory screen,
             // so it has no way in from here, and that is safe. The notes
@@ -435,12 +441,8 @@ public struct HomeView: View {
             // notes to read the redactor refuses to send anything. If the
             // setting is ever kept somewhere that opens on its own, give it
             // a route here, so it can always be seen and turned off.
-            ZStack {
-                Backdrop()
-                GentleNotice(text: MemoryWords.couldNotOpen)
-                    .padding(Theme.gutter)
-                    .frame(maxWidth: Theme.readableWidth)
-            }
+            MemoryUnavailableView(hasTasks: feed.hasTasks, forgotten: feed.tasksForgotten,
+                                  underway: feed.forgotUnderway, onForgetTasks: { feed.forgetTasks() })
         }
     }
 }
