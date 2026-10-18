@@ -509,17 +509,30 @@ struct CloudPromiseTests {
     /// private words are kept.
     @Test func theForgetEverythingQuestionFollowsThePrivateWords() throws {
         let cloud = help()
-        #expect(MemoryView.forgetEverythingDetail(for: nil) == MemoryWords.forgetEverythingDetail)
-        #expect(MemoryView.forgetEverythingDetail(for: cloud) == MemoryWords.forgetEverythingDetail)
+        #expect(MemoryView.forgetEverythingDetail(for: nil) == MemoryWords.forgetEverythingDetail(background: false))
+        #expect(MemoryView.forgetEverythingDetail(for: cloud) == MemoryWords.forgetEverythingDetail(background: false))
         cloud.newPrivateWord = "lemon cake"
         cloud.addPrivateWord()
         #expect(MemoryView.forgetEverythingDetail(for: cloud) == CloudWords.forgetEverythingDetail)
+        // With background work, the summaries and the switch are named too,
+        // with the private words or without.
+        #expect(MemoryView.forgetEverythingDetail(for: cloud, background: true)
+                == CloudWords.forgetEverythingWithSummariesDetail)
+        #expect(MemoryView.forgetEverythingDetail(for: help(), background: true)
+                == MemoryWords.forgetEverythingDetail(background: true))
+        #expect(MemoryView.forgetEverythingDetail(for: nil, background: true)
+                == MemoryWords.forgetEverythingDetail(background: true))
         let source = try String(contentsOf: Self.sources.appendingPathComponent("PebbleUI/MemoryView.swift"),
                                 encoding: .utf8)
         let dialog = try #require(source.range(of: "private struct ForgetEverythingDialog"))
-        let watching = source[dialog.upperBound...].prefix(1_200)
+        // The struct's own body, up to its closing brace at the start of a
+        // line: the types inside it close indented.
+        let after = source[dialog.upperBound...]
+        let end = try #require(after.range(of: "\n}\n"), "ForgetEverythingDialog's closing brace")
+        let watching = after[..<end.lowerBound]
+        #expect(!watching.contains("\nstruct ") && !watching.contains("\nprivate struct "), "only the one struct")
         #expect(watching.contains("@ObservedObject var help: CloudHelp"))
-        #expect(watching.contains("forgetEverythingDetail(for: help)"))
+        #expect(watching.contains("forgetEverythingDetail(for: help, background: background)"))
     }
 
     /// The notes folder won't open, but a words file from an earlier launch
@@ -685,7 +698,7 @@ struct CloudPromiseTests {
         // None kept, read fine: the plain words.
         let empty = help()
         #expect(!empty.mayHavePrivateWords)
-        #expect(MemoryView.forgetEverythingDetail(for: empty) == MemoryWords.forgetEverythingDetail)
+        #expect(MemoryView.forgetEverythingDetail(for: empty) == MemoryWords.forgetEverythingDetail(background: false))
 
         // Opened, read and erased: nothing left to name.
         try cloud.forgetPrivateWords()
@@ -698,7 +711,7 @@ struct CloudPromiseTests {
         let unopened = CloudHelp.couldNotOpen(endpoint: endpoint, memory: scratchMemory(), file: { file })
         #expect(MemoryView.forgetEverythingDetail(for: unopened) == CloudWords.forgetEverythingDetail)
         try unopened.forgetPrivateWords()
-        #expect(MemoryView.forgetEverythingDetail(for: unopened) == MemoryWords.forgetEverythingDetail)
+        #expect(MemoryView.forgetEverythingDetail(for: unopened) == MemoryWords.forgetEverythingDetail(background: false))
         // With nothing to reach, nothing was ever kept.
         #expect(!CloudHelp.couldNotOpen(endpoint: endpoint, memory: nil).mayHavePrivateWords)
 
@@ -707,7 +720,10 @@ struct CloudPromiseTests {
         let source = try String(contentsOf: Self.sources.appendingPathComponent("PebbleUI/MemoryView.swift"),
                                 encoding: .utf8)
         #expect(source.contains(".onAppear { cloud?.refresh() }"))
-        #expect(source.contains("model.hasStoredFile || help.mayHavePrivateWords"))
+        #expect(source.contains("hasNotes: model.hasSomethingToForget, mayHaveWords: help.mayHavePrivateWords"))
+        #expect(MemoryView.showsForgetEverything(hasNotes: false, mayHaveWords: true, holdsMore: false))
+        // Which shows for the notes file, and for background work's summaries.
+        #expect(source.contains("var hasSomethingToForget: Bool { hasStoredFile || hasBackgroundToForget }"))
     }
 
     /// The setting's changes reach the home screen through one publisher,

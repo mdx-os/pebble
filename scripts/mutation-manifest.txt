@@ -170,11 +170,21 @@ perl: s~for session in sessions\.allObjects where session\.holdsAnything \{ sess
 
 test: forgetEverythingFirstEndsEveryOpenCloudChat afterSendingNoForgetLineSaysGone
 file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
-perl: s~guard sent else \{ return line \}~guard false else { return line }~
+perl: s~let line = switch \(sent, notesGone, rest\)~let line = switch (false, notesGone, rest)~
+perl: s~return sent \? whole~return false ? whole~
 
 test: forgetEverythingWithNothingSentEndsTheChatAndSaysGone
 file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
 perl: s~let sent = endsCloudChats\?\(\) \?\? false~let sent = true~
+
+# With background work too, the chats still end first and the line stays honest.
+test: forgetEverythingEndsCloudChatsFirstThenClearsTheSummariesToo
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~let sent = endsCloudChats\?\(\) \?\? false~let sent = false~
+
+test: afterSendingTheSummaryLinesStayHonest
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~return sent \? whole \+ " " \+ CloudWords\.sentCantBeErased : whole~return whole~
 
 test: forgettingEndsAnOpenCloudChat
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
@@ -518,7 +528,7 @@ perl: s~guard !Task\.isCancelled, !hasEnded, generation == replyGeneration else 
 
 test: afterSendingNoForgetLineSaysGone
 file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
-perl: s~case \(true, nil\), \(true, \.privateWords\?\): CloudWords\.forgotAfterSending~case (true, nil): CloudWords.forgotAfterSending~
+perl: s~case \(true, true, nil\), \(true, true, \.privateWords\?\): CloudWords\.forgotAfterSending~case (true, true, nil): CloudWords.forgotAfterSending~
 
 # Plurals fold a trailing s only, and blank words hide nothing.
 test: aPluralOtherThanATrailingSSlipsBy
@@ -593,7 +603,7 @@ test: theLocalConfigCheckFailsWhenProjectYmlSetsAnAddress
 file: scripts/local-config-check.sh
 perl: s~PEBBLE_CLOUD_ENDPOINT\(\\\[\[\^\]\]\*\\\]\)\*"\?~PEBBLE_CLOUD_ENDPOINT"?~
 
-test: theLocalConfigCheckFailsWhenATrackedConfigCantBeRead
+test: theLocalConfigCheckFailsWhenATrackedConfigCantBeRead theLocalConfigCheckFailsWhenATrackedConfigIsUnreadable
 file: scripts/local-config-check.sh
 perl: s~can't read the tracked \$config, so I can't check it\."\n    exit 1~can't read the tracked \$config, so I can't check it."\n    continue~g
 
@@ -754,7 +764,7 @@ perl: s~ mutation-check build build-release~ build build-release~
 
 test: verifyRunsTheCommentLintAndTheMutationCheck
 file: Makefile
-perl: s~ comment-lint test release-test~ test release-test~
+perl: s~ comment-lint screenshots-check-test test release-test~ screenshots-check-test test release-test~
 
 test: verifyRunsTheCommentLintAndTheMutationCheck
 file: Makefile
@@ -910,4 +920,4 @@ perl: s~WritingOptions = \[\.noFileProtection\]~WritingOptions = [.noFileProtect
 
 test: verifyRunsTheCommentLintAndTheMutationCheck
 file: Makefile
-perl: s~(\nverify:[^\n]*) build build-release screenshots~$1 build screenshots~
+perl: s~(\nverify:[^\n]*) build build-release\n~$1 build\n~

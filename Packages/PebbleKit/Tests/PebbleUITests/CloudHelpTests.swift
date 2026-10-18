@@ -1376,11 +1376,12 @@ struct CloudHelpTests {
         #expect(engine.tasks.isEmpty)
     }
 
-    /// Every way the three parts can land has its own honest line. Tasks
-    /// can't fail to go, so they are named only when something stayed.
-    @Test func everyForgetOutcomeHasItsOwnLine() {
-        let line: (Bool, CloudHelp.Forgot??, Bool) -> String = {
-            MemoryModel.forgotLine(notesGone: $0, rest: $1, tasksGone: $2)
+    /// Every way the parts can land has its own honest line. Tasks can't
+    /// fail to go, so they are named only when something stayed. With
+    /// background work, the morning summaries are named the same way.
+    @Test func everyForgetOutcomeHasItsOwnLine() throws {
+        let line = { (notes: Bool, rest: CloudHelp.Forgot??, tasks: Bool) in
+            MemoryModel.forgotLine(notesGone: notes, rest: rest, tasksGone: tasks)
         }
         #expect(line(true, nil, true) == MemoryWords.forgotten)
         #expect(line(true, .privateWords, true) == MemoryWords.forgotten)
@@ -1406,6 +1407,87 @@ struct CloudHelpTests {
         // The cloud's question says tasks go and stop, like the plain one.
         #expect(CloudWords.forgetEverythingDetail.contains("every task"))
         #expect(CloudWords.forgetEverythingDetail.contains("stops any task still going"))
+
+        // With background work, its file erased or not. Work while you're
+        // away is off and its cards are gone either way.
+        let withSummaries = { (notes: Bool, rest: CloudHelp.Forgot??, tasks: Bool, summaries: MemoryModel.Summaries) in
+            MemoryModel.forgotLine(notesGone: notes, rest: rest, tasksGone: tasks, summaries: summaries)
+        }
+        let everyRest: [CloudHelp.Forgot??] = [nil, .some(nil), .some(.some(.privateWords)),
+                                                .some(.some(.privateWordsAndCloud))]
+        var allWent = 0
+        for tasks in [false, true] {
+            // All the rest went: the same line as without background work,
+            // whatever that line is, or one that says only the summaries stayed.
+            for notes in [false, true] {
+                for rest in everyRest where line(notes, rest, tasks) == MemoryWords.forgotten {
+                    allWent += 1
+                    #expect(withSummaries(notes, rest, tasks, .erased) == line(notes, rest, tasks))
+                    // It names the notes, the tasks and the hidden words
+                    // only when they went.
+                    for hadNotes in [false, true] {
+                        #expect(MemoryModel.forgotLine(notesGone: notes, rest: rest, tasksGone: tasks,
+                                                       summaries: .stayed, hadNotes: hadNotes)
+                                == MemoryWords.couldNotForgetSummaries(notes: hadNotes, tasks: tasks,
+                                                                       words: rest == .some(.some(.privateWords))))
+                    }
+                }
+            }
+            #expect(withSummaries(true, .privateWordsAndCloud, tasks, .erased)
+                    == line(true, .privateWordsAndCloud, tasks))
+            // The cloud's form names the tasks only when they went, and the
+            // notes only when there were some.
+            for hadNotes in [false, true] {
+                let stayed = MemoryModel.forgotLine(notesGone: true, rest: .privateWordsAndCloud, tasksGone: tasks,
+                                                    summaries: .stayed, hadNotes: hadNotes)
+                #expect(stayed == CloudWords.forgotAndCloudOffNotSummaries(notes: hadNotes, tasks: tasks))
+                #expect(stayed.contains("tasks") == tasks, "\(stayed)")
+                #expect(stayed.contains("notes") == hadNotes, "\(stayed)")
+            }
+            // Something else stayed: its own line, then what happened to
+            // the summaries, and the advice to try again last of all.
+            let someStayed: [(Bool, CloudHelp.Forgot??)] = [
+                (true, .some(nil)), (false, nil), (false, .some(nil)),
+                (false, .some(.some(.privateWords))), (false, .some(.some(.privateWordsAndCloud))),
+            ]
+            for (notes, rest) in someStayed {
+                let plain = line(notes, rest, tasks)
+                let retry = try #require(MemoryWords.retryAdvice.first { plain.hasSuffix(" " + $0) },
+                                         "\(plain) ends with advice to try again")
+                let body = String(plain.dropLast(retry.count + 1))
+                #expect(withSummaries(notes, rest, tasks, .erased)
+                        == body + " " + MemoryWords.summariesGone + " " + retry)
+                #expect(withSummaries(notes, rest, tasks, .stayed)
+                        == body + " " + MemoryWords.summariesStayed + " " + retry)
+                // A step said yes to that may have happened goes before it too.
+                let underway = TaskWords.forgotUnderway(1)
+                #expect(MemoryModel.forgotLine(notesGone: notes, rest: rest, tasksGone: tasks, summaries: .erased,
+                                               underway: underway)
+                        == body + " " + MemoryWords.summariesGone + " " + underway + " " + retry)
+            }
+        }
+        #expect(allWent == 4, "both tasks cases, with and without the private words")
+        // Where every part went, nothing says to try again, and the
+        // underway line simply follows.
+        #expect(MemoryModel.forgotLine(notesGone: true, rest: nil, tasksGone: true, summaries: .erased,
+                                       underway: TaskWords.forgotUnderway(1))
+                == MemoryWords.forgotten + " " + TaskWords.forgotUnderway(1))
+        // Each line where the summaries stayed and the rest went ends with the advice.
+        for stayed in MemoryWords.couldNotForgetSummariesLines + CloudWords.forgotAndCloudOffNotSummariesLines {
+            #expect(MemoryWords.retryAdvice.contains { stayed.hasSuffix(" " + $0) }, "\(stayed)")
+        }
+        // Each line where the summaries stayed says so, and that the switch is off.
+        for stayed in MemoryWords.couldNotForgetSummariesLines + CloudWords.forgotAndCloudOffNotSummariesLines
+            + [MemoryWords.summariesStayed] {
+            #expect(stayed.contains("couldn't erase your morning summaries"), "\(stayed)")
+            #expect(stayed.lowercased().contains("work while you're away"), "\(stayed)")
+        }
+        #expect(MemoryWords.summariesGone.contains("work while you're away is off"))
+        // The question with both names the summaries, the switch and the words.
+        #expect(CloudWords.forgetEverythingWithSummariesDetail.contains("every morning summary"))
+        #expect(CloudWords.forgetEverythingWithSummariesDetail.contains("every word you asked me to hide"))
+        #expect(CloudWords.forgetEverythingWithSummariesDetail.contains("turns off work while you're away"))
+        #expect(CloudWords.forgetEverythingWithSummariesDetail.contains("stops any task still going"))
     }
 
     /// Once anything was handed to the cloud this session, no outcome says

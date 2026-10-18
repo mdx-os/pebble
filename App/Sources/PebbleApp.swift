@@ -1,3 +1,4 @@
+import PebbleBackground
 import PebbleCore
 import PebbleModel
 import PebbleUI
@@ -14,6 +15,20 @@ struct PebbleApp: App {
     /// the setting must not re-run the body and rebuild the home screen.
     /// The screens that show it observe it themselves.
     @State private var cloud: CloudHelp
+    /// The app's questions, shared by Today and the background runner, so
+    /// anything the runner asks waits in the same Needs you.
+    private let needsYou: NeedsYou
+    /// The app's task engine, shared by Today and the background runner,
+    /// so the summary counts the tasks Today shows. `BackgroundWiring`
+    /// gives it: there is none yet.
+    private let tasks: (any TaskEngine)?
+    /// Work done while the app is closed. Off until the person turns it on
+    /// from the memory screen. Its runner is nil if its folder can't be made.
+    private let background: BackgroundService
+    /// Tasks and receipts kept while the app is closed. If the folder
+    /// can't be opened they are kept in memory, and Forget everything still
+    /// deletes a file an earlier launch left.
+    private let kept: TaskStore
 
     /// The one notes store, shared by the memory screen and the cloud
     /// redactor. Read from `cloud`, so the two are always the same store.
@@ -43,6 +58,26 @@ struct PebbleApp: App {
             endpoint: CloudEndpoint.url(infoDictionary: Bundle.main.infoDictionary),
             openStore: { try CloudHelpFileStore.onDevice() }
         ))
+        // Before launch finishes, so a nudge opened from the lock screen
+        // reaches Today even when it starts the app. Asks for nothing.
+        LocalQuestionNotifier.shared.install()
+        kept = (try? TaskStore.onDevice()) ?? TaskStore.forgetOnly()
+        let asks = NeedsYou()
+        needsYou = asks
+        // Registered here, before launch ends, or the system won't run it.
+        let wiring: BackgroundWiring
+        #if DEBUG
+        if let seeded = BackgroundSeed.launched() {
+            wiring = .app(needsYou: asks, store: { seeded.store }, toggle: { seeded.toggle })
+        } else {
+            wiring = .app(needsYou: asks)
+        }
+        #else
+        wiring = .app(needsYou: asks)
+        #endif
+        tasks = wiring.tasks
+        background = wiring.service
+        background.start()
     }
 
     var body: some Scene {
@@ -67,7 +102,12 @@ struct PebbleApp: App {
             names: UserDefaultsAgentNameStore(),
             onboarding: UserDefaultsOnboardingStore(),
             memory: memory,
-            cloud: cloud
+            needsYou: needsYou,
+            tasks: tasks,
+            kept: kept,
+            notifier: LocalQuestionNotifier.shared,
+            cloud: cloud,
+            background: background.runner
         )
     }
 }

@@ -131,8 +131,16 @@ public enum MemoryWords {
     // engine on this device, whatever the model is, so this is true even
     // with a cloud model. It makes no promise about the chat. Don't gate it
     // like the lines above. Forget everything forgets tasks too, so it says
-    // running ones stop.
-    public static let forgetEverythingDetail = "This removes every note and every task from this device, and stops any task still going. It can't be undone."
+    // running ones stop. With `background`, work while away is on or has
+    // summaries to erase, and it says that turns off and its summaries,
+    // kept in the same folder as the notes, are erased. Without, it never
+    // promises to turn off what is already off, or to erase what isn't there.
+    // Either way the nudge choice stays, since it holds nothing of the person's.
+    public static func forgetEverythingDetail(background: Bool) -> String {
+        background
+            ? "This removes every note, every task and every morning summary from this device, stops any task still going, and turns off work while you're away. It can't be undone. Your choice about nudges stays as it is."
+            : "This removes every note and every task from this device, and stops any task still going. It can't be undone. Your choice about nudges stays as it is."
+    }
     /// See the note above `empty`.
     public static func privacyNote(_ place: PrivacyPlace) -> String {
         place.staysOnDevice ? "Kept only on this device. Removing a note erases it." : "Removing a note erases it."
@@ -149,6 +157,85 @@ public enum MemoryWords {
     public static let couldNotForget = "Sorry, I couldn't erase that just now. Please try again in a moment."
     /// Forget everything when the tasks went but the notes couldn't be erased.
     public static let couldNotForgetNotes = "I forgot your tasks, but I couldn't erase your notes just now. Please try again in a moment."
+    /// How a Forget everything line opens when the summaries' file stayed:
+    /// "I forgot your notes and tasks, and turned off work while you're
+    /// away". It names only what went: the notes and the tasks only when
+    /// there were some, and the hidden words only when they were erased.
+    /// With none of them, it says only that work while away is off.
+    public static func forgotAndTurnedOff(notes: Bool, tasks: Bool, words: Bool) -> String {
+        let yours = (notes ? ["notes"] : []) + (tasks ? ["tasks"] : [])
+        let went = yours + (words ? ["any words you asked me to hide"] : [])
+        guard let last = went.last else { return "I turned off work while you're away" }
+        let listed = went.count == 1 ? last : went.dropLast().joined(separator: ", ") + " and " + last
+        let named = (yours.isEmpty ? "" : "your ") + listed
+        return went.count == 1
+            ? "I forgot \(named) and turned off work while you're away"
+            : "I forgot \(named), and turned off work while you're away"
+    }
+    /// Forget everything when the rest went but the morning summaries'
+    /// file couldn't be erased. Work while you're away is off either way.
+    /// It opens with what went (`forgotAndTurnedOff`).
+    public static func couldNotForgetSummaries(notes: Bool, tasks: Bool, words: Bool) -> String {
+        forgotAndTurnedOff(notes: notes, tasks: tasks, words: words)
+            + ", but I couldn't erase your morning summaries just now. Please try Forget everything again in a moment."
+    }
+    /// Every form of `couldNotForgetSummaries`, for the word checks.
+    public static let couldNotForgetSummariesLines = [false, true].flatMap { notes in
+        [false, true].flatMap { tasks in
+            [false, true].map { couldNotForgetSummaries(notes: notes, tasks: tasks, words: $0) }
+        }
+    }
+    /// Follows a Forget everything line that says something else stayed,
+    /// when the morning summaries' file was erased.
+    public static let summariesGone = "Your morning summaries are gone, and work while you're away is off."
+    /// The same, when the summaries' file couldn't be erased either.
+    public static let summariesStayed = "Work while you're away is off, but I couldn't erase your morning summaries either."
+    /// The advice that ends a Forget everything line when something stayed.
+    /// Whatever is said after such a line goes before it, so it comes last.
+    public static let retryAdvice = ["Please try Forget everything again in a moment.", "Please try again in a moment."]
+}
+
+extension Data.WritingOptions {
+    /// How a store writes its staged copy: never over a file already there,
+    /// and on iPhone and iPad with `protection`. The rename that follows
+    /// keeps the class, so the file has it too.
+    package static func staged(_ protection: FileProtectionType) -> Data.WritingOptions {
+        #if os(macOS)
+        staged(protection, protecting: false)
+        #else
+        staged(protection, protecting: true)
+        #endif
+    }
+
+    /// `protecting` is false on the Mac, which keeps no protection classes.
+    package static func staged(_ protection: FileProtectionType, protecting: Bool) -> Data.WritingOptions {
+        guard protecting else { return .withoutOverwriting }
+        switch protection {
+        case .completeUntilFirstUserAuthentication:
+            return [.withoutOverwriting, .completeFileProtectionUntilFirstUserAuthentication]
+        case .completeUnlessOpen:
+            return [.withoutOverwriting, .completeFileProtectionUnlessOpen]
+        case .none:
+            return [.withoutOverwriting, .noFileProtection]
+        default:
+            return [.withoutOverwriting, .completeFileProtection]
+        }
+    }
+}
+
+/// Writes a store's staged copy with the store's protection class. Each
+/// store takes one, so a test can see the class every save really asks for.
+package struct ProtectedWriter: Sendable {
+    package let write: @Sendable (Data, URL, FileProtectionType) throws -> Void
+
+    package init(_ write: @escaping @Sendable (Data, URL, FileProtectionType) throws -> Void) {
+        self.write = write
+    }
+
+    /// The real write, with `Data.WritingOptions.staged(_:)`.
+    package static let disk = ProtectedWriter { data, url, protection in
+        try data.write(to: url, options: .staged(protection))
+    }
 }
 
 /// Notes the agent keeps, stored only on this device.
@@ -183,13 +270,19 @@ public final class MemoryStore: @unchecked Sendable {
         case unavailable
     }
 
+    /// The notes can be opened only while the device is unlocked, on iPhone
+    /// and iPad. The strictest class: nothing that runs while locked reads them.
+    public static let fileProtection: FileProtectionType = .complete
+
     public let fileURL: URL
+    private let writer: ProtectedWriter
     private let lock = NSLock()
 
     /// Package access: the app uses `onDevice()` so there is one store per
     /// file. Tests and screenshots point a store at a scratch file.
-    package init(fileURL: URL) {
+    package init(fileURL: URL, writer: ProtectedWriter = .disk) {
         self.fileURL = fileURL
+        self.writer = writer
     }
 
     /// The only other file this store ever writes: the next version of the
@@ -215,7 +308,8 @@ public final class MemoryStore: @unchecked Sendable {
 
     /// The folder the notes live in, inside Application Support and left
     /// out of backups. Other things that must stay on this device, like the
-    /// words the person always wants hidden, are kept here too.
+    /// words the person always wants hidden and the background runner's
+    /// morning summaries, are kept here too.
     public static func onDeviceFolder(fileManager: FileManager = .default) throws -> URL {
         let base = try fileManager.url(
             for: .applicationSupportDirectory, in: .userDomainMask,
@@ -346,11 +440,7 @@ public final class MemoryStore: @unchecked Sendable {
         // Stage under one known name, then rename over the real file. The
         // system never makes a copy somewhere this store can't clean up.
         try removeStaged()
-        #if os(macOS)
-        try data.write(to: stagingURL, options: [.withoutOverwriting])
-        #else
-        try data.write(to: stagingURL, options: [.withoutOverwriting, .completeFileProtection])
-        #endif
+        try writer.write(data, stagingURL, Self.fileProtection)
         guard rename(stagingURL.path, fileURL.path) == 0 else {
             try? removeStaged()
             throw CocoaError(.fileWriteUnknown)

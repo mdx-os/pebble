@@ -23,7 +23,7 @@ targets:
       - App/Sources
     dependencies:
       - package: PebbleKit
-        products: [PebbleCore, PebbleModel, PebbleUI]
+        products: [PebbleCore, PebbleModel, PebbleUI, PebbleBackground]
     info:
       path: App/Info.plist
       properties:
@@ -48,6 +48,12 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
+        # Background work on iPhone and iPad, off until the person turns it
+        # on. Must match BackgroundIdentifiers in PebbleCore; BackgroundTests checks.
+        BGTaskSchedulerPermittedIdentifiers:
+          - $(PRODUCT_BUNDLE_IDENTIFIER).background.refresh
+        UIBackgroundModes:
+          - fetch
     # Every build checks first, so any build with a cloud address fails
     # unless it is Debug and not an archive, wherever the address came from.
     preBuildScripts:

@@ -2,6 +2,7 @@
 import CryptoKit
 import Foundation
 import Testing
+import TestScratch
 
 /// The shell guards `make verify` runs, each driven against scratch files,
 /// so a guard that stops catching what it is for fails here.
@@ -142,11 +143,21 @@ struct ScriptGuardTests {
         #expect(try Self.run(["sh", check, repo.path], in: repo) == 0)
         try FileManager.default.removeItem(at: config)
         #expect(try Self.run(["sh", check, repo.path], in: repo) == 1)
-        // Root reads a file whatever its permissions say, so a runner that
-        // runs as root can't make one unreadable this way; there, the
-        // deleted file above is the check.
-        guard getuid() != 0 else { return }
+    }
+
+    /// The same, for a tracked config whose file modes keep it from being
+    /// read. Root reads a file whatever its modes say, so this one runs only
+    /// where they hold, and fails rather than skips in CI.
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
+    func theLocalConfigCheckFailsWhenATrackedConfigIsUnreadable() throws {
+        let repo = try scratchFolder()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let check = Self.script("local-config-check.sh")
+        #expect(try Self.run(["git", "init", "--quiet"], in: repo) == 0)
+        let config = repo.appendingPathComponent("Config/Cloud.xcconfig")
         try Data("PEBBLE_CLOUD_ENDPOINT =\n".utf8).write(to: config)
+        #expect(try Self.run(["git", "add", "Config/Cloud.xcconfig"], in: repo) == 0)
+        #expect(try Self.run(["sh", check, repo.path], in: repo) == 0)
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: config.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: config.path) }
         #expect(try Self.run(["sh", check, repo.path], in: repo) == 1)

@@ -22,7 +22,8 @@ in lint, a skill, or CI.
 - `make comment-lint`: no review history ("fix round", "item 11", "round 4") or personal names in code comments, project.yml, the Makefile or the mutation manifest. Say what the code or test protects. The names it blocks are never committed in plain text: `Config/comment-lint-names.sha256` holds a salt and the SHA-256 of each name, and CI needs no secret. The plain list lives only in the git-ignored `Config/comment-lint-names.local.txt`; after changing it, run `make hash-names` and commit the hash file. A match prints the file and line, never the name. Never print, copy or quote the local list
 - `make build-release`: Release builds for macOS and the iOS Simulator (part of verify). Anything behind `#if DEBUG`, like the showcase, must only be used behind it too. Every build with a cloud address fails unless it is Debug and not an archive, whatever the configuration is called
 - `make pulse`: fetch the competitor watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
-- `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`
+- `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`, plus a `STAMP` with the commit and the working tree's hash. `make verify` makes them and then fails with "screenshots are stale, rerun make screenshots" if the stamp is missing or the tree has changed since. The tree hash is the contract: the same files make the same screenshots, so committing or amending them with nothing changed keeps them fresh. The commit line is only there to read. Screenshots always show the code as it is now
+- `make screenshots-check`: that check alone, and `make screenshots-check-test` its self-test
 - `make generate`: regenerate `Pebble.xcodeproj` after editing `project.yml`
 - `make secrets-check`: gitleaks over git history
 
@@ -34,15 +35,75 @@ in lint, a skill, or CI.
   - `PebbleCore`: plain types. No SwiftUI, no networking.
   - `PebblePulse`: competitor watch fetching and snapshots. Imports PebbleCore.
   - `PebbleModel`: model adapter. `ModelClient`, the on-device placeholder and `CloudModel` (off by default, every request previewed and redacted by `Redactor` in PebbleCore). Imports PebbleCore. MLX and Ollama adapters plug in here.
+  - `PebbleBackground`: gives the background runner time (`BGTaskScheduler` on iOS, `NSBackgroundActivityScheduler` on the Mac). Imports PebbleCore. Scheduling decisions are pure functions in `BackgroundPlan`; the runner, its store and its switch live in PebbleCore's `Background.swift`, so no platform code goes there.
   - `PebbleUI`: SwiftUI views shared by every platform. Imports PebbleCore and PebbleModel.
 - New code goes in a package, not in `App/`. New layers get added to
   `Package.swift` with their place in the order written down.
+
+## Background work
+
+- On iPhone and iPad the app has the background fetch capability:
+  `UIBackgroundModes: fetch` and one identifier in
+  `BGTaskSchedulerPermittedIdentifiers`, both from `project.yml`. It lets
+  the system wake the app for a short `BGAppRefreshTask`, so the morning
+  summary can be made while the app is closed. It is off until the person
+  turns on "Work while you're away".
+- That run never touches the network. It counts what is already on the
+  device and writes counts and times to its own file. Nothing in
+  `PebbleBackground` or the runner opens a connection.
+- The summary's file uses `completeUntilFirstUserAuthentication`, so it
+  opens once the device has been unlocked since it started. Notes and
+  private words keep `.complete`, and the summary never copies their words.
+- The switch lives in `background-switch.json` with no file protection
+  (`.none`), so a run before the first unlock can read it. It holds only a
+  bool, dates and a reason (on or off, the next due time, why a run waited,
+  whether a Forget everything is pending), never anything of the person's.
+  Keep it that way: nothing else goes in that file. `UserDefaults` can't be
+  read before the first unlock, so the switch is not kept there. Beside it,
+  an empty `.background-switch.json.kept` marks that an earlier version's
+  keys were seen in `UserDefaults`, so they never move over again. It holds
+  no data and stays through Forget everything, so it is the one sign left
+  that the switch was set; people who never had those keys get none.
+- A switch write that fails is tried again at the next read, and an off
+  that hasn't gone in makes the switch unknown. While the switch is
+  unknown the runner never reads or writes its own file and shows no cards:
+  a Forget everything still waiting is kept in the switch.
+- Most background runs end quiet. iOS usually starts a fresh process for
+  them, and Needs you lives only in memory, so the run counts nothing, makes
+  no card and moves the job to tomorrow. A missing morning card after a
+  night in the background is expected, not a bug. The runner counts
+  `NeedsYou`, not the asks `TaskStore` keeps for a task while the app is
+  closed, so those are not in the summary yet.
+- Forget everything clears the runner (its file and the switch's) and
+  everything `TaskStore` keeps (saved tasks, receipts, nudges) in one tap.
+  `BackgroundFeedTests` guards both together.
+- "Locked" for the runner means its file can't be opened yet, found by
+  trying the file (`BackgroundConditions.background(store:...)`). Never
+  derive it from `isProtectedDataAvailable` or the screen lock: a phone
+  locked after its first unlock still makes the summary overnight.
+- After a Forget everything erases the summary's file, the switch file
+  goes too, with the keys an earlier version kept in `UserDefaults`.
+
+## Manual checks before release
+
+Things no test here can reach. Check each on a real iPhone before a release.
+
+- `BackgroundStore.shutError` is `EPERM`. With "Work while you're away" on,
+  restart the phone in the evening and leave it locked, never unlocked,
+  until after 7:00. Unlock it but don't open the app, and download the
+  app's container from Xcode's Devices window: `background-switch.json`
+  (or the job in `background.json`) should hold `"locked"`. If neither
+  does, opening the file failed with another error, and the runner took
+  it as a disk error.
 
 ## The name
 
 - The product name lives only in `Config/Brand.xcconfig`. Code reads it from
   `Brand` and never spells it. `make brand-check` enforces this.
 - Code, modules, bundle IDs and the repo use the codename `pebble`.
+- But never in a new key, path, folder or launch argument, where it would
+  be written down and outlive a rename: `make brand-check` fails on a new
+  lowercase `pebble` in Swift. Old ones stay in `scripts/brand-check-known.txt`.
 - Each user may name their own agent. Never confuse the agent's name with a
   person in the user's contacts.
 
@@ -63,6 +124,14 @@ in lint, a skill, or CI.
 - No em dashes or en dashes in commits, PR bodies or UI copy.
 - No co-authored-by footers unless the founder asks.
 - Squash merge.
+
+## Learned the hard way
+
+- `UNUserNotificationCenterDelegate`: use the completion-handler methods, not
+  the async ones. The async ones answer UIKit off the main thread and crash
+  the app as a notification opens. `NeedsYouFlowModelTests` guards this.
+- `onReceive` of a `@Published` publisher replays its value each time the
+  body runs. To react to a change, observe the object and use `onChange`.
 
 ## Never
 
