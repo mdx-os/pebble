@@ -19,13 +19,33 @@ enum DevicePromise {
         "cloud", "server", "servers", "upload", "uploads", "uploaded",
     ]
 
-    /// `line` as a person reads it: a `\n`, `\t` or `\r` escape, a `\` that
-    /// joins two lines of a multi-line literal, and every run of white space
-    /// or line breaks become one space. So a phrase wrapped across the lines
-    /// of a `"""` literal, or split by an escape, is still one phrase.
+    /// `line` as a person reads it: a `\u{...}` escape becomes its character,
+    /// then a `\n`, `\t` or `\r` escape, a `\` that joins two lines of a
+    /// multi-line literal, and every run of white space or line breaks
+    /// become one space. So a phrase wrapped across the lines of a `"""`
+    /// literal, or split by an escape, is still one phrase.
     static func folded(_ line: String) -> String {
-        line.replacingOccurrences(of: #"\\(?:[ntr]|\n)"#, with: " ", options: .regularExpression)
+        decodingUnicodeEscapes(line)
+            .replacingOccurrences(of: #"\\(?:[ntr]|\n)"#, with: " ", options: .regularExpression)
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+    }
+
+    /// `text` with each `\u{...}` escape replaced by the character it names.
+    static func decodingUnicodeEscapes(_ text: String) -> String {
+        let regex = try! NSRegularExpression(pattern: #"\\u\{([0-9a-fA-F]{1,8})\}"#)
+        let ns = text as NSString
+        var result = "", last = 0
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            result += ns.substring(with: NSRange(location: last, length: match.range.location - last))
+            let hex = ns.substring(with: match.range(at: 1))
+            if let value = UInt32(hex, radix: 16), let scalar = Unicode.Scalar(value) {
+                result.unicodeScalars.append(scalar)
+            } else {
+                result += ns.substring(with: match.range)
+            }
+            last = match.range.location + match.range.length
+        }
+        return result + ns.substring(from: last)
     }
 
     /// The phrases in `line`, if any. The words of a phrase may be apart by
@@ -375,6 +395,38 @@ enum DevicePromise {
     ///   come straight from `.staysOnDevice`, with no `!`.
     /// - `LocalStubModel()` is made only in `stubMakers` and in a
     ///   `#Preview`, so its `.onDevice` is never a screen's own promise.
+    /// True when UTF-16 offset `location` of `code` is inside the braces of a
+    /// `#Preview`. A preview's scope ends where its own braces close, so
+    /// code after it is never inside it, however many braces open later.
+    static func isInPreview(at location: Int, in code: String) -> Bool {
+        let units = Array(code.utf16)
+        let marker = Array("#Preview".utf16)
+        let open = UInt16(UInt8(ascii: "{")), close = UInt16(UInt8(ascii: "}"))
+        var start = 0
+        while start + marker.count <= location {
+            guard Array(units[start..<start + marker.count]) == marker else {
+                start += 1
+                continue
+            }
+            // The preview's first `{`, and the `}` that brings it back to zero.
+            var depth = 0, first: Int?, end = start + marker.count
+            while end < units.count {
+                if units[end] == open {
+                    depth += 1
+                    if first == nil { first = end }
+                }
+                if units[end] == close, first != nil {
+                    depth -= 1
+                    if depth == 0 { break }
+                }
+                end += 1
+            }
+            if let first, first < location, location < end { return true }
+            start = end + 1
+        }
+        return false
+    }
+
     static func placeProblems(in source: SwiftSource, file: String) -> [String] {
         let code = String(source.code)
         var problems: [String] = []
@@ -438,11 +490,7 @@ enum DevicePromise {
         // `#Preview`, which no person sees.
         if !DevicePromise.stubMakers.contains(file) {
             each(#"\bLocalStubModel\s*(?:\(|\.\s*init\b)"#) { match, ns in
-                let lead = ns.substring(to: match.range.location)
-                if let preview = lead.range(of: "#Preview", options: .backwards) {
-                    let after = lead[preview.upperBound...]
-                    if after.filter({ $0 == "{" }).count > after.filter({ $0 == "}" }).count { return nil }
-                }
+                if DevicePromise.isInPreview(at: match.range.location, in: code) { return nil }
                 return "LocalStubModel() is made only by the app's wiring and the showcase, "
                     + "so no screen takes its place without the real model"
             }
@@ -612,6 +660,8 @@ struct DevicePromiseTests {
             #"static let x = "Only\nyou can read it.""#,
             #"static let x = "It runs on this\ndevice.""#,
             #"static let x = "Nothing\tleaves.""#,
+            #"static let x = "It never\u{0020}leaves.""#,
+            #"static let x = "Only\u{A}you can read it.""#,
             // Split into literals joined with +, a phrase is still one phrase.
             #"static let x = "It never " + "leaves.""#,
             "static let x = \"Your words stay on this \"\n    + \"device.\"",
@@ -640,6 +690,7 @@ struct DevicePromiseTests {
         #expect(DevicePromise.found(in: "only one").isEmpty)
         #expect(!DevicePromise.found(in: "Kept ONLY on this device").isEmpty)
         #expect(DevicePromise.found(in: "Kept on this\n    device") == ["this device", "on this device"])
+        #expect(DevicePromise.found(in: #"never\u{0020}leaves"#) == ["never leaves"])
     }
 
     /// PERMANENT GUARD. The gate trusts `.staysOnDevice`, so only
@@ -688,6 +739,9 @@ struct DevicePromiseTests {
             "init(model: any ModelClient = LocalStubModel()) {}",
             "let model = LocalStubModel\n    .init()",
             "#Preview { Text(\"a\") }\nlet model = LocalStubModel()",
+            // A preview's scope ends at its own closing brace, whatever opens after it.
+            "#Preview { Text(\"a\") }\nstruct Screen: View {\n    var body: some View {\n"
+                + "        Text(LocalStubModel().privacyPlace.staysOnDevice ? \"a\" : \"b\")\n    }\n}",
         ]
         for text in wrong {
             #expect(!DevicePromise.placeProblems(in: SwiftSource(text), file: "PebbleUI/Wrong.swift").isEmpty, "missed: \(text)")
@@ -706,6 +760,7 @@ struct DevicePromiseTests {
             "let lines = CloudWords.all()",
             "let reply = (try? LocalStubModel.answer(to: turns)) ?? LocalStubModel.fallback",
             "#Preview {\n    ChatView(brand: brand, model: LocalStubModel())\n}",
+            "#Preview { Text(\"a\") }\n#Preview(\"Chat\") {\n    VStack {\n        ChatView(brand: brand, model: LocalStubModel())\n    }\n}",
         ]
         for text in right {
             #expect(DevicePromise.placeProblems(in: SwiftSource(text), file: "PebbleUI/Right.swift").isEmpty, "flagged: \(text)")

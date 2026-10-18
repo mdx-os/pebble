@@ -40,24 +40,8 @@ print(match[0]["udid"])
 ' "$1" "${2:-}"
 }
 
-# A screenshot of simulator $1 once the screen has stopped changing, written
-# to $2. A fixed wait can catch a launch half drawn, or the home screen, on
-# a busy machine; two shots in a row that match mean it has settled. A
-# blinking caret never matches byte for byte, so build/same-shot lets a
-# thousandth of the pixels differ.
-settled_shot() {
-  sleep 3
-  xcrun simctl io "$1" screenshot "$2" >/dev/null 2>&1
-  tries=0
-  while [ "$tries" -lt 15 ]; do
-    sleep 2
-    xcrun simctl io "$1" screenshot "$2.next.png" >/dev/null 2>&1
-    if build/same-shot "$2" "$2.next.png"; then break; fi
-    mv "$2.next.png" "$2"
-    tries=$((tries + 1))
-  done
-  rm -f "$2.next.png"
-}
+# settled_shot and launch_and_shoot, each of which exits 1 when it gives up.
+. scripts/shot-lib.sh
 
 # The app itself, picked by bundle id. Products also holds the UI test
 # runner once `make ui-test` has run, so the first .app is not always it.
@@ -88,12 +72,7 @@ for kind in iPhone iPad; do
   xcrun simctl status_bar "$udid" override --time 9:41 --batteryState charged --batteryLevel 100 || true
   xcrun simctl install "$udid" "$ios_app"
   file="$out/$(echo "$kind" | tr '[:upper:]' '[:lower:]').png"
-  for attempt in 1 2 3; do
-    xcrun simctl launch --terminate-running-process "$udid" "$bundle_id" >/dev/null
-    settled_shot "$udid" "$file"
-    if xcrun simctl spawn "$udid" launchctl list | grep -q "$bundle_id"; then break; fi
-    echo "screenshots: the app wasn't up for $file, launching again"
-  done
+  launch_and_shoot "$udid" "$bundle_id" "$file" -pebbleStill YES
   echo "screenshots: $file"
   # In dark mode, where white words on the orange fill are hardest to
   # read: the iPad sidebar with Today selected, then with a question
@@ -117,12 +96,7 @@ for kind in iPhone iPad; do
   sleep 3
   for shot in $shots; do
     scene="${shot%%:*}"; file="$out/${shot#*:}.png"
-    for attempt in 1 2 3; do
-      xcrun simctl launch --terminate-running-process "$udid" "$bundle_id" -pebbleScreen "$scene" >/dev/null
-      settled_shot "$udid" "$file"
-      if xcrun simctl spawn "$udid" launchctl list | grep -q "$bundle_id"; then break; fi
-      echo "screenshots: the app wasn't up for $file, launching again"
-    done
+    launch_and_shoot "$udid" "$bundle_id" "$file" -pebbleScreen "$scene" -pebbleStill YES
     echo "screenshots: $file"
   done
   xcrun simctl ui "$udid" appearance "$was"

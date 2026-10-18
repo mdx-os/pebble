@@ -19,6 +19,8 @@ import SwiftUI
 @MainActor
 enum SnapshotMode {
     static let size = CGSize(width: 1280, height: 800)
+    /// Every Mac shot is drawn at 2x, so a 1x display makes the same picture.
+    static let scale: CGFloat = 2
 
     static func runIfRequested(brand: Brand) {
         guard let path = UserDefaults.standard.string(forKey: "snapshotPath") else { return }
@@ -35,11 +37,14 @@ enum SnapshotMode {
             .frame(width: size.width, height: size.height)
             .background(Color(nsColor: .windowBackgroundColor))
         let renderer = ImageRenderer(content: view)
-        renderer.scale = 2
+        renderer.scale = scale
         guard let image = renderer.cgImage else {
             fail("render failed")
         }
-        write(NSBitmapImageRep(cgImage: image), to: path)
+        // Its size in points, so the file says 2x, as the sheets do.
+        let rep = NSBitmapImageRep(cgImage: image)
+        rep.size = size
+        write(rep, to: path)
     }
 
     /// Shows `screen` in a window, waits for the sheet it presents, and
@@ -69,8 +74,18 @@ enum SnapshotMode {
             fail("no sheet was presented")
         }
         frame.layoutSubtreeIfNeeded()
-        guard let rep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { fail("sheet capture failed") }
-        frame.cacheDisplay(in: frame.bounds, to: rep)
+        // Always 2x, whatever the display's scale, so the shot is the same
+        // on every Mac. A rep with twice the pixels of its size in points
+        // makes cacheDisplay draw at 2x.
+        let bounds = frame.bounds
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil,
+                                         pixelsWide: Int(bounds.width * scale), pixelsHigh: Int(bounds.height * scale),
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else {
+            fail("sheet capture failed")
+        }
+        rep.size = bounds.size
+        frame.cacheDisplay(in: bounds, to: rep)
         write(rep, to: path)
     }
 

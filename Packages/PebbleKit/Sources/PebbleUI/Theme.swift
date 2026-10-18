@@ -325,6 +325,9 @@ struct QuietButtonStyle: ButtonStyle {
 /// ignores a foreground style; and the Mac draws it gray. `make
 /// screenshots` takes the dark sheet and `scripts/check-screenshots.sh`
 /// looks for the fill with white words on it.
+/// Its toolbar item hides the shared background with
+/// `.sharedBackgroundVisibility(.hidden)`, or iOS 26 draws a glass ring
+/// around the fill.
 /// `ContrastGuardTests` makes every confirmation button one of these.
 struct DoneButton: View {
     var title = MemoryWords.doneTitle

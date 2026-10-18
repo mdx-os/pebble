@@ -47,5 +47,22 @@ struct ScreenshotCheckTests {
         #expect(!right.output.contains("unknown scene"), "\(right.output)")
         #expect(right.output.contains("is missing"), "\(right.output)")
     }
+
+    /// A scene check with nothing to check fails, rather than passing with
+    /// nothing checked: the script is missing, or it asks for no scene the
+    /// check can read.
+    @Test func aSceneCheckWithNothingToCheckFails() throws {
+        let missing = FileManager.default.temporaryDirectory.appendingPathComponent("missing-\(UUID().uuidString).sh")
+        let gone = try check(script: missing)
+        #expect(gone.status != 0)
+        #expect(gone.output.contains("\(missing.path) is missing, so no scene"), "\(gone.output)")
+
+        let none = FileManager.default.temporaryDirectory.appendingPathComponent("screenshots-\(UUID().uuidString).sh")
+        try "#!/bin/sh\nshots='today:ipad'\n".write(to: none, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: none) }
+        let empty = try check(script: none)
+        #expect(empty.status != 0)
+        #expect(empty.output.contains("found no scenes asked for"), "\(empty.output)")
+    }
 }
 #endif

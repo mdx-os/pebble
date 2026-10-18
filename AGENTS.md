@@ -79,4 +79,3 @@ Some things can't be proven by an automated test. Check these by hand before a r
 - **Done's focus ring on the Mac:** turn on Full Keyboard Access, open a sheet, and Tab to Done. Exactly one ring shows around it, in light and in dark. If the system draws a second ring, add `.focusEffectDisabled()` to the button.
 - **Done's focus ring on iPad:** with a hardware keyboard, Tab to Done. The ring shows in light and in dark.
 - **Done's pointer hover on iPad:** with a trackpad or mouse, hover over Done. It shows the hover effect.
-- **Glass behind Done on iPhone:** in the dark sheet, Done shows as a filled capsule with no glass halo around it.

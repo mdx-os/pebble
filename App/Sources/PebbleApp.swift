@@ -46,11 +46,16 @@ struct PebbleApp: App {
     var body: some Scene {
         WindowGroup {
             #if DEBUG
-            if let scene = UserDefaults.standard.string(forKey: ShowcaseScene.launchKey).flatMap(ShowcaseScene.init(rawValue:)) {
-                scene.view(brand: brand)
-            } else {
-                home
+            // scripts/screenshots.sh launches with -pebbleStill YES, so the
+            // screen settles and two shots of it match.
+            Group {
+                if let scene = UserDefaults.standard.string(forKey: ShowcaseScene.launchKey).flatMap(ShowcaseScene.init(rawValue:)) {
+                    scene.view(brand: brand)
+                } else {
+                    home
+                }
             }
+            .environment(\.holdsStill, UserDefaults.standard.bool(forKey: "pebbleStill"))
             #else
             home
             #endif

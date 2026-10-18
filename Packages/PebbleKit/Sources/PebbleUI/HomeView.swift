@@ -537,6 +537,7 @@ struct HomeScreen: View {
                         ToolbarItem(placement: .confirmationAction) {
                             DoneButton { section = memoryOverChat ? .chat : .today }
                         }
+                        .sharedBackgroundVisibility(.hidden)
                     }
             }
         }
@@ -1009,6 +1010,7 @@ struct KeyboardShortcutsView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     DoneButton { dismiss() }
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
         }
         .presentationDragIndicator(.visible)

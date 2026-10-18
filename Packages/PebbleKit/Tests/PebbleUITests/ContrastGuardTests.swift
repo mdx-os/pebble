@@ -119,6 +119,9 @@ struct ContrastGuardTests {
             // The next item's DoneButton doesn't count for this one.
             "ToolbarItem(placement: .confirmationAction) {\n    Button(\"Done\") { dismiss() }\n}\n"
                 + "ToolbarItem(placement: .cancellationAction) {\n    DoneButton { dismiss() }\n}",
+            // Done without hiding the toolbar's glass gets a ring around it.
+            "ToolbarItem(placement: .confirmationAction) {\n    DoneButton { dismiss() }\n}",
+            "ToolbarItem(placement: .confirmationAction) {\n    DoneButton { dismiss() }\n}\n.sharedBackgroundVisibility(.visible)",
             // The fill tint, anywhere but a fill.
             #"Text("Open").tint(Theme.tintFill)"#,
             #"Text("Open").foregroundStyle(Theme.tintFill)"#,
@@ -176,7 +179,7 @@ struct ContrastGuardTests {
             #"Text(".foregroundStyle(Theme.accent) and .orange")"#,
             "Text(\"\"\"\n    .foregroundStyle(.white)\n    \"\"\")",
             #"Text("\(name) .foregroundStyle(.secondary)")"#,
-            "ToolbarItem(placement: .confirmationAction) {\n    DoneButton { dismiss() }\n}",
+            "ToolbarItem(placement: .confirmationAction) {\n    DoneButton { dismiss() }\n}\n.sharedBackgroundVisibility(.hidden)",
             // Art, not words: the character's highlights.
             #".fill(.white.opacity(0.35))"#,
             // White on the fill: the chosen sidebar row, its badge, and Done.
@@ -334,6 +337,17 @@ enum ContrastLint {
                 || content.range(of: #"\bButton\s*[({]"#, options: .regularExpression) != nil {
                 found.append(Problem(line: call.line,
                                      reason: "a confirmation button fills with the tint; use DoneButton so its words stay readable"))
+            }
+            // On iOS 26 the toolbar puts a glass ring around the fill
+            // unless the item hides its shared background.
+            if let braces = source.trailingClosureBraces(of: call), braces.upperBound < source.code.count {
+                let after = String(source.code[(braces.upperBound + 1)...])
+                if after.range(of: #"\A\s*\.\s*sharedBackgroundVisibility\(\s*\.hidden\s*\)"#,
+                               options: .regularExpression) == nil {
+                    found.append(Problem(line: call.line,
+                                         reason: "Done draws its own fill; add .sharedBackgroundVisibility(.hidden) "
+                                            + "so the toolbar draws no glass ring around it"))
+                }
             }
         }
         for rule in codeRules {

@@ -5,6 +5,10 @@
 // region is the end of a row, where only a count of a digit or two sits, so
 // a smaller patch of fill and fewer white pixels will do.
 //
+// How much fill and how many white pixels are enough is a share of the
+// region, never a count of pixels, so a shot taken at 1x passes just as the
+// same shot at 2x or 3x does.
+//
 // Passes when the region holds a patch of Theme.tintFill in dark mode
 // (0.74, 0.33, 0.08), or in light mode (0.66, 0.29, 0.07), which is inside
 // the tolerance, and that patch has white words on it, not black or
@@ -60,8 +64,11 @@ for y in y0..<y1 {
         }
     }
 }
-// About a row of a sidebar or a Done button at 2x or 3x, or the end of a row.
-guard count >= (badge ? 1_500 : 4_000) else { fail("\(path): no orange fill in the region (\(count) pixels)") }
+// A share of the region, whatever the scale: a sidebar row or a Done button
+// covers 6 to 14 percent of its region, the end of a row with its count
+// about as much of its narrower one.
+let area = Double((x1 - x0) * (y1 - y0))
+guard Double(count) >= area * (badge ? 0.015 : 0.03) else { fail("\(path): no orange fill in the region (\(count) pixels)") }
 
 // The words on the fill: white, never black or gray.
 var white = 0, dark = 0
@@ -72,6 +79,7 @@ for (y, span) in spans {
         if r <= 90, g <= 90, b <= 90 { dark += 1 }
     }
 }
-guard white >= (badge ? 30 : 150) else { fail("\(path): the words on the fill aren't white (\(white) white pixels)") }
+// The words cover 0.2 to 0.6 percent of the region, a count about 0.05.
+guard Double(white) >= area * (badge ? 0.0002 : 0.001) else { fail("\(path): the words on the fill aren't white (\(white) white pixels)") }
 guard dark * 4 < white else { fail("\(path): dark words on the fill (\(dark) dark, \(white) white pixels)") }
 print("fill-check: \(path): \(count) fill pixels, \(white) white on it")

@@ -73,17 +73,24 @@ extension EnvironmentValues {
     /// their entrance. Off unless a live screen turns it on, so previews and
     /// still renders, which may never call `onAppear`, show everything.
     @Entry var animatesEntrances = false
+
+    /// Whether the things that move on their own, like the character's
+    /// breath and the thinking dots, hold still as they do with Reduce
+    /// Motion. Only the screenshots turn it on, so a screen can settle and
+    /// two shots of it match.
+    @Entry public var holdsStill = false
 }
 
 /// Three soft dots in a bubble while a reply is on its way. VoiceOver reads
 /// it as one calm line rather than three dots.
 struct ThinkingDots: View {
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.holdsStill) private var holdsStill
     @Environment(\.colorSchemeContrast) private var contrast
     /// Set by tests; otherwise the system setting decides.
     var stillOverride: Bool?
 
-    private var reduceMotion: Bool { stillOverride ?? systemReduceMotion }
+    private var reduceMotion: Bool { stillOverride ?? (systemReduceMotion || holdsStill) }
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { context in
@@ -119,11 +126,12 @@ struct CalmProgress: View {
     /// False once the work has paused or ended, so nothing drifts.
     var isLive = true
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.holdsStill) private var holdsStill
     @Environment(\.colorScheme) private var scheme
     /// Set by tests; otherwise the system setting decides.
     var stillOverride: Bool?
 
-    private var reduceMotion: Bool { stillOverride ?? systemReduceMotion }
+    private var reduceMotion: Bool { stillOverride ?? (systemReduceMotion || holdsStill) }
 
     var body: some View {
         GeometryReader { proxy in
@@ -159,7 +167,10 @@ struct CalmProgress: View {
 /// Reduce Motion on or once the task pauses.
 struct LiveDot: View {
     var isLive = true
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.holdsStill) private var holdsStill
+
+    private var reduceMotion: Bool { systemReduceMotion || holdsStill }
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1 / 20, paused: reduceMotion || !isLive)) { context in

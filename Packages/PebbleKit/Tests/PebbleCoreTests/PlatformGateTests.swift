@@ -8,9 +8,26 @@ enum PlatformGate {
     /// AppKit names that don't exist on iOS.
     static let appKitOnly = #"\bNS(?:Window|HostingView|HostingController|View|Image|App|Application|Screen|Color|Font|Event)\b"#
 
-    /// True when the `#if` condition holds only on the Mac.
+    /// True when the `#if` condition holds only on the Mac: every `||` arm
+    /// is `os(macOS)` or `canImport(AppKit)`, and nothing is turned with
+    /// `!`. So `!os(macOS)` and `os(macOS) || os(iOS)` are not Mac-only.
     static func isMacOnly(_ condition: String) -> Bool {
-        condition.contains("os(macOS)") || condition.contains("canImport(AppKit)")
+        var rest = condition.trimmingCharacters(in: .whitespaces)
+        for directive in ["#elseif", "#if"] where rest.hasPrefix(directive) {
+            rest = String(rest.dropFirst(directive.count))
+            break
+        }
+        guard !rest.contains("!") else { return false }
+        // Spaces and grouping parentheses don't change an arm.
+        let arms = rest.replacingOccurrences(of: " ", with: "").components(separatedBy: "||")
+        return arms.allSatisfy { arm in
+            var arm = Substring(arm)
+            while arm.hasPrefix("(") { arm = arm.dropFirst() }
+            while arm.hasSuffix(")"), arm.filter({ $0 == ")" }).count > arm.filter({ $0 == "(" }).count {
+                arm = arm.dropLast()
+            }
+            return ["os(macOS)", "canImport(AppKit)"].contains(String(arm))
+        }
     }
 
     /// Each line of `text` that names AppKit outside a Mac-only branch.
@@ -73,6 +90,11 @@ struct PlatformGateTests {
             "#if os(macOS)\nlet a = 1\n#else\nlet host = NSHostingView(rootView: Text(\"\"))\n#endif",
             "#if os(iOS)\nlet a = 1\n#else\nlet host = NSHostingView(rootView: Text(\"\"))\n#endif",
             "#if os(iOS)\nlet a = 1\n#endif\nlet host = NSHostingView(rootView: Text(\"\"))",
+            // Naming the Mac isn't enough: turned around, or one arm of many.
+            "#if !os(macOS)\nlet window = NSWindow()\n#endif",
+            "#if os(macOS) || os(iOS)\nlet window = NSWindow()\n#endif",
+            "#if canImport(AppKit) || canImport(UIKit)\nlet image = NSImage()\n#endif",
+            "#if os(iOS)\nlet a = 1\n#elseif !canImport(AppKit)\nlet image = NSImage()\n#endif",
         ]
         for text in wrong {
             #expect(!PlatformGate.ungated(in: text, file: "Wrong.swift").isEmpty, "missed: \(text)")
@@ -82,6 +104,8 @@ struct PlatformGateTests {
             "#if canImport(SwiftUI)\n#if os(macOS)\nlet host = NSHostingView(rootView: Text(\"\"))\n#endif\n#endif",
             "#if os(iOS)\nlet a = 1\n#elseif os(macOS)\nlet host = NSHostingView(rootView: Text(\"\"))\n#endif",
             "#if canImport(AppKit)\nlet image = NSImage()\n#endif",
+            "#if os(macOS) || canImport(AppKit)\nlet image = NSImage()\n#endif",
+            "#if (os(macOS))\nlet image = NSImage()\n#endif",
             "// NSWindow, in a comment",
             "let note = \"NSHostingView, in words\"",
             "let range = NSRange(location: 0, length: 1)",
