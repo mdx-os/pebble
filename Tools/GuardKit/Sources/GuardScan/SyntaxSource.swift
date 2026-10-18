@@ -542,15 +542,20 @@ public indirect enum Condition: Equatable, CustomStringConvertible {
         }
     }
 
+    /// The most free names `canHold` tries every value of.
+    public static let mostFreeNames = 16
+
     /// True when, on some platform in `platforms` and for some value of
-    /// each free name allowed by `fixed`, the condition holds.
+    /// each free name allowed by `fixed`, the condition holds. Past
+    /// `mostFreeNames` it can't try them all, so it says the condition may
+    /// hold: no such gate is ever taken as Mac only or Debug only.
     public func canHold(on platforms: [Platform], fixed: [String: Bool] = [:]) -> Bool {
         let names = free.filter { fixed[$0] == nil }
-        let count = min(names.count, 16)
+        guard names.count <= Self.mostFreeNames else { return true }
         for platform in platforms {
-            for bits in 0..<(1 << count) {
+            for bits in 0..<(1 << names.count) {
                 var values = fixed
-                for (index, name) in names.prefix(count).enumerated() { values[name] = bits & (1 << index) != 0 }
+                for (index, name) in names.enumerated() { values[name] = bits & (1 << index) != 0 }
                 if evaluate(on: platform, values) { return true }
             }
         }

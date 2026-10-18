@@ -158,7 +158,13 @@ perl: s~Rule\("contrast\.splitCall", splitCall\)~Rule("contrast.splitCall", { _,
 # A system color is read off any base, Theme's own included.
 test: theContrastGuardCatchesEveryWrongCase
 file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
-perl: s~return code == "Color" \|\| code == "SwiftUI\.Color" \|\| !\(code\.last\?\.isLetter \?\? false\)~return true~
+perl: s~!isTheme\(member, name\(member\)\)~true~
+
+# A system color only off Color: UIColor.gray and
+# HierarchicalShapeStyle.secondary are let by.
+test: theContrastGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~!isTheme\(member, name\(member\)\)~member.base.map { ["Color", "SwiftUI.Color"].contains(SyntaxSource.code(\$0)) || !(SyntaxSource.code(\$0).last?.isLetter ?? false) } ?? true~
 
 # Theme only when written bare: PebbleUI.Theme.accent is let by.
 test: theContrastGuardCatchesEveryWrongCase theAccentGuardCatchesEveryWrongCase
@@ -220,6 +226,16 @@ test: theAccentGuardCatchesEveryWrongCase
 file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
 perl: s~clause\.body\.id == child\.id, mentionsChosen\(clause\.catchItems\)~clause.body.id == child.id, false~
 
+# A `chosen` a tuple binds, as in `let (chosen, _)`, read past.
+test: theAccentGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~if variable\.bindings\.contains\(where: \{ mentionsChosen\(\$0\.pattern\) \}\) \{ return \.other \}~~
+
+# A `chosen` declared inside an #if before it, read past.
+test: theAccentGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~if let config = item\.item\.as\(IfConfigDeclSyntax\.self\), declaresChosen\(config\) \{ return \.other \}~~
+
 # Inside a type means after its name, however far: no exact body.
 test: theAccentGuardCatchesEveryWrongCase
 file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
@@ -275,6 +291,12 @@ test: ifConditionsAreEvaluated
 file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
 perl: s~case \.flag\(let name\): names\.append\(name\)~case .flag: break~
 perl: s~case \.flag\(let name\): return values\[name\] \?\? false~case .flag: return true~
+
+# Names past the sixteenth dropped, so they read as false and a gate on
+# one of them looks Mac only or Debug only.
+test: thePlatformGateCatchesEveryWrongCase ifConditionsAreEvaluated
+file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
+perl: s~let names = free\.filter \{ fixed\[\$0\] == nil \}~let names = Array(free.filter { fixed[\$0] == nil }.prefix(Self.mostFreeNames))~
 
 # Names read as written, backticks and all, by every guard.
 test: thePromiseGuardCatchesEveryWrongCase theContrastGuardCatchesEveryWrongCase theAccentGuardCatchesEveryWrongCase thePlatformGateCatchesEveryWrongCase namesAreReadWithoutBackticks

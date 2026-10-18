@@ -386,6 +386,15 @@ struct GuardWrongCaseTests {
         contrast("gray", #".foregroundStyle(Color.gray)"#),
         contrast("red", #".foregroundStyle(Color.red)"#),
         contrast("red", #".foregroundColor(.red)"#),
+        // Off any type but Theme, a system color is still the system's.
+        contrast("gray", #".foregroundStyle(Color(UIColor.gray))"#),
+        contrast("gray", #".foregroundStyle(Color(nsColor: NSColor.gray))"#),
+        contrast("red", #".foregroundStyle(Color(uiColor: UIColor.red))"#),
+        contrast("systemGray", #".foregroundStyle(HierarchicalShapeStyle.secondary)"#),
+        contrast("systemGray", #".foregroundStyle(ShapeStyle.tertiary)"#),
+        contrast("systemGray", #".foregroundStyle(style.quaternary)"#),
+        contrast("white", #".foregroundStyle(Theme.RGB.white.color)"#),
+        contrast("surface", #".background(Color(UIColor.gray))"#),
         contrast("fadedWhite", #".foregroundStyle(.white.opacity(0.8))"#),
         contrast("fadedWhite", #".foregroundStyle(Color.white.opacity(0.7))"#),
         contrast("white", #".foregroundStyle(.white)"#),
@@ -579,6 +588,45 @@ struct GuardWrongCaseTests {
         accent("ink", split("    static func ink(chosen: Bool, row: () -> some View) -> some View { row() }\n"
                + "    static func rows(chosen: Bool) -> some View {\n        do {\n            try work()\n"
                + "        } catch let chosen as Flag {\n            Self.ink(chosen: chosen) { Text(\"a\") }\n        }\n    }")),
+        // A `chosen` a tuple binds, in any of the forms that bind one, is
+        // not the parameter either.
+        accent("onTintFill", split("    static func ink(chosen: Bool, row: () -> some View) -> some View {\n"
+               + "        let (chosen, _) = (!chosen, 1)\n        if chosen {\n            row().foregroundStyle(Theme.onTintFill)\n"
+               + "        }\n    }")),
+        accent("onTintFill", split("    static func ink(chosen: Bool, row: () -> some View) -> some View {\n"
+               + "        var (other, chosen) = (1, false)\n        if chosen {\n            row().foregroundStyle(Theme.onTintFill)\n"
+               + "        }\n    }")),
+        accent("onTintFill", split("    static func ink(chosen: Bool, row: () -> some View) -> some View {\n"
+               + "        let ((chosen, _), _) = ((true, 1), 2)\n        if chosen {\n            row().foregroundStyle(Theme.onTintFill)\n"
+               + "        }\n    }")),
+        accent("onTintFill", split("    static func ink(chosen: Bool, row: () -> some View) -> some View {\n"
+               + "        for (chosen, _) in pairs {\n            if chosen {\n"
+               + "                row().foregroundStyle(Theme.onTintFill)\n            }\n        }\n    }")),
+        accent("onTintFill", split("    static func ink(chosen: Bool, row: () -> some View) -> some View {\n"
+               + "        if case let (chosen, _) = pair {\n            if chosen {\n"
+               + "                row().foregroundStyle(Theme.onTintFill)\n            }\n        }\n    }")),
+        accent("onTintFill", split("    static func ink(chosen: Bool, row: () -> some View) -> some View {\n"
+               + "        guard case (let chosen, _) = pair else { return row() }\n        if chosen {\n"
+               + "            row().foregroundStyle(Theme.onTintFill)\n        }\n    }")),
+        accent("onTintFill", split("    static func ink(chosen: Bool, row: () -> some View) -> some View {\n"
+               + "        switch pair {\n        case (let chosen, _):\n            if chosen {\n"
+               + "                row().foregroundStyle(Theme.onTintFill)\n            }\n        }\n    }")),
+        accent("onTintFill", split("    static func ink(chosen: Bool, row: () -> some View) -> some View {\n"
+               + "        while case let (chosen, _)? = next() {\n            if chosen {\n"
+               + "                row().foregroundStyle(Theme.onTintFill)\n            }\n        }\n    }")),
+        accent("onTintFill", split("    static func ink(chosen: Bool, row: () -> some View) -> some View {\n"
+               + "        do {\n            try work()\n        } catch let Failure.picked(chosen, _) {\n            if chosen {\n"
+               + "                row().foregroundStyle(Theme.onTintFill)\n            }\n        }\n    }")),
+        // A `chosen` set inside an #if before it is not the parameter.
+        accent("onTintFill", split("    static func ink(chosen: Bool, row: () -> some View) -> some View {\n"
+               + "        #if DEBUG\n        let chosen = true\n        #endif\n        if chosen {\n"
+               + "            row().foregroundStyle(Theme.onTintFill)\n        }\n    }")),
+        accent("ink", split("    static func ink(chosen: Bool, row: () -> some View) -> some View { row() }\n"
+               + "    static func rows(chosen: Bool) -> some View {\n        let (chosen, _) = (flag, 1)\n"
+               + "        Self.ink(chosen: chosen) { Text(\"a\") }\n    }")),
+        accent("ink", split("    static func ink(chosen: Bool, row: () -> some View) -> some View { row() }\n"
+               + "    static func rows(chosen: Bool) -> some View {\n        #if DEBUG\n        var chosen = flag\n        #endif\n"
+               + "        Self.ink(chosen: chosen) { Text(\"a\") }\n    }")),
         // In backticks, a name is the same name.
         accent("tintFillWords", #"Text("Open").foregroundStyle(Theme.`tintFill`)"#),
         accent("tintFillTint", #"Text("Open").tint(Theme.`tintFill`)"#),
@@ -691,6 +739,9 @@ struct GuardWrongCaseTests {
         gate("nsName", "#if canImport(Cocoa)\nlet image = NSImage()\n#endif"),
         gate("macOnlyImport", "#if canImport(Cocoa)\nimport AppKit\n#endif"),
         gate("nsName", "#if canImport(`Cocoa`)\nlet image = NSImage()\n#endif"),
+        // Past sixteen flags, the last one still counts.
+        gate("nsName", "#if \(GuardScanTests.manyFlags("os(macOS) || ZZ"))\nlet window = NSWindow()\n#endif"),
+        gate("macOnlyImport", "#if \(GuardScanTests.manyFlags("os(macOS) || ZZ"))\nimport AppKit\n#endif"),
     ]
 
     static func fineTest(_ text: String) -> RightCase { fine(text, file: "PebbleCoreTests/Right.swift") }
@@ -824,6 +875,21 @@ struct GuardScanTests {
         let debug = SyntaxSource("#if DEBUG\nlet a = 1\n#else\nlet b = 1\n#endif")
         #expect(debug.context(atFirst: "a")?.isDebugOnly == true)
         #expect(debug.context(atFirst: "b")?.isDebugOnly == false)
+        // Every flag counts, the seventeenth too: `ZZ` sorts after the
+        // sixteen others, and alone makes each condition hold elsewhere.
+        func debugOnly(_ condition: String) -> Bool {
+            SyntaxSource("#if \(condition)\nlet x = 1\n#endif").context(atFirst: "x")?.isDebugOnly ?? false
+        }
+        #expect(macOnly(Self.manyFlags("os(macOS)")))
+        #expect(!macOnly(Self.manyFlags("os(macOS) || ZZ")))
+        #expect(debugOnly(Self.manyFlags("DEBUG")))
+        #expect(!debugOnly(Self.manyFlags("DEBUG || ZZ")))
+    }
+
+    /// `condition`, or'd with sixteen flags that can never hold: `A01` to
+    /// `A16`, each and'd with its own negation.
+    static func manyFlags(_ condition: String) -> String {
+        ([condition] + (1...16).map { String(format: "(A%02d && !A%02d)", $0, $0) }).joined(separator: " || ")
     }
 
     @Test func declarationsAndMacrosAroundANodeAreKnown() throws {

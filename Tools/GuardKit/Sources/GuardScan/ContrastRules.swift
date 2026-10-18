@@ -73,12 +73,11 @@ public enum ContrastLint {
         return false
     }
 
-    /// A member read off the system: `.gray`, `Color.gray`, or off a value
-    /// that doesn't end in a name, such as `f().gray`. Never `Theme.gray`.
+    /// A member read off anything but `Theme`: `.gray`, `Color.gray`,
+    /// `UIColor.gray`, `style.secondary` or `f().gray`. Never `Theme.gray`
+    /// or `PebbleUI.Theme.gray`, which `Theme.textPairs` covers.
     static func isSystem(_ member: MemberAccessExprSyntax) -> Bool {
-        guard let base = member.base else { return true }
-        let code = SyntaxSource.code(base)
-        return code == "Color" || code == "SwiftUI.Color" || !(code.last?.isLetter ?? false)
+        !isTheme(member, name(member))
     }
 
     /// Each word call's arguments with the members read in them.
@@ -110,7 +109,7 @@ public enum ContrastLint {
 
     @Sendable static func systemGray(_ source: SyntaxSource, _ file: String) -> [Finding] {
         wordRule("contrast.systemGray", "the system gray is about 3.5 to 1 on white; use Theme.secondaryText", source) {
-            ["secondary", "tertiary", "quaternary"].contains(name($0))
+            ["secondary", "tertiary", "quaternary"].contains(name($0)) && isSystem($0)
         }
     }
 
@@ -315,9 +314,10 @@ public enum ContrastLint {
 
     /// The declaration of `chosen` that `start` sees, found going out from
     /// it scope by scope. Every form that binds a name counts: `let` and
-    /// `var`, `if`, `guard` and `while` conditions, a `for` pattern, a
-    /// `case .x(let chosen)`, a `catch let chosen`, and a closure's
-    /// parameters.
+    /// `var`, a tuple such as `let (chosen, _)`, `if`, `guard` and `while`
+    /// conditions, a `for` pattern, a `case .x(let chosen)`, a
+    /// `catch let chosen`, a closure's parameters, and any of these inside
+    /// an `#if` before it.
     static func nearestChosen(above start: Syntax) -> Chosen? {
         var child = start
         var current = start.parent
@@ -339,6 +339,8 @@ public enum ContrastLint {
                     if let guardStatement = item.item.as(GuardStmtSyntax.self), binds(guardStatement.conditions) {
                         return .other
                     }
+                    // One inside an #if may or may not be built: never the row's own.
+                    if let config = item.item.as(IfConfigDeclSyntax.self), declaresChosen(config) { return .other }
                 }
             }
             if let branch = parent.as(IfExprSyntax.self), branch.body.id == child.id, binds(branch.conditions) { return .other }
@@ -383,6 +385,12 @@ public enum ContrastLint {
     /// True when a name in `node` is `chosen`, backticks aside.
     static func mentionsChosen(_ node: some SyntaxProtocol) -> Bool {
         node.tokens(viewMode: .sourceAccurate).contains { $0.identifier != nil && SyntaxSource.name($0) == "chosen" }
+    }
+
+    /// True when a `let`, `var` or `guard` anywhere in `node` binds `chosen`.
+    static func declaresChosen(_ node: some SyntaxProtocol) -> Bool {
+        node.descendants(VariableDeclSyntax.self).contains { $0.bindings.contains { mentionsChosen($0.pattern) } }
+            || node.descendants(GuardStmtSyntax.self).contains { binds($0.conditions) }
     }
 
     static func binds(_ conditions: ConditionElementListSyntax) -> Bool {
