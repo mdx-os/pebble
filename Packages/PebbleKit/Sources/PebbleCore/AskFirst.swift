@@ -116,12 +116,18 @@ public struct ProposedAction: Sendable, Equatable, Hashable {
     public let details: String
     /// Required for a purchase. A purchase without a price is never approved.
     public let price: Price?
+    /// What will happen once the person says yes, in the agent's words, such
+    /// as "I'll hold Saturday at 10:30 for you." Part of what is approved, so
+    /// a yes for one outcome never covers another.
+    public let outcome: String?
 
-    public init(kind: ConsequentialAction, recipient: Recipient, details: String, price: Price? = nil) {
+    public init(kind: ConsequentialAction, recipient: Recipient, details: String, price: Price? = nil,
+                outcome: String? = nil) {
         self.kind = kind
         self.recipient = recipient
         self.details = details
         self.price = price
+        self.outcome = outcome
     }
 
     /// The question shown before anything happens.
@@ -235,17 +241,38 @@ public final class AskFirst: @unchecked Sendable {
     /// exactly where it goes (no handle that fits in full) or, for a
     /// purchase, how much. Such a question must not be asked.
     public func ask(_ action: ProposedAction) -> ConfirmationRequest? {
+        ask(action, askedAgo: .zero)
+    }
+
+    /// How long a question stays open, in seconds.
+    public var questionWindow: TimeInterval {
+        Double(window.components.seconds) + Double(window.components.attoseconds) / 1e18
+    }
+
+    /// Asks again, after the app was closed and opened, a question first
+    /// asked `age` seconds ago. It keeps the deadline it had: its window
+    /// counts from the first time it was asked, never from now, so opening
+    /// the app again never buys it more time. Nil, as for `ask`, when it
+    /// can't be asked, and nil when its time is already up or `age` is
+    /// below zero, as when the date was moved back.
+    public func askAgain(_ action: ProposedAction, askedAgo age: TimeInterval) -> ConfirmationRequest? {
+        guard age.isFinite, age >= 0, age <= questionWindow else { return nil }
+        return ask(action, askedAgo: .milliseconds(Int64((age * 1000).rounded(.up))))
+    }
+
+    private func ask(_ action: ProposedAction, askedAgo age: Duration) -> ConfirmationRequest? {
         guard action.recipient.handle != nil else { return nil }
         // What is shown must read the same as what goes out: no hidden or
-        // reordering characters in the details.
+        // reordering characters in the details or the outcome.
         if Self.hasHiddenScalars(action.details) { return nil }
+        if let outcome = action.outcome, Self.hasHiddenScalars(outcome) { return nil }
         if action.kind == .purchase, action.price == nil { return nil }
         let request = ConfirmationRequest(action: action)
         lock.lock()
         let time = now()
         pending = pending.filter { isOpen($0.value) || isFreshYes($0.value) }
         withdrawn = withdrawn.filter { isOpen(Open(askedAt: $0.value)) }
-        pending[request.id] = Open(askedAt: time)
+        pending[request.id] = Open(askedAt: time.advanced(by: .zero - age))
         lock.unlock()
         return request
     }

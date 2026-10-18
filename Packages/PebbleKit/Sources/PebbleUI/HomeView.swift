@@ -32,10 +32,13 @@ public struct HomeView: View {
         looks: UserDefaults = .standard,
         feed: [any FeedSource] = [EmptyFeedSource()],
         needsYou: NeedsYou = NeedsYou(),
-        tasks: (any TaskEngine)? = nil
+        tasks: (any TaskEngine)? = nil,
+        kept: TaskStore? = nil,
+        notifier: (any QuestionNotifying)? = nil
     ) {
         self.init(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
-                  looks: looks, conversation: nil, section: .today, feed: feed, needsYou: needsYou, tasks: tasks)
+                  looks: looks, conversation: nil, section: .today, feed: feed, needsYou: needsYou, tasks: tasks,
+                  kept: kept, notifier: notifier)
     }
 
     /// Opens on a given conversation, section and feed, for screenshots and tests.
@@ -54,11 +57,15 @@ public struct HomeView: View {
         needsYou: NeedsYou,
         tasks: (any TaskEngine)? = nil,
         drivesTasks: Bool = false,
+        kept: TaskStore? = nil,
+        notifier: (any QuestionNotifying)? = nil,
+        opensQuestion: Bool = false,
         now: @escaping () -> Date = { Date() }
     ) {
         screen = HomeScreen(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                             looks: looks, conversation: conversation, section: section, feed: feed,
-                            needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, now: now)
+                            needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, kept: kept,
+                            notifier: notifier, opensQuestion: opensQuestion, now: now)
     }
 
     /// Which model the screen was made for: its kind and where its words
@@ -81,10 +88,10 @@ public struct HomeView: View {
     /// Today's model, which takes its privacy place from the active model,
     /// so the example note never promises the device when words may leave.
     static func feedModel(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)? = nil,
-                          drivesTasks: Bool = false, model: any ModelClient,
+                          drivesTasks: Bool = false, flow: NeedsYouFlow? = nil, model: any ModelClient,
                           now: @escaping () -> Date) -> FeedModel {
         FeedModel(sources: sources, needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
-                  place: model.privacyPlace, now: now)
+                  place: model.privacyPlace, flow: flow, now: now)
     }
 
     /// The memory screen's model, with its privacy place from the active
@@ -122,6 +129,8 @@ struct HomeScreen: View {
     /// What to do once the open sheet has finished closing.
     @State private var handoff = SheetHandoff()
     @StateObject private var feed: FeedModel
+    /// Opens the first waiting question once, for the showcase.
+    private let opensQuestion: Bool
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -140,6 +149,9 @@ struct HomeScreen: View {
         needsYou: NeedsYou,
         tasks: (any TaskEngine)?,
         drivesTasks: Bool,
+        kept: TaskStore?,
+        notifier: (any QuestionNotifying)?,
+        opensQuestion: Bool,
         now: @escaping () -> Date
     ) {
         self.brand = brand
@@ -148,8 +160,16 @@ struct HomeScreen: View {
         self.onboarding = onboarding
         self.memory = memory
         self.looks = looks
-        _feed = StateObject(wrappedValue: HomeView.feedModel(sources: feed, needsYou: needsYou, tasks: tasks,
-                                                             drivesTasks: drivesTasks, model: model, now: now))
+        self.opensQuestion = opensQuestion
+        _feed = StateObject(wrappedValue: HomeView.feedModel(
+            sources: feed, needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
+            // A nudge says the name the person chose, read when it is sent.
+            flow: kept.map { kept in
+                NeedsYouFlow(store: kept, notifier: notifier, agentName: {
+                    AgentProfile(brand: brand, stored: names.loadDisplayName()).displayName.text
+                })
+            },
+            model: model, now: now))
         let needed = OnboardingFlow.isNeeded(store: onboarding, names: names)
         // People who named their agent before the first run existed count as finished.
         if !needed, !onboarding.hasFinished() { onboarding.markFinished() }
@@ -208,6 +228,30 @@ struct HomeScreen: View {
         .task { await feed.keepFresh() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { feed.refresh() }
+            // Away, a waiting question may nudge; back in front, its nudge
+            // goes. A glance at Control Center is neither.
+            switch phase {
+            case .active: feed.flow?.scene(isActive: true)
+            case .background: feed.flow?.scene(isActive: false)
+            default: break
+            }
+        }
+        // A nudge opened: Today, with its card in view. A question already
+        // open in its sheet stays open; any other sheet makes way.
+        .background {
+            if let flow = feed.flow {
+                NudgeOpened(flow: flow) {
+                    guard finished, feed.reviewing == nil else { return }
+                    if showsShortcuts { showsShortcuts = false }
+                    if feed.reading != nil { feed.reading = nil }
+                    if section != .today { go(.today) }
+                }
+            }
+        }
+        .task {
+            // The showcase's open question, as a tap on Approve would open it.
+            guard opensQuestion, let task = FeedModel.pinnedTasks(in: feed.feed).first else { return }
+            feed.review(task)
         }
         // A question or any sheet, the memory on a narrow window included,
         // sits in front; Command Return can't send a chat line from behind it.
@@ -487,6 +531,21 @@ struct TodayComposer: View {
                 .ignoresSafeArea(edges: .bottom)
                 .overlay(alignment: .top) { Rectangle().fill(Theme.hairline(scheme)).frame(height: 1) }
         }
+    }
+}
+
+/// Hears a nudge being opened, once each time, so the home screen can
+/// bring Today to the front.
+struct NudgeOpened: View {
+    @ObservedObject var flow: NeedsYouFlow
+    let action: () -> Void
+
+    var body: some View {
+        Color.clear
+            .onChange(of: flow.focus, initial: true) { _, id in
+                if id != nil { action() }
+            }
+            .accessibilityHidden(true)
     }
 }
 

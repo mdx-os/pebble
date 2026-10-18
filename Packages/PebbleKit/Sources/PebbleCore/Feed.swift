@@ -14,6 +14,8 @@ public struct FeedItem: Identifiable, Sendable, Equatable {
         case needsYou
         /// Longer work, shown live on a task card.
         case task
+        /// What the person said yes to, and what came of it.
+        case receipt
     }
 
     public let id: String
@@ -54,7 +56,14 @@ public struct FeedItem: Identifiable, Sendable, Equatable {
         case .noticed: FeedWords.noticedLabel
         case .needsYou: FeedWords.needsYouHeading
         case .task: task?.state.label ?? TaskWords.runningLabel
+        case .receipt: ReceiptWords.label
         }
+    }
+
+    /// The receipt this card shows, when it is a receipt card.
+    public var receipt: Receipt? {
+        if kind == .receipt, case .receipt(let receipt) = action { return receipt }
+        return nil
     }
 }
 
@@ -73,6 +82,8 @@ public enum FeedAction: Sendable, Equatable {
     /// question sheet as `review`, for the question the task's engine asked
     /// through `AskFirst`. Holds the task without live progress.
     case task(AgentTask)
+    /// A receipt card, whose one button clears it.
+    case receipt(Receipt)
 
     public var title: String {
         switch self {
@@ -80,6 +91,7 @@ public enum FeedAction: Sendable, Equatable {
         case .talk: FeedWords.talkTitle
         case .review: FeedWords.reviewTitle
         case .task(let task): task.waitsForApproval ? TaskWords.approveTitle : FeedWords.openTitle
+        case .receipt: TaskWords.dismissTitle
         }
     }
 
@@ -90,6 +102,7 @@ public enum FeedAction: Sendable, Equatable {
         case .talk: FeedWords.talkHint
         case .review: FeedWords.reviewHint
         case .task(let task): task.waitsForApproval ? FeedWords.reviewHint : FeedWords.openHint
+        case .receipt: ReceiptWords.clearHint
         }
     }
 }

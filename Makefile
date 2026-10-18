@@ -46,12 +46,15 @@ device-screenshots: generate
 		sh scripts/device-screenshots.sh $(or $(OUT),build/screenshots/devices)
 
 ## ui-test: drive the app in the Simulator: the iPad sidebar, Return to send,
-## and the keyboard shortcuts, on an iPad and an iPhone
+## the keyboard shortcuts, and the Needs you flow with its nudge, on an iPad
+## and an iPhone. The nudge test meets the system's own question, so run it
+## on simulators where the app was removed first.
 ui-test: generate
 	xcodebuild test -quiet -project Pebble.xcodeproj -scheme Pebble -derivedDataPath $(DERIVED) \
 		-destination 'platform=iOS Simulator,name=$(or $(PEBBLE_IPAD),iPad Pro 13-inch (M5))' \
 		-destination 'platform=iOS Simulator,name=$(or $(PEBBLE_IPHONE),iPhone 17 Pro)' \
-		-only-testing:PebbleAppUITests/HomeLayoutUITests
+		-only-testing:PebbleAppUITests/HomeLayoutUITests \
+		-only-testing:PebbleAppUITests/NeedsYouFlowUITests
 
 ## brand-check: the product name must live only in Config/Brand.xcconfig
 brand-check:

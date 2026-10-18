@@ -90,7 +90,7 @@ public struct RetryPolicy: Sendable, Equatable {
 ///
 /// Time moves only through `advance(by:)`. The app's showcase calls it
 /// with real time; tests call it with whatever they like.
-public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
+public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
     private enum Phase: Equatable {
         /// Trying the current step. `attempt` counts from zero.
         case working(attempt: Int, since: TimeInterval)
@@ -119,6 +119,14 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
         /// The current step is one the person said yes to. It is committed:
         /// a redirect lets it finish, and a stop never calls it undone.
         var approved = false
+        /// What the person said yes to, and when, for the step's receipt.
+        var approvedAction: ProposedAction?
+        var approvedAt: Date?
+        /// When the open question was first asked, as the card's clock tells it.
+        var askedAt: Date?
+        /// For a question picked up after the app closed: how long ago it
+        /// was first asked, so it is asked again with the deadline it had.
+        var askedAgo: TimeInterval?
     }
 
     /// A question to put to `AskFirst` once the lock is let go.
@@ -126,6 +134,7 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
         let id: String
         let index: Int
         let action: ProposedAction
+        let askedAgo: TimeInterval?
     }
 
     public let rule: AskFirst
@@ -143,6 +152,8 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
     private var sequence = 0
     /// Questions to withdraw once the lock is let go.
     private var withdrawals: [ConfirmationRequest] = []
+    /// Receipts made and not yet taken by `takeReceipts`.
+    private var receiptsMade: [Receipt] = []
     #if DEBUG
     /// For tests: calls to `AskFirst`, and how many came while this
     /// engine's lock was held. The second must stay zero.
@@ -286,8 +297,9 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
             let run = runs[index]
             var left = run.script.steps[min(run.index, run.script.steps.count)...].map(\.todo)
             // A step the person said yes to may have happened, so it is
-            // never said to be undone.
+            // never said to be undone, and its receipt says it may be done.
             let underway = run.approved ? left.removeFirst() : nil
+            if run.approved { makeReceipt(run, outcome: .mayBeDone) }
             end(&runs[index], as: .stopped, line: TaskWords.stopped,
                 wrapUp: TaskWrapUp(kept: run.kept, notDone: run.notDone + left, underway: underway))
             return true
@@ -310,6 +322,8 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
             let cleared = ClearedTasks(forgotten: runs.count,
                                        underway: runs.filter { $0.approved && $0.task.isActive }.count)
             runs.removeAll()
+            // Receipts not yet handed over go too: nothing a task held stays.
+            receiptsMade.removeAll()
             return cleared
         }
     }
@@ -349,6 +363,8 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
                 runs[index].task.updatedAt = date
                 runs[index].phase = .working(attempt: 0, since: elapsed)
                 runs[index].approved = true
+                runs[index].approvedAction = asked.action
+                runs[index].approvedAt = date
                 return .proceeding
             case .timedOut:
                 skip(&runs[index], line: TaskWords.timedOut(runs[index].script.steps[runs[index].index].todo))
@@ -369,6 +385,96 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
             let todo = runs[index].script.steps[runs[index].index].todo
             skip(&runs[index], line: ranOut ? TaskWords.timedOut(todo) : TaskWords.declined(todo))
         }
+    }
+
+    // MARK: Keeping tasks while the app is closed
+
+    public func saved() -> [SavedTask] {
+        lockRuns(); defer { unlockRuns() }
+        return runs.filter { $0.task.isActive && $0.index < $0.script.steps.count }.map { run in
+            let phase: SavedTask.Phase
+            switch run.phase {
+            case .askingYes: phase = .waiting
+            case .stuck: phase = .stuck
+            default: phase = run.approved ? .approved : .working
+            }
+            return SavedTask(id: run.task.id, title: run.script.title, step: run.index, phase: phase,
+                             askedAt: phase == .waiting ? run.askedAt : nil,
+                             approvedAt: phase == .approved ? run.approvedAt : nil,
+                             kept: run.kept, notDone: run.notDone,
+                             history: run.task.history.map { .init(text: $0.text, mark: $0.mark, at: $0.at) },
+                             startedAt: run.task.startedAt)
+        }
+    }
+
+    public func restore(_ saved: [SavedTask], now: Date) {
+        // Read before the lock: the rule is never asked anything under it.
+        let window = rule.questionWindow
+        mutate {
+            for entry in saved where !runs.contains(where: { $0.task.id == entry.id }) {
+                let script = scripts.first { $0.title == entry.title } ?? Self.generic(entry.title)
+                guard entry.step >= 0, entry.step < script.steps.count else { continue }
+                if let number = Int(entry.id.dropFirst("task:".count)) { made = max(made, number) }
+                let step = script.steps[entry.step]
+                var run = Run(
+                    task: AgentTask(id: entry.id, title: script.title, step: step.text,
+                                    progress: script.determinate ? .fraction(Double(entry.step) / Double(script.steps.count))
+                                        : .indeterminate,
+                                    history: entry.history.map { TaskStep($0.text, mark: $0.mark, at: $0.at) },
+                                    startedAt: entry.startedAt, updatedAt: date),
+                    script: script, index: entry.step, phase: .working(attempt: 0, since: elapsed),
+                    stallsLeft: script.steps.map { if case .work(let stalls) = $0.kind { stalls } else { 0 } },
+                    kept: entry.kept, notDone: entry.notDone
+                )
+                switch entry.phase {
+                case .working:
+                    begin(&run)
+                case .stuck:
+                    run.phase = .stuck
+                    run.task.state = .waitingOnYou
+                    run.task.step = TaskWords.stuck
+                case .waiting:
+                    // Asked again with the deadline it had, or, once that has
+                    // passed or the clock went back, ended as a timeout.
+                    let age = entry.askedAt.map { now.timeIntervalSince($0) } ?? .infinity
+                    if case .ask = step.kind, age >= 0, age <= window {
+                        run.askedAgo = age
+                        begin(&run)
+                    } else {
+                        skip(&run, line: TaskWords.timedOut(step.todo))
+                    }
+                case .approved:
+                    // The yes was for that moment. The step may have
+                    // happened, so it is never run again, and never called undone.
+                    if case .ask(let action, _) = step.kind {
+                        run.approvedAction = action
+                        run.approvedAt = entry.approvedAt ?? date
+                        run.approved = true
+                        makeReceipt(run, outcome: .mayBeDone)
+                    }
+                    end(&run, as: .failed, line: TaskWords.interrupted,
+                        wrapUp: TaskWrapUp(kept: run.kept,
+                                           notDone: run.notDone + script.steps[(entry.step + 1)...].map(\.todo),
+                                           underway: step.todo))
+                    run.approved = false
+                }
+                runs.append(run)
+            }
+        }
+    }
+
+    public func takeReceipts() -> [Receipt] {
+        lockRuns(); defer { unlockRuns() }
+        let out = receiptsMade
+        receiptsMade = []
+        return out
+    }
+
+    /// A receipt for the step the person said yes to, as it ends.
+    private func makeReceipt(_ run: Run, outcome: Receipt.Outcome) {
+        guard let action = run.approvedAction else { return }
+        receiptsMade.append(Receipt(action: action, taskTitle: run.task.title, approvedAt: run.approvedAt ?? date,
+                                    endedAt: date, outcome: outcome, isSample: isSample))
     }
 
     // MARK: The state machine. Everything below runs inside the lock, except
@@ -462,6 +568,9 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
     /// the task is done.
     private func begin(_ run: inout Run, line: String? = nil) {
         run.approved = false
+        run.approvedAction = nil
+        run.approvedAt = nil
+        run.askedAt = nil
         guard run.index < run.script.steps.count else {
             run.phase = .ended
             end(&run, as: .done, line: run.script.doneLine,
@@ -521,7 +630,9 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
         for index in runs.indices where runs[index].phase == .toAsk {
             guard case .ask(let action, _) = runs[index].script.steps[runs[index].index].kind else { continue }
             runs[index].phase = .asking
-            asks.append(PendingAsk(id: runs[index].task.id, index: runs[index].index, action: action))
+            asks.append(PendingAsk(id: runs[index].task.id, index: runs[index].index, action: action,
+                                   askedAgo: runs[index].askedAgo))
+            runs[index].askedAgo = nil
         }
         return (out, asks)
     }
@@ -537,7 +648,8 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
         }
         let step = runs[index].script.steps[ask.index]
         guard let request, case .ask(_, let askLine) = step.kind else {
-            skip(&runs[index], line: TaskWords.couldNotAsk(step.todo))
+            // Asked once already, so only its time running out can stop it now.
+            skip(&runs[index], line: ask.askedAgo == nil ? TaskWords.couldNotAsk(step.todo) : TaskWords.timedOut(step.todo))
             return
         }
         runs[index].phase = .askingYes(request)
@@ -545,6 +657,7 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
         runs[index].task.question = request
         runs[index].task.step = askLine
         runs[index].task.updatedAt = date
+        runs[index].askedAt = date - (ask.askedAgo ?? 0)
     }
 
     /// The soonest thing due, across every task.
@@ -591,6 +704,7 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
                     ? TaskStep(TaskWords.tookAnotherWay(step.todo), mark: .retried, at: date)
                     : TaskStep(step.text, mark: .done, at: date))
                 if let kept = step.kept { run.kept.append(kept) }
+                if run.approved { makeReceipt(run, outcome: .done) }
                 run.index += 1
                 begin(&run)
             }
@@ -633,7 +747,12 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
         unlockRuns()
         while !work.withdrawals.isEmpty || !work.asks.isEmpty {
             for request in work.withdrawals { withRule { $0.withdraw(request) } }
-            let answers = work.asks.map { ask in (ask, withRule { $0.ask(ask.action) }) }
+            let answers = work.asks.map { ask in
+                (ask, withRule { rule in
+                    // A question picked up after the app closed keeps its deadline.
+                    ask.askedAgo.map { rule.askAgain(ask.action, askedAgo: $0) } ?? rule.ask(ask.action)
+                })
+            }
             lockRuns()
             for (ask, request) in answers { asked(ask, request) }
             work = takeRuleWork()
@@ -680,7 +799,8 @@ public enum SampleTasks {
         kind: .sharePersonalInfo,
         // A reserved name, so the example never points at a real site.
         recipient: Recipient(id: "clinic:sample-maple-dental", displayName: "Maple Dental", handle: "mapledental.example"),
-        details: "Your name and phone number, to hold Saturday at 10:30"
+        details: "Your name and phone number, to hold Saturday at 10:30",
+        outcome: "I'll hold a visit for you on Saturday at 10:30."
     )
 
     public static let dentist = TaskScript(

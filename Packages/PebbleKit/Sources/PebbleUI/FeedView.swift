@@ -61,6 +61,9 @@ final class FeedModel: ObservableObject {
     /// yes that comes late is then still known as the task's, and never
     /// falls through to `NeedsYou`. Holds only ids, nothing a task said.
     private var taskAsked: [UUID: String] = [:]
+    /// Yeses a task has gone on with, by question id, so the same yes
+    /// handed over again is known and quietly ignored. Ids only.
+    private var usedYes: Set<UUID> = []
     /// Kept on Today after Forget everything, while a step the person said
     /// yes to may have happened. Names nothing the task held.
     @Published private(set) var forgotUnderway: String?
@@ -71,19 +74,36 @@ final class FeedModel: ObservableObject {
     /// Says a line to VoiceOver. Tests replace it to hear what would be said.
     var announce: @MainActor (TaskAnnouncer.Line) -> Void = FeedModel.post
 
+    /// Nudges, receipts, and keeping tasks while the app is closed. Nil
+    /// when nothing is kept.
+    let flow: NeedsYouFlow?
+    /// This model's watch on the flow's store, ended when the model goes.
+    private var storeObservation: TaskStore.Observation?
+    /// The flow's store, held here too so `deinit` can stop watching it.
+    private let store: TaskStore?
+
     init(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)? = nil,
-         drivesTasks: Bool = false, place: PrivacyPlace, calendar: Calendar = .current,
+         drivesTasks: Bool = false, place: PrivacyPlace, flow: NeedsYouFlow? = nil, calendar: Calendar = .current,
          now: @escaping () -> Date = { Date() },
          clock: @escaping () -> ContinuousClock.Instant = { ContinuousClock.now }) {
-        self.sources = sources
+        self.sources = sources + (flow.map { [ReceiptFeed(store: $0.store)] } ?? [])
         self.needsYou = needsYou
         self.tasks = tasks
         self.drivesTasks = drivesTasks
         self.place = place
+        self.flow = flow
+        self.store = flow?.store
         self.calendar = calendar
         self.now = now
         self.clock = clock
-        feed = Feed.build(from: sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
+        // Tasks kept while the app was closed come back first, before
+        // anything is shown. A question is asked again with the deadline it
+        // had; a yes is never brought back.
+        if let flow, let keeper = tasks as? any KeepsTasks {
+            flow.store.restore(into: keeper, now: now())
+        }
+        feed = Feed.build(from: self.sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
+        flow?.pinned(Self.pinnedTasks(in: feed))
         let list = tasks?.tasks ?? []
         track(list)
         sections = Self.sections(of: feed)
@@ -111,6 +131,16 @@ final class FeedModel: ObservableObject {
         observation = needsYou.observe { [weak self] in
             hops.add { self?.refresh() }
         }
+        // A receipt made or cleared shows at once, the same way.
+        storeObservation = store?.observe { [weak self] in
+            hops.add { self?.rebuild() }
+        }
+    }
+
+    /// The tasks whose questions are pinned in Needs you: the only ones the
+    /// flow may nudge about.
+    static func pinnedTasks(in feed: Feed) -> [AgentTask] {
+        feed.needsYou.compactMap(\.task).filter { $0.question != nil }
     }
 
     /// Refreshes asked for by `needsYou` and not yet run.
@@ -127,6 +157,7 @@ final class FeedModel: ObservableObject {
     /// The task watch ends on its own as `watching` is released.
     deinit {
         if let observation { needsYou.stopObserving(observation) }
+        if let storeObservation, let store { store.stopObserving(storeObservation) }
     }
 
     var isSample: Bool { needsYou.isSample || sources.contains { $0.isSample } || tasks?.isSample == true }
@@ -134,6 +165,7 @@ final class FeedModel: ObservableObject {
     /// True when this card came from an example source or a scripted engine.
     func isSample(_ item: FeedItem) -> Bool {
         if let tasks, tasks.isSample, taskIDs.contains(item.id) { return true }
+        if let receipt = item.receipt { return receipt.isSample }
         if item.kind == .needsYou { return needsYou.isSample }
         return sources.contains { $0.isSample && $0.items(now: now()).contains { $0.id == item.id } }
     }
@@ -188,6 +220,7 @@ final class FeedModel: ObservableObject {
         let next = Feed.build(from: sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
         if next != feed { feed = next }
         followCards()
+        flow?.pinned(Self.pinnedTasks(in: feed))
     }
 
     /// Each task card's section: Needs you, Working on it, or a time group.
@@ -228,6 +261,9 @@ final class FeedModel: ObservableObject {
     func tasksChanged(_ snapshot: TaskSnapshot) {
         guard snapshot.sequence > seen else { return }
         seen = snapshot.sequence
+        // Kept at every real change, so closing the app at any moment loses
+        // nothing. Only what changed is written.
+        if let flow, let keeper = tasks as? any KeepsTasks { flow.store.keep(keeper) }
         if track(snapshot.tasks) { rebuild() }
         for line in announcer.lines(for: snapshot.tasks, at: clock()) { announce(line) }
     }
@@ -285,8 +321,15 @@ final class FeedModel: ObservableObject {
         case .talk(let line): talk(line)
         case .task(let task):
             if task.question != nil { review(task) } else { open(task) }
+        case .receipt(let receipt): clearReceipt(receipt)
         case nil: break
         }
+    }
+
+    /// Takes a receipt away for good.
+    func clearReceipt(_ receipt: Receipt) {
+        flow?.store.clearReceipt(receipt.id)
+        rebuild()
     }
 
     // MARK: Task cards
@@ -351,6 +394,11 @@ final class FeedModel: ObservableObject {
     /// stays on Today to say it may be done. It names nothing the task held.
     @discardableResult
     func forgetTasks() -> ClearedTasks {
+        // Receipts, saved tasks and nudges go too, with or without an engine.
+        defer {
+            flow?.forget()
+            rebuild()
+        }
         guard let tasks else { return .none }
         if let reviewing, askedBy[reviewing.id] != nil || tasks.tasks.contains(where: { $0.question?.id == reviewing.id }) {
             self.reviewing = nil
@@ -392,8 +440,15 @@ final class FeedModel: ObservableObject {
     /// than leave the person wondering. A late one says so in its history.
     func approved(_ approval: Approval) {
         var refusedBy: String?
-        if let id = askedBy.removeValue(forKey: approval.id) {
-            if tasks?.resume(id, with: approval) ?? .refused == .refused { refusedBy = id }
+        if usedYes.contains(approval.id) {
+            // The same yes again, as from a second tap. The first one
+            // stands and went through; this one does nothing and says nothing.
+        } else if let id = askedBy.removeValue(forKey: approval.id) {
+            switch tasks?.resume(id, with: approval) ?? .refused {
+            case .proceeding: usedYes.insert(approval.id)
+            case .refused: refusedBy = id
+            case .timedOut: break
+            }
         } else if let id = taskAsked[approval.id] {
             // The task moved on before this yes came. It does nothing, and
             // never goes to `NeedsYou`.
@@ -506,6 +561,7 @@ struct FeedView: View {
 
     var body: some View {
         GeometryReader { proxy in
+            ScrollViewReader { scroller in
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
                     VStack(alignment: .leading, spacing: 6) {
@@ -540,6 +596,12 @@ struct FeedView: View {
                             .accessibilityIdentifier("needsYou")
                             .transition(Motion.arrival(reduceMotion: reduceMotion))
                     }
+                    if let flow = model.flow {
+                        // Offered only once a question is waiting, never at launch.
+                        NudgeOffer(flow: flow)
+                            .padding(.top, model.feed.showsNeedsYou ? -14 : 0)
+                            .transition(Motion.arrival(reduceMotion: reduceMotion))
+                    }
                     if model.feed.showsWorking {
                         section(TaskWords.workingHeading, detail: TaskWords.workingDetail,
                                 items: model.feed.working, columns: columns)
@@ -556,6 +618,12 @@ struct FeedView: View {
                 .readableColumn(columnWidth)
                 .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.45, dampingFraction: 0.9),
                            value: model.feed)
+            }
+            .background {
+                if let flow = model.flow {
+                    FocusScroller(flow: flow, scroller: scroller, reduceMotion: reduceMotion)
+                }
+            }
             }
         }
         .background(Backdrop())
@@ -631,12 +699,18 @@ struct FeedView: View {
                                      onRetry: { model.retry(task) },
                                      onOpen: { model.open(task) },
                                      onDismiss: { model.dismiss(task) })
+                        } else if let receipt = item.receipt {
+                            ReceiptCard(receipt: receipt, time: model.timeLabel(for: item.time)) {
+                                model.clearReceipt(receipt)
+                            }
                         } else {
                             FeedCard(item: item, time: model.timeLabel(for: item.time), isSample: model.isSample(item)) {
                                 model.perform(item, talk: onTalk)
                             }
                         }
                     }
+                    // So a nudge opened from the lock screen can bring its card into view.
+                    .id(item.id)
                     .transition(Motion.arrival(reduceMotion: reduceMotion))
                 }
             }
@@ -761,7 +835,31 @@ struct FeedCard: View {
         // Never drawn: a task item is always a `TaskCard`, which picks its
         // symbol by state. Here only so the switch is complete.
         case .task: "circle.fill"
+        // Never drawn here either: a receipt is a `ReceiptCard`, which uses it.
+        case .receipt: "checkmark.seal.fill"
         }
+    }
+}
+
+/// Brings a task's card into view when its nudge is opened, then lets go.
+struct FocusScroller: View {
+    @ObservedObject var flow: NeedsYouFlow
+    let scroller: ScrollViewProxy
+    let reduceMotion: Bool
+
+    var body: some View {
+        Color.clear
+            .onChange(of: flow.focus, initial: true) { _, id in
+                guard let id else { return }
+                // A beat later, once Today is in front and the card in place.
+                Task { @MainActor in
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.35)) {
+                        scroller.scrollTo(id, anchor: .top)
+                    }
+                    flow.focus = nil
+                }
+            }
+            .accessibilityHidden(true)
     }
 }
 

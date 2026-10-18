@@ -60,6 +60,14 @@ in lint, a skill, or CI.
 - No co-authored-by footers unless the founder asks.
 - Squash merge.
 
+## Learned the hard way
+
+- `UNUserNotificationCenterDelegate`: use the completion-handler methods, not
+  the async ones. The async ones answer UIKit off the main thread and crash
+  the app as a notification opens. `NeedsYouFlowModelTests` guards this.
+- `onReceive` of a `@Published` publisher replays its value each time the
+  body runs. To react to a change, observe the object and use `onChange`.
+
 ## Never
 
 - Commit secrets, API keys or signing material. The xAI key and signing keys

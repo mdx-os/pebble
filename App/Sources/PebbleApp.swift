@@ -12,6 +12,9 @@ struct PebbleApp: App {
             preconditionFailure("\(Brand.infoKey) is missing from Info.plist. Set BRAND_NAME in Config/Brand.xcconfig.")
         }
         self.brand = brand
+        // Before launch finishes, so a nudge opened from the lock screen
+        // reaches Today even when it starts the app. Asks for nothing.
+        LocalQuestionNotifier.shared.install()
         #if os(macOS)
         SnapshotMode.runIfRequested(brand: brand)
         #endif
@@ -38,7 +41,9 @@ struct PebbleApp: App {
             model: LocalStubModel(),
             names: UserDefaultsAgentNameStore(),
             onboarding: UserDefaultsOnboardingStore(),
-            memory: try? MemoryStore.onDevice()
+            memory: try? MemoryStore.onDevice(),
+            kept: try? TaskStore.onDevice(),
+            notifier: LocalQuestionNotifier.shared
         )
     }
 }

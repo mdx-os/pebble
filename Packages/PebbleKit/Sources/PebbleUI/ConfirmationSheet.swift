@@ -132,6 +132,9 @@ public struct ConfirmationSheet: View {
     @StateObject private var state: ConfirmationState
     @Environment(\.colorScheme) private var scheme
     @AccessibilityFocusState private var footnoteFocused: Bool
+    /// Room for the longest label, "What happens", growing with the text.
+    @ScaledMetric(relativeTo: .subheadline) private var labelWidth: CGFloat = 96
+    @State private var detent: PresentationDetent = .large
 
     public init(
         request: ConfirmationRequest,
@@ -146,6 +149,12 @@ public struct ConfirmationSheet: View {
         _state = StateObject(wrappedValue: ConfirmationState(
             request: request, rule: rule, onApprove: onApprove, onDecline: onDecline
         ))
+    }
+
+    /// Over the details: what is shared when it is the person's own
+    /// details, else what goes out.
+    static func detailsLabel(_ kind: ConsequentialAction) -> String {
+        kind == .sharePersonalInfo ? ConfirmationWords.sharedLabel : ConfirmationWords.whatLabel
     }
 
     /// The footnote under the details.
@@ -168,7 +177,11 @@ public struct ConfirmationSheet: View {
             content
         }
         .scrollBounceBehavior(.basedOnSize)
-        .presentationDetents([.medium, .large])
+        // Opens tall, so what happens, to whom and what is shared are all
+        // seen with the buttons before anything is decided.
+        .presentationDetents([.medium, .large], selection: $detent)
+        // On iPad a form sheet keeps a set height; let it grow to its words.
+        .presentationSizing(.form.fitted(horizontal: false, vertical: true))
         .presentationDragIndicator(.visible)
         .interactiveDismissDisabled()
         .onDisappear {
@@ -228,10 +241,15 @@ public struct ConfirmationSheet: View {
                     row(ConfirmationWords.whereLabel, handle)
                 }
                 Divider().overlay(Theme.hairline(scheme))
-                row(ConfirmationWords.whatLabel, action.details)
+                row(Self.detailsLabel(action.kind), action.details)
                 if let price = action.price {
                     Divider().overlay(Theme.hairline(scheme))
                     row(ConfirmationWords.priceLabel, price.formatted())
+                }
+                // What a yes will do, so nothing about it is left to guess.
+                if let outcome = action.outcome {
+                    Divider().overlay(Theme.hairline(scheme))
+                    row(ConfirmationWords.happensLabel, outcome)
                 }
             }
             .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
@@ -268,7 +286,7 @@ public struct ConfirmationSheet: View {
             Text(label)
                 .font(.subheadline)
                 .foregroundStyle(Theme.secondaryText)
-                .frame(width: 56, alignment: .leading)
+                .frame(width: labelWidth, alignment: .leading)
             Text(value)
                 .font(.body.weight(.medium))
                 .fixedSize(horizontal: false, vertical: true)

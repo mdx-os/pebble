@@ -131,7 +131,7 @@ public enum TaskState: String, Sendable, Equatable, CaseIterable {
 
 /// One line in a task's history.
 public struct TaskStep: Sendable, Hashable {
-    public enum Mark: String, Sendable, Hashable {
+    public enum Mark: String, Sendable, Hashable, Codable {
         /// A step finished.
         case done
         /// A step finished, after it was slow and the agent tried another way.
@@ -326,6 +326,28 @@ extension TaskEngine {
     public var isSample: Bool { false }
 }
 
+/// An engine whose tasks outlive the app being closed, through `TaskStore`.
+///
+/// What it keeps is plain: where each task still going had got to, what it
+/// kept, and when a question waiting on the person was first asked. Never a
+/// yes. A question is asked again through `AskFirst.askAgain` with the
+/// deadline it had, or ends as timed out. A step the person said yes to
+/// that was under way is never run again: it ends with a line saying it
+/// may be done, and its receipt says the same.
+public protocol KeepsTasks: TaskEngine {
+    /// Every task still going, as it can be picked up again.
+    func saved() -> [SavedTask]
+
+    /// Picks up tasks saved before the app closed. `now` is the time on
+    /// the device clock, to tell how long a question has been waiting.
+    /// A task already here is left as it is.
+    func restore(_ saved: [SavedTask], now: Date)
+
+    /// Receipts for steps the person said yes to that have ended since the
+    /// last call, each handed over once.
+    func takeReceipts() -> [Receipt]
+}
+
 /// What forgetting every task left behind: counts only, so nothing a task
 /// held outlives it.
 public struct ClearedTasks: Sendable, Equatable {
@@ -476,6 +498,9 @@ public enum TaskWords {
     public static let waitingForYes = "I'll wait for your yes before I go on."
     public static let redirected = "Got it. I'm working that in now."
     public static let stopped = "I stopped, as you asked."
+    /// A task whose step the person said yes to was under way when the app
+    /// closed. It is never run again, so it ends here.
+    public static let interrupted = "I was closed before I could finish, so I stopped here."
     public static let failed = "Sorry, I couldn't finish this."
     public static let keptNothing = "I hadn't kept anything yet."
     public static let stillWorking = "Still working"

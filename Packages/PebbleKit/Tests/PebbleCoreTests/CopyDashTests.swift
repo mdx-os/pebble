@@ -38,6 +38,7 @@ struct CopyDashTests {
         ConfirmationWords.heading, ConfirmationWords.toLabel, ConfirmationWords.fromLabel,
         ConfirmationWords.whatLabel, ConfirmationWords.whereLabel, ConfirmationWords.priceLabel,
         ConfirmationWords.expired, ConfirmationWords.closeTitle, ConfirmationWords.promise,
+        ConfirmationWords.sharedLabel, ConfirmationWords.happensLabel,
         ProposedAction.yesTitle, ProposedAction.noTitle, ProposedAction.declined,
         HomeWords.chatTitle, HomeWords.newChatTitle, HomeWords.goMenuTitle, HomeWords.shortcutsTitle,
         CareCheck.reply, CareCheck.followUp,
@@ -47,6 +48,8 @@ struct CopyDashTests {
       + HomeWords.shortcuts.flatMap { [$0.keys, $0.action] }
       + FeedWords.all
       + TaskWords.all
+      + ReceiptWords.all
+      + NudgeWords.all
 
     @Test func noScreenWordsUseADash() {
         for line in Self.copy {
@@ -125,7 +128,7 @@ extension TaskWords {
     /// line takes some. The one list the dash test and the warmth test read.
     static var all: [String] {
         [workingHeading, workingDetail, runningLabel, stalledLabel, retryingLabel, stoppedLabel, failedLabel,
-         stalled, retrying, stuck, waitingForYes, redirected, stopped, failed, keptNothing, stillWorking,
+         stalled, retrying, stuck, waitingForYes, redirected, stopped, interrupted, failed, keptNothing, stillWorking,
          approveTitle, redirectTitle, redirectPlaceholder, redirectSendTitle, redirectCancelTitle, stopTitle,
          tryAgainTitle, dismissTitle, youSaidYes, finishingApproved, yesNotUsed,
          forgetTasksTitle, forgetTasksQuestion, forgetTasksDetail, questionTimedOut, tasksForgotten,
