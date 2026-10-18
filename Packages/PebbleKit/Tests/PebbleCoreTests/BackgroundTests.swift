@@ -504,6 +504,29 @@ struct BackgroundRunnerTests {
         #expect(summary.finished == 1)
     }
 
+    /// A file whose last summary is later than the clock, as after the
+    /// clock was set back, counts from now rather than trap, so Today's
+    /// refresh still makes the summary that is due.
+    @Test func aLastSummaryLaterThanNowCountsFromNow() throws {
+        let store = scratchStore()
+        try store.save(BackgroundState(queue: [BackgroundJob(kind: .morningSummary, due: at(7))],
+                                       lastSummary: at(7, days: 2)))
+        let tasks = FixedTasks([
+            AgentTask(id: "a", title: "Done", step: "Done", state: .done, startedAt: at(1), updatedAt: at(2)),
+        ])
+        let runner = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(on: true), needsYou: oneWaiting(),
+                                      tasks: tasks, watchingSince: .distantPast, calendar: calendar)
+        let made = try #require(runner.runDue(now: at(8), conditions: .foreground).first)
+        guard case .morningSummary(let summary) = made.content else { Issue.record("not a summary"); return }
+        #expect(summary.since == at(8))
+        #expect(summary.waiting == 1)
+        #expect(summary.finished == 0, "nothing ended in an empty window")
+
+        let counted = MorningSummary.count(questions: [], tasks: tasks.tasks, since: at(9), now: at(8), late: nil)
+        #expect(counted.since == at(8))
+        #expect(counted.finished == 0)
+    }
+
     // MARK: Only what it can know
 
     /// The app's own wiring: the same Needs you and task engine as Today,
@@ -1149,6 +1172,41 @@ struct BackgroundRunnerTests {
         #expect(try store.load().results.contains { $0.id == made.id })
         let next = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(on: true), calendar: calendar)
         #expect(next.results.first?.id == made.id)
+    }
+
+    /// A save cut between its write and its rename leaves only the staged
+    /// copy. The next launch reads it, rather than start from nothing,
+    /// and renames it into place. A copy that doesn't decode starts over,
+    /// as a file that doesn't would.
+    @Test func aStagedCopyWithNoFileIsRecovered() throws {
+        let store = scratchStore()
+        let runner = runner(store: store)
+        let made = try #require(runner.runDue(now: at(7), conditions: background).first)
+        try FileManager.default.moveItem(at: store.fileURL, to: store.stagingURL)
+        #expect(!FileManager.default.fileExists(atPath: store.fileURL.path))
+        #expect(store.canOpen && !store.isShut)
+
+        let next = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(on: true), calendar: calendar)
+        #expect(next.results.map(\.id) == [made.id])
+        #expect(next.queue.first?.due == at(7, days: 1), "the queue came back too")
+        #expect(FileManager.default.fileExists(atPath: store.fileURL.path), "renamed into place")
+        #expect(!FileManager.default.fileExists(atPath: store.stagingURL.path))
+
+        try FileManager.default.removeItem(at: store.fileURL)
+        try Data("not a state".utf8).write(to: store.stagingURL)
+        #expect(try store.load() == .empty)
+    }
+
+    /// A staged copy left alone, with no file, that can't be opened yet is
+    /// shut like the file would be, so nothing is written over it.
+    @Test func aShutStagedCopyWithNoFileIsShut() throws {
+        let faults = BackgroundStoreFaults()
+        let store = BackgroundStore(fileURL: Scratch.url("background"), faults: faults)
+        try store.save(BackgroundState(lastSummary: at(7)))
+        try FileManager.default.moveItem(at: store.fileURL, to: store.stagingURL)
+        faults.openError = BackgroundStore.shutError
+        #expect(store.isShut)
+        #expect(throws: BackgroundStore.Unavailable.self) { try store.load() }
     }
 
     /// Forget everything whose file can't be erased says so beside the
@@ -1906,7 +1964,7 @@ struct BackgroundWordsTests {
                 BackgroundWords.missedTitle(at(7)), BackgroundWords.settingTitle,
                 BackgroundWords.missedTitle(from: at(7), through: at(7, days: 2), calendar: calendar, locale: en),
                 BackgroundWords.missedTitle(from: at(7), through: at(7, days: 9), calendar: calendar, locale: en),
-                BackgroundWords.missedSeveral, BackgroundWords.countedNothing,
+                BackgroundWords.missedSeveral,
                 BackgroundWords.settingDetail(whileClosed: true, countsTasks: true),
                 BackgroundWords.settingDetail(whileClosed: false, countsTasks: true),
                 BackgroundWords.settingDetail(whileClosed: true, countsTasks: false),
@@ -1927,7 +1985,9 @@ struct BackgroundWordsTests {
         MemoryWords.couldNotForgetSummariesLines + CloudWords.forgotAndCloudOffNotSummariesLines
             + [CloudWords.forgotNotesNotWords, CloudWords.forgotNotesAndTasksNotWords,
                MemoryWords.summariesGone, MemoryWords.summariesStayed,
-               MemoryWords.forgetEverythingDetail(background: true), CloudWords.forgetEverythingWithSummariesDetail]
+               MemoryWords.forgetEverythingDetail(background: true), CloudWords.forgetEverythingWithSummariesDetail,
+               MemoryWords.forgetSummariesTitle, MemoryWords.forgetSummariesQuestion,
+               MemoryWords.forgetSummariesDetail, MemoryWords.couldNotForgetSummariesAlone]
     }
 
     @Test func theWordsAreCalmAndPromiseNothingAboutTheDevice() {
@@ -1938,7 +1998,7 @@ struct BackgroundWordsTests {
         for line in Self.all {
             #expect(DevicePromise.found(in: line).isEmpty, "device promise in: \(line)")
         }
-        #expect(Self.forgetLines.count == 18, "every form of each line")
+        #expect(Self.forgetLines.count == 22, "every form of each line")
     }
 
     /// "Nothing finished" never stands beside tasks that couldn't: the
@@ -1954,6 +2014,24 @@ struct BackgroundWordsTests {
         let quiet = MorningSummary(waiting: 1, finished: 0, couldNotFinish: 0, since: at(19, days: -1), late: nil)
         #expect(BackgroundWords.summaryBody(quiet, now: at(7), calendar: calendar, locale: en)
             == "One thing was waiting for you. Nothing finished overnight.")
+    }
+
+    /// A summary where nothing could be counted is quiet, so the runner
+    /// leaves no card for it, and the words have no line for one: there is
+    /// no card to say it on.
+    @Test func nothingCountedLeavesNoCardAndNoLine() {
+        let runner = runner(needsYou: nil, tasks: nil)
+        #expect(runner.runDue(now: at(7), conditions: .foreground).isEmpty)
+        #expect(runner.results.isEmpty)
+        #expect(runner.queue.first?.due == at(7, days: 1), "it still moved on")
+
+        let unknown = MorningSummary(waiting: nil, finished: nil, couldNotFinish: nil, since: at(19, days: -1),
+                                     late: nil)
+        #expect(unknown.isQuiet)
+        #expect(BackgroundWords.summaryBody(unknown, now: at(7), calendar: calendar).isEmpty)
+        let en = Locale(identifier: "en_US")
+        #expect(BackgroundWords.summaryDetail(unknown, now: at(7), calendar: calendar, locale: en)
+            == BackgroundWords.countedSince(at(19, days: -1), now: at(7), calendar: calendar, locale: en))
     }
 
     @Test func theSwitchSaysWhatItDoesAndThatItAsksFirst() {

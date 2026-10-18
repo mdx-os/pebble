@@ -281,7 +281,7 @@ struct LockedTaskStoreTests {
         let body = BackgroundWords.summaryBody(summary, now: clock.now(), calendar: Self.calendar)
         #expect(body.contains(BackgroundWords.tasksLocked))
         #expect(!body.contains("finished overnight"))
-        #expect(!body.contains(BackgroundWords.countedNothing))
+        #expect(!body.contains("couldn't count what happened"))
         let detail = BackgroundWords.summaryDetail(summary, now: clock.now(), calendar: Self.calendar, locale: .current)
         #expect(detail.contains(BackgroundWords.tasksLocked))
     }

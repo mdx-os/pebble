@@ -235,6 +235,39 @@ struct BackgroundServiceTests {
         #expect(scheduler.asks == [at(7)], "a wake that still comes asks for none")
     }
 
+    /// A change that leaves the wake where it was asks nothing again; one
+    /// that moves it asks once. After a cancel, or a run that used the ask,
+    /// the same time is asked for afresh.
+    @Test func anUnchangedWakeIsNotAskedForAgain() {
+        let store = scratchStore()
+        defer { try? store.forget() }
+        let runner = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(), needsYou: oneWaiting(),
+                                      watchingSince: .distantPast, calendar: calendar)
+        runner.turnOn(now: at(6))
+        let scheduler = RecordingScheduler()
+        let service = BackgroundService(runner: runner, scheduler: scheduler, clock: { at(6, 30) })
+        service.start()
+        #expect(scheduler.asks == [at(7)])
+
+        // A card dismissed, the switch turned on again: the wake stays.
+        service.plan()
+        runner.turnOn(now: at(6, 30))
+        service.plan()
+        #expect(scheduler.asks == [at(7)], "the same ask, made once")
+
+        runner.turnOff()
+        service.plan()
+        #expect(scheduler.cancels == 1)
+        runner.turnOn(now: at(6, 30))
+        service.plan()
+        #expect(scheduler.asks == [at(7), at(7)], "asked again once it was cancelled")
+
+        // A run uses the ask, so the next is asked for even at the same time.
+        let early = BackgroundConditions.background(store: store, lowPower: false, deadline: at(6, 30) + 20)
+        service.run(now: at(6, 30), conditions: early, time: BackgroundTime())
+        #expect(scheduler.asks == [at(7), at(7), at(7)])
+    }
+
     /// The service finds the lock by trying the file, through the one
     /// helper the tests drive, and nothing in PebbleBackground, the runner,
     /// or the app's own sources, where the system's task arrives, reads the
@@ -355,10 +388,14 @@ struct BackgroundServiceTests {
     @Test func theSeedsScratchFolderGoesOnTheNextLaunch() throws {
         let suite = "background-seed-test.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let legacy = suite + ".legacy"
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            defaults.removePersistentDomain(forName: legacy)
+        }
         let folder = Scratch.url("seed").deletingPathExtension()
         defaults.set("on", forKey: BackgroundSeed.launchKey)
-        let seeded = try #require(BackgroundSeed.launched(defaults: defaults, folder: folder))
+        let seeded = try #require(BackgroundSeed.launched(defaults: defaults, folder: folder, legacySuite: legacy))
         #expect(seeded.store.hasStoredFile)
         #expect(FileManager.default.fileExists(atPath: folder.path))
 
@@ -366,13 +403,41 @@ struct BackgroundServiceTests {
         seeded.toggle.set(true)
         try seeded.store.save(.empty)
         defaults.set("again", forKey: BackgroundSeed.launchKey)
-        let again = try #require(BackgroundSeed.launched(defaults: defaults, folder: folder))
+        let again = try #require(BackgroundSeed.launched(defaults: defaults, folder: folder, legacySuite: legacy))
         #expect(again.toggle.isOn)
         #expect(try again.store.load() == .empty, "nothing seeded over it")
 
         defaults.removeObject(forKey: BackgroundSeed.launchKey)
-        #expect(BackgroundSeed.launched(defaults: defaults, folder: folder) == nil)
+        #expect(BackgroundSeed.launched(defaults: defaults, folder: folder, legacySuite: legacy) == nil)
         #expect(!FileManager.default.fileExists(atPath: folder.path))
+    }
+
+    /// A seeded launch on a dev device never moves or removes the keys an
+    /// earlier version kept in the app's own `UserDefaults`: its switch
+    /// reads a throwaway suite, cleared before each seeded launch.
+    @Test func aSeededLaunchLeavesTheDevicesOwnKeysAlone() throws {
+        let suite = "background-seed-own.\(UUID().uuidString)"
+        let own = try #require(UserDefaults(suiteName: suite))
+        let legacySuite = "background-seed-legacy.\(UUID().uuidString)"
+        defer {
+            own.removePersistentDomain(forName: suite)
+            own.removePersistentDomain(forName: legacySuite)
+        }
+        let due = at(7, days: 1)
+        own.set(true, forKey: FileBackgroundSwitch.LegacyKeys.on)
+        own.set(due, forKey: FileBackgroundSwitch.LegacyKeys.nextDue)
+        // Left by an earlier seeded launch, and cleared before this one.
+        try #require(UserDefaults(suiteName: legacySuite)).set(true, forKey: FileBackgroundSwitch.LegacyKeys.on)
+        own.set("on", forKey: BackgroundSeed.launchKey)
+        let folder = Scratch.url("seed-own").deletingPathExtension()
+        let seeded = try #require(BackgroundSeed.launched(defaults: own, folder: folder, legacySuite: legacySuite))
+
+        #expect(!seeded.toggle.isOn, "the device's own on never reaches the seed")
+        seeded.toggle.set(false)
+        #expect(own.bool(forKey: FileBackgroundSwitch.LegacyKeys.on))
+        #expect(own.object(forKey: FileBackgroundSwitch.LegacyKeys.nextDue) as? Date == due)
+        own.removeObject(forKey: BackgroundSeed.launchKey)
+        #expect(BackgroundSeed.launched(defaults: own, folder: folder, legacySuite: legacySuite) == nil)
     }
     #endif
 }
