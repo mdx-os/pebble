@@ -217,6 +217,11 @@ final class HomeLayoutUITests: XCTestCase {
     /// the file, and the memory screen says when it looks next. The seed
     /// points the runner at a scratch folder, so nothing of the person's is
     /// touched, and it is the app's own home screen, not the showcase.
+    ///
+    /// The earlier version's setting comes from a launch argument, which
+    /// lasts only for that launch. So the app opens again on the same
+    /// folder without it, and is still on: the switch really moved beside
+    /// the file, rather than being read from that argument each time.
     func testALaunchWithBackgroundWorkAlreadyOnKeepsItOn() throws {
         // A launch without the seed removes its scratch folder, so the
         // test leaves nothing behind in the app's temporary folder.
@@ -230,17 +235,29 @@ final class HomeLayoutUITests: XCTestCase {
         app.launchArguments = ["-pebbleBackgroundSeed", "on", "-backgroundWork.on", "YES",
                                "-pebble.onboarding.finished", "YES", "-pebble.agent.displayName", "Pip"]
         app.launch()
+        expectOnInMemoryScreen(app, "still on after the launch")
+        app.terminate()
+
+        // The same folder, without the earlier version's setting.
+        app.launchArguments = ["-pebbleBackgroundSeed", "again",
+                               "-pebble.onboarding.finished", "YES", "-pebble.agent.displayName", "Pip"]
+        app.launch()
+        expectOnInMemoryScreen(app, "on, read from the switch's own file")
+        app.terminate()
+    }
+
+    private func expectOnInMemoryScreen(_ app: XCUIApplication, _ why: String,
+                                        file: StaticString = #filePath, line: UInt = #line) {
         let memory = app.buttons["What I remember"].firstMatch
-        XCTAssertTrue(memory.waitForExistence(timeout: 10), "the app's home, past the first run")
+        XCTAssertTrue(memory.waitForExistence(timeout: 10), "the app's home, past the first run", file: file, line: line)
         memory.tap()
         let toggle = app.switches["backgroundSwitch"]
-        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10), file: file, line: line)
         for _ in 0..<8 where !toggle.isHittable { app.swipeUp() }
-        XCTAssertEqual(toggle.value as? String, "1", "still on after the launch")
+        XCTAssertEqual(toggle.value as? String, "1", why, file: file, line: line)
         let next = app.staticTexts["backgroundNext"]
-        XCTAssertTrue(next.waitForExistence(timeout: 5))
-        XCTAssertTrue(next.label.hasPrefix("I'll look next"), next.label)
-        app.terminate()
+        XCTAssertTrue(next.waitForExistence(timeout: 5), why, file: file, line: line)
+        XCTAssertTrue(next.label.hasPrefix("I'll look next"), next.label, file: file, line: line)
     }
 
     /// Typing on Today and pressing Command 2 still goes to the chat, and

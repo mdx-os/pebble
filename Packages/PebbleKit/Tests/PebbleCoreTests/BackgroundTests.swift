@@ -90,20 +90,52 @@ private func lockedBytes(_ store: BackgroundStore) throws -> Data {
     try Data(contentsOf: store.fileURL)
 }
 
-/// The protection class every save asked for, through the stores' real
-/// write path, which it then takes.
+/// The protection class every save asked for, and what it wrote, through
+/// the stores' real write path, which it then takes.
 final class ProtectionLog: @unchecked Sendable {
     private let lock = NSLock()
     private var list: [FileProtectionType] = []
+    private var written: [Data] = []
 
     var classes: [FileProtectionType] { lock.withLock { list } }
+    var payloads: [Data] { lock.withLock { written } }
 
     var writer: ProtectedWriter {
         ProtectedWriter { [self] data, url, protection in
-            lock.withLock { list.append(protection) }
+            lock.withLock {
+                list.append(protection)
+                written.append(data)
+            }
             try ProtectedWriter.disk.write(data, url, protection)
         }
     }
+}
+
+/// The real switch, writing down in order when it was turned on or off and
+/// when a Forget everything's wait began or ended.
+private final class OrderedSwitch: BackgroundSwitch, @unchecked Sendable {
+    let real: FileBackgroundSwitch
+    private let lock = NSLock()
+    private var list: [String] = []
+
+    init(_ real: FileBackgroundSwitch) {
+        self.real = real
+    }
+
+    var steps: [String] { lock.withLock { list } }
+    func clear() { lock.withLock { list = [] } }
+    private func log(_ step: String) { lock.withLock { list.append(step) } }
+
+    var isOn: Bool { real.isOn }
+    func set(_ on: Bool) { log("set(\(on))"); real.set(on) }
+    var isKnown: Bool { real.isKnown }
+    var hasBeenSet: Bool { real.hasBeenSet }
+    var nextDue: Date? { real.nextDue }
+    func setNextDue(_ due: Date?) { real.setNextDue(due) }
+    var heldBeforeLoad: BackgroundHeldRun? { real.heldBeforeLoad }
+    func setHeldBeforeLoad(_ held: BackgroundHeldRun?) { real.setHeldBeforeLoad(held) }
+    var forgetPending: Bool { real.forgetPending }
+    func setForgetPending(_ pending: Bool) { log("forgetPending(\(pending))"); real.setForgetPending(pending) }
 }
 
 /// Needs you with one question open, so a summary has something to say:
@@ -255,6 +287,33 @@ struct BackgroundRunnerTests {
         let next = FileBackgroundSwitch(fileURL: toggle.fileURL)
         #expect(next.isOn)
         #expect(next.nextDue == at(7))
+    }
+
+    /// A Forget everything that begins on a switch never kept here, while
+    /// the old keys still say on: they go before anything is written, so no
+    /// write along the way says on, and a launch after a crash between two
+    /// writes never finds on that the person asked to forget.
+    @Test func aForgetNeverMovesTheOldKeysOver() throws {
+        let suite = "background-switch-test.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: FileBackgroundSwitch.LegacyKeys.on)
+        defaults.set(at(7), forKey: FileBackgroundSwitch.LegacyKeys.nextDue)
+        let writes = ProtectionLog()
+        let toggle = FileBackgroundSwitch(fileURL: Scratch.url("background-switch"), defaults: defaults,
+                                          writer: writes.writer)
+        toggle.setForgetPending(true)
+        // The marker is empty; every other write is the switch's file.
+        let saves = writes.payloads.filter { !$0.isEmpty }
+        #expect(!saves.isEmpty)
+        for save in saves {
+            let fields = try JSONSerialization.jsonObject(with: save) as? [String: Any] ?? [:]
+            #expect(fields["on"] as? Bool == false, "\(fields)")
+            #expect(fields["forgetPending"] as? Bool == true, "the wait goes in the same write: \(fields)")
+        }
+        #expect(defaults.object(forKey: FileBackgroundSwitch.LegacyKeys.on) == nil)
+        #expect(defaults.object(forKey: FileBackgroundSwitch.LegacyKeys.nextDue) == nil)
+        #expect(!FileBackgroundSwitch(fileURL: toggle.fileURL, defaults: defaults).isOn)
     }
 
     /// Before the first unlock `UserDefaults` reads as empty. A launch then
@@ -929,7 +988,7 @@ struct BackgroundRunnerTests {
     /// it unlocks, however often the runner is asked to run.
     @Test func forgetEverythingWhileLockedWritesNothingBack() throws {
         let saved = BackgroundState(queue: [BackgroundJob(kind: .morningSummary, due: at(7))])
-        let (store, _) = try lockedStore(saved: saved)
+        let (store, unlock) = try lockedStore(saved: saved)
         defer { try? FileManager.default.removeItem(at: store.fileURL) }
         let toggle = InMemoryBackgroundSwitch()
         let runner = BackgroundRunner(store: store, toggle: toggle, needsYou: oneWaiting(),
@@ -947,6 +1006,7 @@ struct BackgroundRunnerTests {
 
         // Unlocked: the file is gone, so there is nothing to put back, and
         // the runner has nothing of its own to write.
+        try unlock()
         for hour in [8, 9] { runner.runDue(now: at(hour), conditions: .foreground) }
         #expect(!store.hasStoredFile)
         #expect(!FileManager.default.fileExists(atPath: store.stagingURL.path))
@@ -955,12 +1015,15 @@ struct BackgroundRunnerTests {
         #expect(runner.results.isEmpty)
         #expect(toggle.nextDue == nil)
         // Turned on from elsewhere, as by another window, it still has
-        // nothing old to write: only the fresh queue goes in the file.
+        // nothing old to write. On with nothing queued, its next look
+        // queues the next morning, so on never waits for nothing: only
+        // that fresh job goes in the file.
         toggle.set(true)
         runner.runDue(now: at(10), conditions: .foreground)
-        #expect(!store.hasStoredFile, "nothing changed, so nothing written")
+        #expect(runner.queue.map(\.due) == [at(7, days: 1)])
+        #expect(runner.nextWake(now: at(10)) == at(7, days: 1))
         let again = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(on: true), calendar: calendar)
-        #expect(again.queue.isEmpty)
+        #expect(again.queue.map(\.due) == [at(7, days: 1)])
         #expect(again.results.isEmpty)
     }
 
@@ -1108,10 +1171,11 @@ struct BackgroundRunnerTests {
 
     /// Forget everything with the real switch, while what an earlier
     /// version kept in `UserDefaults` still says on. Read afresh, as the
-    /// next launch reads it, the switch stays off, the old keys are gone,
-    /// and once the forget is done the switch's file is gone too, so on
-    /// can never move back over it. While the forget waits, the file holds
-    /// off and the wait, and no time.
+    /// next launch reads it, the switch stays off, whether the forget still
+    /// waits or is done, and however often the old keys come back. Once it
+    /// is done the switch's file is gone too, and only the empty marker
+    /// stays, which keeps the old keys from ever moving over again. While
+    /// the forget waits, the file holds off and the wait, and no time.
     @Test func forgetEverythingWithTheRealSwitchStaysOffAndLeavesNoTrace() throws {
         let suite = "background-switch-test.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -1149,13 +1213,34 @@ struct BackgroundRunnerTests {
         #expect(Set(waiting.keys) == ["on", "forgetPending"], "no time and no held run")
         #expect(waiting["on"] as? Bool == false)
 
-        // The old keys come back once more, then a later launch erases it.
+        // The old keys come back while the forget still waits. A fresh
+        // read still says off, and so does a launch that can't erase the
+        // file yet: off, never unknown, and it asks for no wake.
+        keepTheOldKeys()
+        #expect(!FileBackgroundSwitch(fileURL: switchURL, defaults: defaults).isOn)
+        let stuck = BackgroundRunner(store: store,
+                                     toggle: FileBackgroundSwitch(fileURL: switchURL, defaults: defaults),
+                                     calendar: calendar)
+        #expect(!stuck.isOn)
+        #expect(stuck.switchReading == .off)
+        #expect(stuck.nextWake(now: at(8)) == nil)
+        #expect(stuck.results.isEmpty)
+        #expect(FileBackgroundSwitch(fileURL: switchURL).forgetPending, "still waits")
+        expectOff(switchURL, defaults: defaults, "while the forget waits")
+
+        // Then a later launch erases it, with the old keys there again.
         keepTheOldKeys()
         faults.eraseFails = false
         let later = BackgroundRunner(store: store,
                                      toggle: FileBackgroundSwitch(fileURL: switchURL, defaults: defaults),
                                      calendar: calendar)
+        #expect(!later.isOn)
+        #expect(later.switchReading == .off)
+        #expect(later.nextWake(now: at(8)) == nil)
         #expect(later.results.isEmpty)
+        #expect(!later.isOn, "and once it has erased the file")
+        #expect(later.switchReading == .off)
+        #expect(later.nextWake(now: at(8)) == nil)
         #expect(!store.hasStoredFile)
         #expect(oldKeysLeft().isEmpty)
         #expect(!FileManager.default.fileExists(atPath: switchURL.path), "no trace left")
@@ -1166,18 +1251,170 @@ struct BackgroundRunnerTests {
         #expect(fresh.nextDue == nil)
         #expect(fresh.heldBeforeLoad == nil)
         #expect(!FileManager.default.fileExists(atPath: switchURL.path), "reading writes nothing back")
+        // The marker is all that stays, and it holds nothing.
+        #expect(try Data(contentsOf: fresh.markerURL).isEmpty)
+        // Old keys that come back after the forget, as from an old backup,
+        // never move over: no launch turns it on without a tap.
+        keepTheOldKeys()
+        expectOff(switchURL, defaults: defaults, "the old keys came back after the forget")
 
-        // And when it erases at once, the same.
+        // And when it erases at once, the same. A switch that has never
+        // been kept moves the old keys over, for this part.
+        let otherURL = Scratch.url("background-switch")
         keepTheOldKeys()
         let again = BackgroundRunner(store: scratchStore(),
-                                     toggle: FileBackgroundSwitch(fileURL: switchURL, defaults: defaults),
+                                     toggle: FileBackgroundSwitch(fileURL: otherURL, defaults: defaults),
                                      needsYou: oneWaiting(), watchingSince: .distantPast, calendar: calendar)
-        #expect(again.isOn, "moved over again, for this part")
+        #expect(again.isOn, "moved over, for this part")
         keepTheOldKeys()
         try again.forget()
         #expect(oldKeysLeft().isEmpty)
-        #expect(!FileManager.default.fileExists(atPath: switchURL.path))
-        #expect(!FileBackgroundSwitch(fileURL: switchURL, defaults: defaults).isOn)
+        #expect(!FileManager.default.fileExists(atPath: otherURL.path))
+        #expect(!again.isOn)
+        #expect(again.switchReading == .off)
+        #expect(again.nextWake(now: at(8)) == nil)
+        keepTheOldKeys()
+        expectOff(otherURL, defaults: defaults, "erased at once, then the old keys came back")
+    }
+
+    /// A fresh read of the switch, and a launch on it, read off with the
+    /// old keys there, and ask for no wake.
+    private func expectOff(_ switchURL: URL, defaults: UserDefaults, _ when: String,
+                           sourceLocation: SourceLocation = #_sourceLocation) {
+        #expect(!FileBackgroundSwitch(fileURL: switchURL, defaults: defaults).isOn, "\(when)",
+                sourceLocation: sourceLocation)
+        let launch = BackgroundRunner(store: scratchStore(),
+                                      toggle: FileBackgroundSwitch(fileURL: switchURL, defaults: defaults),
+                                      calendar: calendar)
+        #expect(!launch.isOn, "\(when)", sourceLocation: sourceLocation)
+        #expect(launch.switchReading == .off, "\(when)", sourceLocation: sourceLocation)
+        #expect(launch.nextWake(now: at(8)) == nil, "\(when)", sourceLocation: sourceLocation)
+    }
+
+    /// Forget everything couldn't erase the file, and then the person turns
+    /// work on, or off, once it can. The erase that waited goes before the
+    /// switch moves, so it never undoes the tap: one tap, on, read on by
+    /// the next launch, with the next morning queued and kept in the file.
+    @Test func turningOnAfterAForgetThatFailedStaysOn() throws {
+        let faults = BackgroundStoreFaults()
+        let store = BackgroundStore(fileURL: Scratch.url("background"), faults: faults)
+        let switchURL = Scratch.url("background-switch")
+        let toggle = OrderedSwitch(FileBackgroundSwitch(fileURL: switchURL))
+        let runner = BackgroundRunner(store: store, toggle: toggle, needsYou: oneWaiting(),
+                                      watchingSince: .distantPast, calendar: calendar)
+        runner.turnOn(now: at(6))
+        runner.runDue(now: at(7), conditions: background)
+        #expect(!runner.results.isEmpty)
+        faults.eraseFails = true
+        #expect(throws: (any Error).self) { try runner.forget() }
+        #expect(FileBackgroundSwitch(fileURL: switchURL).forgetPending)
+
+        faults.eraseFails = false
+        toggle.clear()
+        runner.turnOn(now: at(9))
+        #expect(toggle.steps.prefix(2) == ["forgetPending(false)", "set(true)"], "the erase first")
+        #expect(runner.isOn, "one tap, on")
+        #expect(runner.switchReading == .on)
+        let fresh = FileBackgroundSwitch(fileURL: switchURL)
+        #expect(fresh.isOn, "the next launch reads on")
+        #expect(!fresh.forgetPending)
+        #expect(!FileManager.default.fileExists(atPath: store.stagingURL.path))
+        #expect(runner.queue.map(\.due) == [at(7, days: 1)])
+        #expect(runner.nextWake(now: at(9)) == at(7, days: 1))
+        #expect(try store.load().queue.map(\.due) == [at(7, days: 1)], "kept in the file")
+        #expect(try store.load().results.isEmpty, "none of the old cards came back")
+        let next = BackgroundRunner(store: store, toggle: fresh, calendar: calendar)
+        #expect(next.queue.map(\.kind) == [.morningSummary])
+
+        // And off the same way.
+        faults.eraseFails = true
+        #expect(throws: (any Error).self) { try runner.forget() }
+        faults.eraseFails = false
+        toggle.clear()
+        runner.turnOff()
+        #expect(toggle.steps.prefix(2) == ["forgetPending(false)", "set(false)"], "the erase first")
+        #expect(!FileBackgroundSwitch(fileURL: switchURL).isOn)
+        #expect(!FileBackgroundSwitch(fileURL: switchURL).forgetPending)
+        #expect(runner.queue.isEmpty)
+    }
+
+    /// The same across launches, while the file still can't be erased: a
+    /// launch that finds the forget waiting is turned on. Nothing goes in
+    /// the old file, the tap is kept beside the switch, and the launch that
+    /// can erase the file keeps it on and queues only the next morning.
+    @Test func turningOnWhileAForgetWaitsStaysOnAcrossLaunches() throws {
+        let faults = BackgroundStoreFaults()
+        let store = BackgroundStore(fileURL: Scratch.url("background"), faults: faults)
+        let switchURL = Scratch.url("background-switch")
+        func launch() -> BackgroundRunner {
+            BackgroundRunner(store: store, toggle: FileBackgroundSwitch(fileURL: switchURL), needsYou: oneWaiting(),
+                             watchingSince: .distantPast, calendar: calendar)
+        }
+        let first = launch()
+        first.turnOn(now: at(6))
+        first.runDue(now: at(7), conditions: background)
+        #expect(!first.results.isEmpty)
+        faults.eraseFails = true
+        #expect(throws: (any Error).self) { try first.forget() }
+        let bytes = try Data(contentsOf: store.fileURL)
+
+        let stuck = launch()
+        #expect(!stuck.isOn)
+        stuck.turnOn(now: at(9, days: 1))
+        #expect(stuck.isOn, "one tap, on")
+        #expect(stuck.results.isEmpty, "none of its cards come back")
+        #expect(stuck.runDue(now: at(9, 5, days: 1), conditions: .foreground).isEmpty)
+        #expect(try Data(contentsOf: store.fileURL) == bytes, "nothing written into it")
+        let waiting = FileBackgroundSwitch(fileURL: switchURL)
+        #expect(waiting.forgetPending, "still waits")
+        #expect(waiting.isOn, "the tap is kept beside the switch")
+
+        faults.eraseFails = false
+        let later = launch()
+        #expect(later.results.isEmpty, "none of the old cards")
+        #expect(!FileManager.default.fileExists(atPath: store.stagingURL.path))
+        #expect(later.isOn, "the erase kept the tap")
+        #expect(later.switchReading == .on)
+        let fresh = FileBackgroundSwitch(fileURL: switchURL)
+        #expect(fresh.isOn)
+        #expect(!fresh.forgetPending)
+        later.runDue(now: at(9, 30, days: 1), conditions: .foreground)
+        #expect(later.queue.map(\.due) == [at(7, days: 2)])
+        #expect(try store.load().queue.map(\.due) == [at(7, days: 2)], "only the fresh job in the file")
+        #expect(try store.load().results.isEmpty)
+    }
+
+    /// A switch file that is there but won't read, as after a disk error,
+    /// can't be told from off. Through the switch's faults, so no file
+    /// modes are needed and root runs it the same: unknown, never off, so
+    /// no wake is cancelled on its word, nothing runs, and nothing is
+    /// written over it. Turned off meanwhile, off is laid over it once it
+    /// reads again.
+    @Test func aSwitchThatWontReadIsUnknown() throws {
+        let store = scratchStore()
+        let switchURL = Scratch.url("background-switch")
+        let setUp = BackgroundRunner(store: store, toggle: FileBackgroundSwitch(fileURL: switchURL),
+                                     needsYou: oneWaiting(), watchingSince: .distantPast, calendar: calendar)
+        setUp.turnOn(now: at(6))
+        let bytes = try Data(contentsOf: switchURL)
+
+        let faults = BackgroundSwitchFaults(readFails: true)
+        let toggle = FileBackgroundSwitch(fileURL: switchURL, faults: faults)
+        let runner = BackgroundRunner(store: store, toggle: toggle, needsYou: oneWaiting(),
+                                      watchingSince: .distantPast, calendar: calendar)
+        #expect(!toggle.isKnown)
+        #expect(!toggle.isOn)
+        #expect(runner.switchReading == .unknown)
+        #expect(runner.nextWake(now: at(2)) == at(2) + BackgroundPlan.retryAfterHold, "never cancelled")
+        #expect(runner.runDue(now: at(7, 1), conditions: background).isEmpty)
+        #expect(!runner.didItsWork(now: at(7, 1)))
+        runner.turnOff()
+        #expect(try Data(contentsOf: switchURL) == bytes, "nothing written over it")
+
+        faults.readFails = false
+        #expect(toggle.isKnown)
+        #expect(runner.switchReading == .off)
+        #expect(!FileBackgroundSwitch(fileURL: switchURL).isOn, "the off waited, and went in")
     }
 
     /// Off written beside the switch is the person's own off, even while
@@ -1472,10 +1709,20 @@ struct BackgroundWordsTests {
     /// When the summaries' file stayed, the line opens with what went, in
     /// plain words, and ends with the same advice as its siblings.
     @Test func aForgetThatLeftTheSummariesSaysWhatWentAndWhatToDo() {
-        for line in [MemoryWords.couldNotForgetSummaries, CloudWords.forgotAndCloudOffNotSummaries] {
-            #expect(line.hasPrefix("I forgot your notes and tasks"), "\(line)")
+        for line in MemoryWords.couldNotForgetSummariesLines + [CloudWords.forgotAndCloudOffNotSummaries] {
+            #expect(line.hasPrefix("I forgot your notes"), "\(line)")
             #expect(line.hasSuffix(" Please try Forget everything again in a moment."), "\(line)")
         }
+        // Only what went is named.
+        let lines = [(false, false), (true, false), (false, true), (true, true)].map {
+            MemoryWords.couldNotForgetSummaries(tasks: $0.0, words: $0.1)
+        }
+        #expect(lines.map { $0.components(separatedBy: " and turned off").first ?? "" } == [
+            "I forgot your notes", "I forgot your notes and tasks",
+            "I forgot your notes and any words you asked me to hide,",
+            "I forgot your notes, tasks and any words you asked me to hide,",
+        ])
+        #expect(Set(lines).count == 4)
         #expect(CloudWords.forgotNotesNotWords.hasSuffix(" Please try Forget everything again in a moment."),
                 "the sibling it matches")
     }
@@ -1625,6 +1872,52 @@ struct BackgroundWordsTests {
         let tests = SwiftSource.repositoryRoot(from: #filePath).appendingPathComponent("Packages/PebbleKit/Tests")
         let asking = try SwiftSource.files(under: tests).filter { String(SwiftSource($0.text).code).contains("geteuid") }
         #expect(asking.map(\.name) == ["PebbleUITests/FileModes.swift"])
+    }
+
+    /// `.fileModesHoldOrCI` alone would run as root in CI and pass or fail
+    /// by chance, so each test or suite given it is given `.failsAsRoot`
+    /// in the same list. And CI is found under `xcodebuild` too, which
+    /// passes the test only variables named `TEST_RUNNER_` something.
+    @Test func everyFileModesTestFailsAsRoot() throws {
+        let tests = SwiftSource.repositoryRoot(from: #filePath).appendingPathComponent("Packages/PebbleKit/Tests")
+        var lists = 0
+        for file in try SwiftSource.files(under: tests) where file.name != "PebbleUITests/FileModes.swift" {
+            let code = String(SwiftSource(file.text).code)
+            let uses = code.components(separatedBy: ".fileModesHoldOrCI").count - 1
+            let traits = Self.traitLists(in: code).filter { $0.contains(".fileModesHoldOrCI") }
+            #expect(traits.count == uses, "\(file.name): .fileModesHoldOrCI outside a @Test or @Suite")
+            for list in traits {
+                lists += 1
+                #expect(list.contains(".failsAsRoot"), "\(file.name): \(list)")
+            }
+        }
+        #expect(lists > 0, "the sweep found the tests it is for")
+        let modes = try String(contentsOf: tests.appendingPathComponent("PebbleUITests/FileModes.swift"),
+                               encoding: .utf8)
+        #expect(modes.contains("\"TEST_RUNNER_CI\""))
+        #expect(modes.contains("\"CI\""))
+    }
+
+    /// The traits given each `@Test(` and `@Suite(`, up to its closing parenthesis.
+    private static func traitLists(in code: String) -> [String] {
+        let characters = Array(code)
+        var lists: [String] = []
+        for marker in ["@Test(", "@Suite("] {
+            var from = code.startIndex
+            while let found = code.range(of: marker, range: from..<code.endIndex) {
+                var index = code.distance(from: code.startIndex, to: found.upperBound)
+                var depth = 1
+                let start = index
+                while index < characters.count, depth > 0 {
+                    if characters[index] == "(" { depth += 1 }
+                    if characters[index] == ")" { depth -= 1 }
+                    index += 1
+                }
+                lists.append(String(characters[start..<max(start, index - 1)]))
+                from = found.upperBound
+            }
+        }
+        return lists
     }
 
     /// The showcase's store keeps nothing anywhere, so no launch leaves a file.

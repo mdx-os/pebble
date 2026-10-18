@@ -195,21 +195,70 @@ struct BackgroundServiceTests {
     }
 
     /// The service finds the lock by trying the file, through the one
-    /// helper the tests drive, and neither it nor the runner reads the
-    /// screen or protected data.
+    /// helper the tests drive, and nothing in PebbleBackground, nor the
+    /// runner, reads the screen or protected data.
     @Test func theServiceNeverReadsTheScreenForTheLock() throws {
         let sources = SwiftSource.repositoryRoot(from: #filePath).appendingPathComponent("Packages/PebbleKit/Sources")
-        let service = try String(contentsOf: sources.appendingPathComponent("PebbleBackground/BackgroundService.swift"),
-                                 encoding: .utf8)
+        let target = try SwiftSource.files(under: sources.appendingPathComponent("PebbleBackground"))
+        #expect(target.map(\.name).contains("BackgroundService.swift"), "the sweep sees the target")
         let runner = try String(contentsOf: sources.appendingPathComponent("PebbleCore/Background.swift"),
                                 encoding: .utf8)
-        for (name, text) in [("BackgroundService", service), ("Background", runner)] {
+        for (name, text) in target.map({ ("PebbleBackground/" + $0.name, $0.text) }) + [("Background", runner)] {
             let code = String(SwiftSource(text).code)
-            for screen in ["isProtectedDataAvailable", "protectedDataWillBecomeUnavailable", "applicationState"] {
+            for screen in ["isProtectedDataAvailable", "protectedDataWillBecomeUnavailable",
+                           "protectedDataDidBecomeAvailable", "applicationState"] {
                 #expect(!code.contains(screen), "\(screen) in \(name)")
             }
         }
-        #expect(service.contains(".background(store:"))
+        let service = try #require(target.first { $0.name == "BackgroundService.swift" })
+        #expect(service.text.contains(".background(store:"))
+    }
+
+    /// A Release build never reads the seed: its whole file is Debug only,
+    /// and nothing outside `#if DEBUG` in the app or the packages names it
+    /// or its launch argument.
+    @Test func releaseIgnoresTheSeed() throws {
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        let sources = root.appendingPathComponent("Packages/PebbleKit/Sources")
+        let seed = try String(contentsOf: sources.appendingPathComponent("PebbleBackground/BackgroundSeed.swift"),
+                              encoding: .utf8)
+        let lines = seed.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        #expect(lines.first == "#if DEBUG")
+        #expect(lines.last == "#endif")
+        #expect(lines.filter { $0.hasPrefix("#") }.count == 2, "one block, with no #else")
+
+        let files = try SwiftSource.files(under: root.appendingPathComponent("App/Sources")).map { ("App/" + $0.name, $0.text) }
+            + SwiftSource.files(under: sources).map { ($0.name, $0.text) }
+        var named = 0
+        for (name, text) in files where name != "PebbleBackground/BackgroundSeed.swift" {
+            named += text.contains("BackgroundSeed") ? 1 : 0
+            let release = Self.outsideDebug(String(SwiftSource(text).code))
+            #expect(!release.contains("BackgroundSeed"), "\(name) reads the seed outside #if DEBUG")
+            #expect(!SwiftSource(text).literals.contains { $0.text.contains(BackgroundSeed.launchKey) },
+                    "\(name) spells the seed's launch argument")
+        }
+        #expect(named > 0, "the app does read it in Debug")
+    }
+
+    /// The lines of `code` a Release build compiles: everything but the
+    /// `#if DEBUG` branches. Other conditions are taken as compiled.
+    private static func outsideDebug(_ code: String) -> String {
+        var stack: [Bool] = []
+        var kept: [Substring] = []
+        for line in code.split(separator: "\n", omittingEmptySubsequences: false) {
+            let directive = line.trimmingCharacters(in: .whitespaces)
+            if directive.hasPrefix("#if") {
+                stack.append(directive == "#if DEBUG")
+            } else if directive.hasPrefix("#else") {
+                // The other branch of `#if DEBUG` is what Release compiles.
+                if !stack.isEmpty { stack[stack.count - 1] = false }
+            } else if directive.hasPrefix("#endif") {
+                _ = stack.popLast()
+            } else if !stack.contains(true) {
+                kept.append(line)
+            }
+        }
+        return kept.joined(separator: "\n")
     }
 
     /// The UI test's seed leaves no scratch folder behind: any launch
@@ -223,6 +272,14 @@ struct BackgroundServiceTests {
         let seeded = try #require(BackgroundSeed.launched(defaults: defaults, folder: folder))
         #expect(seeded.store.hasStoredFile)
         #expect(FileManager.default.fileExists(atPath: folder.path))
+
+        // Opened again, it keeps what the launch before kept, and seeds nothing.
+        seeded.toggle.set(true)
+        try seeded.store.save(.empty)
+        defaults.set("again", forKey: BackgroundSeed.launchKey)
+        let again = try #require(BackgroundSeed.launched(defaults: defaults, folder: folder))
+        #expect(again.toggle.isOn)
+        #expect(try again.store.load() == .empty, "nothing seeded over it")
 
         defaults.removeObject(forKey: BackgroundSeed.launchKey)
         #expect(BackgroundSeed.launched(defaults: defaults, folder: folder) == nil)

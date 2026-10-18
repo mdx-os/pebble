@@ -789,7 +789,7 @@ final class MemoryModel: ObservableObject {
             said = line; aboutSummaries = MemoryWords.summariesGone
         case (.stayed?, true):
             said = rest == .some(.some(.privateWordsAndCloud)) ? CloudWords.forgotAndCloudOffNotSummaries
-                : MemoryWords.couldNotForgetSummaries
+                : MemoryWords.couldNotForgetSummaries(tasks: tasksGone, words: rest == .some(.some(.privateWords)))
             aboutSummaries = nil
         case (.stayed?, false):
             said = line; aboutSummaries = MemoryWords.summariesStayed

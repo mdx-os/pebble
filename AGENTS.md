@@ -56,7 +56,14 @@ in lint, a skill, or CI.
   bool, dates and a reason (on or off, the next due time, why a run waited,
   whether a Forget everything is pending), never anything of the person's.
   Keep it that way: nothing else goes in that file. `UserDefaults` can't be
-  read before the first unlock, so the switch is not kept there.
+  read before the first unlock, so the switch is not kept there. Beside it,
+  an empty `.background-switch.json.kept` marks that the switch was ever set
+  there, so the old `UserDefaults` keys never move over again. It holds no
+  data and stays through Forget everything.
+- Most background runs end quiet. iOS usually starts a fresh process for
+  them, and Needs you lives only in memory, so the run counts nothing, makes
+  no card and moves the job to tomorrow. A missing morning card after a
+  night in the background is expected, not a bug.
 - "Locked" for the runner means its file can't be opened yet, found by
   trying the file (`BackgroundConditions.background(store:...)`). Never
   derive it from `isProtectedDataAvailable` or the screen lock: a phone

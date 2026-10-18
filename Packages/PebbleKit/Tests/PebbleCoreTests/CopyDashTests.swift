@@ -34,7 +34,7 @@ struct CopyDashTests {
         MemoryWords.forgetEverythingDetail(background: false),
         MemoryWords.unreadable, MemoryWords.unavailable, MemoryWords.couldNotOpen, MemoryWords.tryAgainTitle,
         MemoryWords.forgetOneQuestion, MemoryWords.editPlaceholder, MemoryWords.couldNotForget,
-        MemoryWords.couldNotForgetNotes, MemoryWords.couldNotForgetSummaries, MemoryWords.summariesGone,
+        MemoryWords.couldNotForgetNotes, MemoryWords.summariesGone,
         MemoryWords.summariesStayed,
         MemorySource.toldMe.label, MemorySource.fromApp("Calendar").label, MemorySource.inferred.label,
         ConfirmationWords.heading, ConfirmationWords.toLabel, ConfirmationWords.fromLabel,
@@ -52,6 +52,7 @@ struct CopyDashTests {
       + Redaction.Kind.allCases.flatMap { [$0.mask, $0.counted(1), $0.counted(2)] }
       + TaskWords.all
       + BackgroundWordsTests.all
+      + MemoryWords.couldNotForgetSummariesLines
 
     @Test func noScreenWordsUseADash() {
         for line in Self.copy {
@@ -77,8 +78,8 @@ struct CopyDashTests {
     /// through `CloudWords.all` and `MemoryWords`, so they are swept too.
     @Test func theSummaryLinesAreChecked() {
         for line in [CloudWords.forgetEverythingWithSummariesDetail, CloudWords.forgotAndCloudOffNotSummaries,
-                     MemoryWords.couldNotForgetSummaries, MemoryWords.summariesGone, MemoryWords.summariesStayed,
-                     MemoryWords.forgetEverythingDetail(background: true)] {
+                     MemoryWords.summariesGone, MemoryWords.summariesStayed,
+                     MemoryWords.forgetEverythingDetail(background: true)] + MemoryWords.couldNotForgetSummariesLines {
             #expect(Self.copy.contains(line), "unchecked: \(line)")
         }
     }

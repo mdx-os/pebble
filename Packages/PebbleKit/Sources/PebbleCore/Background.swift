@@ -410,19 +410,27 @@ public struct BackgroundHeldRun: Codable, Sendable, Equatable {
 /// first unlock since the device started can read whether it may go ahead
 /// and keep why it waited. `UserDefaults` can't be read then.
 ///
-/// An earlier version kept the switch in `UserDefaults`. Until the switch
-/// is set here, it is read from there, and moved here the first time
-/// `UserDefaults` has it, so a launch before the first unlock, which sees
-/// nothing there, never writes it over as off.
+/// An earlier version kept the switch in `UserDefaults`. Until on or off
+/// has ever been kept here, it is read from there, and moved here the
+/// first time `UserDefaults` has it, so a launch before the first unlock,
+/// which sees nothing there, never writes it over as off. Once on or off
+/// has been kept here, an empty marker file beside this one says so, and
+/// nothing moves from `UserDefaults` again, even after the file is gone.
 ///
 /// Once a Forget everything has erased the runner's file, this file goes
-/// too, and the old keys with it.
+/// too, and the old keys with it. The marker stays, so old keys that come
+/// back later, as from an old backup, can never turn work on without a tap.
 public final class FileBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
     /// No protection: what this file holds is safe to read before the
     /// first unlock, and has to be.
     public static let fileProtection: FileProtectionType = .none
 
     /// Where the earlier version kept it.
+    ///
+    /// Removing them clears only what `UserDefaults` keeps. A value given
+    /// as a launch argument, such as `-backgroundWork.on YES`, lives in the
+    /// argument domain for the whole launch and can't be removed, so never
+    /// rely on removal alone: the marker is what keeps them from moving.
     public enum LegacyKeys {
         public static let on = "backgroundWork.on"
         public static let nextDue = "backgroundWork.nextDue"
@@ -442,6 +450,7 @@ public final class FileBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
     public let fileURL: URL
     private let defaults: UserDefaults?
     private let writer: ProtectedWriter
+    private let faults: BackgroundSwitchFaults?
     private let lock = NSLock()
     /// What was last read or written. Nil until the file is read.
     private var saved: Saved?
@@ -452,10 +461,14 @@ public final class FileBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
     private var waiting: [(inout Saved) -> Void] = []
 
     /// `defaults` is where an earlier version kept the switch, to move from.
-    package init(fileURL: URL, defaults: UserDefaults? = nil, writer: ProtectedWriter = .disk) {
+    /// Tests may stand in for a file that won't read with `faults`, so they
+    /// never need file modes, which root ignores.
+    package init(fileURL: URL, defaults: UserDefaults? = nil, writer: ProtectedWriter = .disk,
+                 faults: BackgroundSwitchFaults? = nil) {
         self.fileURL = fileURL
         self.defaults = defaults
         self.writer = writer
+        self.faults = faults
     }
 
     private static let sharedLock = NSLock()
@@ -478,6 +491,12 @@ public final class FileBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
         fileURL.deletingLastPathComponent().appendingPathComponent("." + fileURL.lastPathComponent + ".next")
     }
 
+    /// Empty, and there once on or off has been kept here. It holds no
+    /// data, not even a date, and Forget everything leaves it.
+    package var markerURL: URL {
+        fileURL.deletingLastPathComponent().appendingPathComponent("." + fileURL.lastPathComponent + ".kept")
+    }
+
     public var isOn: Bool { read { $0.on ?? false } }
     public func set(_ on: Bool) { update { $0.on = on } }
 
@@ -495,19 +514,34 @@ public final class FileBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
     public func setForgetPending(_ pending: Bool) {
         if pending {
             // Forget everything has begun. What an earlier version kept
-            // goes at once, so it can never move over as on.
-            update { $0.forgetPending = true }
+            // goes first, so it never moves over during the forget. Off
+            // goes in the same write as the wait, so a launch that finds
+            // the wait never finds on from before it.
             lock.withLock { removeLegacyKeys() }
+            update {
+                $0.forgetPending = true
+                $0.on = false
+            }
             return
         }
         lock.lock()
         defer { lock.unlock() }
+        removeLegacyKeys()
+        let latest = current()
         waiting = []
         unreadable = false
-        removeLegacyKeys()
+        // Forget everything turned it off as it began, so on now is a tap
+        // since then, and stays, with when it is due.
+        if latest.on == true {
+            let kept = Saved(on: true, nextDue: latest.nextDue)
+            saved = kept
+            write(kept)
+            return
+        }
         // Forget everything is done, so the file goes too: a forgotten
-        // device keeps no trace that this was ever used.
-        if defaults?.object(forKey: LegacyKeys.on) == nil, removeFiles() {
+        // device keeps no trace that this was ever used, only the empty
+        // marker that keeps old keys from moving over again.
+        if hasMarker || defaults?.object(forKey: LegacyKeys.on) == nil, removeFiles() {
             saved = Saved()
             return
         }
@@ -522,6 +556,9 @@ public final class FileBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
         guard let defaults else { return }
         for key in LegacyKeys.all { defaults.removeObject(forKey: key) }
     }
+
+    /// True once on or off has been kept here, in this file or one before it.
+    private var hasMarker: Bool { FileManager.default.fileExists(atPath: markerURL.path) }
 
     /// With the lock held. True once neither the file nor a staged copy is left.
     private func removeFiles() -> Bool {
@@ -563,7 +600,7 @@ public final class FileBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
 
     /// With the lock held.
     private func reload() {
-        if let data = FileManager.default.contents(atPath: fileURL.path) {
+        if faults?.readFails != true, let data = FileManager.default.contents(atPath: fileURL.path) {
             // A file that can't be decoded starts over: it holds nothing
             // of the person's.
             var read = (try? JSONDecoder().decode(Saved.self, from: data)) ?? Saved()
@@ -586,10 +623,11 @@ public final class FileBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
         }
     }
 
-    /// With the lock held. Until the switch is set here, `UserDefaults`
-    /// is read each time, since before the first unlock it reads as empty.
+    /// With the lock held. Until on or off has ever been kept here,
+    /// `UserDefaults` is read each time, since before the first unlock it
+    /// reads as empty. Once it has, the marker says so, and nothing moves.
     private func moveFromDefaults(_ value: inout Saved) {
-        guard let defaults, defaults.object(forKey: LegacyKeys.on) != nil else { return }
+        guard let defaults, !hasMarker, defaults.object(forKey: LegacyKeys.on) != nil else { return }
         value.on = defaults.bool(forKey: LegacyKeys.on)
         if value.nextDue == nil { value.nextDue = defaults.object(forKey: LegacyKeys.nextDue) as? Date }
         if value.held == nil, let raw = defaults.string(forKey: LegacyKeys.held),
@@ -618,6 +656,7 @@ public final class FileBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
                 try? FileManager.default.removeItem(at: stagingURL)
                 return false
             }
+            if value.on != nil, !hasMarker { try? writer.write(Data(), markerURL, Self.fileProtection) }
             return true
         } catch {
             return false
@@ -630,7 +669,25 @@ public final class FileBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
         defer { lock.unlock() }
         try? FileManager.default.removeItem(at: fileURL)
         try? FileManager.default.removeItem(at: stagingURL)
+        try? FileManager.default.removeItem(at: markerURL)
         saved = nil
+    }
+}
+
+/// What a test has the switch's file do in place of the disk: there, but
+/// won't read, as it would with a disk error. Nothing is written over it
+/// then; a change waits until it reads again.
+package final class BackgroundSwitchFaults: @unchecked Sendable {
+    private let lock = NSLock()
+    private var read = false
+
+    package init(readFails: Bool = false) {
+        read = readFails
+    }
+
+    package var readFails: Bool {
+        get { lock.withLock { read } }
+        set { lock.withLock { read = newValue } }
     }
 }
 
@@ -1031,6 +1088,7 @@ public final class BackgroundRunner: @unchecked Sendable {
     /// Turns background work on, with the morning summary due at the next
     /// morning. Turning it on again changes nothing.
     public func turnOn(now: Date) {
+        finishForgetting()
         toggle.set(true)
         change(switching: true) { state in
             guard !state.queue.contains(where: { $0.kind == .morningSummary }) else { return }
@@ -1046,6 +1104,7 @@ public final class BackgroundRunner: @unchecked Sendable {
     /// waited for the file is forgotten too, so it is never said of a job
     /// queued after turning on again.
     public func turnOff() {
+        finishForgetting()
         toggle.set(false)
         clearHeldBeforeLoad()
         change(switching: false) { state in
@@ -1053,6 +1112,16 @@ public final class BackgroundRunner: @unchecked Sendable {
             state.lastSummary = nil
         }
         withdrawProposals()
+    }
+
+    /// A Forget everything that couldn't erase the file is finished before
+    /// the switch moves, so an erase that goes through later never undoes
+    /// the tap. If it still can't erase, the switch keeps a later on itself
+    /// (`FileBackgroundSwitch.setForgetPending`).
+    private func finishForgetting() {
+        lock.lock()
+        defer { lock.unlock() }
+        try? eraseForgottenFile()
     }
 
     private func clearHeldBeforeLoad() {
@@ -1155,6 +1224,13 @@ public final class BackgroundRunner: @unchecked Sendable {
         }
         var made: [BackgroundResult] = []
         var changed = false
+        // On with nothing queued, as when another window or launch turned
+        // it on: the next morning goes in, so on always has a look to come.
+        if !state.queue.contains(where: { $0.kind == .morningSummary }) {
+            state.queue.append(BackgroundJob(kind: .morningSummary,
+                                             due: BackgroundPlan.nextMorning(after: now, calendar: calendar)))
+            changed = true
+        }
         for index in state.queue.indices {
             var job = state.queue[index]
             // At most twice: a missed job moves to this morning and may run now.

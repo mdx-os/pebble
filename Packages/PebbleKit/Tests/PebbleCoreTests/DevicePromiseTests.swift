@@ -439,7 +439,7 @@ struct DevicePromiseTests {
             #expect(Self.ungated(in: [(name, longer)]).count == 1, "a word added is caught: \(line)")
         }
         // The summaries status lines that promise nothing need no entry.
-        for line in [MemoryWords.couldNotForgetSummaries, MemoryWords.summariesGone, MemoryWords.summariesStayed] {
+        for line in MemoryWords.couldNotForgetSummariesLines + [MemoryWords.summariesGone, MemoryWords.summariesStayed] {
             #expect(DevicePromise.found(in: line).isEmpty, "\(line)")
             #expect(!DevicePromise.allowed.contains { $0.literal == line })
         }

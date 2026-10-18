@@ -824,7 +824,10 @@ struct CloudHelpTests {
                 for rest in everyRest where line(notes, rest, tasks) == MemoryWords.forgotten {
                     allWent += 1
                     #expect(withSummaries(notes, rest, tasks, .erased) == line(notes, rest, tasks))
-                    #expect(withSummaries(notes, rest, tasks, .stayed) == MemoryWords.couldNotForgetSummaries)
+                    // It names the tasks and the hidden words only when they went.
+                    #expect(withSummaries(notes, rest, tasks, .stayed)
+                            == MemoryWords.couldNotForgetSummaries(tasks: tasks,
+                                                                   words: rest == .some(.some(.privateWords))))
                 }
             }
             #expect(withSummaries(true, .privateWordsAndCloud, tasks, .erased)
@@ -860,12 +863,12 @@ struct CloudHelpTests {
                                        underway: TaskWords.forgotUnderway(1))
                 == MemoryWords.forgotten + " " + TaskWords.forgotUnderway(1))
         // Each line where the summaries stayed and the rest went ends with the advice.
-        for stayed in [MemoryWords.couldNotForgetSummaries, CloudWords.forgotAndCloudOffNotSummaries] {
+        for stayed in MemoryWords.couldNotForgetSummariesLines + [CloudWords.forgotAndCloudOffNotSummaries] {
             #expect(MemoryWords.retryAdvice.contains { stayed.hasSuffix(" " + $0) }, "\(stayed)")
         }
         // Each line where the summaries stayed says so, and that the switch is off.
-        for stayed in [MemoryWords.couldNotForgetSummaries, CloudWords.forgotAndCloudOffNotSummaries,
-                       MemoryWords.summariesStayed] {
+        for stayed in MemoryWords.couldNotForgetSummariesLines + [CloudWords.forgotAndCloudOffNotSummaries,
+                                                                  MemoryWords.summariesStayed] {
             #expect(stayed.contains("couldn't erase your morning summaries"), "\(stayed)")
             #expect(stayed.lowercased().contains("work while you're away"), "\(stayed)")
         }

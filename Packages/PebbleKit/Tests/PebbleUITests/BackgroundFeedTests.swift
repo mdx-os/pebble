@@ -274,7 +274,10 @@ struct BackgroundFeedTests {
         #expect(toggle.nextDue == nil)
         #expect(asks.rule.wasWithdrawn(asked), "a yes on a sheet still open does nothing")
         #expect(!asks.items(now: Self.at(9)).contains { $0.request == asked })
-        #expect(memory.status == MemoryWords.couldNotForgetSummaries)
+        #expect(memory.status == MemoryWords.couldNotForgetSummaries(tasks: false, words: false))
+        #expect(memory.status == "I forgot your notes and turned off work while you're away, but I couldn't erase "
+                + "your morning summaries just now. Please try Forget everything again in a moment.",
+                "no tasks and no hidden words went, so it names neither")
         #expect(memory.hasSomethingToForget, "still there, so it can be tried again")
 
         faults.eraseFails = false
@@ -313,7 +316,9 @@ struct BackgroundFeedTests {
         #expect(!notes.hasStoredFile)
         #expect(engine.tasks.isEmpty, "the tasks went")
         #expect(wordsForgotten == 1, "the private words step ran")
-        #expect(memory.status == MemoryWords.couldNotForgetSummaries)
+        #expect(memory.status == "I forgot your notes, tasks and any words you asked me to hide, and turned off work "
+                + "while you're away, but I couldn't erase your morning summaries just now. Please try Forget "
+                + "everything again in a moment.", "names everything that went")
         #expect(!runner.isOn)
     }
 
@@ -460,6 +465,43 @@ struct BackgroundFeedTests {
         #expect(String(SwiftSource(try String(contentsOf: sources.appendingPathComponent("PebbleUI/ChatView.swift"),
                                               encoding: .utf8)).code).contains("UserDefaultsAgentNameStore()"),
                 "the name, and only the name")
+    }
+
+    /// Nor does the chat reach the disk another way. Every source in the
+    /// app's packages that can hold chat text, found by what it names, not
+    /// from a list, writes nothing to the system log, which keeps it on
+    /// disk, and the one session that sends a chat to the cloud keeps no
+    /// cache. Only the competitor watch, which never sees a chat, prints.
+    @Test func theChatNeverReachesTheLogOrACache() throws {
+        let sources = SwiftSource.repositoryRoot(from: #filePath).appendingPathComponent("Packages/PebbleKit/Sources")
+        let chatWords = ["ChatTurn", "Conversation", "ModelClient", "CloudRequest", "ChatController", "messages"]
+        let logging = try NSRegularExpression(pattern: #"\b(Logger|os_log|os_signpost|NSLog|print|debugPrint|dump|OSLog)\b"#)
+        var chatFiles: [String] = []
+        for file in try SwiftSource.files(under: sources)
+        where !file.name.hasPrefix("PebblePulse/") && !file.name.hasPrefix("pulse/") {
+            let code = String(SwiftSource(file.text).code)
+            let range = NSRange(code.startIndex..., in: code)
+            // No logging anywhere a chat could pass through, which is every
+            // file but the competitor watch's.
+            #expect(logging.firstMatch(in: code, range: range) == nil, "logging in \(file.name)")
+            guard chatWords.contains(where: code.contains) else { continue }
+            chatFiles.append(file.name)
+            #expect(!code.contains("URLSession.shared"), "a shared session, with its cache, in \(file.name)")
+            #expect(!code.contains("URLCache"), "a response cache in \(file.name)")
+            #expect(!code.contains("URLSessionConfiguration.default"), "a default session in \(file.name)")
+        }
+        for name in ["PebbleModel/ModelClient.swift", "PebbleModel/CloudModel.swift", "PebbleUI/ChatView.swift"] {
+            #expect(chatFiles.contains(name), "the sweep finds \(name)")
+        }
+        // The cloud session: ephemeral, with no cache at all.
+        let cloud = String(SwiftSource(try String(contentsOf: sources.appendingPathComponent("PebbleModel/CloudModel.swift"),
+                                                  encoding: .utf8)).code)
+        #expect(cloud.components(separatedBy: "URLSession(").count == 2, "one session is made, in makeSession")
+        let session = URLSessionCloudTransport.makeSession()
+        defer { session.invalidateAndCancel() }
+        #expect(session.configuration.urlCache == nil)
+        #expect(session.configuration.requestCachePolicy == .reloadIgnoringLocalAndRemoteCacheData)
+        #expect(cloud.contains("URLSessionConfiguration.ephemeral"))
     }
 
     /// Forget everything names work while away only where there is a switch for it.

@@ -158,7 +158,19 @@ public enum MemoryWords {
     public static let couldNotForgetNotes = "I forgot your tasks, but I couldn't erase your notes just now. Please try again in a moment."
     /// Forget everything when the rest went but the morning summaries'
     /// file couldn't be erased. Work while you're away is off either way.
-    public static let couldNotForgetSummaries = "I forgot your notes and tasks and turned off work while you're away, but I couldn't erase your morning summaries just now. Please try Forget everything again in a moment."
+    /// It opens with what went: the notes, then the tasks only when there
+    /// were some, and the hidden words only when they were erased too.
+    public static func couldNotForgetSummaries(tasks: Bool, words: Bool) -> String {
+        let went = ["notes"] + (tasks ? ["tasks"] : []) + (words ? ["any words you asked me to hide"] : [])
+        let named = went.count > 2
+            ? went.dropLast().joined(separator: ", ") + " and " + went[went.count - 1] + ","
+            : went.joined(separator: " and ") + (went.count > 1 && words ? "," : "")
+        return "I forgot your \(named) and turned off work while you're away, but I couldn't erase your morning summaries just now. Please try Forget everything again in a moment."
+    }
+    /// Every form of `couldNotForgetSummaries`, for the word checks.
+    public static let couldNotForgetSummariesLines = [false, true].flatMap { tasks in
+        [false, true].map { couldNotForgetSummaries(tasks: tasks, words: $0) }
+    }
     /// Follows a Forget everything line that says something else stayed,
     /// when the morning summaries' file was erased.
     public static let summariesGone = "Your morning summaries are gone, and work while you're away is off."

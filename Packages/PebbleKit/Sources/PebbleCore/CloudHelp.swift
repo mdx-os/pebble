@@ -362,7 +362,7 @@ public enum CloudWords {
     /// be erased with the whole cloud setting, which turned it off.
     public static let forgotAndCloudOff = "Gone. I no longer have it. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. You can turn it on again anytime."
     /// The same, but the morning summaries' file couldn't be erased, like
-    /// `MemoryWords.couldNotForgetSummaries`.
+    /// `MemoryWords.couldNotForgetSummaries(tasks:words:)`.
     public static let forgotAndCloudOffNotSummaries = "I forgot your notes and tasks and turned off work while you're away, but I couldn't erase your morning summaries just now. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. Please try Forget everything again in a moment."
     /// The same, but the notes couldn't be erased.
     public static let forgotWordsAndCloudNotNotes = "Your private words are gone. To be sure of that I cleared the cloud setting too, so help from the cloud is off. I couldn't erase your notes just now. Please try Forget everything again in a moment."
