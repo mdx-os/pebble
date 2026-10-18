@@ -96,6 +96,11 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
         case working(attempt: Int, since: TimeInterval)
         /// Waiting `until` before trying again. `attempt` is the try to come.
         case waitingToRetry(attempt: Int, until: TimeInterval)
+        /// At an ask step, before `AskFirst` has been asked. The question is
+        /// asked once the lock is let go.
+        case toAsk
+        /// `AskFirst` is being asked, outside the lock.
+        case asking
         case askingYes(ConfirmationRequest)
         /// Retries ran out; the person decides.
         case stuck
@@ -111,6 +116,16 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
         var stallsLeft: [Int]
         var kept: [String] = []
         var notDone: [String] = []
+        /// The current step is one the person said yes to. It is committed:
+        /// a redirect lets it finish, and a stop never calls it undone.
+        var approved = false
+    }
+
+    /// A question to put to `AskFirst` once the lock is let go.
+    private struct PendingAsk {
+        let id: String
+        let index: Int
+        let action: ProposedAction
     }
 
     public let rule: AskFirst
@@ -122,8 +137,25 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
     private let lock = NSLock()
     private var elapsed: TimeInterval = 0
     private var runs: [Run] = []
-    private var observers: [UUID: @Sendable ([AgentTask]) -> Void] = [:]
+    private var observers: [UUID: @Sendable (TaskSnapshot) -> Void] = [:]
     private var made = 0
+    /// Goes up with every change observers hear about.
+    private var sequence = 0
+    /// Questions to withdraw once the lock is let go.
+    private var withdrawals: [ConfirmationRequest] = []
+    #if DEBUG
+    /// For tests: calls to `AskFirst`, and how many came while this
+    /// engine's lock was held. The second must stay zero.
+    private let countLock = NSLock()
+    private var ruleCallCount = 0
+    private var ruleCallsHoldingLockCount = 0
+    var ruleCalls: Int { countLock.lock(); defer { countLock.unlock() }; return ruleCallCount }
+    var ruleCallsHoldingLock: Int { countLock.lock(); defer { countLock.unlock() }; return ruleCallsHoldingLockCount }
+    #endif
+
+    /// Ended tasks kept at most. Past this the oldest ended ones go, so what
+    /// a task held never piles up. Tasks still going are never dropped.
+    public static let endedLimit = 12
 
     /// `scripts` are matched to `start` by title; anything else gets a short
     /// generic script. `origin` is the wall time the clock starts at, used
@@ -138,18 +170,18 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
 
     /// Seconds since the engine began.
     public var now: TimeInterval {
-        lock.lock(); defer { lock.unlock() }
+        lockRuns(); defer { unlockRuns() }
         return elapsed
     }
 
     /// The wall time the clock has reached, as the cards show it.
     public var currentDate: Date {
-        lock.lock(); defer { lock.unlock() }
+        lockRuns(); defer { unlockRuns() }
         return date
     }
 
     public var tasks: [AgentTask] {
-        lock.lock(); defer { lock.unlock() }
+        lockRuns(); defer { unlockRuns() }
         return runs.reversed().map(\.task)
     }
 
@@ -183,25 +215,26 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
         return id
     }
 
-    public func observe(_ onChange: @escaping @Sendable ([AgentTask]) -> Void) -> TaskObservation {
+    public func observe(_ onChange: @escaping @Sendable (TaskSnapshot) -> Void) -> TaskObservation {
         let key = UUID()
-        lock.lock()
+        lockRuns()
         observers[key] = onChange
-        let snapshot = runs.reversed().map(\.task)
-        lock.unlock()
+        let snapshot = TaskSnapshot(sequence: sequence, tasks: runs.reversed().map(\.task))
+        unlockRuns()
         onChange(snapshot)
         return TaskObservation { [weak self] in
             guard let self else { return }
-            self.lock.lock()
+            self.lockRuns()
             self.observers[key] = nil
-            self.lock.unlock()
+            self.unlockRuns()
         }
     }
 
     /// Moves the clock forward, playing every step that falls inside.
     public func advance(by seconds: TimeInterval) {
+        let closed = closedQuestions()
         mutate {
-            settleQuestions()
+            settle(closed)
             let target = elapsed + max(0, seconds)
             // Play events in time order, so a long jump lands where many
             // short ones would.
@@ -215,7 +248,8 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
     }
 
     public func refresh() {
-        mutate { settleQuestions() }
+        let closed = closedQuestions()
+        mutate { settle(closed) }
     }
 
     @discardableResult
@@ -230,7 +264,20 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
             guard let index = runs.firstIndex(where: { $0.task.id == id }), runs[index].task.isActive else { return false }
             withdrawQuestion(&runs[index])
             runs[index].task.record(TaskStep(TaskWords.youSaid(said), mark: .redirected, at: date))
-            begin(&runs[index], line: TaskWords.redirected)
+            let run = runs[index]
+            if run.approved {
+                // The person said yes, so the step may already be under
+                // way. It is committed: let it finish, and say so.
+                runs[index].task.step = TaskWords.finishingApproved
+                runs[index].task.updatedAt = date
+            } else if run.index < run.script.steps.count, case .ask = run.script.steps[run.index].kind {
+                // A script can't change what it asks, so the question would
+                // come back as it was. Leave the step undone and say so,
+                // rather than say the change was taken and ask the old thing.
+                skip(&runs[index], line: TaskWords.changedCourse(run.script.steps[run.index].todo))
+            } else {
+                begin(&runs[index], line: TaskWords.redirected)
+            }
             return true
         }
     }
@@ -243,10 +290,33 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
             guard let index = runs.firstIndex(where: { $0.task.id == id }), runs[index].task.isActive else { return false }
             withdrawQuestion(&runs[index])
             let run = runs[index]
-            let left = run.script.steps[min(run.index, run.script.steps.count)...].map(\.todo)
+            var left = run.script.steps[min(run.index, run.script.steps.count)...].map(\.todo)
+            // A step the person said yes to may have happened, so it is
+            // never said to be undone.
+            let underway = run.approved ? left.removeFirst() : nil
             end(&runs[index], as: .stopped, line: TaskWords.stopped,
-                wrapUp: TaskWrapUp(kept: run.kept, notDone: run.notDone + left))
+                wrapUp: TaskWrapUp(kept: run.kept, notDone: run.notDone + left, underway: underway))
             return true
+        }
+    }
+
+    @discardableResult
+    public func dismiss(_ id: String) -> Bool {
+        mutate {
+            guard let index = runs.firstIndex(where: { $0.task.id == id }), !runs[index].task.isActive else { return false }
+            runs.remove(at: index)
+            return true
+        }
+    }
+
+    @discardableResult
+    public func clear() -> ClearedTasks {
+        mutate {
+            for index in runs.indices { withdrawQuestion(&runs[index]) }
+            let cleared = ClearedTasks(forgotten: runs.count,
+                                       underway: runs.filter { $0.approved && $0.task.isActive }.count)
+            runs.removeAll()
+            return cleared
         }
     }
 
@@ -263,10 +333,20 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
     }
 
     public func resume(_ id: String, with approval: Approval) -> TaskApproval {
-        mutate {
+        // Find the question under the lock, and check the yes outside it.
+        lockRuns()
+        let asked: ConfirmationRequest? = runs.first { $0.task.id == id }.flatMap { run in
+            if case .askingYes(let request) = run.phase, request.id == approval.id { return request }
+            return nil
+        }
+        unlockRuns()
+        guard let asked else { return .refused }
+        let verdict = withRule { $0.verdict(asked.action, approval: approval) }
+        return mutate {
+            // Moved on while the yes was checked, so nothing is done with it.
             guard let index = runs.firstIndex(where: { $0.task.id == id }),
-                  case .askingYes(let request) = runs[index].phase, request.id == approval.id else { return .refused }
-            switch rule.verdict(request.action, approval: approval) {
+                  runs[index].phase == .askingYes(asked) else { return .refused }
+            switch verdict {
             case .proceed:
                 runs[index].task.record(TaskStep(TaskWords.youSaidYes, mark: .approved, at: date))
                 runs[index].task.question = nil
@@ -274,6 +354,7 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
                 runs[index].task.step = runs[index].script.steps[runs[index].index].text
                 runs[index].task.updatedAt = date
                 runs[index].phase = .working(attempt: 0, since: elapsed)
+                runs[index].approved = true
                 return .proceeding
             case .timedOut:
                 skip(&runs[index], line: TaskWords.timedOut(runs[index].script.steps[runs[index].index].todo))
@@ -287,18 +368,90 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
     public func questionClosed(_ request: ConfirmationRequest) {
         mutate {
             guard let index = runs.firstIndex(where: { $0.phase == .askingYes(request) }) else { return }
-            rule.withdraw(request)
+            withdrawals.append(request)
             skip(&runs[index], line: TaskWords.declined(runs[index].script.steps[runs[index].index].todo))
         }
     }
 
-    // MARK: The state machine. Everything below runs inside the lock.
+    // MARK: The state machine. Everything below runs inside the lock, except
+    // `withRule`, `closedQuestions` and the rule calls in `mutate`.
 
     private var date: Date { origin + elapsed }
+
+    /// Takes the lock. In DEBUG it also marks this thread as its holder, so
+    /// `withRule` can tell this thread holding it from another one.
+    private func lockRuns() {
+        lock.lock()
+        #if DEBUG
+        holding = true
+        #endif
+    }
+
+    private func unlockRuns() {
+        #if DEBUG
+        holding = false
+        #endif
+        lock.unlock()
+    }
+
+    #if DEBUG
+    /// This thread's mark, kept per thread so no other thread reads or sets it.
+    private var holdingKey: String { "LocalFakeEngine.holding.\(ObjectIdentifier(self).hashValue)" }
+
+    private var holding: Bool {
+        get { Thread.current.threadDictionary[holdingKey] as? Bool ?? false }
+        set { Thread.current.threadDictionary[holdingKey] = newValue ? true : nil }
+    }
+
+    /// True when the lock is held by this thread.
+    var holdsLock: Bool { holding }
+
+    /// For tests: runs `body` holding the lock, as the engine itself would.
+    func holdingLock(_ body: () -> Void) {
+        lockRuns()
+        body()
+        unlockRuns()
+    }
+    #endif
+
+    /// Every call to `AskFirst` goes through here, never holding the lock.
+    private func withRule<T>(_ call: (AskFirst) -> T) -> T {
+        #if DEBUG
+        // Only this thread holding it counts. Another thread holding the
+        // lock at the same moment is no fault here.
+        let held = holdsLock
+        countLock.lock()
+        ruleCallCount += 1
+        if held { ruleCallsHoldingLockCount += 1 }
+        countLock.unlock()
+        #endif
+        return call(rule)
+    }
+
+    /// The open questions `AskFirst` has closed, such as one that timed out.
+    /// Asked with the lock let go.
+    private func closedQuestions() -> [ConfirmationRequest] {
+        lockRuns()
+        let open = runs.compactMap { run -> ConfirmationRequest? in
+            if case .askingYes(let request) = run.phase { return request }
+            return nil
+        }
+        unlockRuns()
+        return open.filter { request in withRule { $0.isClosed(request) } }
+    }
+
+    /// A question that closed without a yes (it timed out) lets the task go on without it.
+    private func settle(_ closed: [ConfirmationRequest]) {
+        for request in closed {
+            guard let index = runs.firstIndex(where: { $0.phase == .askingYes(request) }) else { continue }
+            skip(&runs[index], line: TaskWords.timedOut(runs[index].script.steps[runs[index].index].todo))
+        }
+    }
 
     /// Starts the current step: asks, works, or fails. Past the last step,
     /// the task is done.
     private func begin(_ run: inout Run, line: String? = nil) {
+        run.approved = false
         guard run.index < run.script.steps.count else {
             run.phase = .ended
             end(&run, as: .done, line: run.script.doneLine,
@@ -314,15 +467,9 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
             run.phase = .working(attempt: 0, since: elapsed)
             run.task.state = .running
             run.task.step = line ?? step.text
-        case .ask(let action, let askLine):
-            guard let request = rule.ask(action) else {
-                skip(&run, line: TaskWords.couldNotAsk(step.todo))
-                return
-            }
-            run.phase = .askingYes(request)
-            run.task.state = .waitingOnYou
-            run.task.question = request
-            run.task.step = askLine
+        case .ask:
+            // Asked by `mutate` once the lock is let go; `asked` takes the answer.
+            run.phase = .toAsk
         case .fails:
             end(&run, as: .failed, line: TaskWords.failed,
                 wrapUp: TaskWrapUp(kept: run.kept, notDone: run.notDone + run.script.steps[run.index...].map(\.todo)))
@@ -348,17 +495,46 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
         run.task.updatedAt = date
     }
 
+    /// The question goes once the lock is let go. One still being asked is
+    /// withdrawn when its answer comes, since the run will have moved on.
     private func withdrawQuestion(_ run: inout Run) {
-        if case .askingYes(let request) = run.phase { rule.withdraw(request) }
+        if case .askingYes(let request) = run.phase { withdrawals.append(request) }
         run.task.question = nil
     }
 
-    /// A question that closed without a yes (it timed out) lets the task go on without it.
-    private func settleQuestions() {
-        for index in runs.indices {
-            guard case .askingYes(let request) = runs[index].phase, rule.isClosed(request) else { continue }
-            skip(&runs[index], line: TaskWords.timedOut(runs[index].script.steps[runs[index].index].todo))
+    /// Hands over what `AskFirst` must be told, and claims each question
+    /// waiting to be asked, so no one else asks it too.
+    private func takeRuleWork() -> (withdrawals: [ConfirmationRequest], asks: [PendingAsk]) {
+        let out = withdrawals
+        withdrawals = []
+        var asks: [PendingAsk] = []
+        for index in runs.indices where runs[index].phase == .toAsk {
+            guard case .ask(let action, _) = runs[index].script.steps[runs[index].index].kind else { continue }
+            runs[index].phase = .asking
+            asks.append(PendingAsk(id: runs[index].task.id, index: runs[index].index, action: action))
         }
+        return (out, asks)
+    }
+
+    /// `AskFirst`'s answer to a question asked outside the lock. A run that
+    /// moved on meanwhile (stopped, redirected, cleared) has its question
+    /// withdrawn at once.
+    private func asked(_ ask: PendingAsk, _ request: ConfirmationRequest?) {
+        guard let index = runs.firstIndex(where: { $0.task.id == ask.id }),
+              runs[index].phase == .asking, runs[index].index == ask.index else {
+            if let request { withdrawals.append(request) }
+            return
+        }
+        let step = runs[index].script.steps[ask.index]
+        guard let request, case .ask(_, let askLine) = step.kind else {
+            skip(&runs[index], line: TaskWords.couldNotAsk(step.todo))
+            return
+        }
+        runs[index].phase = .askingYes(request)
+        runs[index].task.state = .waitingOnYou
+        runs[index].task.question = request
+        runs[index].task.step = askLine
+        runs[index].task.updatedAt = date
     }
 
     /// The soonest thing due, across every task.
@@ -372,7 +548,7 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
                 due = since + (run.stallsLeft[run.index] > 0 ? policy.timeout : step.duration)
             case .waitingToRetry(_, let until):
                 due = until
-            case .askingYes, .stuck, .ended:
+            case .toAsk, .asking, .askingYes, .stuck, .ended:
                 continue
             }
             if soonest == nil || due < soonest!.1 { soonest = (index, due) }
@@ -413,7 +589,7 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
             run.task.state = .retrying
             run.task.step = step.retryLine
             run.task.updatedAt = date
-        case .askingYes, .stuck, .ended:
+        case .toAsk, .asking, .askingYes, .stuck, .ended:
             break
         }
     }
@@ -434,16 +610,43 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
     }
 
     /// Runs a change inside the lock, then tells observers once.
+    ///
+    /// `AskFirst` is told and asked only with the lock let go, so if it ever
+    /// calls out, and someone calls back in, nothing deadlocks. An answer
+    /// can start the next step, which may ask again, so this goes round
+    /// until nothing is left to tell the rule.
     private func mutate<T>(_ change: () -> T) -> T {
-        lock.lock()
+        lockRuns()
         let before = runs.map(\.task)
         let value = change()
+        var work = takeRuleWork()
+        unlockRuns()
+        while !work.withdrawals.isEmpty || !work.asks.isEmpty {
+            for request in work.withdrawals { withRule { $0.withdraw(request) } }
+            let answers = work.asks.map { ask in (ask, withRule { $0.ask(ask.action) }) }
+            lockRuns()
+            for (ask, request) in answers { asked(ask, request) }
+            work = takeRuleWork()
+            unlockRuns()
+        }
+        lockRuns()
+        dropOldEnded()
         let after = runs.map(\.task)
-        let snapshot = Array(after.reversed())
-        let listeners = before == after ? [] : Array(observers.values)
-        lock.unlock()
+        let changed = before != after
+        if changed { sequence += 1 }
+        let snapshot = TaskSnapshot(sequence: sequence, tasks: Array(after.reversed()))
+        let listeners = changed ? Array(observers.values) : []
+        unlockRuns()
         for listener in listeners { listener(snapshot) }
         return value
+    }
+
+    /// Keeps at most `endedLimit` ended tasks, the newest.
+    private func dropOldEnded() {
+        // Runs are oldest first.
+        let ended = runs.indices.filter { !runs[$0].task.isActive }
+        guard ended.count > Self.endedLimit else { return }
+        for index in ended.prefix(ended.count - Self.endedLimit).reversed() { runs.remove(at: index) }
     }
 
     /// For a request no script covers: a few plain steps.
@@ -465,7 +668,8 @@ public enum SampleTasks {
     /// What holding the dentist visit would share, asked through `AskFirst`.
     public static let holdVisit = ProposedAction(
         kind: .sharePersonalInfo,
-        recipient: Recipient(id: "clinic:sample-maple-dental", displayName: "Maple Dental", handle: "mapledental.ca"),
+        // A reserved name, so the example never points at a real site.
+        recipient: Recipient(id: "clinic:sample-maple-dental", displayName: "Maple Dental", handle: "mapledental.example"),
         details: "Your name and phone number, to hold Saturday at 10:30"
     )
 

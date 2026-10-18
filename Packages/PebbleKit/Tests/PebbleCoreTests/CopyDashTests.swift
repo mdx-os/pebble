@@ -28,6 +28,7 @@ struct CopyDashTests {
         MemoryWords.forgetEverythingQuestion, MemoryWords.forgetEverythingDetail, MemoryWords.privacyNote,
         MemoryWords.unreadable, MemoryWords.unavailable, MemoryWords.couldNotOpen, MemoryWords.tryAgainTitle,
         MemoryWords.forgetOneQuestion, MemoryWords.editPlaceholder, MemoryWords.couldNotForget,
+        MemoryWords.couldNotForgetNotes,
         MemorySource.toldMe.label, MemorySource.fromApp("Calendar").label, MemorySource.inferred.label,
         ConfirmationWords.heading, ConfirmationWords.toLabel, ConfirmationWords.fromLabel,
         ConfirmationWords.whatLabel, ConfirmationWords.whereLabel, ConfirmationWords.priceLabel,
@@ -42,11 +43,7 @@ struct CopyDashTests {
       + FeedWords.all
       + CloudWords.all
       + Redaction.Kind.allCases.flatMap { [$0.mask, $0.counted(1), $0.counted(2)] }
-      + TaskState.allCases.map(\.label)
-      + [TaskWords.workingHeading, TaskWords.workingDetail, TaskWords.stalled, TaskWords.retrying,
-         TaskWords.stuck, TaskWords.waitingForYes, TaskWords.redirected, TaskWords.stopped, TaskWords.failed,
-         TaskWords.keptNothing, TaskWords.approveTitle, TaskWords.redirectTitle, TaskWords.redirectPlaceholder,
-         TaskWords.redirectSendTitle, TaskWords.redirectCancelTitle, TaskWords.stopTitle, TaskWords.tryAgainTitle]
+      + TaskWords.all
       + ReconWords.all
       + [MemorySource.lookedUp("Riverside Gazette").label, MemorySource.lookedUp("").label]
 
@@ -54,6 +51,20 @@ struct CopyDashTests {
         for line in Self.copy {
             #expect(!line.contains(where: Self.dashes.contains), "dash in: \(line)")
         }
+    }
+
+    /// Every line a task card can show, from the one list both word tests
+    /// read. A line missing here would go unchecked, so a few spot checks.
+    @Test func everyTaskLineIsChecked() {
+        let all = TaskWords.all
+        for line in [TaskWords.youSaidYes, TaskWords.timedOut("x"), TaskWords.couldNotAsk("x"),
+                     TaskWords.tookAnotherWay("x"), TaskWords.youSaid("x"), TaskWords.stillWorking,
+                     TaskWords.percentDone(40), TaskWords.finishingApproved, TaskWords.mayBeDone("x"),
+                     TaskWords.yesNotUsed, TaskWords.forgetTasksDetail, TaskWords.questionTimedOut,
+                     TaskWords.tasksForgotten, TaskWords.forgotUnderway(1), TaskWords.forgotUnderway(3)] {
+            #expect(all.contains(line), "unchecked: \(line)")
+        }
+        #expect(Set(TaskState.allCases.map(\.label)).isSubset(of: Set(all)))
     }
 
     /// Catches new words too: no source file and not the voice guide.
@@ -83,6 +94,12 @@ struct CopyDashTests {
         #expect(!FirstRunWords.helloDetail().contains("stays"))
         #expect(MemoryWords.privacyNote == "Kept only on this device. Removing a note erases it.")
         #expect(MemoryWords.forgotten == "Gone. I no longer have it.")
+        // Forget everything says it stops tasks, and the tasks-only fallback
+        // says the notes are left alone.
+        #expect(MemoryWords.forgetEverythingDetail.contains("every task"))
+        #expect(MemoryWords.forgetEverythingDetail.contains("stops any task still going"))
+        #expect(TaskWords.forgetTasksDetail.contains("stops any task still going"))
+        #expect(TaskWords.forgetTasksDetail.hasSuffix("Your notes aren't touched."))
         #expect(CareCheck.reply.contains("988"))
         #expect(CareCheck.followUp.contains("988"))
         #expect(ConfirmationWords.promise.contains("once, exactly as shown"))
@@ -99,5 +116,22 @@ struct CopyDashTests {
         #expect(text.contains("(\"\(ProposedAction.yesTitle)\" and \"\(ProposedAction.noTitle)\""))
         // The name limit is referred to, not copied, so it can't drift.
         #expect(!text.contains("\(AgentName.maxLength) letters"))
+    }
+}
+
+extension TaskWords {
+    /// Every task line a person can see or hear, with sample words where a
+    /// line takes some. The one list the dash test and the warmth test read.
+    static var all: [String] {
+        [workingHeading, workingDetail, runningLabel, stalledLabel, retryingLabel, stoppedLabel, failedLabel,
+         stalled, retrying, stuck, waitingForYes, redirected, stopped, failed, keptNothing, stillWorking,
+         approveTitle, redirectTitle, redirectPlaceholder, redirectSendTitle, redirectCancelTitle, stopTitle,
+         tryAgainTitle, dismissTitle, youSaidYes, finishingApproved, yesNotUsed,
+         forgetTasksTitle, forgetTasksQuestion, forgetTasksDetail, questionTimedOut, tasksForgotten,
+         forgotUnderway(1), forgotUnderway(2), forgotUnderwayDismissTitle,
+         youSaid("x"), tookAnotherWay("x"), declined("x"), changedCourse("x"), timedOut("x"), couldNotAsk("x"),
+         mayBeDone("x"), percentDone(40), kept(["a"]), kept(["a", "b", "c"]), notDone(["a", "b"]),
+         TaskWrapUp(kept: [], notDone: []).keptLine]
+        + TaskState.allCases.map(\.label)
     }
 }

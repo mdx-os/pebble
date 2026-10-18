@@ -266,6 +266,119 @@ struct ReconTests {
         #expect(runner.tasks.first?.step == ReconWords.nothingFoundLine)
     }
 
+    // MARK: The engine contract, through the runner
+
+    @Test func stoppingWhileTheSummaryWaitsSaysStoppedNeverDone() async throws {
+        let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
+        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let gate = Gate()
+        let id = try #require(runner.lookInto(SampleSources.poolTopic, with: GatedSummarizer(gate: gate)))
+        engine.advance(by: 60)
+        #expect(engine.tasks.first?.state == .done)
+        // Still going as far as the person can see, so it can't be dismissed yet.
+        #expect(!runner.dismiss(id))
+        #expect(runner.stop(id))
+        await gate.open()
+        await runner.settle(id)
+        let task = try #require(runner.tasks.first { $0.id == id })
+        #expect(task.state == .stopped)
+        #expect(task.step == TaskWords.stopped)
+        #expect(task.result == nil)
+        #expect(runner.summary(for: id) == nil)
+        // Ended now, so it can go.
+        #expect(runner.dismiss(id))
+        #expect(runner.tasks.isEmpty)
+        #expect(!runner.isRecon(id))
+    }
+
+    @Test func dismissingAReconTakesItsSummaryToo() throws {
+        let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
+        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let id = try #require(runner.lookInto(SampleSources.poolTopic))
+        #expect(!runner.dismiss(id))
+        engine.advance(by: 60)
+        #expect(runner.summary(for: id) != nil)
+        #expect(runner.dismiss(id))
+        #expect(runner.summary(for: id) == nil)
+        #expect(!runner.isRecon(id))
+        #expect(runner.tasks.isEmpty)
+    }
+
+    @Test func forgettingEverythingForgetsEveryReconAndCountsWhatWasUnderway() async throws {
+        let rule = AskFirst.isolated()
+        let engine = LocalFakeEngine(rule: rule, origin: Self.readOn)
+        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let gate = Gate()
+        let done = try #require(runner.lookInto(SampleSources.libraryTopic))
+        let waiting = try #require(runner.lookInto(SampleSources.poolTopic, with: GatedSummarizer(gate: gate)))
+        let dentist = runner.start(TaskRequest(title: SampleTasks.dentistTitle))
+        engine.advance(by: 45)
+        // The dentist task waits on a yes. Saying yes makes its step one that
+        // may be under way.
+        let question = try #require(runner.tasks.first { $0.id == dentist }?.question)
+        guard case .approved(let yes) = rule.sayYes(to: question) else { Issue.record("yes refused"); return }
+        #expect(runner.resume(dentist, with: yes) == .proceeding)
+        #expect(runner.summary(for: done) != nil)
+
+        let cleared = runner.clear()
+        #expect(cleared == ClearedTasks(forgotten: 3, underway: 1))
+        #expect(runner.tasks.isEmpty)
+        #expect(!runner.isRecon(done))
+        #expect(!runner.isRecon(waiting))
+        #expect(runner.summary(for: done) == nil)
+        // A summary that comes after forgetting is dropped, not brought back.
+        await gate.open()
+        await runner.settle(waiting)
+        #expect(runner.tasks.isEmpty)
+        #expect(runner.summary(for: waiting) == nil)
+        // Every question went to `AskFirst` with no lock held, the runner's included.
+        #expect(engine.ruleCallsHoldingLock == 0)
+        #expect(engine.ruleCalls > 0)
+    }
+
+    @Test func aStopThroughTheRunnerNeverCallsAYesUndone() throws {
+        let rule = AskFirst.isolated()
+        let engine = LocalFakeEngine(rule: rule, origin: Self.readOn)
+        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let id = runner.start(TaskRequest(title: SampleTasks.dentistTitle))
+        engine.advance(by: 45)
+        let question = try #require(runner.tasks.first?.question)
+        guard case .approved(let yes) = rule.sayYes(to: question) else { Issue.record("yes refused"); return }
+        #expect(runner.resume(id, with: yes) == .proceeding)
+        #expect(runner.stop(id))
+        let wrapUp = try #require(runner.tasks.first?.wrapUp)
+        #expect(wrapUp.underway == "hold a Saturday visit")
+        #expect(!wrapUp.notDone.contains("hold a Saturday visit"))
+    }
+
+    @Test func snapshotsAreNumberedInOrder() throws {
+        let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
+        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let numbers = SnapshotNumbers()
+        let watch = runner.observe { numbers.add($0.sequence, count: $0.tasks.count) }
+        let id = try #require(runner.lookInto(SampleSources.poolTopic))
+        engine.advance(by: 60)
+        #expect(runner.dismiss(id))
+        let seen = numbers.list
+        #expect(seen.count > 2)
+        #expect(zip(seen, seen.dropFirst()).allSatisfy { $0.0 < $0.1 })
+        #expect(numbers.lastCount == 0)
+        watch.cancel()
+    }
+
+    @Test func endedReconsAreLetGoWithTheEnginesCap() throws {
+        let engine = LocalFakeEngine(rule: .isolated(), origin: Self.readOn)
+        let runner = ReconRunner(engine: engine, provider: SampleSources())
+        let first = try #require(runner.lookInto(SampleSources.poolTopic))
+        engine.advance(by: 60)
+        for _ in 0..<LocalFakeEngine.endedLimit {
+            runner.lookInto(SampleSources.libraryTopic)
+            engine.advance(by: 60)
+        }
+        #expect(!runner.tasks.contains { $0.id == first })
+        #expect(!runner.isRecon(first))
+    }
+
     // MARK: Nothing leaves the device
 
     @Test func aProviderOffTheDeviceIsNeverAsked() {
@@ -335,6 +448,16 @@ struct GatedSummarizer: ReconSummarizer {
         await gate.wait()
         return LocalReconSummarizer().summary(task, id: id, sources: sources, gatheredAt: gatheredAt)
     }
+}
+
+/// Each snapshot's number, in the order they came, and how many tasks the last one held.
+final class SnapshotNumbers: @unchecked Sendable {
+    private let lock = NSLock()
+    private var numbers: [Int] = []
+    private var count = 0
+    func add(_ number: Int, count: Int) { lock.lock(); numbers.append(number); self.count = count; lock.unlock() }
+    var list: [Int] { lock.lock(); defer { lock.unlock() }; return numbers }
+    var lastCount: Int { lock.lock(); defer { lock.unlock() }; return count }
 }
 
 /// A provider that would leave the device. Counts every time it is asked.

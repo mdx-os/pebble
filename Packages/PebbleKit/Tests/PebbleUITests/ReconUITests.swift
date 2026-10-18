@@ -220,6 +220,54 @@ struct ReconUITests {
         #expect(model.rememberStatus == MemoryWords.couldNotOpen)
     }
 
+    @Test func forgetEverythingTakesEveryReconAndClosesItsSheets() throws {
+        let memory = scratchMemory()
+        defer { try? memory.forgetEverything() }
+        let (model, engine, runner) = feed(memory: memory)
+        #expect(model.lookInto(SampleSources.poolTopic))
+        engine.advance(by: 30)
+        let id = try #require(runner.tasks.first?.id)
+        let summary = try #require(runner.summary(for: id))
+        #expect(model.remember(try #require(summary.points.first), in: summary))
+        model.readingSources = summary
+        model.choosingPoint = summary
+
+        let cleared = model.forgetTasks()
+        #expect(cleared.forgotten == 1)
+        #expect(cleared.underway == 0)
+        #expect(model.forgotUnderway == nil)
+        #expect(model.tasksForgotten)
+        #expect(runner.tasks.isEmpty)
+        #expect(!runner.isRecon(id))
+        #expect(model.readingSources == nil)
+        #expect(model.choosingPoint == nil)
+        #expect(model.rememberStatus == nil)
+        #expect(!summary.points.contains { model.isRemembered($0, in: summary) })
+        #expect(model.feed.working.isEmpty)
+        #expect(!model.feed.groups.flatMap(\.items).contains { $0.id == id })
+    }
+
+    @Test func dismissingAReadyCardClosesItsSheets() throws {
+        let (model, engine, runner) = feed(memory: nil)
+        #expect(model.lookInto(SampleSources.libraryTopic))
+        engine.advance(by: 30)
+        let task = try #require(runner.tasks.first)
+        let summary = try #require(model.summary(for: task))
+        model.readingSources = summary
+        model.dismiss(task)
+        #expect(model.readingSources == nil)
+        #expect(runner.tasks.isEmpty)
+        #expect(!model.hasTasks)
+    }
+
+    @Test func aReadyCardFromExamplesSaysSoAndCanBeDismissed() throws {
+        let summary = try ReconTestData.pool()
+        let card = ReconCard(summary: summary, time: "9:40 AM", gathered: "", isSample: true)
+        #expect(card.spoken.hasPrefix(FeedWords.exampleTag))
+        #expect(card.actions.last == .dismiss)
+        #expect(!ReconCard(summary: summary, time: "9:40 AM", gathered: "").spoken.hasPrefix(FeedWords.exampleTag))
+    }
+
     // MARK: Cloud off and on
 
     @Test func withTheCloudOffNothingLeavesTheDevice() async throws {
@@ -305,10 +353,10 @@ struct ReconUITests {
 
     @Test func theReadyCardOffersRememberOnlyWithPoints() throws {
         let summary = try ReconTestData.pool()
-        #expect(ReconCard(summary: summary, time: "", gathered: "").actions == [.sources, .followUp, .remember])
+        #expect(ReconCard(summary: summary, time: "", gathered: "").actions == [.sources, .followUp, .remember, .dismiss])
         let empty = ReconSummary(id: "t", topic: "volcanoes", overview: ReconWords.nothingFound("volcanoes"),
                                  points: [], sources: [], gatheredAt: summary.gatheredAt, madeOnDevice: true)
-        #expect(ReconCard(summary: empty, time: "", gathered: "").actions == [.followUp])
+        #expect(ReconCard(summary: empty, time: "", gathered: "").actions == [.followUp, .dismiss])
     }
 
     @Test func voiceOverHearsWhoSaidEachPoint() throws {

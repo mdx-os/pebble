@@ -12,9 +12,13 @@ public struct MemoryView: View {
     @FocusState private var addFocused: Bool
     private let cloud: CloudHelp?
 
-    /// With `cloud`, the screen ends with a way into the cloud setting.
-    public init(store: MemoryStore, cloud: CloudHelp? = nil) {
-        _model = StateObject(wrappedValue: MemoryModel(store: store))
+    /// `onForgetEverything` runs with Forget everything, so whatever else the
+    /// agent holds about the person, such as its tasks, goes too. It says
+    /// what it forgot, so the status line can be honest about it. With
+    /// `cloud`, the screen ends with a way into the cloud setting.
+    public init(store: MemoryStore, cloud: CloudHelp? = nil,
+                onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) {
+        _model = StateObject(wrappedValue: MemoryModel(store: store, onForgetEverything: onForgetEverything))
         self.cloud = cloud
     }
 
@@ -168,6 +172,73 @@ public struct MemoryView: View {
     }
 }
 
+/// The memory screen when the notes couldn't be opened. It says so rather
+/// than hide memory; they are only opened again at launch, so the words say
+/// that. Forget everything needs the notes, so tasks can be forgotten here
+/// on their own, with words that are honest that the notes stay.
+struct MemoryUnavailableView: View {
+    let hasTasks: Bool
+    /// True once every task was forgotten here, until a new one starts.
+    var forgotten = false
+    /// The line kept while a step said yes to may have happened.
+    var underway: String?
+    let onForgetTasks: @MainActor () -> Void
+    @State private var asking = false
+    /// The button goes once the tasks do, so VoiceOver goes to the line
+    /// that says what happened rather than nowhere.
+    @AccessibilityFocusState private var statusFocused: Bool
+
+    /// What the screen says once the tasks are gone. Nil before then.
+    var status: String? {
+        guard forgotten, !hasTasks else { return nil }
+        return [TaskWords.tasksForgotten, underway].compactMap { $0 }.joined(separator: " ")
+    }
+
+    var body: some View {
+        ZStack {
+            Backdrop()
+            VStack(spacing: 18) {
+                GentleNotice(text: MemoryWords.couldNotOpen)
+                if hasTasks {
+                    Button(role: .destructive) { asking = true } label: {
+                        Text(TaskWords.forgetTasksTitle)
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                    .accessibilityIdentifier("forgetTasks")
+                } else if let status {
+                    Text(status)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity)
+                        .accessibilityIdentifier("tasksForgotten")
+                        .accessibilityFocused($statusFocused)
+                        .onAppear {
+                            // A beat later, once it is on screen; set in
+                            // the same pass that adds it, SwiftUI drops it.
+                            Task { @MainActor in statusFocused = true }
+                        }
+                }
+            }
+            .padding(Theme.gutter)
+            .frame(maxWidth: Theme.readableWidth)
+        }
+        .confirmationDialog(TaskWords.forgetTasksQuestion, isPresented: $asking, titleVisibility: .visible) {
+            Button(TaskWords.forgetTasksTitle, role: .destructive, action: forgetTasks)
+            Button(MemoryWords.cancelTitle, role: .cancel) {}
+        } message: {
+            Text(TaskWords.forgetTasksDetail)
+        }
+    }
+
+    /// What the dialog's button does.
+    func forgetTasks() {
+        onForgetTasks()
+    }
+}
+
 struct MemoryRow: View {
     let note: MemoryNote
     let isEditing: Bool
@@ -293,8 +364,12 @@ final class MemoryModel: ObservableObject {
     @Published private(set) var savedCount = 0
     @Published private(set) var forgottenCount = 0
 
-    init(store: MemoryStore) {
+    /// Forgets what lives outside the memory file, such as tasks.
+    private let onForgetEverything: @MainActor () -> ClearedTasks
+
+    init(store: MemoryStore, onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) {
         self.store = store
+        self.onForgetEverything = onForgetEverything
         refresh()
     }
 
@@ -354,12 +429,18 @@ final class MemoryModel: ObservableObject {
 
     func forgetEverything() {
         cancelEdit()
+        // First, and even if the file can't be erased: the person asked to
+        // forget, and nothing here depends on the file.
+        let tasks = onForgetEverything()
+        // A step said yes to may have happened, so the line says so here too.
+        let underway = tasks.underwayLine.map { " " + $0 } ?? ""
         do {
             try store.forgetEverything()
-            status = MemoryWords.forgotten
+            status = MemoryWords.forgotten + underway
             forgottenCount += 1
         } catch {
-            status = MemoryWords.couldNotForget
+            // The tasks went even so; the words say which part didn't.
+            status = (tasks.forgotten > 0 ? MemoryWords.couldNotForgetNotes : MemoryWords.couldNotForget) + underway
         }
         refresh()
     }

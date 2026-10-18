@@ -3,28 +3,121 @@ import PebbleCore
 #if canImport(SwiftUI)
 import SwiftUI
 
+/// One task's progress, live. The feed holds tasks without it, so a tick
+/// redraws only the card that reads it and never the whole feed.
+@MainActor
+final class LiveProgress: ObservableObject {
+    @Published var value: TaskProgress
+
+    init(_ value: TaskProgress) {
+        self.value = value
+    }
+}
+
+/// What a task's card is in the middle of, kept by `FeedModel` by task id.
+/// A card moving from one section to another is a new view, so anything
+/// kept in the view itself would be lost: the half typed words, the open
+/// field, and where VoiceOver was.
+@MainActor
+final class TaskCardState: ObservableObject {
+    /// The Change course field is open.
+    @Published var redirecting = false
+    @Published var words = ""
+    /// Where VoiceOver goes next. The card takes it once it is on screen,
+    /// so a card that just moved sections still gets it.
+    @Published var pendingFocus: TaskCard.Focus?
+    /// The field had the keyboard when the card moved, so the new card
+    /// gives it back.
+    var pendingKeyboard = false
+    /// The field has the keyboard, as the card last said.
+    var typing = false
+    /// VoiceOver is on some part of the card, as the card last said.
+    var hasVoiceOver = false
+    /// A line to show on the card, such as a yes that didn't go through.
+    @Published var note: String?
+
+    init() {}
+
+    /// Where VoiceOver should go, once. Nil when nowhere.
+    func takeFocus() -> TaskCard.Focus? {
+        defer { pendingFocus = nil }
+        return pendingFocus
+    }
+
+    /// The field opens, and VoiceOver and the keyboard go to it once it is there.
+    func openField() {
+        redirecting = true
+        pendingFocus = .field
+        pendingKeyboard = true
+    }
+
+    /// The field closes, and VoiceOver goes back to the summary.
+    func closeField() {
+        words = ""
+        redirecting = false
+        pendingKeyboard = false
+        typing = false
+        pendingFocus = .summary
+    }
+}
+
 /// A live card for long work: what the agent is doing now, how far along it
 /// is, the last few steps, and what the person can do about it.
 ///
-/// Approve shows only while the task waits on a yes, and opens the same
-/// question sheet as every other question. Change course and Stop never ask.
-/// VoiceOver reads the state, the title, the step and the progress as one
-/// thought, then each button.
+/// Approve shows only while the task waits on a yes and its question is
+/// pinned in Needs you, and opens the same question sheet as every other
+/// question. Change course and Stop never ask. VoiceOver reads the state,
+/// the title, the step and the progress as one thought, then each button.
 struct TaskCard: View {
     let task: AgentTask
     let time: String
+    @ObservedObject var progress: LiveProgress
+    /// The field, its words and where focus goes. Held by the feed, so it
+    /// outlives this view when the card moves sections.
+    @ObservedObject var state: TaskCardState
+    /// True only while the task's question is pinned in Needs you. Without
+    /// it the card shows the waiting line and no Approve, since nothing
+    /// could open the sheet.
+    let canApprove: Bool
+    /// A scripted example, so the card says so where its buttons are.
+    let isSample: Bool
     /// False for work that can't change course, such as looking into one topic.
-    var canRedirect = true
-    var onApprove: () -> Void = {}
+    let canRedirect: Bool
+    let onApprove: () -> Void
     /// Returns false when the engine couldn't take the words, so they stay.
-    var onRedirect: (String) -> Bool = { _ in true }
-    var onStop: () -> Void = {}
-    var onRetry: () -> Void = {}
-    var onOpen: () -> Void = {}
+    let onRedirect: (String) -> Bool
+    let onStop: () -> Void
+    let onRetry: () -> Void
+    let onOpen: () -> Void
+    let onDismiss: () -> Void
 
-    @State private var redirecting = false
-    @State private var words = ""
+    init(task: AgentTask, time: String, progress: LiveProgress? = nil, state: TaskCardState? = nil,
+         canApprove: Bool = false, isSample: Bool = false, canRedirect: Bool = true,
+         onApprove: @escaping () -> Void = {}, onRedirect: @escaping (String) -> Bool = { _ in true },
+         onStop: @escaping () -> Void = {}, onRetry: @escaping () -> Void = {},
+         onOpen: @escaping () -> Void = {}, onDismiss: @escaping () -> Void = {}) {
+        self.task = task
+        self.time = time
+        _progress = ObservedObject(wrappedValue: progress ?? LiveProgress(task.progress))
+        _state = ObservedObject(wrappedValue: state ?? TaskCardState())
+        self.canApprove = canApprove
+        self.isSample = isSample
+        self.canRedirect = canRedirect
+        self.onApprove = onApprove
+        self.onRedirect = onRedirect
+        self.onStop = onStop
+        self.onRetry = onRetry
+        self.onOpen = onOpen
+        self.onDismiss = onDismiss
+    }
+
+    enum Focus: Hashable { case summary, field, action(Action) }
+
+    private var redirecting: Bool { state.redirecting }
     @FocusState private var fieldFocused: Bool
+    /// Where VoiceOver goes when the redirect field opens and closes, so it
+    /// never lands nowhere when a button it was on goes away.
+    @AccessibilityFocusState private var focus: Focus?
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -37,6 +130,13 @@ struct TaskCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             summary
+            if let note = state.note {
+                Text(note)
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("taskNote")
+            }
             if task.isActive, !task.history.isEmpty {
                 history
             }
@@ -57,8 +157,33 @@ struct TaskCard: View {
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .easeInOut(duration: 0.3), value: redirecting)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("task:\(task.id)")
-        .onChange(of: task.isActive) { _, active in
-            if !active { redirecting = false }
+        // The feed asks for focus when the card moves sections or its task
+        // ends. A card that just moved is a new view, so it looks on appear.
+        .onAppear(perform: takeSummaryFocus)
+        .onChange(of: state.pendingFocus) { _, _ in takeSummaryFocus() }
+        .onChange(of: fieldFocused) { _, focused in state.typing = focused }
+        .onChange(of: focus) { _, place in state.hasVoiceOver = place != nil }
+    }
+
+    /// Takes VoiceOver to the summary a beat later, once the card is in
+    /// place; set in the same pass that moves it, SwiftUI drops it.
+    private func takeSummaryFocus() {
+        guard state.pendingFocus == .summary else { return }
+        _ = state.takeFocus()
+        Task { @MainActor in focus = .summary }
+    }
+
+    /// Takes VoiceOver, and the keyboard if it had it, to the field once it
+    /// is on screen.
+    private func takeFieldFocus() {
+        let voiceOver = state.pendingFocus == .field
+        if voiceOver { _ = state.takeFocus() }
+        let keyboard = state.pendingKeyboard
+        state.pendingKeyboard = false
+        guard voiceOver || keyboard else { return }
+        Task { @MainActor in
+            if keyboard { fieldFocused = true }
+            if voiceOver { focus = .field }
         }
     }
 
@@ -66,14 +191,19 @@ struct TaskCard: View {
 
     // MARK: What it says
 
-    /// The card's first line for VoiceOver.
+    /// The card's first line for VoiceOver. An example says so first, as it
+    /// is seen first.
     var spoken: String {
-        [task.state.label, task.title, task.step, time].filter { !$0.isEmpty }.joined(separator: ". ")
+        [isSample ? FeedWords.exampleTag : "", task.state.label, task.title, task.step, time]
+            .filter { !$0.isEmpty }.joined(separator: ". ")
     }
 
     /// The progress, read after the label. Nil once the task has ended.
     var spokenValue: String? {
-        task.isActive ? task.spokenProgress : nil
+        guard task.isActive else { return nil }
+        var live = task
+        live.progress = progress.value
+        return live.spokenProgress
     }
 
     private var summary: some View {
@@ -91,6 +221,16 @@ struct TaskCard: View {
                 }
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(.secondary)
+                if isSample {
+                    // The same capsule as the label over an example opened to read.
+                    Text(FeedWords.exampleTag)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.primary.opacity(0.06), in: Capsule())
+                        .accessibilityIdentifier("exampleTag")
+                }
                 Spacer(minLength: 8)
                 Text(time)
                     .font(.footnote)
@@ -107,7 +247,7 @@ struct TaskCard: View {
                 .contentTransition(.opacity)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.35), value: task.step)
             if task.isActive && !task.isStuck {
-                CalmProgress(progress: task.progress, isLive: isLive)
+                CalmProgress(progress: progress.value, isLive: isLive)
                     .padding(.top, 2)
             }
         }
@@ -115,11 +255,14 @@ struct TaskCard: View {
         .accessibilityLabel(spoken)
         .accessibilityValue(spokenValue ?? "")
         .accessibilityAddTraits(task.isActive ? .updatesFrequently : [])
+        .accessibilityFocused($focus, equals: .summary)
     }
 
     private var history: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(task.history.suffix(3).enumerated()), id: \.offset) { _, step in
+            // Keyed by each step, so a new step pushing in never moves
+            // words into another row.
+            ForEach(task.history.suffix(3), id: \.id) { step in
                 Label {
                     Text(step.text)
                         .fixedSize(horizontal: false, vertical: true)
@@ -143,6 +286,9 @@ struct TaskCard: View {
             }
             if let notDone = wrapUp.notDoneLine {
                 Text(notDone)
+            }
+            if let underway = wrapUp.underwayLine {
+                Text(underway)
             }
         }
         .font(.subheadline)
@@ -173,50 +319,63 @@ struct TaskCard: View {
         }
     }
 
-    enum Action: Hashable { case approval, retry, redirect, stop, open }
+    enum Action: Hashable { case approval, retry, redirect, stop, open, dismiss }
 
-    /// The buttons this card shows, in order. Approve only while waiting on a yes.
+    /// The buttons this card shows, in order. Approve only while waiting on
+    /// a yes whose question is pinned in Needs you. An ended card can be
+    /// cleared away.
     var actions: [Action] {
         if task.isActive {
             var row: [Action] = []
-            if task.waitsForApproval { row.append(.approval) }
+            if task.waitsForApproval && canApprove { row.append(.approval) }
             if task.isStuck { row.append(.retry) }
             if canRedirect && !redirecting { row.append(.redirect) }
             row.append(.stop)
             return row
         }
-        return task.state == .done && task.result != nil ? [.open] : []
+        return (task.state == .done && task.result != nil ? [.open] : []) + [.dismiss]
     }
 
     @ViewBuilder
     private func buttonViews(_ row: [Action]) -> some View {
         ForEach(row, id: \.self) { action in
-            switch action {
-            case .approval:
-                Button(TaskWords.approveTitle, action: onApprove)
-                    .buttonStyle(CardButtonStyle(kind: .primary))
-            case .retry:
-                Button(TaskWords.tryAgainTitle, action: onRetry)
-                    .buttonStyle(CardButtonStyle(kind: .primary))
-            case .redirect:
-                Button(TaskWords.redirectTitle) {
-                    redirecting = true
-                    fieldFocused = true
-                }
-                .buttonStyle(CardButtonStyle(kind: .secondary))
-            case .stop:
-                Button(TaskWords.stopTitle, action: onStop)
-                    .buttonStyle(CardButtonStyle(kind: .quiet))
-            case .open:
-                Button(FeedWords.openTitle, action: onOpen)
-                    .buttonStyle(CardButtonStyle(kind: .secondary))
+            button(action)
+                // Known, so a card that moves sections can bring VoiceOver along.
+                .accessibilityFocused($focus, equals: .action(action))
+        }
+    }
+
+    @ViewBuilder
+    private func button(_ action: Action) -> some View {
+        switch action {
+        case .approval:
+            Button(TaskWords.approveTitle, action: onApprove)
+                .buttonStyle(CardButtonStyle(kind: .primary))
+        case .retry:
+            Button(TaskWords.tryAgainTitle, action: onRetry)
+                .buttonStyle(CardButtonStyle(kind: .primary))
+        case .redirect:
+            Button(TaskWords.redirectTitle) {
+                // This button goes away, so VoiceOver and the keyboard
+                // go to the field once it appears.
+                state.openField()
             }
+            .buttonStyle(CardButtonStyle(kind: .secondary))
+        case .stop:
+            Button(TaskWords.stopTitle, action: onStop)
+                .buttonStyle(CardButtonStyle(kind: .quiet))
+        case .open:
+            Button(FeedWords.openTitle, action: onOpen)
+                .buttonStyle(CardButtonStyle(kind: .secondary))
+        case .dismiss:
+            Button(TaskWords.dismissTitle, action: onDismiss)
+                .buttonStyle(CardButtonStyle(kind: .quiet))
         }
     }
 
     private var redirectField: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField(TaskWords.redirectPlaceholder, text: $words, axis: .vertical)
+            TextField(TaskWords.redirectPlaceholder, text: $state.words, axis: .vertical)
                 .lineLimit(1...3)
                 .font(.subheadline)
                 .focused($fieldFocused)
@@ -226,25 +385,28 @@ struct TaskCard: View {
                 .padding(.vertical, 10)
                 .background(Theme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: Theme.smallCorner, style: .continuous))
                 .accessibilityLabel(TaskWords.redirectPlaceholder)
+                .accessibilityFocused($focus, equals: .field)
+                .onAppear(perform: takeFieldFocus)
             HStack(spacing: 8) {
                 Button(TaskWords.redirectSendTitle, action: send)
                     .buttonStyle(CardButtonStyle(kind: .primary))
-                    .disabled(words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                Button(TaskWords.redirectCancelTitle) {
-                    redirecting = false
-                    words = ""
-                }
-                .buttonStyle(CardButtonStyle(kind: .quiet))
+                    .disabled(state.words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button(TaskWords.redirectCancelTitle, action: closeField)
+                    .buttonStyle(CardButtonStyle(kind: .quiet))
             }
         }
     }
 
     private func send() {
-        guard !words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        if onRedirect(words) {
-            words = ""
-            redirecting = false
-        }
+        guard !state.words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if onRedirect(state.words) { closeField() }
+    }
+
+    /// The field goes away with its buttons, so VoiceOver goes back to the
+    /// card's summary, which says what happens now.
+    private func closeField() {
+        fieldFocused = false
+        state.closeField()
     }
 
     static func symbol(_ state: TaskState) -> String {

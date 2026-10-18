@@ -357,16 +357,12 @@ public struct HomeView: View {
     @ViewBuilder
     private var memoryScreen: some View {
         if let memory {
-            MemoryView(store: memory, cloud: cloud)
+            MemoryView(store: memory, cloud: cloud, onForgetEverything: { feed.forgetTasks() })
         } else {
             // The store couldn't be opened. Say so rather than hide memory.
-            // It is only opened again at launch, so the words say that.
-            ZStack {
-                Backdrop()
-                GentleNotice(text: MemoryWords.couldNotOpen)
-                    .padding(Theme.gutter)
-                    .frame(maxWidth: Theme.readableWidth)
-            }
+            // Tasks can still be forgotten here, since Forget everything isn't.
+            MemoryUnavailableView(hasTasks: feed.hasTasks, forgotten: feed.tasksForgotten,
+                                  underway: feed.forgotUnderway, onForgetTasks: { feed.forgetTasks() })
         }
     }
 }

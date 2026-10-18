@@ -134,7 +134,8 @@ public enum MemoryWords {
     public static let addPlaceholder = "Something for me to remember"
     public static let addTitle = "Remember"
     public static let forgetEverythingQuestion = "Forget everything I remember?"
-    public static let forgetEverythingDetail = "This removes every note from this device. It can't be undone."
+    /// Forget everything forgets tasks too, so it says running ones stop.
+    public static let forgetEverythingDetail = "This removes every note and every task from this device, and stops any task still going. It can't be undone."
     public static let privacyNote = "Kept only on this device. Removing a note erases it."
     /// Shown while adding is turned off, so the saved notes stay as they are.
     public static let unreadable = "Sorry, I can't read the notes I saved. I've left them untouched, so I won't add new ones for now. If this keeps happening, Forget everything clears them so we can start fresh."
@@ -146,6 +147,8 @@ public enum MemoryWords {
     public static let forgetOneQuestion = "Forget this note?"
     public static let editPlaceholder = "What should I remember instead?"
     public static let couldNotForget = "Sorry, I couldn't erase that just now. Please try again in a moment."
+    /// Forget everything when the tasks went but the notes couldn't be erased.
+    public static let couldNotForgetNotes = "I forgot your tasks, but I couldn't erase your notes just now. Please try again in a moment."
 }
 
 /// Notes the agent keeps, stored only on this device.

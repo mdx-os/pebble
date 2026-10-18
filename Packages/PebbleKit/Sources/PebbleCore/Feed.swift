@@ -71,7 +71,7 @@ public enum FeedAction: Sendable, Equatable {
     case review(ConfirmationRequest)
     /// A live task card, with its own buttons. Its Approve opens the same
     /// question sheet as `review`, for the question the task's engine asked
-    /// through `AskFirst`.
+    /// through `AskFirst`. Holds the task without live progress.
     case task(AgentTask)
     /// Starts looking into this topic, as a task that lands back in the
     /// feed. The tap is the person's go ahead; nothing starts without it.
@@ -300,9 +300,12 @@ public struct TaskFeed: FeedSource {
         engine.tasks.map(Self.item)
     }
 
+    /// Holds the task without its live progress (`AgentTask.card`), so a
+    /// tick of progress never changes the feed. The card reads progress
+    /// from the engine.
     public static func item(_ task: AgentTask) -> FeedItem {
         FeedItem(id: task.id, kind: .task, time: task.isActive ? task.startedAt : task.updatedAt,
-                 title: task.title, body: task.step, action: .task(task))
+                 title: task.title, body: task.step, action: .task(task.card))
     }
 }
 
@@ -433,6 +436,9 @@ public enum FeedWords {
     public static let sampleNote = "These are examples for now. They were made on this device, and nothing was sent or bought."
     /// Over an example opened to read.
     public static let sampleLabel = "This is an example. Nothing here was really done."
+    /// On a live card that is an example, such as a scripted task, which has
+    /// buttons that look like real work.
+    public static let exampleTag = "Example"
     public static let doneTitle = "Done"
 
     /// The chat button on a narrow screen, such as "Chat with Pip".

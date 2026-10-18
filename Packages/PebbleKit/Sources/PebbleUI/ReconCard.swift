@@ -13,9 +13,13 @@ struct ReconCard: View {
     let summary: ReconSummary
     let time: String
     let gathered: String
+    /// Read from example sources, so the card says so, as a scripted task's does.
+    var isSample = false
     var onOpenSources: () -> Void = {}
     var onFollowUp: () -> Void = {}
     var onRemember: () -> Void = {}
+    /// Takes the card away, with the summary and everything it read.
+    var onDismiss: () -> Void = {}
 
     @Environment(\.colorScheme) private var scheme
 
@@ -58,7 +62,8 @@ struct ReconCard: View {
     }
 
     var spoken: String {
-        [FeedWords.readyLabel, ReconWords.title(summary.topic), summary.overview, time].joined(separator: ". ")
+        [isSample ? FeedWords.exampleTag : "", FeedWords.readyLabel, ReconWords.title(summary.topic), summary.overview, time]
+            .filter { !$0.isEmpty }.joined(separator: ". ")
     }
 
     private var header: some View {
@@ -72,6 +77,16 @@ struct ReconCard: View {
                 }
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(.secondary)
+                if isSample {
+                    // The same capsule as a scripted task's card.
+                    Text(FeedWords.exampleTag)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.primary.opacity(0.06), in: Capsule())
+                        .accessibilityIdentifier("exampleTag")
+                }
                 Spacer(minLength: 8)
                 Text(time)
                     .font(.footnote)
@@ -131,12 +146,13 @@ struct ReconCard: View {
         .accessibilityElement(children: .combine)
     }
 
-    enum Action: Hashable { case sources, followUp, remember }
+    enum Action: Hashable { case sources, followUp, remember, dismiss }
 
-    /// Remember shows only when there is a point to keep.
+    /// Remember shows only when there is a point to keep. Dismiss is always
+    /// last, as on every ended task card.
     var actions: [Action] {
-        guard !summary.sources.isEmpty else { return [.followUp] }
-        return summary.points.isEmpty ? [.sources, .followUp] : [.sources, .followUp, .remember]
+        guard !summary.sources.isEmpty else { return [.followUp, .dismiss] }
+        return summary.points.isEmpty ? [.sources, .followUp, .dismiss] : [.sources, .followUp, .remember, .dismiss]
     }
 
     @ViewBuilder
@@ -169,6 +185,9 @@ struct ReconCard: View {
                 Button(ReconWords.rememberTitle, action: onRemember)
                     .buttonStyle(CardButtonStyle(kind: .quiet))
                     .accessibilityHint(ReconWords.rememberHint)
+            case .dismiss:
+                Button(TaskWords.dismissTitle, action: onDismiss)
+                    .buttonStyle(CardButtonStyle(kind: .quiet))
             }
         }
     }

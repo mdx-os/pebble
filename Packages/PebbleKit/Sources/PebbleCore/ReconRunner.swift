@@ -20,19 +20,31 @@ extension LocalFakeEngine: ScriptedTaskEngine {}
 /// person turned the cloud on, one that goes through the cloud model's
 /// redaction and preview. The card stays live until the summary is in hand,
 /// so a card never says it is done before it is.
+///
+/// It keeps the engine contract for every task, a recon's included: it never
+/// calls the engine or `AskFirst` while holding its own lock, its snapshots
+/// are numbered in order, and `clear` forgets every summary and source a
+/// recon read along with the engine's tasks.
 public final class ReconRunner: TaskEngine, @unchecked Sendable {
     public let engine: any TaskEngine
     public let provider: any SourceProvider
     private let lock = NSLock()
     private var runs: [String: Run] = [:]
-    private var observers: [UUID: @Sendable ([AgentTask]) -> Void] = [:]
+    private var observers: [UUID: @Sendable (TaskSnapshot) -> Void] = [:]
     private var watching: TaskObservation?
     private let now: @Sendable () -> Date
+    /// Held while a snapshot is taken and numbered, so a later number always
+    /// means a later look. Never held while observers are told.
+    private let snapshotLock = NSLock()
+    private var sequence = 0
 
     private struct Run {
         let task: ReconTask
         var summary: ReconSummary?
         var work: Task<Void, Never>?
+        /// Stopped after the engine finished, while the summary was still
+        /// coming. The card says stopped, never done.
+        var stopped = false
     }
 
     /// `now` is when sources count as read. By default, the engine's own
@@ -109,13 +121,12 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
     }
 
     private func finish(_ id: String, with summary: ReconSummary) {
+        // Asked before the lock is taken, so the engine is never called under it.
+        let task = engine.tasks.first { $0.id == id }
+        // A recon that was stopped, dismissed or forgotten keeps no summary.
+        guard let task, task.state != .stopped, task.state != .failed else { return }
         lock.lock()
-        guard runs[id] != nil else { lock.unlock(); return }
-        // A recon that was stopped keeps no summary.
-        if let task = engine.tasks.first(where: { $0.id == id }), task.state == .stopped || task.state == .failed {
-            lock.unlock()
-            return
-        }
+        guard let run = runs[id], !run.stopped else { lock.unlock(); return }
         runs[id]?.summary = summary
         runs[id]?.work = nil
         lock.unlock()
@@ -144,7 +155,13 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
             guard let run = known[task.id] else { return task }
             var shown = task
             if task.state == .done {
-                if let summary = run.summary {
+                if run.stopped {
+                    // Nothing was summed up, so nothing was kept.
+                    shown.state = .stopped
+                    shown.step = TaskWords.stopped
+                    shown.result = nil
+                    shown.wrapUp = TaskWrapUp(kept: [], notDone: [])
+                } else if let summary = run.summary {
                     shown.result = summary.plainText
                     if summary.points.isEmpty { shown.step = ReconWords.nothingFoundLine }
                 } else {
@@ -161,12 +178,12 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
     @discardableResult
     public func start(_ request: TaskRequest) -> String { engine.start(request) }
 
-    public func observe(_ onChange: @escaping @Sendable ([AgentTask]) -> Void) -> TaskObservation {
+    public func observe(_ onChange: @escaping @Sendable (TaskSnapshot) -> Void) -> TaskObservation {
         let key = UUID()
         lock.lock()
         observers[key] = onChange
         lock.unlock()
-        onChange(tasks)
+        onChange(snapshot(advancing: false))
         return TaskObservation { [weak self] in
             guard let self else { return }
             self.lock.lock()
@@ -192,13 +209,48 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         work?.cancel()
         let stopped = engine.stop(id)
         if !stopped, work != nil {
-            // The engine had finished; the card was only waiting on the summary.
+            // The engine had finished; the card was only waiting on the
+            // summary. It stays, saying it stopped, until it is dismissed.
             lock.lock()
-            runs[id] = nil
+            runs[id]?.stopped = true
             lock.unlock()
             changed()
         }
         return stopped || work != nil
+    }
+
+    /// Takes an ended card away, with its summary and the sources it read.
+    /// False while it is still going, a recon whose summary is still coming
+    /// included, so it is stopped first.
+    @discardableResult
+    public func dismiss(_ id: String) -> Bool {
+        lock.lock()
+        let waiting = runs[id]?.work != nil && runs[id]?.summary == nil
+        lock.unlock()
+        guard !waiting, engine.dismiss(id) else { return false }
+        lock.lock()
+        let had = runs.removeValue(forKey: id) != nil
+        lock.unlock()
+        // The engine has told observers already; tell them the summary went too.
+        if had { changed() }
+        return true
+    }
+
+    /// Forgets every task, and every summary and source a recon held, at
+    /// once. Work still putting a summary together is cancelled, so nothing
+    /// comes back later. A recon has no step to say yes to, so the count of
+    /// steps under way is the engine's.
+    @discardableResult
+    public func clear() -> ClearedTasks {
+        lock.lock()
+        let works = runs.values.compactMap(\.work)
+        runs.removeAll()
+        lock.unlock()
+        // Cancelling also withdraws a cloud preview still waiting for an answer.
+        for work in works { work.cancel() }
+        let cleared = engine.clear()
+        changed()
+        return cleared
     }
 
     @discardableResult
@@ -215,12 +267,27 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
         (engine as? LocalFakeEngine)?.advance(by: seconds)
     }
 
+    /// Every task now, numbered. A change takes the next number; a first
+    /// look for a new observer keeps the current one.
+    private func snapshot(advancing: Bool) -> TaskSnapshot {
+        snapshotLock.lock(); defer { snapshotLock.unlock() }
+        let list = tasks
+        if advancing { sequence += 1 }
+        return TaskSnapshot(sequence: sequence, tasks: list)
+    }
+
     private func changed() {
+        // The engine lets its oldest ended tasks go. A summary goes with its
+        // task, so what a recon read never piles up. Only a finished run is
+        // let go: one just started may not be in the list it was checked
+        // against.
+        let ids = Set(engine.tasks.map(\.id))
         lock.lock()
+        runs = runs.filter { ids.contains($0.key) || ($0.value.summary == nil && !$0.value.stopped) }
         let listeners = Array(observers.values)
         lock.unlock()
         guard !listeners.isEmpty else { return }
-        let snapshot = tasks
+        let snapshot = snapshot(advancing: true)
         for listener in listeners { listener(snapshot) }
     }
 }
