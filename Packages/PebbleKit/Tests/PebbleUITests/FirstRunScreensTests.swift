@@ -82,7 +82,7 @@ struct FirstRunScreensTests {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("pebble-ui-\(UUID().uuidString).json")
         let store = MemoryStore(fileURL: url)
         defer { try? store.forgetEverything() }
-        let model = MemoryModel(store: store)
+        let model = MemoryModel(store: store, place: .onDevice)
         model.newNote = "Door code 4417"
         model.add()
         model.newNote = "Prefers tea"
@@ -121,13 +121,13 @@ struct FirstRunScreensTests {
     }
 
     @Test func theMemoryScreenShowsWhereEachNoteCameFrom() {
-        let model = MemoryModel(store: ShowcaseScene.sampleMemory())
+        let model = MemoryModel(store: ShowcaseScene.sampleMemory(), place: .onDevice)
         #expect(Set(model.notes.map(\.source)) == [.toldMe, .fromApp("Calendar"), .inferred])
     }
 
     @Test func aBlankNoteFromTheScreenIsRefusedKindly() {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("pebble-ui-\(UUID().uuidString).json")
-        let model = MemoryModel(store: MemoryStore(fileURL: url))
+        let model = MemoryModel(store: MemoryStore(fileURL: url), place: .onDevice)
         model.newNote = "   "
         model.add()
         #expect(model.notes.isEmpty)
@@ -165,7 +165,7 @@ struct FirstRunScreensTests {
     @Test func anUnreadableMemoryIsShownAndCanBeCleared() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("pebble-ui-\(UUID().uuidString).json")
         try Data("not notes {".utf8).write(to: url)
-        let model = MemoryModel(store: MemoryStore(fileURL: url))
+        let model = MemoryModel(store: MemoryStore(fileURL: url), place: .onDevice)
         #expect(model.isUnreadable)
         #expect(model.hasStoredFile)
         model.newNote = "Prefers tea"

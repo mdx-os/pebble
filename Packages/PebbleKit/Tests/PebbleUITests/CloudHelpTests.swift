@@ -197,7 +197,7 @@ struct CloudHelpTests {
                                              conversation: promised)
         #expect(!controller.conversation.onDevice)
         #expect(controller.conversation.turns.first?.text.contains("stays") == false)
-        #expect(controller.presence == CloudWords.presence)
+        #expect(FirstConversation.presence(controller.privacyPlace) == CloudWords.presence)
         // And sent directly, it is refused before any preview.
         await #expect(throws: ConversationError.leavesDevice) {
             try await promised.sending("Write to Sam", with: model)
@@ -221,7 +221,39 @@ struct CloudHelpTests {
     @Test func theOnDeviceHeaderStaysForOnDeviceChats() {
         let controller = ChatController.make(brand: brand, model: LocalStubModel(),
                                              names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil)
-        #expect(controller.presence == FirstConversation.presence)
+        #expect(FirstConversation.presence(controller.privacyPlace) == FirstConversation.presence(.onDevice))
+    }
+
+    /// Today and the memory follow this, so their device lines drop the
+    /// moment the cloud is on, and come back when it is off.
+    @Test func thePlaceFollowsTheSettingTheSameWayTheModelDoes() {
+        let maker = TransportMaker()
+        let off = help(endpoint: endpoint, maker: maker)
+        #expect(off.place(local: .onDevice) == .onDevice)
+        #expect(off.place(local: .mayLeaveDevice) == .mayLeaveDevice)
+        #expect(off.place(local: .onDevice, with: CloudHelpSettings(isOn: true)) == .mayLeaveDevice)
+        let on = help(CloudHelpSettings(isOn: true), endpoint: endpoint, maker: maker)
+        #expect(on.place(local: .onDevice) == .mayLeaveDevice)
+        #expect(on.chatModel(local: LocalStubModel()).privacyPlace == .mayLeaveDevice)
+        // With no address the setting can't take effect, so nothing changes.
+        let nowhere = help(CloudHelpSettings(isOn: true), endpoint: nil, maker: maker)
+        #expect(nowhere.place(local: .onDevice) == .onDevice)
+        #expect(nowhere.chatModel(local: LocalStubModel()).privacyPlace == .onDevice)
+    }
+
+    /// The memory screen's saved line follows a place that changes while it is open.
+    @Test func theMemorysDeviceLinesFollowAChangedPlace() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("place-\(UUID().uuidString).json")
+        let store = MemoryStore(fileURL: url)
+        defer { try? store.forgetEverything() }
+        let model = MemoryModel(store: store, place: .onDevice)
+        model.newNote = "Tea in the afternoon"
+        model.add()
+        #expect(model.status == MemoryWords.saved(.onDevice))
+        model.place = .mayLeaveDevice
+        model.newNote = "Sam likes lemon cake"
+        model.add()
+        #expect(model.status == MemoryWords.saved(.mayLeaveDevice))
     }
 
     // MARK: Screens render
@@ -234,7 +266,7 @@ struct CloudHelpTests {
         turns.append(ChatTurn(id: UUID(), speaker: .person, text: "Call Sam at 416-555-0199"))
         let preview = try CloudModel.preview(for: turns, endpoint: endpoint, redactor: Redactor(names: ["Sam"]))
         let screens: [AnyView] = [
-            AnyView(CloudHelpView(help: cloud)),
+            AnyView(CloudHelpView(help: cloud, local: .onDevice)),
             AnyView(CloudTurnOnSheet(onYes: {}, onNo: {})),
             AnyView(CloudPreviewSheet(preview: preview, onSend: {}, onCancel: {})),
         ]

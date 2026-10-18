@@ -139,7 +139,7 @@ struct ReconUITests {
         let engine = LocalFakeEngine(rule: .isolated(), origin: ShowcaseScene.morning)
         let runner = ReconRunner(engine: engine, provider: ReconTestData.sources)
         let model = FeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()), tasks: runner,
-                              memory: memory, now: { ShowcaseScene.morning })
+                              place: .onDevice, memory: memory, now: { ShowcaseScene.morning })
         return (model, engine, runner)
     }
 
@@ -166,7 +166,7 @@ struct ReconUITests {
     }
 
     @Test func withoutARunnerTheFeedAsksInTheChat() throws {
-        let model = FeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()))
+        let model = FeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()), place: .onDevice)
         let card = try #require(model.feed.groups.flatMap(\.items).first { $0.id == "sample:pool" })
         var talked: [String] = []
         model.perform(card) { talked.append($0) }
@@ -202,7 +202,7 @@ struct ReconUITests {
 
         let point = try #require(summary.points.first)
         #expect(model.remember(point, in: summary))
-        #expect(model.rememberStatus == MemoryWords.saved)
+        #expect(model.rememberStatus == MemoryWords.saved(.onDevice))
         #expect(model.isRemembered(point, in: summary))
         let notes = memory.notes()
         #expect(notes.count == 1)
@@ -266,9 +266,9 @@ struct ReconUITests {
     @Test func aReadyCardFromExamplesSaysSoAndCanBeDismissed() throws {
         let summary = try ReconTestData.pool()
         let card = ReconCard(summary: summary, time: "9:40 AM", gathered: "", isSample: true)
-        #expect(card.spoken.hasPrefix(FeedWords.exampleTag))
+        #expect(card.spoken.hasPrefix(FeedWords.exampleMarker))
         #expect(card.actions.last == .dismiss)
-        #expect(!ReconCard(summary: summary, time: "9:40 AM", gathered: "").spoken.hasPrefix(FeedWords.exampleTag))
+        #expect(!ReconCard(summary: summary, time: "9:40 AM", gathered: "").spoken.hasPrefix(FeedWords.exampleMarker))
     }
 
     // MARK: Cloud off and on

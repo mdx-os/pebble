@@ -19,7 +19,7 @@ struct ReconFeedTests {
         let engine = LocalFakeEngine(rule: .isolated(), origin: morning)
         let runner = ReconRunner(engine: engine, provider: ReconTestData.sources)
         let model = FeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()), tasks: runner,
-                              drivesTasks: drivesTasks, now: { [morning] in morning })
+                              drivesTasks: drivesTasks, place: .onDevice, now: { [morning] in morning })
         return (model, engine, runner)
     }
 
@@ -28,7 +28,8 @@ struct ReconFeedTests {
     @Test func aRealTaskBesideASampleReconIsNeverCalledAnExample() throws {
         let inner = LocalFakeEngine(rule: .isolated(), origin: morning)
         let runner = ReconRunner(engine: PlainEngine(inner), provider: ReconTestData.sources)
-        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: runner, now: { [morning] in morning })
+        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: runner, place: .onDevice,
+                              now: { [morning] in morning })
         let real = runner.start(TaskRequest(title: "Book the car service"))
         #expect(model.lookInto(SampleSources.libraryTopic))
         let recon = try #require(runner.tasks.first { $0.id != real }?.id)
@@ -39,7 +40,7 @@ struct ReconFeedTests {
         #expect(!model.isSample(realItem))
         #expect(model.isSample(reconItem))
         let card = TaskCard(task: try #require(realItem.task), time: "9:40 AM", isSample: model.isSample(realItem))
-        #expect(!card.spoken.contains(FeedWords.exampleTag))
+        #expect(!card.spoken.contains(FeedWords.exampleMarker))
         // The note at the top still says some of Today is examples.
         #expect(model.isSample)
     }
@@ -55,14 +56,14 @@ struct ReconFeedTests {
         controller.reconReadsExamples = model.readsExamples
         controller.submit("look into the Riverside pool reopening")
         let line = controller.conversation.turns.last?.text ?? ""
-        #expect(line == ReconWords.offer("the Riverside pool reopening", examples: true))
-        #expect(line.contains("example pages"))
+        #expect(line == ReconWords.offer("the Riverside pool reopening", examples: true, place: .onDevice))
+        #expect(line.contains("example pages kept on this device"))
         #expect(!ReconWords.offer("the pool").contains("example"))
     }
 
     @Test func aRealProviderIsNotCalledExamples() {
         let runner = ReconRunner(engine: LocalFakeEngine(rule: .isolated()), provider: RealPages())
-        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: runner)
+        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: runner, place: .onDevice)
         #expect(!model.readsExamples)
     }
 
@@ -169,7 +170,7 @@ struct ReconFeedTests {
     @Test func theCardsHeadingIsTheTitleAndTheOverviewIsReadAsText() throws {
         let summary = try ReconTestData.pool()
         let card = ReconCard(summary: summary, time: "9:40 AM", gathered: "", isSample: true)
-        #expect(card.spoken == "\(FeedWords.exampleTag). \(FeedWords.readyLabel). 9:40 AM")
+        #expect(card.spoken == "\(FeedWords.exampleMarker). \(FeedWords.readyLabel). 9:40 AM")
         #expect(!card.spoken.contains(summary.overview))
     }
 

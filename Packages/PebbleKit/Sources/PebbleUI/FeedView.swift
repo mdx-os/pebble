@@ -40,7 +40,14 @@ final class FeedModel: ObservableObject {
     let tasks: (any TaskEngine)?
     /// Moves a scripted engine's clock with real time, for the live showcase.
     let drivesTasks: Bool
+    /// Where the person's words go, passed down from the model so copy that
+    /// mentions the device never drifts from it. `HomeView` sets it again
+    /// when the cloud setting changes where words go.
+    @Published var place: PrivacyPlace
     private let sources: [any FeedSource]
+    /// This model's watch on `needsYou`, ended when the model goes, so a
+    /// closed window leaves nothing behind.
+    private var observation: NeedsYou.Observation?
     private let calendar: Calendar
     let now: () -> Date
     private var watching: TaskObservation?
@@ -83,7 +90,8 @@ final class FeedModel: ObservableObject {
     var announce: @MainActor (TaskAnnouncer.Line) -> Void = FeedModel.post
 
     init(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)? = nil,
-         drivesTasks: Bool = false, memory: MemoryStore? = nil, calendar: Calendar = .current,
+         drivesTasks: Bool = false, place: PrivacyPlace, memory: MemoryStore? = nil,
+         calendar: Calendar = .current,
          now: @escaping () -> Date = { Date() },
          clock: @escaping () -> ContinuousClock.Instant = { ContinuousClock.now }) {
         self.sources = sources
@@ -92,6 +100,7 @@ final class FeedModel: ObservableObject {
         self.recon = tasks as? ReconRunner
         self.memory = memory
         self.drivesTasks = drivesTasks
+        self.place = place
         self.calendar = calendar
         self.now = now
         self.clock = clock
@@ -110,11 +119,30 @@ final class FeedModel: ObservableObject {
                 Task { @MainActor in self?.tasksChanged(snapshot) }
             }
         }
+        // A question asked, answered or withdrawn shows at once, wherever
+        // the person is. A question that times out is caught by `keepFresh`.
+        // Each model watches for itself, so every window's Today updates.
+        // A task's question is asked through the rule, not `NeedsYou`, so
+        // its card moves with the engine's own snapshots above.
+        observation = needsYou.observe { [weak self] in
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { self?.refresh() }
+            } else {
+                Task { @MainActor in self?.refresh() }
+            }
+        }
+    }
+
+    /// Plain, not isolated: the observation and `needsYou` are Sendable and
+    /// `stopObserving` takes its own lock, so this runs safely anywhere.
+    /// The task watch ends on its own as `watching` is released.
+    deinit {
+        if let observation { needsYou.stopObserving(observation) }
     }
 
     /// True when anything on Today is an example, so the note at the top says so.
     var isSample: Bool {
-        sources.contains { $0.isSample } || taskIDs.contains { tasks?.isSample($0) == true }
+        needsYou.isSample || sources.contains { $0.isSample } || taskIDs.contains { tasks?.isSample($0) == true }
     }
 
     /// True when this card came from an example source, a scripted engine,
@@ -122,7 +150,16 @@ final class FeedModel: ObservableObject {
     /// never makes real work look like one.
     func isSample(_ item: FeedItem) -> Bool {
         if let tasks, taskIDs.contains(item.id) { return tasks.isSample(item.id) }
+        if item.kind == .needsYou { return needsYou.isSample }
         return sources.contains { $0.isSample && $0.items(now: now()).contains { $0.id == item.id } }
+    }
+
+    /// True when a question in the sheet is an example: one of the sample
+    /// questions, or one an example task asked, so the sheet says so too.
+    func isSample(_ request: ConfirmationRequest) -> Bool {
+        if needsYou.isSample { return true }
+        guard let tasks, let id = taskAsked[request.id] else { return false }
+        return tasks.isSample(id)
     }
 
     /// True while a card in Working on it is live, so the scripted clock
@@ -249,6 +286,22 @@ final class FeedModel: ObservableObject {
         return next != cards
     }
 
+    /// How often `keepFresh` looks again. Questions time out after
+    /// `AskFirst.defaultWindow`, so a card is gone within this of its end.
+    static let refreshInterval: Duration = .seconds(10)
+
+    /// Keeps the feed current for as long as the caller runs it: the home
+    /// screen runs it from its root, so the Needs you count beside Today
+    /// drops when a question times out even while the chat or the memory is
+    /// showing. `sleep` is passed in so tests can move a clock instead of
+    /// waiting. Ends when the task is cancelled or `sleep` throws.
+    func keepFresh(sleep: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) async {
+        while !Task.isCancelled {
+            refresh()
+            do { try await sleep(Self.refreshInterval) } catch { return }
+        }
+    }
+
     /// What a card's button does. Talking is handed to the screen around
     /// the feed, which owns the chat. Only a question pinned by `NeedsYou`
     /// opens the question sheet.
@@ -324,7 +377,7 @@ final class FeedModel: ObservableObject {
             case .saved:
                 remembered.insert(Self.rememberKey(summary, point))
                 rememberedFrom[Self.rememberKey(summary, point)] = summary.id
-                rememberStatus = MemoryWords.saved
+                rememberStatus = MemoryWords.saved(place)
                 return true
             case .tooLong:
                 rememberStatus = MemoryWords.tooLong
@@ -492,10 +545,19 @@ final class FeedModel: ObservableObject {
 
     /// The sheet closed without a yes, by Not now, Close, or going away.
     /// The sheet has already withdrawn the question.
+    ///
+    /// A task's question goes to its engine first, before anything can
+    /// build the feed again: a refresh in between, from a `NeedsYou` hook
+    /// or the sheet's `onDismiss`, would otherwise find the question closed
+    /// and settle it as it saw fit. Only a question `NeedsYou` asked is
+    /// handed to `NeedsYou`.
     func closedQuestion(_ request: ConfirmationRequest) {
-        askedBy[request.id] = nil
-        needsYou.dismissed(request)
-        tasks?.questionClosed(request)
+        let asking = askedBy.removeValue(forKey: request.id) ?? taskAsked[request.id]
+        if asking != nil {
+            tasks?.questionClosed(request)
+        } else {
+            needsYou.dismissed(request)
+        }
         if reviewing?.id == request.id { reviewing = nil }
         refresh()
     }
@@ -537,10 +599,8 @@ struct FeedView: View {
     @ObservedObject var model: FeedModel
     let look: AgentLook
     let onTalk: (String) -> Void
-    let onChat: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var typeSize
     /// Two cards side by side once each can be at least this wide. Grows
     /// with the text size, so large text gets one roomy column.
@@ -556,12 +616,12 @@ struct FeedView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(model.dateLine)
                             .font(.subheadline.weight(.medium))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.secondaryText)
                         // Said first, so no example is ever taken for real work.
                         if model.isSample && !model.feed.isEmpty {
-                            Text(FeedWords.sampleNote)
+                            Text(FeedWords.sampleNote(model.place))
                                 .font(.footnote)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Theme.secondaryText)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .accessibilityIdentifier("sampleNote")
                         }
@@ -605,19 +665,11 @@ struct FeedView: View {
         }
         .background(Backdrop())
         .navigationTitle(FeedWords.title)
-        .task {
-            // Questions time out on their own, so look again now and then.
-            // Stops when the screen goes away.
-            while !Task.isCancelled {
-                model.refresh()
-                do { try await Task.sleep(for: .seconds(10)) } catch { return }
-            }
-        }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { model.refresh() }
-        }
-        // Scripted tasks are played in real time by `HomeView`, so they go
-        // on while the person is in the chat or memory.
+        // Kept fresh by `FeedModel.keepFresh`, which the home screen runs
+        // whether Today is showing or not, so the sidebar's count is true too.
+        // Its `refresh` also has the engine notice task questions that timed out.
+        // Scripted tasks are played in real time by `HomeView`, so a recon
+        // goes on while the person is in the chat or memory.
     }
 
     /// The room the cards have: the window's width, held to the reading
@@ -651,7 +703,7 @@ struct FeedView: View {
                 if let detail {
                     Text(detail)
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.secondaryText)
                 }
             }
             LazyVGrid(columns: columns, alignment: .leading, spacing: Self.cardSpacing) {
@@ -681,7 +733,7 @@ struct FeedView: View {
                                      onOpen: { model.open(task) },
                                      onDismiss: { model.dismiss(task) })
                         } else {
-                            FeedCard(item: item, time: model.timeLabel(for: item.time)) {
+                            FeedCard(item: item, time: model.timeLabel(for: item.time), isSample: model.isSample(item)) {
                                 model.perform(item, talk: onTalk)
                             }
                         }
@@ -699,17 +751,14 @@ struct FeedView: View {
                 .font(.system(.title3, design: .rounded).weight(.semibold))
                 .multilineTextAlignment(.center)
                 .accessibilityAddTraits(.isHeader)
+            // The composer below is the one thing to do, so there is no
+            // button here.
             Text(FeedWords.empty)
                 .font(.body)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: Theme.readableWidth)
-            Button(FeedWords.emptyActionTitle, action: onChat)
-                .buttonStyle(.bordered)
-                .tint(Theme.accent)
-                .padding(.top, 4)
-                .pointerHover(in: Capsule())
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 48)
@@ -723,6 +772,8 @@ struct FeedView: View {
 struct FeedCard: View {
     let item: FeedItem
     let time: String
+    /// True for an example card, so VoiceOver says so before anything else.
+    var isSample = false
     let perform: () -> Void
     @Environment(\.colorScheme) private var scheme
 
@@ -753,7 +804,8 @@ struct FeedCard: View {
     private var asks: Bool { item.kind == .needsYou }
 
     var spoken: String {
-        [item.spokenKind, item.title, item.body, time].filter { !$0.isEmpty }.joined(separator: ". ")
+        [isSample ? FeedWords.exampleMarker : "", item.spokenKind, item.title, item.body, time]
+            .filter { !$0.isEmpty }.joined(separator: ". ")
     }
 
     private func content(actionTitle: String?) -> some View {
@@ -763,14 +815,14 @@ struct FeedCard: View {
                     Text(item.spokenKind)
                 } icon: {
                     Image(systemName: Self.symbol(item.kind))
-                        .foregroundStyle(Theme.accent)
+                        .foregroundStyle(Theme.accentSymbol)
                 }
                 .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 Spacer(minLength: 8)
                 Text(time)
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.secondaryText)
             }
             Text(item.title)
                 .font(.system(.headline, design: .rounded))
@@ -780,17 +832,17 @@ struct FeedCard: View {
             if !item.body.isEmpty {
                 Text(item.body)
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.secondaryText)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let actionTitle {
                 Text(actionTitle)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(asks ? Theme.onAccent : Theme.accent)
+                    .foregroundStyle(asks ? AnyShapeStyle(Theme.onAccent) : AnyShapeStyle(Theme.accentText))
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
-                    .background(asks ? Theme.accent : Theme.accent.opacity(0.14), in: Capsule())
+                    .background(asks ? Theme.accent : Theme.accent.opacity(Theme.accentWash), in: Capsule())
                     .padding(.top, 2)
             }
         }
@@ -839,6 +891,21 @@ struct ForgotUnderwayNotice: View {
     }
 }
 
+/// Over an example opened to read or answer, so it is never taken for
+/// real work.
+struct ExampleLabel: View {
+    var body: some View {
+        Text(FeedWords.sampleLabel)
+            .font(.footnote.weight(.medium))
+            .foregroundStyle(Theme.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.primary.opacity(Theme.fieldTint), in: Capsule())
+            .accessibilityIdentifier("sampleLabel")
+    }
+}
+
 /// A finished result, opened from its card.
 struct FeedReader: View {
     let item: FeedItem
@@ -857,23 +924,17 @@ struct FeedReader: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     if isSample {
-                        Text(FeedWords.sampleLabel)
-                            .font(.footnote.weight(.medium))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(Color.primary.opacity(0.06), in: Capsule())
-                            .accessibilityIdentifier("sampleLabel")
+                        ExampleLabel()
                     }
                     Label(item.spokenKind, systemImage: FeedCard.symbol(item.kind))
                         .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.secondaryText)
                     Text(item.title)
                         .font(.system(.title2, design: .rounded).weight(.bold))
                         .accessibilityAddTraits(.isHeader)
                     Text(time)
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.secondaryText)
                     Text(text)
                         .font(.body)
                         .textSelection(.enabled)

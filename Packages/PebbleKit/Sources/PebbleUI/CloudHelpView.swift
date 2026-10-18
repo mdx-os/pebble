@@ -58,6 +58,13 @@ public final class CloudHelp: ObservableObject {
         }
     }
 
+    /// Where a new chat's words may go: `local` unless the cloud is on, the
+    /// same choice `chatModel` makes. `settings` is for a change about to
+    /// land, as `$settings` sends it.
+    public func place(local: PrivacyPlace, with settings: CloudHelpSettings? = nil) -> PrivacyPlace {
+        (settings ?? self.settings).isOn && isAvailable ? .mayLeaveDevice : local
+    }
+
     /// The toggle. Turning on asks first; turning off never does.
     func setOn(_ on: Bool) {
         if on {
@@ -153,10 +160,13 @@ public final class CloudReview: ObservableObject, CloudReviewing {
 /// The cloud setting: off by default, with the words always hidden.
 public struct CloudHelpView: View {
     @ObservedObject var help: CloudHelp
+    /// The place of the model used while the cloud is off.
+    let local: PrivacyPlace
     @Environment(\.colorScheme) private var scheme
 
-    public init(help: CloudHelp) {
+    public init(help: CloudHelp, local: PrivacyPlace) {
         self.help = help
+        self.local = local
     }
 
     public var body: some View {
@@ -183,7 +193,7 @@ public struct CloudHelpView: View {
 
     private var detail: String {
         if !help.isAvailable { return CloudWords.unavailable }
-        return help.settings.isOn ? CloudWords.onDetail : CloudWords.offDetail
+        return help.settings.isOn ? CloudWords.onDetail : CloudWords.offDetail(local)
     }
 
     private var switchCard: some View {
@@ -192,12 +202,12 @@ public struct CloudHelpView: View {
                 Label(CloudWords.toggleTitle, systemImage: help.settings.isOn ? "cloud.fill" : "lock.fill")
                     .font(.body.weight(.semibold))
             }
-            .tint(Theme.accent)
+            .tint(Theme.accentText)
             .disabled(!help.isAvailable)
             .accessibilityIdentifier("cloudToggle")
             Text(detail)
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(16)
@@ -212,7 +222,7 @@ public struct CloudHelpView: View {
                     .accessibilityAddTraits(.isHeader)
                 Text(CloudWords.privateDetail)
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 10) {
@@ -243,7 +253,7 @@ public struct CloudHelpView: View {
                     Spacer(minLength: 8)
                     Button { help.removePrivateWord(word) } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.secondaryText)
                             .frame(minWidth: 44, minHeight: 44)
                     }
                     .buttonStyle(.plain)
@@ -260,25 +270,27 @@ public struct CloudHelpView: View {
 /// The row on the memory screen that opens the cloud setting.
 struct CloudHelpRow: View {
     @ObservedObject var help: CloudHelp
+    /// See `CloudHelpView.local`.
+    let local: PrivacyPlace
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         NavigationLink {
-            CloudHelpView(help: help)
+            CloudHelpView(help: help, local: local)
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: help.settings.isOn ? "cloud.fill" : "lock.fill")
-                    .foregroundStyle(Theme.accent)
+                    .foregroundStyle(Theme.accentSymbol)
                     .frame(width: 24)
                 Text(CloudWords.rowTitle)
                     .font(.body.weight(.medium))
                     .foregroundStyle(.primary)
                 Spacer(minLength: 8)
                 Text(help.settings.isOn ? CloudWords.rowOn : CloudWords.rowOff)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.secondaryText)
                 Image(systemName: "chevron.right")
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.secondaryText)
             }
             .padding(.horizontal, 16)
             .frame(minHeight: 52)
@@ -318,7 +330,7 @@ struct CloudTurnOnSheet: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         } icon: {
                             Image(systemName: Self.symbols[index % Self.symbols.count])
-                                .foregroundStyle(Theme.accent)
+                                .foregroundStyle(Theme.accentSymbol)
                         }
                         .font(.body)
                     }
@@ -373,7 +385,7 @@ struct CloudPreviewSheet: View {
                         .accessibilityAddTraits(.isHeader)
                     Text(CloudWords.previewDetail)
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.secondaryText)
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     Label(CloudWords.previewDestination(preview.request.url.host ?? ""), systemImage: "arrow.up.forward.circle")

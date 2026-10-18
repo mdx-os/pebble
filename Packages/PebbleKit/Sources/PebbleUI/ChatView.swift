@@ -2,9 +2,6 @@ import PebbleCore
 import PebbleModel
 #if canImport(SwiftUI)
 import SwiftUI
-#if os(iOS)
-import GameController
-#endif
 
 /// The first screen: the agent has a face, a name, and a conversation.
 public struct ChatView: View {
@@ -22,6 +19,9 @@ public struct ChatView: View {
     @ScaledMetric(relativeTo: .body) private var bubbleWidth: CGFloat = Theme.bubbleWidth
     private let look: AgentLook?
     private let firstMessage: String?
+    /// True while another sheet, such as the shortcuts, covers the chat, so
+    /// nothing here is spoken over it.
+    private let covered: Bool
     private let onFirstMessageSent: () -> Void
 
     public init(
@@ -57,11 +57,13 @@ public struct ChatView: View {
         controller: @autoclosure @escaping () -> ChatController,
         look: AgentLook?,
         firstMessage: String?,
+        covered: Bool = false,
         onFirstMessageSent: @escaping () -> Void = {}
     ) {
         _controller = StateObject(wrappedValue: controller())
         self.look = look
         self.firstMessage = firstMessage
+        self.covered = covered
         self.onFirstMessageSent = onFirstMessageSent
     }
 
@@ -125,7 +127,7 @@ public struct ChatView: View {
             }
             .onChange(of: controller.conversation.turns.count) {
                 Self.scrollToLatest(controller, with: scroller, animated: !reduceMotion)
-                if let line = Self.announcement(for: controller.conversation) {
+                if let line = Self.replyLanded(in: controller, covered: covered) {
                     AccessibilityNotification.Announcement(line).post()
                 }
             }
@@ -136,11 +138,7 @@ public struct ChatView: View {
                 thinkingNotice?.cancel()
                 thinkingNotice = nil
                 guard replying else { return }
-                thinkingNotice = Task { @MainActor in
-                    try? await Task.sleep(for: Self.thinkingNoticeDelay(after: controller.replyBeat))
-                    guard !Task.isCancelled, controller.isReplying else { return }
-                    AccessibilityNotification.Announcement(FirstConversation.thinking).post()
-                }
+                if Self.speaks(covered: covered) { sayThinkingSoon() }
                 if reduceMotion {
                     scroller.scrollTo(Self.thinkingID, anchor: .bottom)
                 } else {
@@ -148,7 +146,17 @@ public struct ChatView: View {
                 }
             }
             .onChange(of: controller.failure) { _, failure in
-                if let failure { AccessibilityNotification.Announcement(failure).post() }
+                if let failure, Self.speaks(covered: covered) {
+                    AccessibilityNotification.Announcement(failure).post()
+                }
+            }
+            .onChange(of: covered) { _, covered in
+                // A sheet came over the chat, so a pending "thinking" stays
+                // quiet. When it goes, a reply that landed under it is read
+                // once, or "thinking" follows a reply still on its way.
+                thinkingNotice?.cancel()
+                thinkingNotice = nil
+                speak(Self.arrival(for: controller, covered: covered))
             }
             }
             composer
@@ -159,6 +167,11 @@ public struct ChatView: View {
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.4, dampingFraction: 0.85),
                    value: controller.conversation.turns.count)
         .haptic(.sent, trigger: controller.sentCount)
+        .onAppear {
+            // Sent from Today, the line may be answered, or still on its
+            // way, before this screen was here to see it change.
+            speak(Self.arrival(for: controller, covered: covered))
+        }
         .onDisappear {
             // Never say "thinking" over another screen.
             thinkingNotice?.cancel()
@@ -182,14 +195,14 @@ public struct ChatView: View {
             Text(controller.displayName.text)
                 .font(.title.weight(.semibold))
                 .multilineTextAlignment(.center)
-            Text(controller.presence)
+            Text(FirstConversation.presence(controller.privacyPlace))
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 .multilineTextAlignment(.center)
             if controller.showsNameInvitation {
                 Text(FirstConversation.nameInvitation)
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.secondaryText)
                     .multilineTextAlignment(.center)
             }
             renameControl
@@ -220,19 +233,18 @@ public struct ChatView: View {
                 if let nameHint = controller.nameHint {
                     Text(nameHint)
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.secondaryText)
                         .multilineTextAlignment(.center)
                 }
                 HStack(spacing: 8) {
                     Button(FirstConversation.cancelNameTitle) {
                         controller.cancelRename()
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(SoftButtonStyle(neutral: true))
                     Button(FirstConversation.confirmNameTitle) {
                         controller.commitName()
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.orange)
+                    .buttonStyle(AccentButtonStyle())
                     .disabled(controller.nameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
@@ -240,8 +252,7 @@ public struct ChatView: View {
             Button(controller.renameTitle) {
                 controller.beginRename()
             }
-            .buttonStyle(.bordered)
-            .tint(.orange)
+            .buttonStyle(SoftButtonStyle())
         }
     }
 
@@ -266,6 +277,44 @@ public struct ChatView: View {
     /// Where an offer's buttons sit, so the chat can follow them.
     static let offerID = "reconOffer"
 
+    /// Says "thinking" once, a beat after the dots appear, unless the reply
+    /// lands first.
+    private func sayThinkingSoon() {
+        thinkingNotice?.cancel()
+        thinkingNotice = Task { @MainActor in
+            try? await Task.sleep(for: Self.thinkingNoticeDelay(after: controller.replyBeat))
+            guard !Task.isCancelled, controller.isReplying else { return }
+            AccessibilityNotification.Announcement(FirstConversation.thinking).post()
+        }
+    }
+
+    private func speak(_ arrival: Arrival) {
+        switch arrival {
+        case .reply(let line): AccessibilityNotification.Announcement(line).post()
+        case .thinking: sayThinkingSoon()
+        case .nothing: break
+        }
+    }
+
+    /// What the chat says as it comes on screen, or as a sheet over it goes.
+    enum Arrival: Equatable {
+        case nothing
+        /// A reply that landed while no chat was on screen.
+        case reply(String)
+        /// A reply still on its way, so "thinking" follows as usual.
+        case thinking
+    }
+
+    /// A line sent from Today may be answered, or still coming, before the
+    /// chat opens, and then the chat never sees the change it speaks on.
+    /// So it looks as it arrives. A reply nobody heard is read once, and
+    /// covered means quiet with the reply kept for later.
+    static func arrival(for controller: ChatController, covered: Bool) -> Arrival {
+        guard speaks(covered: covered) else { return .nothing }
+        if controller.isReplying { return .thinking }
+        return controller.takeUnheardReply().map { .reply($0) } ?? .nothing
+    }
+
     /// Where the thinking dots sit, so the chat can follow them.
     static let thinkingID = "thinking"
 
@@ -276,12 +325,28 @@ public struct ChatView: View {
         beat + .milliseconds(400)
     }
 
-    /// New lines from the agent are read out, since they may land offscreen.
-    static func announcement(for conversation: Conversation) -> String? {
-        guard let last = conversation.turns.last, last.speaker == .agent, !conversation.isWaitingForPerson else {
+    /// "Thinking it over.", the failure line and a new reply are spoken only
+    /// while the chat is in front. Another sheet over it means quiet.
+    static func speaks(covered: Bool) -> Bool { !covered }
+
+    /// New lines from the agent are read out, since they may land offscreen,
+    /// but never over a sheet that covers the chat. The reply stays in the
+    /// transcript, so it is still there to read once the sheet goes.
+    static func announcement(for conversation: Conversation, covered: Bool) -> String? {
+        guard speaks(covered: covered), let last = conversation.turns.last, last.speaker == .agent,
+              !conversation.isWaitingForPerson else {
             return nil
         }
         return last.text
+    }
+
+    /// A new turn landed in the chat. The reply is marked heard only when it
+    /// is actually spoken, so one that lands under a sheet is kept and read
+    /// once the sheet goes.
+    static func replyLanded(in controller: ChatController, covered: Bool) -> String? {
+        guard let line = announcement(for: controller.conversation, covered: covered) else { return nil }
+        controller.replyWasSeen()
+        return line
     }
 
     private var transcript: some View {
@@ -315,9 +380,9 @@ public struct ChatView: View {
     private func bubbleFill(for speaker: ChatTurn.Speaker) -> Color {
         switch speaker {
         case .agent:
-            Color.primary.opacity(0.06)
+            Color.primary.opacity(Theme.bubbleTint)
         case .person:
-            Color.orange.opacity(0.18)
+            Theme.accent.opacity(Theme.personBubbleWash)
         }
     }
 
@@ -327,7 +392,7 @@ public struct ChatView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(FirstConversation.startersHeading)
                 .font(.subheadline.weight(.medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 .accessibilityAddTraits(.isHeader)
                 .padding(.top, 4)
             ForEach(Array(FirstConversation.jobs.enumerated()), id: \.element.id) { index, job in
@@ -340,76 +405,9 @@ public struct ChatView: View {
     }
 
     private var composer: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            // Return sends and Shift Return starts a new line. The field
-            // stays open while a reply comes, so a keyboard never loses its
-            // place; sending waits until the reply is in.
-            TextField(FirstConversation.composerPlaceholder, text: composerText, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...6)
-                .submitLabel(.send)
-                .accessibilityIdentifier("composer")
-                // Keyboards are reported a moment after first asking, so ask early.
-                .onAppear { _ = Self.shiftIsDown }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
-                // One send path per platform: the draft binding reads a lone
-                // Return as Send on iOS, and onKeyPress handles it on the Mac.
-                #if os(macOS)
-                .onKeyPress(.return, phases: .down) { press in
-                    if press.modifiers.contains(.shift) {
-                        addLine()
-                        return .handled
-                    }
-                    controller.submit(controller.draft)
-                    return .handled
-                }
-                #endif
-            Button(FirstConversation.sendTitle) {
-                controller.submit(controller.draft)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.orange)
-            .keyboardShortcut(sendsFromKeyboard ? KeyboardShortcut(.return, modifiers: .command) : nil)
-            .disabled(controller.isReplying || controller.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        Composer(draft: $controller.draft, isBusy: controller.isReplying, keyboardSends: sendsFromKeyboard) {
+            controller.send($0)
         }
-    }
-
-    #if os(macOS)
-    /// Shift Return on the Mac. The break goes at the end, where the cursor
-    /// almost always is while writing.
-    private func addLine() {
-        controller.draft += "\n"
-    }
-    #endif
-
-    /// True while Shift is held on a hardware keyboard.
-    private static var shiftIsDown: Bool {
-        #if os(iOS)
-        guard let keys = GCKeyboard.coalesced?.keyboardInput else { return false }
-        return keys.button(forKeyCode: .leftShift)?.isPressed == true
-            || keys.button(forKeyCode: .rightShift)?.isPressed == true
-        #else
-        false
-        #endif
-    }
-
-    /// The draft, with a lone Return read as Send. On iPad the field types
-    /// Return and Shift Return alike as a line break, so the Shift key is
-    /// checked here. See `ComposerReturn`.
-    private var composerText: Binding<String> {
-        Binding(
-            get: { controller.draft },
-            set: { new in
-                if !Self.shiftIsDown, let text = ComposerReturn.textToSend(old: controller.draft, new: new) {
-                    controller.draft = text
-                    controller.submit(text)
-                } else {
-                    controller.draft = new
-                }
-            }
-        )
     }
 }
 
@@ -420,13 +418,27 @@ final class ChatController: ObservableObject {
     private let names: any AgentNameStoring
     @Published private(set) var naming: AgentRenameState
     @Published var conversation: Conversation
-    @Published var draft = ""
+    @Published var draft = "" {
+        didSet {
+            // "What you wrote is still here" stops being true once the
+            // person clears the words, so the line goes with them.
+            if failure == FirstConversation.couldNotAnswer || failure == CloudWords.notSent,
+               draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                failure = nil
+            }
+        }
+    }
     @Published var isReplying = false
-    private var replyTask: Task<Void, Never>?
+    /// The reply on its way. Tests await it so ordering never rests on timing.
+    private(set) var replyTask: Task<Void, Never>?
     /// Goes up with each reply asked for and each stop, so a late reply
     /// can tell it is no longer the current one.
     private var replyGeneration = 0
     @Published var failure: String?
+    /// The newest reply, until a chat on screen has seen it land. A line
+    /// sent from Today can be answered before the chat has opened, so the
+    /// chat reads this as it arrives instead of relying on seeing it change.
+    private(set) var unheardReply: String?
     /// Goes up by one each time the person sends something.
     @Published private(set) var sentCount = 0
     /// An offer to look into something, waiting for the person's tap.
@@ -439,6 +451,9 @@ final class ChatController: ObservableObject {
     /// True while the only pages there are to read are examples, so the
     /// offer says so rather than promise real sources.
     var reconReadsExamples = false
+    /// The place of the model a new chat gets while the cloud is off, so the
+    /// line after the cloud is turned off promises only what is true.
+    var localPlace: PrivacyPlace = .mayLeaveDevice
     /// The shortest time the thinking dots show, so a quick reply settles
     /// in after a calm beat instead of snapping onto the screen.
     let replyBeat: Duration
@@ -466,6 +481,9 @@ final class ChatController: ObservableObject {
         }
         return controller
     }
+
+    /// Whether the chat may promise the device, from the model it talks to.
+    var privacyPlace: PrivacyPlace { model.privacyPlace }
 
     var displayName: AgentName { naming.profile.displayName }
     var renameTitle: String { naming.renameTitle }
@@ -503,6 +521,17 @@ final class ChatController: ObservableObject {
         conversation = conversation.renamingAgent(to: name)
     }
 
+    /// What both composers call, in the chat and on Today: the same care
+    /// check, the same conversation and the same rules either way. True
+    /// when the line went out, false when there was nothing to send or a
+    /// reply was still coming.
+    @discardableResult
+    func send(_ text: String) -> Bool {
+        let before = sentCount
+        submit(text)
+        return sentCount != before
+    }
+
     /// Sends `text`. `byHand` is false for the line the first run sends on
     /// its own, which gets no tap since the person didn't just press anything.
     func submit(_ text: String, byHand: Bool = true) {
@@ -519,15 +548,18 @@ final class ChatController: ObservableObject {
         }
         if byHand { sentCount += 1 }
         failure = nil
+        unheardReply = nil
         // Saying something else lets an old offer go.
         reconOffer = nil
         // Care comes first: only a message that gets no care reply can be
         // an offer, and the offer starts nothing until the person taps it.
         if lookInto != nil, !CareCheck.answersWithCare(conversation.turns),
            let topic = ReconIntent.topic(in: trimmed),
-           let offered = try? conversation.appendingAgent(ReconWords.offer(topic, examples: reconReadsExamples)) {
+           let offered = try? conversation.appendingAgent(
+               ReconWords.offer(topic, examples: reconReadsExamples, place: privacyPlace)) {
             conversation = offered
             reconOffer = ReconOffer(topic: topic, turnID: offered.turns.last?.id)
+            unheardReply = offered.turns.last?.text
             return
         }
         isReplying = true
@@ -539,15 +571,18 @@ final class ChatController: ObservableObject {
         // Words of care are never held back, not even for a beat. Decided
         // from the turns, the same way the reply itself is chosen.
         let caring = CareCheck.answersWithCare(snapshot.turns)
+        let local = localPlace
         replyTask = Task {
             let started = ContinuousClock.now
             let next: Conversation?
-            var failure = FirstConversation.couldNotAnswer
+            // Choosing not to send, or the cloud being turned off, is said
+            // as what it is, not as a failure.
+            var said: String?
             do {
                 next = try await snapshot.appendingReply(from: client)
             } catch {
                 next = nil
-                failure = Self.failureLine(for: error)
+                said = Self.failureLine(for: error, local: local)
             }
             let waited = ContinuousClock.now - started
             if !caring, waited < beat { try? await Task.sleep(for: beat - waited) }
@@ -555,27 +590,28 @@ final class ChatController: ObservableObject {
             // nothing and changes nothing; only the newest reply settles.
             guard !Task.isCancelled, generation == replyGeneration else { return }
             if let next {
+                unheardReply = next.turns.last.flatMap { $0.speaker == .agent ? $0.text : nil }
                 conversation = next
+            } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // The failure line promises the words are back, ready to send.
+                draft = trimmed
+                failure = said ?? FirstConversation.couldNotAnswer
             } else {
-                self.failure = failure
-                // The failure line promises the words are still here to send.
-                if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { draft = trimmed }
+                // A newer draft is never replaced, so point at the bubble instead.
+                failure = said ?? FirstConversation.couldNotAnswerKeptDraft
             }
             isReplying = false
         }
     }
 
-    /// The line under the name. "On this device" only when it is true.
-    var presence: String {
-        model.runsOnDevice ? FirstConversation.presence : CloudWords.presence
-    }
-
-    /// What to say when no reply came. Choosing not to send is not a failure.
-    nonisolated static func failureLine(for error: Error) -> String {
+    /// What to say when no reply came, or nil for the usual failure line.
+    /// Choosing not to send is not a failure. After the cloud is turned
+    /// off, a new chat uses `local`'s model, so the line follows its place.
+    nonisolated static func failureLine(for error: Error, local: PrivacyPlace = .mayLeaveDevice) -> String? {
         switch error as? CloudModelError {
         case .notSent: CloudWords.notSent
-        case .off: CloudWords.turnedOff
-        default: FirstConversation.couldNotAnswer
+        case .off: CloudWords.turnedOff(local)
+        default: nil
         }
     }
 
@@ -606,6 +642,19 @@ final class ChatController: ObservableObject {
         replyTask = nil
         replyGeneration += 1
         isReplying = false
+    }
+
+    /// A chat on screen read the newest reply aloud, so it is never read
+    /// again later.
+    func replyWasSeen() {
+        unheardReply = nil
+    }
+
+    /// The reply that landed before any chat was on screen, handed over
+    /// once.
+    func takeUnheardReply() -> String? {
+        defer { unheardReply = nil }
+        return unheardReply
     }
 }
 
@@ -657,6 +706,14 @@ struct StarterChip: View {
         arrived || reduceMotion || !animatesEntrances
     }
 
+    /// What appearing does: the chip always lands, and plays its entrance
+    /// only when it isn't showing yet. Landing even when Reduce Motion
+    /// already shows it means turning Reduce Motion off later never leaves
+    /// the chip invisible.
+    static func appearing(arrived: Bool, reduceMotion: Bool, animatesEntrances: Bool) -> (arrived: Bool, animates: Bool) {
+        (true, !isShown(arrived: arrived, reduceMotion: reduceMotion, animatesEntrances: animatesEntrances))
+    }
+
     private var shown: Bool {
         Self.isShown(arrived: arrived, reduceMotion: reduceMotion, animatesEntrances: animatesEntrances)
     }
@@ -668,7 +725,7 @@ struct StarterChip: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
-                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+                .background(Theme.accent.opacity(Theme.accentWash), in: RoundedRectangle(cornerRadius: 14))
                 .contentShape(RoundedRectangle(cornerRadius: 14))
                 .pointerHover(in: RoundedRectangle(cornerRadius: 14))
         }
@@ -676,10 +733,14 @@ struct StarterChip: View {
         .opacity(shown ? 1 : 0)
         .offset(y: shown ? 0 : Motion.entranceOffset(reduceMotion: reduceMotion))
         .onAppear {
-            guard !shown else { return }
+            let step = Self.appearing(arrived: arrived, reduceMotion: reduceMotion, animatesEntrances: animatesEntrances)
+            guard step.animates else {
+                arrived = step.arrived
+                return
+            }
             let delay = Motion.stagger(index, reduceMotion: reduceMotion)
             withAnimation(.spring(response: 0.45, dampingFraction: 0.85).delay(delay)) {
-                arrived = true
+                arrived = step.arrived
             }
         }
     }
@@ -690,12 +751,12 @@ struct AvatarView: View {
 
     var body: some View {
         Circle()
-            .fill(Color.orange.gradient)
+            .fill(Theme.accent.gradient)
             .frame(width: 88, height: 88)
             .overlay {
                 Text(initial)
                     .font(.system(size: 40, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.onAccent)
             }
             .accessibilityHidden(true)
     }

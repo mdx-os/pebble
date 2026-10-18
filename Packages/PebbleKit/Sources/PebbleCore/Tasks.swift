@@ -309,7 +309,8 @@ public protocol TaskEngine: AnyObject, Sendable {
     func resume(_ id: String, with approval: Approval) -> TaskApproval
 
     /// The question was closed without a yes: Not now, Close, or the sheet
-    /// went away. The task goes on without that step.
+    /// went away. The task goes on without that step, and its line says
+    /// the person closed it, or that it timed out if the rule says so.
     func questionClosed(_ request: ConfirmationRequest)
 
     /// Looks again at anything that changes with time, such as a question
@@ -518,6 +519,11 @@ public enum TaskWords {
 
     /// Forgetting tasks when the notes can't be opened, so Forget everything
     /// isn't there. Honest that the notes stay.
+    ///
+    /// The detail says "this device" without asking `PrivacyPlace`, like
+    /// `MemoryWords.forgetEverythingDetail`: it says where the tasks are
+    /// erased from, not that nothing ever left, so it is true with a cloud
+    /// model too. Any line that promises words stay here must be gated.
     public static let forgetTasksTitle = "Forget all tasks"
     public static let forgetTasksQuestion = "Forget all tasks?"
     public static let forgetTasksDetail = "This stops any task still going, and removes every task and what you told me for it from this device. It can't be undone. Your notes aren't touched."

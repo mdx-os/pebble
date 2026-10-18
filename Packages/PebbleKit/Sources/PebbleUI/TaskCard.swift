@@ -194,7 +194,7 @@ struct TaskCard: View {
     /// The card's first line for VoiceOver. An example says so first, as it
     /// is seen first.
     var spoken: String {
-        [isSample ? FeedWords.exampleTag : "", task.state.label, task.title, task.step, time]
+        [isSample ? FeedWords.exampleMarker : "", task.state.label, task.title, task.step, time]
             .filter { !$0.isEmpty }.joined(separator: ". ")
     }
 
@@ -216,25 +216,25 @@ struct TaskCard: View {
                         LiveDot()
                     } else {
                         Image(systemName: Self.symbol(task.state))
-                            .foregroundStyle(Theme.accent)
+                            .foregroundStyle(Theme.accentSymbol)
                     }
                 }
                 .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 if isSample {
                     // The same capsule as the label over an example opened to read.
-                    Text(FeedWords.exampleTag)
+                    Text(FeedWords.exampleMarker)
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.secondaryText)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
-                        .background(Color.primary.opacity(0.06), in: Capsule())
+                        .background(Color.primary.opacity(Theme.fieldTint), in: Capsule())
                         .accessibilityIdentifier("exampleTag")
                 }
                 Spacer(minLength: 8)
                 Text(time)
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.secondaryText)
             }
             Text(task.title)
                 .font(.system(.headline, design: .rounded))
@@ -242,7 +242,7 @@ struct TaskCard: View {
                 .fixedSize(horizontal: false, vertical: true)
             Text(task.step)
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
                 .contentTransition(.opacity)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.35), value: task.step)
@@ -268,11 +268,11 @@ struct TaskCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                 } icon: {
                     Image(systemName: Self.symbol(step.mark))
-                        .foregroundStyle(Theme.accent.opacity(0.8))
+                        .foregroundStyle(Theme.accentSymbol.opacity(0.8))
                         .accessibilityHidden(true)
                 }
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
             }
         }
         .padding(.leading, 2)
@@ -383,7 +383,9 @@ struct TaskCard: View {
                 .onSubmit(send)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
-                .background(Theme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: Theme.smallCorner, style: .continuous))
+                // The same neutral field as the chat's, so typed words are
+                // on a pair `Theme.textPairs` checks.
+                .background(Color.primary.opacity(Theme.fieldTint), in: RoundedRectangle(cornerRadius: Theme.smallCorner, style: .continuous))
                 .accessibilityLabel(TaskWords.redirectPlaceholder)
                 .accessibilityFocused($focus, equals: .field)
                 .onAppear(perform: takeFieldFocus)
@@ -448,27 +450,36 @@ struct CardButtonStyle: ButtonStyle {
             .frame(minHeight: 44)
             .background(background, in: Capsule())
             .overlay(Capsule().stroke(kind == .quiet ? Theme.hairline(scheme) : .clear))
-            .opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.45)
+            .opacity(configuration.isPressed ? 0.8 : 1)
             .scaleEffect(configuration.isPressed ? Motion.pressedScale(reduceMotion: reduceMotion) : 1)
             .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
             .contentShape(Capsule())
             .pointerHover(in: Capsule())
     }
 
-    private var foreground: Color {
+    // Every pair here is in `Theme.textPairs`, over the card: primary is
+    // "onAccent" on "accent", secondary is "accentText" on "accent wash on
+    // the card on ...", quiet is "secondaryText" on "card on ...", and a
+    // disabled one is "secondaryText" on "disabled button on the card on
+    // ...". `TaskCardTests` checks each by name. A button that
+    // can't be pressed yet goes quiet gray on a neutral fill, as
+    // `AccentButtonStyle` does, rather than fading its words out.
+    private var foreground: AnyShapeStyle {
+        guard isEnabled else { return AnyShapeStyle(Theme.secondaryText) }
         switch kind {
         // Dark words on the accent fill, as everywhere else, so they read.
-        case .primary: Theme.onAccent
-        case .secondary: Theme.accent
-        case .quiet: .secondary
+        case .primary: return AnyShapeStyle(Theme.onAccent)
+        case .secondary: return AnyShapeStyle(Theme.accentText)
+        case .quiet: return AnyShapeStyle(Theme.secondaryText)
         }
     }
 
     private var background: Color {
+        guard isEnabled else { return kind == .quiet ? .clear : Color.primary.opacity(Theme.disabledTint) }
         switch kind {
-        case .primary: Theme.accent
-        case .secondary: Theme.accent.opacity(0.14)
-        case .quiet: .clear
+        case .primary: return Theme.accent
+        case .secondary: return Theme.accent.opacity(Theme.accentWash)
+        case .quiet: return .clear
         }
     }
 }

@@ -42,7 +42,7 @@ struct ReconCard: View {
                     if summary.points.count > Self.pointsOnCard {
                         Text(ReconWords.morePoints(summary.points.count - Self.pointsOnCard))
                             .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.secondaryText)
                             .padding(.leading, 14)
                     }
                 }
@@ -64,7 +64,7 @@ struct ReconCard: View {
     /// What VoiceOver reads for the line above the title: example or not,
     /// that it's ready, and when.
     var spoken: String {
-        [isSample ? FeedWords.exampleTag : "", FeedWords.readyLabel, time]
+        [isSample ? FeedWords.exampleMarker : "", FeedWords.readyLabel, time]
             .filter { !$0.isEmpty }.joined(separator: ". ")
     }
 
@@ -76,24 +76,24 @@ struct ReconCard: View {
                     Text(FeedWords.readyLabel)
                 } icon: {
                     Image(systemName: "doc.text.magnifyingglass")
-                        .foregroundStyle(Theme.accent)
+                        .foregroundStyle(Theme.accentSymbol)
                 }
                 .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 if isSample {
                     // The same capsule as a scripted task's card.
-                    Text(FeedWords.exampleTag)
+                    Text(FeedWords.exampleMarker)
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.secondaryText)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
-                        .background(Color.primary.opacity(0.06), in: Capsule())
+                        .background(Color.primary.opacity(Theme.fieldTint), in: Capsule())
                         .accessibilityIdentifier("exampleTag")
                 }
                 Spacer(minLength: 8)
                 Text(time)
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.secondaryText)
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(spoken)
@@ -104,7 +104,7 @@ struct ReconCard: View {
                 .accessibilityAddTraits(.isHeader)
             Text(summary.overview)
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -113,14 +113,14 @@ struct ReconCard: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(ReconWords.sourcesHeading)
                 .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 .accessibilityAddTraits(.isHeader)
             ForEach(Array(summary.sources.enumerated()), id: \.element.id) { index, source in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     SourceNumber(number: index + 1)
                     Text(Self.sourceLine(source, gatheredAt: summary.gatheredAt))
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .accessibilityElement(children: .ignore)
@@ -144,7 +144,7 @@ struct ReconCard: View {
             }
         }
         .font(.footnote)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Theme.secondaryText)
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .combine)
     }
@@ -227,7 +227,7 @@ struct ReconPointRow: View {
                     .frame(width: 6, height: 6)
                     .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
                 // The source numbers follow the words on the same line.
-                Text("\(point.text) \(Text(refs).font(.caption.weight(.bold)).foregroundStyle(Theme.accent))")
+                Text("\(point.text) \(Text(refs).font(.caption.weight(.bold)).foregroundStyle(Theme.accentText))")
                     .font(.subheadline)
                     .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -235,7 +235,7 @@ struct ReconPointRow: View {
             if let oldLabel {
                 Label(oldLabel, systemImage: "clock.arrow.circlepath")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.secondaryText)
                     .padding(.leading, 14)
             }
             if let disagreement = point.disagreement {
@@ -244,13 +244,14 @@ struct ReconPointRow: View {
                         .fixedSize(horizontal: false, vertical: true)
                 } icon: {
                     Image(systemName: "arrow.left.arrow.right")
-                        .foregroundStyle(Theme.accent)
+                        .foregroundStyle(Theme.accentSymbol)
                 }
                 .font(.footnote)
                 .foregroundStyle(.primary)
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.accent.opacity(scheme == .dark ? 0.16 : 0.1),
+                // The accent wash `Theme.textPairs` checks the words against.
+                .background(Theme.accent.opacity(Theme.accentWash),
                             in: RoundedRectangle(cornerRadius: Theme.smallCorner, style: .continuous))
                 .padding(.leading, 14)
             }
@@ -267,10 +268,10 @@ struct SourceNumber: View {
     var body: some View {
         Text("\(number)")
             .font(.caption2.weight(.bold).monospacedDigit())
-            .foregroundStyle(Theme.accent)
+            .foregroundStyle(Theme.accentText)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(Theme.accent.opacity(0.14), in: Capsule())
+            .background(Theme.accent.opacity(Theme.accentWash), in: Capsule())
             .accessibilityLabel(ReconWords.sourceNumber(number))
     }
 }
@@ -319,7 +320,7 @@ struct ReconSourcesSheet: View {
                             }
                             Text(ReconCard.sourceLine(source, gatheredAt: summary.gatheredAt))
                                 .font(.footnote)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Theme.secondaryText)
                             Text(source.text)
                                 .font(.body)
                                 .textSelection(.enabled)
@@ -331,7 +332,7 @@ struct ReconSourcesSheet: View {
                                     Label(ReconWords.pageLinkTitle, systemImage: "safari")
                                         .font(.subheadline.weight(.semibold))
                                 }
-                                .tint(Theme.accent)
+                                .tint(Theme.accentText)
                                 .frame(minHeight: 44)
                                 .accessibilityHint(link.host ?? "")
                             }
@@ -379,9 +380,9 @@ struct ReconRememberSheet: View {
                         Text(ReconWords.rememberQuestion)
                             .font(.system(.title2, design: .rounded).weight(.bold))
                             .accessibilityAddTraits(.isHeader)
-                        Text(ReconWords.rememberDetail)
+                        Text(ReconWords.rememberDetail(model.place))
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     ForEach(summary.points) { point in
@@ -436,7 +437,7 @@ struct SampleTag: View {
     var body: some View {
         Text(FeedWords.sampleLabel)
             .font(.footnote.weight(.medium))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Theme.secondaryText)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(Color.primary.opacity(0.06), in: Capsule())

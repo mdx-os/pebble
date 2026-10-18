@@ -11,15 +11,29 @@ public struct MemoryView: View {
     @Environment(\.scenePhase) private var scenePhase
     @FocusState private var addFocused: Bool
     private let cloud: CloudHelp?
+    private let place: PrivacyPlace
 
+    /// `place` comes from the active model (`ModelClient.privacyPlace`), so
+    /// the device promise here is the same one the chat makes. It may change
+    /// while the screen is open, as when the cloud is turned on, and the
+    /// lines follow it.
+    ///
     /// `onForgetEverything` runs with Forget everything, so whatever else the
     /// agent holds about the person, such as its tasks, goes too. It says
     /// what it forgot, so the status line can be honest about it. With
     /// `cloud`, the screen ends with a way into the cloud setting.
-    public init(store: MemoryStore, cloud: CloudHelp? = nil,
+    public init(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp? = nil,
                 onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) {
-        _model = StateObject(wrappedValue: MemoryModel(store: store, onForgetEverything: onForgetEverything))
+        _model = StateObject(wrappedValue: MemoryModel(store: store, place: place, onForgetEverything: onForgetEverything))
         self.cloud = cloud
+        self.place = place
+    }
+
+    /// Shows a model that already has something to say, for screenshots.
+    init(model: @autoclosure @escaping () -> MemoryModel, place: PrivacyPlace) {
+        _model = StateObject(wrappedValue: model())
+        self.cloud = nil
+        self.place = place
     }
 
     public var body: some View {
@@ -62,18 +76,20 @@ public struct MemoryView: View {
                         Button(role: .destructive) { model.askForgetEverything = true } label: {
                             Text(MemoryWords.forgetEverythingTitle)
                                 .font(.subheadline.weight(.semibold))
+                                // The system red is about 3.6 to 1 on white.
+                                .foregroundStyle(Theme.dangerText)
                                 .frame(maxWidth: .infinity, minHeight: 44)
                         }
                         .padding(.top, 8)
                     }
                     if let cloud {
-                        CloudHelpRow(help: cloud)
+                        CloudHelpRow(help: cloud, local: place)
                             .padding(.top, 8)
                     }
                     if let status = model.status {
                         Text(status)
                             .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.secondaryText)
                             .frame(maxWidth: .infinity)
                             .accessibilityAddTraits(.updatesFrequently)
                     }
@@ -107,6 +123,7 @@ public struct MemoryView: View {
         } message: { note in
             Text(note.text)
         }
+        .onChange(of: place) { _, place in model.place = place }
         .onChange(of: model.statusCount) { _, _ in
             if let status = model.status { AccessibilityNotification.Announcement(status).post() }
         }
@@ -123,9 +140,9 @@ public struct MemoryView: View {
             Text(MemoryWords.title)
                 .font(.system(.largeTitle, design: .rounded).weight(.bold))
                 .accessibilityAddTraits(.isHeader)
-            Label(MemoryWords.privacyNote, systemImage: "lock.fill")
+            Label(MemoryWords.privacyNote(model.place), systemImage: "lock.fill")
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
         }
     }
 
@@ -139,7 +156,7 @@ public struct MemoryView: View {
             Button { model.add() } label: {
                 Image(systemName: "plus")
                     .font(.headline)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.onAccent)
                     .frame(width: 36, height: 36)
                     .background(Theme.accent, in: Circle())
                     .pointerHover(in: Circle())
@@ -164,7 +181,7 @@ public struct MemoryView: View {
         EmptyState(
             symbol: "sparkles",
             title: MemoryWords.emptyTitle,
-            detail: MemoryWords.empty,
+            detail: MemoryWords.empty(model.place),
             actionTitle: MemoryWords.emptyActionTitle
         ) {
             addFocused = true
@@ -203,13 +220,15 @@ struct MemoryUnavailableView: View {
                     Button(role: .destructive) { asking = true } label: {
                         Text(TaskWords.forgetTasksTitle)
                             .font(.subheadline.weight(.semibold))
+                            // The system red is about 3.6 to 1 on white.
+                            .foregroundStyle(Theme.dangerText)
                             .frame(maxWidth: .infinity, minHeight: 44)
                     }
                     .accessibilityIdentifier("forgetTasks")
                 } else if let status {
                     Text(status)
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.secondaryText)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity)
@@ -262,7 +281,7 @@ struct MemoryRow: View {
                     Spacer()
                     Button(MemoryWords.saveTitle, action: onSave)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Theme.accent)
+                        .foregroundStyle(Theme.accentText)
                         .frame(minHeight: 44)
                 }
             } else {
@@ -275,14 +294,14 @@ struct MemoryRow: View {
                         SourceLabel(source: note.source)
                         Text(note.savedAt, format: .dateTime.month(.abbreviated).day())
                             .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(Theme.secondaryText)
                     }
                     // At large text sizes the source gets its own line so it never clips.
                     VStack(alignment: .leading, spacing: 4) {
                         SourceLabel(source: note.source)
                         Text(note.savedAt, format: .dateTime.month(.abbreviated).day())
                             .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(Theme.secondaryText)
                     }
                 }
                     Spacer(minLength: 0)
@@ -300,7 +319,7 @@ struct MemoryRow: View {
                         .accessibilityLabel(MemoryWords.forgetTitle)
                 }
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 .buttonStyle(.plain)
             }
         }
@@ -323,16 +342,16 @@ struct SourceLabel: View {
     var body: some View {
         Label {
             Text(source.label)
-                .foregroundStyle(source == .inferred ? Color.primary : Color.secondary)
+                .foregroundStyle(source == .inferred ? AnyShapeStyle(.primary) : AnyShapeStyle(Theme.secondaryText))
         } icon: {
             Image(systemName: source.symbol)
-                .foregroundStyle(source == .inferred ? Theme.accent : .secondary)
+                .foregroundStyle(source == .inferred ? AnyShapeStyle(Theme.accentSymbol) : AnyShapeStyle(Theme.secondaryText))
         }
             .font(.caption.weight(.medium))
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(
-                (source == .inferred ? Theme.accent : Color.secondary).opacity(0.12),
+                source == .inferred ? Theme.accent.opacity(Theme.accentWash) : Color.primary.opacity(Theme.fieldTint),
                 in: Capsule()
             )
             .fixedSize(horizontal: false, vertical: true)
@@ -345,6 +364,9 @@ struct SourceLabel: View {
 @MainActor
 final class MemoryModel: ObservableObject {
     let store: MemoryStore
+    /// Whether the words here may promise the device. The view sets it again
+    /// when the cloud setting changes where words go.
+    @Published var place: PrivacyPlace
     @Published private(set) var notes: [MemoryNote] = []
     @Published private(set) var isUnreadable = false
     @Published private(set) var isUnavailable = false
@@ -367,8 +389,10 @@ final class MemoryModel: ObservableObject {
     /// Forgets what lives outside the memory file, such as tasks.
     private let onForgetEverything: @MainActor () -> ClearedTasks
 
-    init(store: MemoryStore, onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) {
+    init(store: MemoryStore, place: PrivacyPlace,
+         onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) {
         self.store = store
+        self.place = place
         self.onForgetEverything = onForgetEverything
         refresh()
     }
@@ -388,6 +412,11 @@ final class MemoryModel: ObservableObject {
     /// False while the saved notes can't be read or opened, so they stay untouched.
     var canAdd: Bool { !isUnreadable && !isUnavailable }
 
+    /// The store refuses notes it can't read or open, so the words that were
+    /// typed stay in the field and the file stays as it was. The screen
+    /// refuses first too, as a second guard, so notes it last saw as
+    /// unreadable or locked are never written over even if the store
+    /// changes how it reads them.
     func add() {
         guard canAdd else {
             status = isUnavailable ? MemoryWords.unavailable : MemoryWords.unreadable
@@ -448,7 +477,7 @@ final class MemoryModel: ObservableObject {
     private func report(_ decision: @autoclosure () throws -> MemoryStore.Decision, onSaved: () -> Void) {
         do {
             switch try decision() {
-            case .saved: status = MemoryWords.saved; savedCount += 1; onSaved()
+            case .saved: status = MemoryWords.saved(place); savedCount += 1; onSaved()
             case .needsWords: status = MemoryWords.needsWords
             case .tooLong: status = MemoryWords.tooLong
             case .notFound: status = nil; cancelEdit()

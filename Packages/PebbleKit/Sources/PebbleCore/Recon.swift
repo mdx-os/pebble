@@ -377,11 +377,14 @@ public struct SampleSources: SourceProvider {
 public enum ReconWords {
     // The offer in the chat.
     /// `examples` while the only pages there are to read are the sample
-    /// ones, so the offer never promises real sources it doesn't have.
-    public static func offer(_ topic: String, examples: Bool = false) -> String {
-        examples
-            ? "Want me to look into \(topic)? For now I can only read a few example pages kept on this device, so it will be an example, not real news. I'll bring a short summary to Today, with where each point came from."
-            : "Want me to look into \(topic)? I'll read a few sources and bring a short summary to Today, with where each point came from."
+    /// ones, so the offer never promises real sources it doesn't have. It
+    /// says where they are kept only when `place` says every word stays here.
+    public static func offer(_ topic: String, examples: Bool = false, place: PrivacyPlace = .mayLeaveDevice) -> String {
+        guard examples else {
+            return "Want me to look into \(topic)? I'll read a few sources and bring a short summary to Today, with where each point came from."
+        }
+        let pages = place.staysOnDevice ? "a few example pages kept on this device" : "a few example pages"
+        return "Want me to look into \(topic)? For now I can only read \(pages), so it will be an example, not real news. I'll bring a short summary to Today, with where each point came from."
     }
     public static let offerYes = "Look into it"
     public static let offerNo = "Not now"
@@ -470,9 +473,12 @@ public enum ReconWords {
         return "From \(TaskWords.list(names, joiner: "and"))."
     }
     public static func sourceNumber(_ number: Int) -> String { "Source \(number)" }
-    public static let declinedCloud = "You chose not to send it, so I put this together on this device."
-    public static let cloudUnreadable = "I couldn't use the answer from the cloud, so I put this together on this device."
-    public static let cloudUnavailable = "I couldn't reach the cloud just now, so I put this together on this device."
+    // Shown only on a summary the cloud was asked for, so they name the
+    // cloud, not the device: docs/VOICE.md keeps device lines for when the
+    // flag says every word stays here.
+    public static let declinedCloud = "You chose not to send it, so I put this together without the cloud."
+    public static let cloudUnreadable = "I couldn't use the answer from the cloud, so I put this together without it."
+    public static let cloudUnavailable = "I couldn't reach the cloud just now, so I put this together without it."
     /// Under a summary put into words in the cloud: its points are a
     /// retelling, not the sources' own words.
     public static let wordedInCloud = "Put into words in the cloud, from these sources. Open sources to read what each one says."
@@ -489,7 +495,13 @@ public enum ReconWords {
     public static let rememberHint = "Lets you choose a point to keep in your notes."
     public static func followUpDraft(_ topic: String) -> String { "Tell me more about \(topic)." }
     public static let rememberQuestion = "Which point should I remember?"
-    public static let rememberDetail = "I'll keep it in your notes with where it came from. Notes stay on this device."
+    /// Promises the device only when `place` says every word stays here,
+    /// like `MemoryWords.saved`.
+    public static func rememberDetail(_ place: PrivacyPlace) -> String {
+        place.staysOnDevice
+            ? "I'll keep it in your notes with where it came from. Notes stay on this device."
+            : "I'll keep it in your notes with where it came from."
+    }
     public static let rememberThis = "Remember this"
     public static let remembered = "Remembered"
     public static let pageLinkTitle = "Open the page"
@@ -508,7 +520,8 @@ public enum ReconWords {
 
     /// Every fixed line, for the dash and tone checks.
     public static var all: [String] {
-        [offer("the pool"), offer("the pool", examples: true), offerYes, offerNo, started, offerDeclined,
+        [offer("the pool"), offer("the pool", examples: true, place: .onDevice),
+         offer("the pool", examples: true, place: .mayLeaveDevice), offerYes, offerNo, started, offerDeclined,
          couldNotStart, title("the pool"),
          planning, looking, reading(1), reading(4), checkingDates, puttingTogether, doneLine, nothingFoundLine,
          couldNotRead, wordedInCloud, forgotWhileInCloud,
@@ -521,7 +534,8 @@ public enum ReconWords {
                       newest: "City of Riverside Parks"),
          sourcesHeading, pointsHeading, morePoints(1), morePoints(2), olderLabel, gathered(Date(), now: Date()), from(["A", "B"]), sourceNumber(1),
          declinedCloud, cloudUnreadable, cloudUnavailable, openSourcesTitle, followUpTitle, rememberTitle,
-         openSourcesHint, followUpHint, rememberHint, followUpDraft("the pool"), rememberQuestion, rememberDetail,
+         openSourcesHint, followUpHint, rememberHint, followUpDraft("the pool"), rememberQuestion,
+         rememberDetail(.onDevice), rememberDetail(.mayLeaveDevice),
          rememberThis, remembered, pageLinkTitle, lookIntoTitle, lookIntoHint, askLine("the pool")]
             + questions(about: "the pool")
     }

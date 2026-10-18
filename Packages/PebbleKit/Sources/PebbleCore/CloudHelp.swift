@@ -115,7 +115,11 @@ public enum CloudEndpoint {
 public enum CloudWords {
     public static let title = "Help from the cloud"
     public static let toggleTitle = "Use a cloud model"
-    public static let offDetail = "Off. Everything I do stays on this device."
+    /// `place` is the model used while this is off. The device promise is
+    /// made only when it says every word stays here.
+    public static func offDetail(_ place: PrivacyPlace) -> String {
+        place.staysOnDevice ? "Off. Everything I do stays on this device." : "Off."
+    }
     public static let onDetail = "On for new chats. Before anything leaves this device, I show you exactly what goes, and you decide."
     public static let unavailable = "There's no cloud model set up for this device yet, so this stays off."
     public static let rowTitle = "Help from the cloud"
@@ -153,15 +157,20 @@ public enum CloudWords {
     /// After the person chose not to send.
     public static let notSent = "Okay, I didn't send it. What you wrote is still here."
     /// The setting was turned off while this chat was using the cloud.
-    public static let turnedOff = "Help from the cloud is off now, so I didn't send that. Start a new chat and I'll answer on this device."
+    /// `place` is the model a new chat will use. See `offDetail`.
+    public static func turnedOff(_ place: PrivacyPlace) -> String {
+        place.staysOnDevice
+            ? "Help from the cloud is off now, so I didn't send that. Start a new chat and I'll answer on this device."
+            : "Help from the cloud is off now, so I didn't send that. Start a new chat to keep going."
+    }
     /// The chat header when the model is not on this device.
     public static let presence = "Here with you."
 
     public static let all: [String] = [
-        title, toggleTitle, offDetail, onDetail, unavailable, rowTitle, rowOff, rowOn,
+        title, toggleTitle, offDetail(.onDevice), offDetail(.mayLeaveDevice), onDetail, unavailable, rowTitle, rowOff, rowOn,
         askQuestion, askYes, askNo, privateTitle, privateDetail, privatePlaceholder, privateAdd,
         privateRemove("Sam"), previewTitle, previewDetail, previewDestination("example.com"),
         previewNothingHidden, previewHidden(["1 name"]), previewSend, previewCancel,
-        notSent, turnedOff, presence,
+        notSent, turnedOff(.onDevice), turnedOff(.mayLeaveDevice), presence,
     ] + askPoints
 }

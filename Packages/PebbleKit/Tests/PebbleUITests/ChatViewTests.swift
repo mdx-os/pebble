@@ -129,14 +129,14 @@ struct ChatRenameTests {
 
     @Test func onlyNewAgentLinesAreReadAloud() throws {
         let start = Conversation.firstRun(named: "Pip", onDevice: true)
-        #expect(ChatView.announcement(for: start) == nil)
+        #expect(ChatView.announcement(for: start, covered: false) == nil)
         let asked = try start.appendingPerson("gym")
-        #expect(ChatView.announcement(for: asked) == nil)
+        #expect(ChatView.announcement(for: asked, covered: false) == nil)
         let answered = Conversation(
             turns: asked.turns + [ChatTurn(id: UUID(), speaker: .agent, text: "Here's a plan")],
             onDevice: true
         )
-        #expect(ChatView.announcement(for: answered) == "Here's a plan")
+        #expect(ChatView.announcement(for: answered, covered: false) == "Here's a plan")
     }
 
     @Test func theAppModelOpensWithAnHonestPrivacyLine() {

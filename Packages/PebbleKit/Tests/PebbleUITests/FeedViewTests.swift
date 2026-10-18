@@ -28,13 +28,13 @@ struct FeedViewTests {
                               details: "Running ten minutes late")
 
     private func feed(_ sources: [any FeedSource] = [SampleFeedSource()], asks: NeedsYou = NeedsYou(rule: .isolated())) -> FeedModel {
-        FeedModel(sources: sources, needsYou: asks, now: { ShowcaseScene.morning })
+        FeedModel(sources: sources, needsYou: asks, place: .onDevice, now: { ShowcaseScene.morning })
     }
 
     private func render(_ model: FeedModel, size: CGSize, scheme: ColorScheme = .light,
                         text: DynamicTypeSize = .large) throws -> CGImage {
         let view = NavigationStack {
-            FeedView(model: model, look: .startingPoint, onTalk: { _ in }, onChat: {})
+            FeedView(model: model, look: .startingPoint, onTalk: { _ in })
         }
         let renderer = ImageRenderer(content: view
             .environment(\.colorScheme, scheme)
@@ -80,7 +80,7 @@ struct FeedViewTests {
         #expect(sample.isSample(item))
         let real = FeedItem(id: "real", kind: .did, time: ShowcaseScene.morning, title: "Done", body: "", action: .open("x"))
         let mixed = FeedModel(sources: [SampleFeedSource(), Fixed(items: [real])], needsYou: NeedsYou(rule: .isolated()),
-                              now: { ShowcaseScene.morning })
+                              place: .onDevice, now: { ShowcaseScene.morning })
         #expect(!mixed.isSample(real))
         #expect(mixed.isSample(item))
     }
@@ -90,7 +90,8 @@ struct FeedViewTests {
     /// Every width the feed can get, from Slide Over to a full 13-inch iPad,
     /// with the card minimum scaled from the smallest text size to past the
     /// largest (320 pt grows to about 1000 at AX5). Each card fits, and
-    /// accessibility sizes get one plain column.
+    /// accessibility sizes get one plain column. This checks the column
+    /// math only; `everyCardFitsItsColumnAsRendered` measures the cards.
     @Test(arguments: [DynamicTypeSize.xSmall, .large, .xxxLarge, .accessibility1, .accessibility5],
           [280, 320, 420, 560, 760, 1000] as [CGFloat])
     func cardsAlwaysFitTheScreen(text: DynamicTypeSize, minimum: CGFloat) {

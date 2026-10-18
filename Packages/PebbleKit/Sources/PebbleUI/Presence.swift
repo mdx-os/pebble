@@ -22,13 +22,20 @@ enum Motion {
     /// How each thinking dot looks at a moment: its opacity and how far it
     /// lifts. The dots rise and fall in a slow wave, one after another.
     /// With Reduce Motion on they hold still, all three the same.
-    static func dot(_ index: Int, at time: TimeInterval, reduceMotion: Bool) -> (opacity: Double, lift: CGFloat) {
-        guard !reduceMotion else { return (0.55, 0) }
+    /// Never fainter than `dotFloor`, so a dot keeps 3:1 against its bubble
+    /// (see `Contrast`), and fully solid with Increase Contrast on.
+    static func dot(_ index: Int, at time: TimeInterval, reduceMotion: Bool,
+                    increasedContrast: Bool = false) -> (opacity: Double, lift: CGFloat) {
+        guard !reduceMotion else { return (increasedContrast ? 1 : dotFloor, 0) }
         let period = 1.4
         let phase = (time / period - Double(index) * 0.18).truncatingRemainder(dividingBy: 1)
         let wave = (sin(2 * .pi * phase) + 1) / 2
-        return (0.3 + 0.6 * wave, CGFloat(wave) * 3)
+        let opacity = increasedContrast ? 1 : dotFloor + (1 - dotFloor) * wave
+        return (opacity, CGFloat(wave) * 3)
     }
+
+    /// The faintest a thinking dot ever gets.
+    static let dotFloor = 0.6
 
     /// Where the soft glow sits on a progress bar that can't say how far
     /// along it is, from 0 to 1. It drifts slowly across and back. With
@@ -72,6 +79,7 @@ extension EnvironmentValues {
 /// it as one calm line rather than three dots.
 struct ThinkingDots: View {
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.colorSchemeContrast) private var contrast
     /// Set by tests; otherwise the system setting decides.
     var stillOverride: Bool?
 
@@ -82,9 +90,11 @@ struct ThinkingDots: View {
             let time = context.date.timeIntervalSinceReferenceDate
             HStack(spacing: 5) {
                 ForEach(0..<3, id: \.self) { index in
-                    let dot = Motion.dot(index, at: time, reduceMotion: reduceMotion)
+                    let dot = Motion.dot(index, at: time, reduceMotion: reduceMotion,
+                                         increasedContrast: contrast == .increased)
+                    // Full strength ink, so the floor opacity alone sets the contrast.
                     Circle()
-                        .fill(Color.secondary)
+                        .fill(Color.primary)
                         .frame(width: 7, height: 7)
                         .opacity(dot.opacity)
                         .offset(y: -dot.lift)
@@ -92,7 +102,7 @@ struct ThinkingDots: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
-            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
+            .background(Color.primary.opacity(Theme.bubbleTint), in: RoundedRectangle(cornerRadius: 16))
         }
         .accessibilityElement()
         .accessibilityLabel(FirstConversation.thinking)
@@ -168,13 +178,27 @@ struct LiveDot: View {
 enum Haptic: Equatable {
     case sent, answered, saved, forgotten
 
-    /// True only where a phone can be felt in the hand.
-    @MainActor static var isAvailable: Bool {
-        #if os(iOS)
-        UIDevice.current.userInterfaceIdiom == .phone
-        #else
-        false
-        #endif
+    /// The kinds of device the app runs on, as far as haptics care.
+    enum Device: Equatable, CaseIterable {
+        case phone, pad, mac
+
+        /// The device this is running on.
+        @MainActor static var current: Device {
+            #if os(iOS)
+            switch UIDevice.current.userInterfaceIdiom {
+            case .phone: .phone
+            case .mac: .mac
+            default: .pad
+            }
+            #else
+            .mac
+            #endif
+        }
+    }
+
+    /// The tap to play on `device`: only a phone, felt in the hand, gets one.
+    func feedback(on device: Device) -> SensoryFeedback? {
+        device == .phone ? feedback : nil
     }
 
     var feedback: SensoryFeedback {
@@ -197,7 +221,7 @@ extension View {
     @ViewBuilder
     func haptic<T: Equatable>(_ haptic: Haptic, trigger: T, when: @escaping (T) -> Bool) -> some View {
         #if os(iOS)
-        let feedback = Haptic.isAvailable ? haptic.feedback : nil
+        let feedback = haptic.feedback(on: .current)
         sensoryFeedback(trigger: trigger) { _, new in when(new) ? feedback : nil }
         #else
         self
@@ -230,19 +254,18 @@ struct EmptyState: View {
         VStack(spacing: 12) {
             Image(systemName: symbol)
                 .font(.largeTitle)
-                .foregroundStyle(Theme.accent)
+                .foregroundStyle(Theme.accentSymbol)
                 .accessibilityHidden(true)
             Text(title)
                 .font(.system(.title3, design: .rounded).weight(.semibold))
                 .multilineTextAlignment(.center)
             Text(detail)
                 .font(.body)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
             Button(actionTitle, action: action)
-                .buttonStyle(.bordered)
-                .tint(Theme.accent)
+                .buttonStyle(SoftButtonStyle())
                 .padding(.top, 4)
         }
         .frame(maxWidth: .infinity)
@@ -264,14 +287,12 @@ struct GentleNotice: View {
             Label {
                 Text(text).fixedSize(horizontal: false, vertical: true)
             } icon: {
-                Image(systemName: "info.circle").foregroundStyle(Theme.accent)
+                Image(systemName: "info.circle").foregroundStyle(Theme.accentSymbol)
             }
             .font(.subheadline)
             if let actionTitle, let action {
                 Button(actionTitle, action: action)
-                    .font(.subheadline.weight(.semibold))
-                    .buttonStyle(.bordered)
-                    .tint(Theme.accent)
+                    .buttonStyle(SoftButtonStyle())
             }
         }
         .padding(14)

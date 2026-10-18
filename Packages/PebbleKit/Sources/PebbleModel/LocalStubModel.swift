@@ -93,6 +93,10 @@ public struct LocalStubModel: ModelClient {
         return first.uppercased() + text.dropFirst()
     }
 
+    // The device lines in `fallback`, the remember opener and its result are
+    // true because they are only ever said by this model, and it always runs
+    // here (`runsOnDevice` is true). A cloud adapter writes its own replies
+    // and never reaches these.
     package static let fallback = "Thanks for telling me. I'm a small helper that runs only on this device, so I can't do everything yet. I'm good at morning plans, saying a detail back, and talking things through. Want to start with one of those?"
 
     package static let morningReask = "I didn't catch any steps there. Try a few things separated by commas, like gym, email Ana, groceries."

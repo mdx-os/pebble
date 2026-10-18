@@ -15,17 +15,22 @@ struct CopyDashTests {
         FirstRunWords.step(1, of: 4), FirstRunWords.greeting(named: "Pip"),
         OnboardingWords.welcome, OnboardingWords.proactivityQuestion, OnboardingWords.startersHeading,
         OnboardingWords.continueTitle, OnboardingWords.skipTitle,
-        FirstConversation.presence, FirstConversation.composerPlaceholder, FirstConversation.sendTitle,
-        FirstConversation.thinking, FirstConversation.couldNotAnswer, FirstConversation.startersHeading,
+        FirstConversation.presence(.onDevice), FirstConversation.presence(.mayLeaveDevice),
+        FirstConversation.composerPlaceholder, FirstConversation.sendTitle,
+        FirstConversation.thinking, FirstConversation.couldNotAnswer, FirstConversation.couldNotAnswerKeptDraft,
+        FirstConversation.startersHeading,
         FirstConversation.nameInvitation, FirstConversation.giveNameTitle, FirstConversation.changeNameTitle,
         FirstConversation.namePlaceholder, FirstConversation.confirmNameTitle, FirstConversation.cancelNameTitle,
         FirstConversation.needsAName, FirstConversation.nameTooLong,
         FirstConversation.opening(named: "Pip", onDevice: true), FirstConversation.opening(named: "Pip"),
-        MemoryWords.title, MemoryWords.emptyTitle, MemoryWords.empty, MemoryWords.emptyActionTitle,
-        MemoryWords.forgetTitle, MemoryWords.forgetEverythingTitle, MemoryWords.saved, MemoryWords.forgotten,
+        MemoryWords.title, MemoryWords.emptyTitle, MemoryWords.emptyActionTitle,
+        MemoryWords.empty(.onDevice), MemoryWords.empty(.mayLeaveDevice),
+        MemoryWords.saved(.onDevice), MemoryWords.saved(.mayLeaveDevice),
+        MemoryWords.privacyNote(.onDevice), MemoryWords.privacyNote(.mayLeaveDevice),
+        MemoryWords.forgetTitle, MemoryWords.forgetEverythingTitle, MemoryWords.forgotten,
         MemoryWords.needsWords, MemoryWords.tooLong, MemoryWords.editTitle, MemoryWords.saveTitle,
         MemoryWords.cancelTitle, MemoryWords.doneTitle, MemoryWords.addPlaceholder, MemoryWords.addTitle,
-        MemoryWords.forgetEverythingQuestion, MemoryWords.forgetEverythingDetail, MemoryWords.privacyNote,
+        MemoryWords.forgetEverythingQuestion, MemoryWords.forgetEverythingDetail,
         MemoryWords.unreadable, MemoryWords.unavailable, MemoryWords.couldNotOpen, MemoryWords.tryAgainTitle,
         MemoryWords.forgetOneQuestion, MemoryWords.editPlaceholder, MemoryWords.couldNotForget,
         MemoryWords.couldNotForgetNotes,
@@ -92,7 +97,7 @@ struct CopyDashTests {
         #expect(FirstRunWords.helloDetail(onDevice: true).contains("Everything you tell me stays on this device."))
         #expect(!FirstRunWords.helloDetail(onDevice: false).contains("stays"))
         #expect(!FirstRunWords.helloDetail().contains("stays"))
-        #expect(MemoryWords.privacyNote == "Kept only on this device. Removing a note erases it.")
+        #expect(MemoryWords.privacyNote(.onDevice) == "Kept only on this device. Removing a note erases it.")
         #expect(MemoryWords.forgotten == "Gone. I no longer have it.")
         // Forget everything says it stops tasks, and the tasks-only fallback
         // says the notes are left alone.

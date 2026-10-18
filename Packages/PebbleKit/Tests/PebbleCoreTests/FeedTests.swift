@@ -342,6 +342,6 @@ extension FeedWords {
     static var all: [String] {
         [title, needsYouHeading, needsYouDetail, thisMorning, thisAfternoon, thisEvening, earlier, yesterday,
          didLabel, readyLabel, noticedLabel, openTitle, talkTitle, reviewTitle, openHint, talkHint, reviewHint,
-         emptyTitle, empty, emptyActionTitle, sampleNote, sampleLabel, exampleTag, doneTitle, chatWith("Pip")]
+         emptyTitle, empty, composerHint, exampleMarker, sampleNote(.onDevice), sampleNote(.mayLeaveDevice), sampleLabel, doneTitle, chatWith("Pip")]
     }
 }

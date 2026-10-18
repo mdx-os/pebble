@@ -366,10 +366,14 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
     }
 
     public func questionClosed(_ request: ConfirmationRequest) {
+        // Close on a question that had already run out of time is a
+        // timeout, not a no. Asked with the lock let go.
+        let ranOut = withRule { $0.isClosed(request) && !$0.wasWithdrawn(request) }
         mutate {
             guard let index = runs.firstIndex(where: { $0.phase == .askingYes(request) }) else { return }
             withdrawals.append(request)
-            skip(&runs[index], line: TaskWords.declined(runs[index].script.steps[runs[index].index].todo))
+            let todo = runs[index].script.steps[runs[index].index].todo
+            skip(&runs[index], line: ranOut ? TaskWords.timedOut(todo) : TaskWords.declined(todo))
         }
     }
 
@@ -428,23 +432,35 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
         return call(rule)
     }
 
-    /// The open questions `AskFirst` has closed, such as one that timed out.
-    /// Asked with the lock let go.
-    private func closedQuestions() -> [ConfirmationRequest] {
+    /// A question `AskFirst` closed, and whether it was withdrawn (the
+    /// person said Not now or closed the sheet) rather than timed out.
+    private struct Closed {
+        let request: ConfirmationRequest
+        let withdrawn: Bool
+    }
+
+    /// The open questions `AskFirst` has closed, and why. Asked with the
+    /// lock let go.
+    private func closedQuestions() -> [Closed] {
         lockRuns()
         let open = runs.compactMap { run -> ConfirmationRequest? in
             if case .askingYes(let request) = run.phase { return request }
             return nil
         }
         unlockRuns()
-        return open.filter { request in withRule { $0.isClosed(request) } }
+        return open.compactMap { request in
+            guard withRule({ $0.isClosed(request) }) else { return nil }
+            return Closed(request: request, withdrawn: withRule { $0.wasWithdrawn(request) })
+        }
     }
 
-    /// A question that closed without a yes (it timed out) lets the task go on without it.
-    private func settle(_ closed: [ConfirmationRequest]) {
-        for request in closed {
-            guard let index = runs.firstIndex(where: { $0.phase == .askingYes(request) }) else { continue }
-            skip(&runs[index], line: TaskWords.timedOut(runs[index].script.steps[runs[index].index].todo))
+    /// A question that closed without a yes lets the task go on without it.
+    /// Its line says which: the person said no, or the question timed out.
+    private func settle(_ closed: [Closed]) {
+        for question in closed {
+            guard let index = runs.firstIndex(where: { $0.phase == .askingYes(question.request) }) else { continue }
+            let todo = runs[index].script.steps[runs[index].index].todo
+            skip(&runs[index], line: question.withdrawn ? TaskWords.declined(todo) : TaskWords.timedOut(todo))
         }
     }
 

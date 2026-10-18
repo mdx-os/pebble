@@ -92,7 +92,7 @@ public struct OnboardingView: View {
             if !detail.isEmpty {
                 Text(detail)
                     .font(.body)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.secondaryText)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -127,7 +127,7 @@ public struct OnboardingView: View {
             if let hint = model.hint {
                 Text(hint)
                     .font(.subheadline)
-                    .foregroundStyle(Theme.accent)
+                    .foregroundStyle(Theme.accentText)
                     .transition(.opacity)
             }
             Button(OnboardingWords.continueTitle) { model.commitName() }
@@ -149,7 +149,7 @@ public struct OnboardingView: View {
                                 .frame(width: 64, height: 64)
                             Text(look.title)
                                 .font(.caption.weight(.medium))
-                                .foregroundStyle(model.look == look ? .primary : .secondary)
+                                .foregroundStyle(model.look == look ? AnyShapeStyle(.primary) : AnyShapeStyle(Theme.secondaryText))
                         }
                         .padding(.vertical, 10)
                         .frame(maxWidth: .infinity)
@@ -181,7 +181,7 @@ public struct OnboardingView: View {
                 Button { model.choose(choice) } label: {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(choice.title).font(.headline)
-                        Text(choice.detail).font(.subheadline).foregroundStyle(.secondary)
+                        Text(choice.detail).font(.subheadline).foregroundStyle(Theme.secondaryText)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(16)
@@ -230,16 +230,16 @@ struct IdeaCardButton: View {
             HStack(spacing: 14) {
                 Image(systemName: symbol)
                     .font(.title3)
-                    .foregroundStyle(Theme.accent)
+                    .foregroundStyle(Theme.accentSymbol)
                     .frame(width: 40, height: 40)
-                    .background(Theme.accent.opacity(0.14), in: Circle())
+                    .background(Theme.accent.opacity(Theme.accentWash), in: Circle())
                 Text(job.title)
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.primary)
                 Spacer()
                 Image(systemName: "chevron.right")
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.secondaryText)
             }
             .padding(14)
             .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))

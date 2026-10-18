@@ -22,8 +22,8 @@ print(match[0]["udid"])
 ' "$1" "${2:-}"
 }
 
+# The app itself, never a UI test runner that `make ui-test` left beside it.
 built_app() {
-  # Not the UI test runner, which `make ui-test` leaves beside the app.
   find "$derived/Build/Products/$1" -maxdepth 1 -name '*.app' ! -name '*-Runner.app' | head -n 1
 }
 
