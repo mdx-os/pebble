@@ -44,18 +44,27 @@ struct HomeLayoutTests {
     }
 
     /// The row drawn chosen and the row VoiceOver hears chosen are the same
-    /// one, before the list has a selection too, when Today is drawn chosen.
-    @Test(arguments: [nil] + HomeSection.allCases.map(Optional.some))
-    func theChosenRowIsHeardChosen(section: HomeSection?) {
+    /// one. With no selection yet, Today is drawn chosen only beside its own
+    /// screen. A collapsed list with no selection, as after going back on
+    /// iPhone, has no row chosen.
+    @Test(arguments: [nil] + HomeSection.allCases.map(Optional.some), [true, false])
+    func theChosenRowIsHeardChosen(section: HomeSection?, regular: Bool) {
         typealias Split = HomeSplit<EmptyView, EmptyView, EmptyView>
-        let chosen = HomeSection.allCases.filter { Split.isChosen($0, section: section) }
-        #expect(chosen == [section ?? .today], "exactly one row is drawn chosen")
-        for place in HomeSection.allCases {
-            #expect(Split.traits(place, section: section).contains(.isSelected) == Split.isChosen(place, section: section),
-                    "\(place) with \(String(describing: section))")
+        let chosen = HomeSection.allCases.filter { Split.isChosen($0, section: section, regular: regular) }
+        if let section {
+            #expect(chosen == [section], "the selection is the one row drawn chosen")
+        } else if regular {
+            #expect(chosen == [.today], "Today shows beside the list, so it is drawn chosen")
+        } else {
+            #expect(chosen.isEmpty, "a collapsed list with nothing chosen draws no row chosen")
         }
-        // The count the chosen row draws itself is heard as what it counts,
-        // as the badge on any other row is, never as a bare number.
+        for place in HomeSection.allCases {
+            #expect(Split.traits(place, section: section, regular: regular).contains(.isSelected)
+                        == Split.isChosen(place, section: section, regular: regular),
+                    "\(place) with \(String(describing: section)), regular \(regular)")
+        }
+        // A count is heard as what it counts, never as a bare number: the
+        // one the chosen row draws itself and the system badge on the rest.
         for count in [1, 3] {
             let spoken = Split.spokenCount(count)
             #expect(spoken == HomeWords.waiting(count))
@@ -67,6 +76,8 @@ struct HomeLayoutTests {
         let code = String(SwiftSource(text).code)
         #expect(code.range(of: #"Text\(count, format: \.number\)\s*\.monospacedDigit\(\)\s*\.accessibilityLabel\(Self\.spokenCount\(count\)\)"#,
                            options: .regularExpression) != nil, "the drawn count carries the spoken label")
+        #expect(code.range(of: #"\.badge\([^\n]*\n?[^\n]*Text\(count, format: \.number\)\.accessibilityLabel\(Self\.spokenCount\(count\)\)\)"#,
+                           options: .regularExpression) != nil, "the system badge carries the spoken label too")
         #if os(iOS)
         #expect(Split.drawsOwnFill)
         #else

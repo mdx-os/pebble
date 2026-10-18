@@ -50,8 +50,9 @@ public enum PrivacyPlace: Sendable, Hashable {
 
     /// `.onDevice` only when every place given is. A line read by more than
     /// one chat, or by a chat and the next one, promises only what all of
-    /// them keep.
-    public static func all(_ places: PrivacyPlace...) -> PrivacyPlace {
-        places.allSatisfy(\.staysOnDevice) ? .onDevice : .mayLeaveDevice
+    /// them keep. It takes at least one place, since an empty list would
+    /// promise the device with no model behind it.
+    public static func all(_ first: PrivacyPlace, _ rest: PrivacyPlace...) -> PrivacyPlace {
+        ([first] + rest).allSatisfy(\.staysOnDevice) ? .onDevice : .mayLeaveDevice
     }
 }

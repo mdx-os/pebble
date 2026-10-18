@@ -10,17 +10,20 @@ bundle_id="com.mdxos.pebble"
 mkdir -p "$out" build
 
 # Simulators are shared with other worktrees, so whatever happens, one
-# switched to dark goes back to light.
+# switched to dark goes back to the appearance it had when we found it.
+# Each entry is udid:appearance.
 darkened=""
-restore_light() {
-  for sim in $darkened; do xcrun simctl ui "$sim" appearance light 2>/dev/null || true; done
+restore_appearance() {
+  for entry in $darkened; do
+    xcrun simctl ui "${entry%%:*}" appearance "${entry#*:}" 2>/dev/null || true
+  done
   darkened=""
 }
 # Not every sh runs the EXIT trap on a signal, so Ctrl-C and a kill restore
 # too, then stop the script.
-trap restore_light EXIT
-trap 'restore_light; exit 130' INT
-trap 'restore_light; exit 143' TERM
+trap restore_appearance EXIT
+trap 'restore_appearance; exit 130' INT
+trap 'restore_appearance; exit 143' TERM
 
 swiftc -O scripts/same-shot.swift -o build/same-shot
 
@@ -102,7 +105,11 @@ for kind in iPhone iPad; do
   # Switching to dark can take an app launched at the same moment down with
   # it, so let it finish, and launch again if the app isn't up once the
   # screen settles.
-  darkened="$darkened $udid"
+  # What it was before, light or dark. Anything else, as from a runtime
+  # that can't say, goes back to light.
+  was="$(xcrun simctl ui "$udid" appearance 2>/dev/null || true)"
+  case "$was" in light|dark) ;; *) was=light ;; esac
+  darkened="$darkened $udid:$was"
   xcrun simctl ui "$udid" appearance dark
   sleep 3
   for shot in $shots; do
@@ -115,7 +122,8 @@ for kind in iPhone iPad; do
     done
     echo "screenshots: $file"
   done
-  xcrun simctl ui "$udid" appearance light
+  xcrun simctl ui "$udid" appearance "$was"
+  darkened="${darkened% $udid:$was}"
   xcrun simctl terminate "$udid" "$bundle_id" || true
   xcrun simctl shutdown "$udid" || true
 done

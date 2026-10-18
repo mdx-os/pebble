@@ -100,7 +100,20 @@ struct CloudPromiseTests {
         #expect(PrivacyPlace.all(.onDevice, .onDevice) == .onDevice)
         #expect(PrivacyPlace.all(.onDevice, .mayLeaveDevice) == .mayLeaveDevice)
         #expect(PrivacyPlace.all(.mayLeaveDevice, .onDevice) == .mayLeaveDevice)
-        #expect(PrivacyPlace.all() == .onDevice)
+        #expect(PrivacyPlace.all(.onDevice) == .onDevice)
+        #expect(PrivacyPlace.all(.mayLeaveDevice) == .mayLeaveDevice)
+        // `PrivacyPlace.all()` with no place does not compile, and
+        // `everyPlaceIsAPrivacyPlace` flags it if the signature loosens.
+    }
+
+    /// The cloud model says its place two ways: the static one its own
+    /// words read, and the one every model reports from `runsOnDevice`.
+    /// They are one answer.
+    @Test func theCloudModelsTwoPlacesAgree() {
+        let model = CloudModel(endpoint: endpoint, transport: RefusingTransport(), reviewer: CloudReview())
+        #expect(model.privacyPlace == CloudModel.place)
+        #expect(CloudModel.place == .mayLeaveDevice)
+        #expect((model as any ModelClient).privacyPlace == CloudModel.place)
     }
 
     // MARK: Item 11

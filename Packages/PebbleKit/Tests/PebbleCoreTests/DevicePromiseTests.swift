@@ -212,10 +212,9 @@ enum DevicePromise {
                 literal: "Sorry, I couldn't save that, so help from the cloud is still off. Please try again in a moment.",
                 reason: cloudSettingName + " CloudWords.onNotSaved: the setting stayed off, which is what the person sees."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
-                literal: "Help from the cloud is off now, so I didn't send that. A new chat won't use the cloud.",
-                reason: cloudSettingName + " CloudWords.turnedOff is said only as the setting turns off, so the next new "
-                    + "chat does not get the cloud model. It promises nothing about the device, since where that chat "
-                    + "answers is the local model's place, which this line can't see."),
+                literal: "Help from the cloud is off now, so I didn't send that.",
+                reason: cloudSettingName + " CloudWords.turnedOff: its only \"cloud\" is the setting's name, Help from "
+                    + "the cloud."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
                 literal: "Your tasks are forgotten, and so are any words you asked me to hide. To be sure of that I cleared the cloud setting too, so help from the cloud is off.",
                 reason: cloudSettingName + " CloudWords.tasksAndWordsAndCloudForgotten: the setting was erased, so it reads "
@@ -412,6 +411,11 @@ enum DevicePromise {
                 return "\(ns.substring(with: match.range)) is decided only by the model, as model.privacyPlace"
             }
         }
+        // `all()` of no places at all would be `.onDevice` with no model
+        // behind it. Its signature needs one place; this keeps it so.
+        each(#"(?:\b(?:PrivacyPlace|Self)\s*|(?<![\w)\]]))\.\s*all\s*\(\s*\)"#) { _, _ in
+            "PrivacyPlace.all() of no places promises the device with no model behind it"
+        }
         for call in source.calls(named: ["PrivacyPlace"]) where call.arguments.contains("staysOnDevice:") {
             if file != "PebbleModel/ModelClient.swift" || call.arguments != "staysOnDevice: runsOnDevice" {
                 problems.append("\(file):\(call.line): PrivacyPlace(\(call.arguments)) is made only by ModelClient, from runsOnDevice")
@@ -524,10 +528,14 @@ struct DevicePromiseTests {
     }
 
     /// The line said when the cloud was turned off mid chat can't read the
-    /// next chat's place, so it promises nothing about the device. Its one
-    /// phrase is the setting's name, allowed with that reason.
+    /// next chat's place, so it promises nothing about the device or the
+    /// cloud. Its one phrase is the setting's name, allowed with that
+    /// reason, and with the name taken out no phrase is left.
     @Test func theTurnedOffLinePromisesNothing() {
         #expect(DevicePromise.found(in: CloudWords.turnedOff) == ["cloud"])
+        #expect(CloudWords.turnedOff.hasPrefix(CloudWords.title))
+        let rest = CloudWords.turnedOff.replacingOccurrences(of: CloudWords.title, with: "")
+        #expect(DevicePromise.found(in: rest).isEmpty, "more than the setting's name: \(rest)")
         let entry = DevicePromise.allowed.first { $0.literal == CloudWords.turnedOff }
         #expect(entry?.reason.hasPrefix(DevicePromise.cloudSettingName) == true)
     }
@@ -645,6 +653,10 @@ struct DevicePromiseTests {
             "f(place: .onDevice)",
             "f(place: isRemote ? .mayLeaveDevice : model.privacyPlace)",
             "switch place { case .onDevice: return true default: return false }",
+            // A place made of no places, which would read as on the device.
+            "let place = PrivacyPlace.all()",
+            "let place = PrivacyPlace\n    .all( )",
+            "f(place: .all())",
         ]
         for text in wrong {
             #expect(!DevicePromise.placeProblems(in: SwiftSource(text), file: "PebbleUI/Wrong.swift").isEmpty, "missed: \(text)")
@@ -659,6 +671,8 @@ struct DevicePromiseTests {
             "let x = place\n    .staysOnDevice",
             "public init(turns: [ChatTurn], place: PrivacyPlace = .mayLeaveDevice) {}",
             "let store = try? MemoryStore.onDevice()",
+            "let place = PrivacyPlace.all(chat.privacyPlace, model.privacyPlace)",
+            "let lines = CloudWords.all()",
         ]
         for text in right {
             #expect(DevicePromise.placeProblems(in: SwiftSource(text), file: "PebbleUI/Right.swift").isEmpty, "flagged: \(text)")

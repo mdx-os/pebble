@@ -51,7 +51,10 @@ enum SnapshotMode {
         let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -20_000, y: -20_000), size: size),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = NSHostingView(rootView: screen.frame(width: size.width, height: size.height))
+        // A sheet needs a titled window, and AppKit may pull a titled window
+        // back on screen as it is ordered in, so it is moved off again after.
         window.orderFront(nil)
+        window.setFrameOrigin(CGPoint(x: -20_000, y: -20_000))
         // Long enough for the sheet to be presented and to finish moving in.
         let deadline = Date().addingTimeInterval(8)
         var settledAt: Date?

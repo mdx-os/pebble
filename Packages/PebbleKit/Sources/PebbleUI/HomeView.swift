@@ -817,7 +817,7 @@ struct HomeSplit<TodayScreen: View, ChatScreen: View, MemoryScreen: View>: View 
         NavigationSplitView {
             List(selection: $section) {
                 ForEach(HomeSection.allCases, id: \.self) { place in
-                    let chosen = Self.isChosen(place, section: section) && Self.drawsOwnFill
+                    let chosen = Self.isChosen(place, section: section, regular: isRegular) && Self.drawsOwnFill
                     let count = place == .today ? needsYouCount : 0
                     NavigationLink(value: place) {
                         HStack {
@@ -834,13 +834,15 @@ struct HomeSplit<TodayScreen: View, ChatScreen: View, MemoryScreen: View>: View 
                         }
                         .foregroundStyle(chosen ? AnyShapeStyle(Theme.onTintFill) : AnyShapeStyle(.primary))
                     }
-                    .badge(chosen ? 0 : count)
+                    // Heard the same way as the count the chosen row draws.
+                    .badge(chosen || count == 0 ? nil
+                           : Text(count, format: .number).accessibilityLabel(Self.spokenCount(count)))
                     // iOS 26 draws a chosen sidebar row in gray glass, whatever
                     // the tint, so the row draws its own fill, with white words.
                     .listRowBackground(chosen ? Capsule().fill(Theme.tintFill).padding(.horizontal, 10) : nil)
-                    // Today is drawn chosen before the list has a selection,
-                    // so VoiceOver hears it chosen too.
-                    .accessibilityAddTraits(Self.traits(place, section: section))
+                    // Today is drawn chosen beside its own screen before the
+                    // list has a selection, so VoiceOver hears it chosen too.
+                    .accessibilityAddTraits(Self.traits(place, section: section, regular: isRegular))
                 }
             }
             // The deep fill tint, not the root's `accentText`, which is too
@@ -877,19 +879,32 @@ struct HomeSplit<TodayScreen: View, ChatScreen: View, MemoryScreen: View>: View 
         #endif
     }
 
-    /// The row drawn chosen: the selection, or Today before there is one.
-    static func isChosen(_ place: HomeSection, section: HomeSection?) -> Bool {
-        place == (section ?? .today)
+    /// Whether the sidebar sits beside its detail. Collapsed, as on iPhone
+    /// or a narrow iPad window, going back to the list clears the selection
+    /// and no detail shows, so nothing is chosen.
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var isRegular: Bool { sizeClass == .regular }
+    #else
+    private var isRegular: Bool { true }
+    #endif
+
+    /// The row drawn chosen: the selection, or Today with no selection yet
+    /// while Today's screen shows beside the list. A collapsed list with no
+    /// selection has no row chosen.
+    static func isChosen(_ place: HomeSection, section: HomeSection?, regular: Bool) -> Bool {
+        if let section { return place == section }
+        return regular && place == .today
     }
 
-    /// What VoiceOver hears for the count the chosen row draws itself.
+    /// What VoiceOver hears for a row's count, drawn or the system's badge.
     static func spokenCount(_ count: Int) -> String {
         HomeWords.waiting(count)
     }
 
     /// What VoiceOver hears of a row: chosen exactly when it is drawn so.
-    static func traits(_ place: HomeSection, section: HomeSection?) -> AccessibilityTraits {
-        isChosen(place, section: section) ? .isSelected : []
+    static func traits(_ place: HomeSection, section: HomeSection?, regular: Bool) -> AccessibilityTraits {
+        isChosen(place, section: section, regular: regular) ? .isSelected : []
     }
 
     private var newChatButton: some View {
