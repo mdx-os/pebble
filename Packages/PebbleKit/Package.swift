@@ -5,8 +5,9 @@ import PackageDescription
 // and SwiftPM enforces that through the dependency lists here.
 //   PebbleCore   plain types. No SwiftUI, no networking.
 //   PebblePulse  competitor watch: fetching and snapshots. Imports PebbleCore.
-//   PebbleModel  model adapter. ModelClient and the on-device placeholder.
-//                Imports PebbleCore. A later MLX or Ollama adapter lives here.
+//   PebbleModel  model adapter. ModelClient, the on-device placeholder and
+//                CloudModel (off by default). Imports PebbleCore. A later
+//                MLX or Ollama adapter lives here.
 //   PebbleBackground  gives the background runner time: BGTaskScheduler on
 //                iPhone and iPad, NSBackgroundActivityScheduler on the Mac.
 //                Imports PebbleCore. The runner and every decision it

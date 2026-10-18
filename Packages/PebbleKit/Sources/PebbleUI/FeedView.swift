@@ -24,8 +24,9 @@ final class FeedModel: ObservableObject {
     /// Moves a scripted engine's clock with real time, for the live showcase.
     let drivesTasks: Bool
     /// Where the person's words go, passed down from the model so copy that
-    /// mentions the device never drifts from it.
-    let place: PrivacyPlace
+    /// mentions the device never drifts from it. `HomeView` keeps it up to
+    /// date as chats start and the cloud setting changes.
+    @Published var place: PrivacyPlace
     /// Work done while the app was closed. Its cards join the feed as a
     /// source, and Today runs whatever is due each time it refreshes, so a
     /// summary the system never woke the app for is made once it opens.
@@ -390,9 +391,9 @@ final class FeedModel: ObservableObject {
     }
 
     /// Forget everything, from the memory screen: every task goes, as in
-    /// `forgetTasks`. The memory screen forgets the background work first,
-    /// so it can say if its file couldn't be erased; here a summary still
-    /// open to read closes, and Today shows the cards gone.
+    /// `forgetTasks`. The memory screen forgets the background work just
+    /// before, so it can say if its file couldn't be erased; here a summary
+    /// still open to read closes, and Today shows the cards gone.
     @discardableResult
     func forgetEverything() -> ClearedTasks {
         if let reading, reading.id.hasPrefix("background:") { self.reading = nil }
@@ -722,6 +723,8 @@ struct FeedCard: View {
             .accessibilityHint(action.hint)
             // Voice Control users can say the words they see on the card.
             .accessibilityInputLabels([Text(action.title), Text(item.title)])
+            // Not redundant: `children: .ignore` makes a new element without
+            // the button's trait. The UI tests find these cards as buttons.
             .accessibilityAddTraits(.isButton)
         } else {
             content(actionTitle: nil)

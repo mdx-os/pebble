@@ -74,7 +74,7 @@ when the code makes them true.
   and passed down by the app. There is no second flag. Every device line
   takes it: `FirstConversation.opening` and `presence`,
   `FirstRunWords.helloDetail`, `MemoryWords.empty`, `saved` and
-  `privacyNote`, and `FeedWords.sampleNote`. Memory lines follow it too: notes never reach a model,
+  `privacyNote`, `FeedWords.sampleNote` and `CloudWords.offDetail`. Memory lines follow it too: notes never reach a model,
   but with a cloud model the chat does leave the device, so a promise on
   the memory screen would mislead. `PrivacyPlaceTests` pins every line.
 - When the flag is off, say nothing about the device. Drop the sentence
@@ -86,6 +86,12 @@ when the code makes them true.
   Don't claim more about the device's storage than the code can check.
 - A promise about what happens next must have a button or a behavior
   behind it. "I'll look again" needs a Try again or a re-check.
+- Help from the cloud (`CloudWords`) is off until the person says yes to
+  a question that names what changes. Before anything from a chat leaves,
+  the person sees "Here is exactly what leaves your device" with the very
+  bytes that will be sent. `CloudModel` reports `.mayLeaveDevice`, so a
+  chat on the cloud, and every line that reads the flag from it, never
+  says "on this device".
 
 ## When someone may be in danger
 

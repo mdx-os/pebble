@@ -203,6 +203,36 @@ struct BackgroundFeedTests {
         #expect(!memory.hasSomethingToForget)
     }
 
+    /// With the private words too, each step runs whatever the others did:
+    /// the notes can't be erased here, but the summaries and the words go,
+    /// and the line says exactly that.
+    @Test(.enabled(if: geteuid() != 0, "file permissions don't hold for root"))
+    func forgetEverythingSaysWhatWentWithTheWordsAndSummaries() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("memory-ro-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let notes = MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
+        _ = try notes.remember("Sam's birthday is May 14.", source: .toldMe)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        let runner = runner(on: true)
+        runner.runDue(now: Self.at(7, days: 1), conditions: .foreground)
+        #expect(!runner.results.isEmpty)
+        var wordsForgotten = false
+        let memory = MemoryModel(store: notes, place: .onDevice,
+                                 alsoForget: { wordsForgotten = true; return .privateWords },
+                                 background: runner, now: { Self.at(9) })
+        memory.forgetEverything()
+        #expect(memory.status == CloudWords.forgotWordsNotNotes + " " + MemoryWords.summariesGone)
+        #expect(wordsForgotten)
+        #expect(!runner.isOn)
+        #expect(runner.results.isEmpty)
+        #expect(!runner.store.hasStoredFile)
+        #expect(notes.notes().count == 1)
+    }
+
     /// Off until the person turns it on. On, it says when the next is due,
     /// and VoiceOver hears it, since that line appears away from the switch.
     @Test func theSwitchIsOffUntilTurnedOnAndSaysWhenTheNextIsDue() {

@@ -34,7 +34,8 @@ struct CopyDashTests {
         MemoryWords.forgetEverythingDetail(background: false),
         MemoryWords.unreadable, MemoryWords.unavailable, MemoryWords.couldNotOpen, MemoryWords.tryAgainTitle,
         MemoryWords.forgetOneQuestion, MemoryWords.editPlaceholder, MemoryWords.couldNotForget,
-        MemoryWords.couldNotForgetNotes,
+        MemoryWords.couldNotForgetNotes, MemoryWords.couldNotForgetSummaries, MemoryWords.summariesGone,
+        MemoryWords.summariesStayed,
         MemorySource.toldMe.label, MemorySource.fromApp("Calendar").label, MemorySource.inferred.label,
         ConfirmationWords.heading, ConfirmationWords.toLabel, ConfirmationWords.fromLabel,
         ConfirmationWords.whatLabel, ConfirmationWords.whereLabel, ConfirmationWords.priceLabel,
@@ -47,6 +48,8 @@ struct CopyDashTests {
       + AgentLook.allCases.map(\.title)
       + HomeWords.shortcuts.flatMap { [$0.keys, $0.action] }
       + FeedWords.all
+      + CloudWords.all
+      + Redaction.Kind.allCases.flatMap { [$0.mask, $0.counted(1), $0.counted(2)] }
       + TaskWords.all
       + BackgroundWordsTests.all
 

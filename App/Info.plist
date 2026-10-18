@@ -28,6 +28,8 @@
 	<string>public.app-category.productivity</string>
 	<key>PebbleBrandName</key>
 	<string>$(BRAND_NAME)</string>
+	<key>PebbleCloudEndpoint</key>
+	<string>$(PEBBLE_CLOUD_ENDPOINT)</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

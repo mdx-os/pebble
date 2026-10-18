@@ -418,7 +418,7 @@ public final class BackgroundStore: @unchecked Sendable {
         sharedLock.lock()
         defer { sharedLock.unlock() }
         if let shared { return shared }
-        let folder = try MemoryStore.folder(fileManager: fileManager)
+        let folder = try MemoryStore.onDeviceFolder(fileManager: fileManager)
         let store = BackgroundStore(fileURL: folder.appendingPathComponent("background.json"))
         shared = store
         return store

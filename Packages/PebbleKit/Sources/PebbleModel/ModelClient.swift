@@ -20,7 +20,9 @@ import PebbleCore
 /// That request stays in this layer.
 ///
 /// PebbleCore does not do networking. A cloud model stays off until the
-/// person chooses one.
+/// person chooses one: `CloudModel` is that adapter, `ModelChoice` only
+/// hands it out with the setting on, and it shows the person every request
+/// before it is sent.
 public protocol ModelClient: Sendable {
     /// Answers the transcript. The newest person turn is the message to answer.
     /// Call this only through `Conversation.appendingReply`. It answers words

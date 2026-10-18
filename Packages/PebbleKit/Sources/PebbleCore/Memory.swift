@@ -100,7 +100,9 @@ public enum MemoryWords {
     // when `place` says every word stays here. Notes live only in
     // `MemoryStore`'s file, left out of backups, and nothing passes them to a
     // `ModelClient`, but a cloud model would still hear the chat, so the
-    // promise follows the model, not the notes.
+    // promise follows the model, not the notes. `Redactor` reads notes on
+    // this device to know which names to take out of a cloud request; the
+    // notes themselves are never sent.
     public static func empty(_ place: PrivacyPlace) -> String {
         place.staysOnDevice
             ? "Tell me something worth keeping, like a birthday or how you take your tea. It stays on this device, and you can change or remove it anytime."
@@ -157,6 +159,11 @@ public enum MemoryWords {
     /// Forget everything when the rest went but the morning summaries'
     /// file couldn't be erased. Work while you're away is off either way.
     public static let couldNotForgetSummaries = "I forgot the rest and turned off work while you're away, but I couldn't erase your morning summaries just now. Please try again in a moment."
+    /// Follows a Forget everything line that says something else stayed,
+    /// when the morning summaries' file was erased.
+    public static let summariesGone = "Your morning summaries are gone, and work while you're away is off."
+    /// The same, when the summaries' file couldn't be erased either.
+    public static let summariesStayed = "Work while you're away is off, but I couldn't erase your morning summaries either."
 }
 
 /// Notes the agent keeps, stored only on this device.
@@ -178,11 +185,11 @@ public final class MemoryStore: @unchecked Sendable {
 
     /// The file is there but its words can't be decoded. Writes refuse rather
     /// than replace notes that may still be recoverable.
-    public struct Unreadable: Error, Equatable {}
+    public struct Unreadable: Error, Equatable { public init() {} }
 
     /// The file is there but can't be opened right now, for example while an
     /// iPhone is locked. Try again later; this is not damage.
-    public struct Unavailable: Error, Equatable {}
+    public struct Unavailable: Error, Equatable { public init() {} }
 
     /// What the memory screen should show.
     public enum Contents: Equatable, Sendable {
@@ -216,14 +223,16 @@ public final class MemoryStore: @unchecked Sendable {
         sharedLock.lock()
         defer { sharedLock.unlock() }
         if let shared { return shared }
-        let store = MemoryStore(fileURL: try folder(fileManager: fileManager).appendingPathComponent("memory.json"))
+        let store = MemoryStore(fileURL: try onDeviceFolder(fileManager: fileManager).appendingPathComponent("memory.json"))
         shared = store
         return store
     }
 
-    /// The notes' folder inside Application Support, made if need be and
-    /// left out of backups. The background runner keeps its file here too.
-    public static func folder(fileManager: FileManager = .default) throws -> URL {
+    /// The folder the notes live in, inside Application Support and left
+    /// out of backups. Other things that must stay on this device, like the
+    /// words the person always wants hidden and the background runner's
+    /// morning summaries, are kept here too.
+    public static func onDeviceFolder(fileManager: FileManager = .default) throws -> URL {
         let base = try fileManager.url(
             for: .applicationSupportDirectory, in: .userDomainMask,
             appropriateFor: nil, create: true
