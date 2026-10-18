@@ -18,18 +18,19 @@ public enum OnDeviceTasks {
         }
     }
 
-    /// The engine for the person's notes, its tasks kept in a file next to
-    /// them. Nil unless `model` keeps every word on this device.
-    public static func engine(model: any ModelClient, notes: MemoryStore, rule: AskFirst = .shared) -> DeviceTaskEngine? {
-        engine(model: model, notes: notes, rule: rule, pace: .milliseconds(900))
+    /// The engine for the person's notes, its tasks kept in `store`, the
+    /// app's one task store. Nil unless `model` keeps every word on this
+    /// device.
+    public static func engine(model: any ModelClient, notes: MemoryStore, store: TaskStore,
+                              rule: AskFirst = .shared) -> DeviceTaskEngine? {
+        engine(model: model, notes: notes, store: store, rule: rule, pace: .milliseconds(900))
     }
 
     /// The same, with the pace steps move at. Nil leaves them to
     /// `DeviceTaskEngine.runPending()`, for tests.
-    package static func engine(model: any ModelClient, notes: MemoryStore, rule: AskFirst, pace: Duration?,
-                               clock: @escaping @Sendable () -> Date = { Date() }) -> DeviceTaskEngine? {
+    package static func engine(model: any ModelClient, notes: MemoryStore, store: TaskStore, rule: AskFirst,
+                               pace: Duration?, clock: @escaping @Sendable () -> Date = { Date() }) -> DeviceTaskEngine? {
         guard let key = Key(model: model) else { return nil }
-        return DeviceTaskEngine(key: key, notes: notes, fileURL: DeviceTaskEngine.fileURL(besides: notes),
-                                rule: rule, pace: pace, clock: clock)
+        return DeviceTaskEngine(key: key, notes: notes, store: store, rule: rule, pace: pace, clock: clock)
     }
 }

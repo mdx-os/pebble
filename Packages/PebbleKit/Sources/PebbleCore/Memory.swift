@@ -132,7 +132,7 @@ public enum MemoryWords {
     // with a cloud model. It makes no promise about the chat. Don't gate it
     // like the lines above. Forget everything forgets tasks too, so it says
     // running ones stop.
-    public static let forgetEverythingDetail = "This removes every note and every task from this device, and stops any task still going. It can't be undone."
+    public static let forgetEverythingDetail = "This removes every note and every task from this device, and stops any task still going. It can't be undone. Your choice about nudges stays as it is."
     /// See the note above `empty`.
     public static func privacyNote(_ place: PrivacyPlace) -> String {
         place.staysOnDevice ? "Kept only on this device. Removing a note erases it." : "Removing a note erases it."

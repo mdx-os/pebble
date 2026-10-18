@@ -55,12 +55,25 @@ struct DeviceTaskEngineTests {
         try notes.remember("Old note from last month", at: now - 30 * 86_400, source: .toldMe)
     }
 
-    /// The engine as the app makes it, with steps left to the test.
+    /// The engine as the app makes it, with steps left to the test. Each
+    /// opens the task store afresh, as a relaunch would.
     func engine() throws -> DeviceTaskEngine {
-        try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, rule: rule, pace: nil, clock: clock.now))
+        try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: openStore(), rule: rule,
+                                          pace: nil, clock: clock.now))
+    }
+
+    /// The app's one task store, over the file in this test's folder.
+    func openStore() -> TaskStore {
+        TaskStore(fileURL: tasksFile, forgetMarker: folder.appendingPathComponent("pending/tasks-forgotten"))
     }
 
     var tasksFile: URL { folder.appendingPathComponent("tasks.json") }
+
+    /// Writes `json`, what the engine keeps, into the task store's file as
+    /// an earlier launch would have left it.
+    func writeKept(_ json: String) throws {
+        try Data(#"{"device":\#(json),"nudges":"notAsked","receipts":[],"tasks":[]}"#.utf8).write(to: tasksFile)
+    }
 
     /// Runs the digest up to its question.
     func runToQuestion(_ engine: DeviceTaskEngine) throws -> (AgentTask, ConfirmationRequest) {
@@ -75,8 +88,8 @@ struct DeviceTaskEngineTests {
     // MARK: On device only
 
     @Test func aModelThatMayLeaveTheDeviceGetsNoEngine() {
-        #expect(OnDeviceTasks.engine(model: LeavesTheDevice(), notes: notes) == nil)
-        let engine = OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, rule: rule, pace: nil)
+        #expect(OnDeviceTasks.engine(model: LeavesTheDevice(), notes: notes, store: openStore()) == nil)
+        let engine = OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: openStore(), rule: rule, pace: nil)
         #expect(engine?.place == LocalStubModel().privacyPlace)
     }
 
@@ -86,7 +99,8 @@ struct DeviceTaskEngineTests {
     /// there is: its place is the model's, every time.
     @Test func theFactoryTakesThePlaceFromTheModel() throws {
         let first = try engine()
-        let second = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, rule: rule, pace: nil))
+        let second = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: openStore(),
+                                                       rule: rule, pace: nil))
         #expect(first.place == LocalStubModel().privacyPlace)
         #expect(second.place == LocalStubModel().privacyPlace)
         #expect(first.place.staysOnDevice)
@@ -211,13 +225,16 @@ struct DeviceTaskEngineTests {
 
     // MARK: The task file and relaunch
 
-    @Test func tasksAreKeptNextToTheNotesAndComeBack() throws {
+    @Test func tasksAreKeptInTheTaskStoreAndComeBack() throws {
         let engine = try engine()
         let (task, question) = try runToQuestion(engine)
         guard case .approved(let approval) = rule.sayYes(to: question) else { Issue.record("no approval"); return }
         _ = engine.resume(task.id, with: approval)
-        #expect(engine.fileURL == tasksFile)
+        #expect(engine.store.fileURL == tasksFile)
         #expect(FileManager.default.fileExists(atPath: tasksFile.path))
+        // The one file: nothing of the engine's own next to the notes.
+        let files = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { !$0.hasPrefix(".") }
+        #expect(Set(files) == ["memory.json", "tasks.json"])
 
         let again = try self.engine()
         let back = try #require(again.tasks.first)
@@ -979,10 +996,10 @@ struct DeviceTaskEngineTests {
     /// closed may have happened, so it is never called undone or done.
     @Test func aSaveUnderWayWhenTheAppClosedMayBeDone() throws {
         let json = """
-            [{"id":"device-task:1","title":"\(DigestTask.title)","step":"\(DigestWords.saving)","state":"running",
-              "history":[{"text":"You said yes.","mark":"approved","at":0}],"startedAt":0,"updatedAt":0,"saving":true}]
+            {"tasks":[{"id":"device-task:1","title":"\(DigestTask.title)","step":"\(DigestWords.saving)","state":"running",
+              "history":[{"text":"You said yes.","mark":"approved","at":0}],"startedAt":0,"updatedAt":0,"saving":true}]}
             """
-        try Data(json.utf8).write(to: tasksFile)
+        try writeKept(json)
         let back = try #require(try engine().tasks.first)
         #expect(back.state == .stopped)
         #expect(back.step == DigestWords.stoppedWhenClosed)
@@ -1001,7 +1018,7 @@ struct DeviceTaskEngineTests {
              "history":[],"startedAt":0,"updatedAt":0,"saving":false}
             """
         }.joined(separator: ",")
-        try Data("[\(json)]".utf8).write(to: tasksFile)
+        try writeKept(#"{"tasks":[\#(json)]}"#)
         let back = Dictionary(uniqueKeysWithValues: try engine().tasks.map { ($0.state, $0.progress) })
         #expect(back[.done] == .fraction(1))
         #expect(back[.stopped] == .indeterminate)
@@ -1056,8 +1073,8 @@ struct DeviceTaskEngineTests {
 
     @Test func aWeekWithNoNotesEndsWithoutAsking() throws {
         let empty = MemoryStore(fileURL: folder.appendingPathComponent("empty.json"))
-        let engine = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: empty, rule: rule, pace: nil,
-                                                       clock: clock.now))
+        let engine = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: empty, store: openStore(),
+                                                       rule: rule, pace: nil, clock: clock.now))
         engine.start(DigestTask.request)
         for _ in 0..<3 { engine.runPending() }
         let task = try #require(engine.tasks.first)

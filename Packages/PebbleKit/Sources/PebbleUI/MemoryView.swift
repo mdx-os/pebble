@@ -14,6 +14,9 @@ public struct MemoryView: View {
     /// Nil keeps the place the model was made with.
     private let place: PrivacyPlace?
     private let cloud: CloudHelp?
+    /// True while Forget everything has something besides the notes to
+    /// take, such as a receipt, so its button shows with no notes at all.
+    private let holdsMore: Bool
 
     /// `place` comes from the active model (`ModelClient.privacyPlace`), so
     /// the device promise here is the same one the chat makes. It can change
@@ -30,6 +33,7 @@ public struct MemoryView: View {
                                                        onForgetEverything: onForgetEverything))
         self.place = place
         self.cloud = cloud
+        holdsMore = false
     }
 
     /// Takes a model built from the active model, as `HomeView` does, or
@@ -42,10 +46,19 @@ public struct MemoryView: View {
     /// autoclosure, so it runs once for the screen, not on every pass of
     /// the view around it. Calling it first would reset "Saved." and a
     /// pending Forget everything on every publish.
-    init(model: @autoclosure @escaping () -> MemoryModel, place: PrivacyPlace? = nil, cloud: CloudHelp? = nil) {
+    init(model: @autoclosure @escaping () -> MemoryModel, place: PrivacyPlace? = nil, cloud: CloudHelp? = nil,
+         holdsMore: Bool = false) {
         _model = StateObject(wrappedValue: model())
         self.place = place
         self.cloud = cloud
+        self.holdsMore = holdsMore
+    }
+
+    /// Forget everything shows while there is anything for it to take:
+    /// notes, private words, or something else the agent holds, such as a
+    /// receipt with no task left.
+    static func showsForgetEverything(hasNotes: Bool, mayHaveWords: Bool, holdsMore: Bool) -> Bool {
+        hasNotes || mayHaveWords || holdsMore
     }
 
     /// What Forget everything erases besides the notes: the words always
@@ -159,10 +172,12 @@ public struct MemoryView: View {
             // Watches the cloud setting, so the button shows while there
             // may be private words to erase.
             CloudWatcher(help: cloud) { help in
-                forgetEverythingButton(shown: model.hasStoredFile || help.mayHavePrivateWords)
+                forgetEverythingButton(shown: Self.showsForgetEverything(
+                    hasNotes: model.hasStoredFile, mayHaveWords: help.mayHavePrivateWords, holdsMore: holdsMore))
             }
         } else {
-            forgetEverythingButton(shown: model.hasStoredFile)
+            forgetEverythingButton(shown: Self.showsForgetEverything(
+                hasNotes: model.hasStoredFile, mayHaveWords: false, holdsMore: holdsMore))
         }
     }
 
@@ -288,6 +303,8 @@ private struct ForgetEverythingDialog: ViewModifier {
 /// on their own, with words that are honest that the notes stay. With the
 /// cloud setting, the words always hidden go with them.
 struct MemoryUnavailableView: View {
+    /// True while there are tasks, or receipts or tasks kept from before,
+    /// to forget. Receipts alone still show the button.
     let hasTasks: Bool
     /// True once every task was forgotten here, until a new one starts.
     var forgotten = false

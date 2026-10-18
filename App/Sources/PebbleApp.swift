@@ -12,7 +12,8 @@ struct PebbleApp: App {
     /// The model that runs here. The task engine takes its place from it.
     private let model = LocalStubModel()
     /// The real task engine: on this device only, reading the same notes,
-    /// its tasks kept next to them. None when the notes can't be opened.
+    /// its tasks kept in `kept`, the one task store. None when the notes
+    /// can't be opened.
     private let tasks: DeviceTaskEngine?
     /// Off until the person turns it on, and unavailable while
     /// Config/Cloud.local.xcconfig has no address. Its settings and private
@@ -22,16 +23,25 @@ struct PebbleApp: App {
     /// the setting must not re-run the body and rebuild the home screen.
     /// The screens that show it observe it themselves.
     @State private var cloud: CloudHelp
+    /// Tasks and receipts kept while the app is closed. If the folder
+    /// can't be opened they are kept in memory, and Forget everything still
+    /// deletes a file an earlier launch left.
+    private let kept: TaskStore
 
     init() {
         guard let brand = Brand(infoDictionary: Bundle.main.infoDictionary) else {
             preconditionFailure("\(Brand.infoKey) is missing from Info.plist. Set BRAND_NAME in Config/Brand.xcconfig.")
         }
         self.brand = brand
+        // Before launch finishes, so a nudge opened from the lock screen
+        // reaches Today even when it starts the app. Asks for nothing.
+        LocalQuestionNotifier.shared.install()
         let memory = try? MemoryStore.onDevice()
         self.memory = memory
+        let kept = (try? TaskStore.onDevice()) ?? TaskStore.forgetOnly()
+        self.kept = kept
         let model = self.model
-        tasks = memory.flatMap { OnDeviceTasks.engine(model: model, notes: $0) }
+        tasks = memory.flatMap { OnDeviceTasks.engine(model: model, notes: $0, store: kept) }
         let endpoint = CloudEndpoint.url(infoDictionary: Bundle.main.infoDictionary)
         // The setting is kept next to the notes. If either can't be opened,
         // nothing typed into the setting could be kept, so it reads as off,
@@ -73,6 +83,8 @@ struct PebbleApp: App {
             onboarding: UserDefaultsOnboardingStore(),
             memory: memory,
             tasks: tasks,
+            kept: kept,
+            notifier: LocalQuestionNotifier.shared,
             cloud: cloud
         )
     }

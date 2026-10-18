@@ -24,14 +24,26 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// moment: working, trying another way, waiting on the person, and done.
     /// `tasksLive` plays the same tasks in real time.
     case taskRunning, taskRetrying, taskWaiting, taskDone, tasksLive
+    /// The dentist search reaching its one question: waiting in Needs you
+    /// with the offer of a nudge, open in its sheet, its receipt after a
+    /// yes, and its card after Not now. `askLive` plays it in real time and
+    /// keeps it while the app is closed, for the UI tests.
+    case askWaiting, askSheet, askAnswered, askClosed, askLive
 
-    public static let launchKey = "pebbleScreen"
+    /// The launch argument that picks a scene. No name in it, product or
+    /// codename, as `make brand-check` asks of new code.
+    public static let launchKey = "showcaseScreen"
+    /// Launch with this set to keep what `askLive` kept last time, as the
+    /// app does after it is closed. Without it, `askLive` starts fresh.
+    public static let keepAsksKey = "showcaseKeepAsks"
+    /// The throwaway suite the showcase keeps its looks in.
+    static let looksSuite = "showcase.looks"
 
     @MainActor
     public func view(brand: Brand) -> some View {
         // A throwaway suite so the showcase never touches real choices.
-        let looks = UserDefaults(suiteName: "pebble.showcase")!
-        looks.removePersistentDomain(forName: "pebble.showcase")
+        let looks = UserDefaults(suiteName: Self.looksSuite)!
+        looks.removePersistentDomain(forName: Self.looksSuite)
         // Read the clock once, so the cards and the question agree.
         let morning = Self.morning
         return Group {
@@ -54,8 +66,12 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     needsYou: needsYou(at: morning) ?? NeedsYou(rule: .isolated()),
                     now: { morning }
                 )
-            case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive:
+            case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive,
+                 .askWaiting, .askSheet, .askAnswered, .askClosed, .askLive:
                 taskHome(brand: brand, looks: looks)
+                    .overlay(alignment: .topLeading) {
+                        if self == .askLive { NudgePermissionProbe() }
+                    }
             case .shortcuts:
                 KeyboardShortcutsView()
             case .hello, .name, .look, .ideas:
@@ -143,7 +159,8 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         switch self {
         case .todayNeedsYou: Self.sampleQuestion(at: now)
         case .today, .todayEmpty, .home, .homeMemory: NeedsYou(rule: .isolated())
-        case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive: NeedsYou(rule: rule)
+        case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive,
+             .askWaiting, .askSheet, .askAnswered, .askClosed, .askLive: NeedsYou(rule: rule)
         default: nil
         }
     }
@@ -155,6 +172,148 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         switch self {
         case .tasksLive: Self.liveTasks(rule: rule)
         case .taskRunning, .taskRetrying, .taskWaiting, .taskDone: Self.sampleTasks(self, rule: rule)
+        case .askWaiting, .askSheet, .askAnswered, .askClosed: Self.askTasks(self, rule: rule)
+        case .askLive: Self.liveAsks().engine
+        default: nil
+        }
+    }
+
+    /// Where an ask scene keeps its tasks and receipts. In memory, except
+    /// for `askLive`, whose file outlasts the app being closed. Nil for
+    /// scenes that keep nothing.
+    @MainActor
+    func kept() -> TaskStore? {
+        switch self {
+        case .askLive: return Self.liveAsks().store
+        case .askWaiting, .askSheet, .askAnswered, .askClosed:
+            if let store = Self.askStores[self] { return store }
+            let store = TaskStore.inMemory()
+            Self.askStores[self] = store
+            return store
+        default: return nil
+        }
+    }
+
+    @MainActor private static var askStores: [ShowcaseScene: TaskStore] = [:]
+    @MainActor private static var liveAsk: (rule: AskFirst, engine: LocalFakeEngine, store: TaskStore)?
+
+    /// The one live ask scene for this launch: its rule, engine and store,
+    /// made once so the screen and its question always agree.
+    @MainActor
+    static func liveAsks() -> (rule: AskFirst, engine: LocalFakeEngine, store: TaskStore) {
+        if let liveAsk { return liveAsk }
+        let temporary = FileManager.default.temporaryDirectory
+        let store = TaskStore(fileURL: temporary.appendingPathComponent("showcase-asks.json"),
+                              forgetMarker: temporary.appendingPathComponent("showcase-asks-pending", isDirectory: true)
+                                  .appendingPathComponent("tasks-forgotten"))
+        if !UserDefaults.standard.bool(forKey: keepAsksKey) { store.reset() }
+        let rule = AskFirst.isolated()
+        // Played to the moment the dentist search asks, so the question
+        // opens as the app does. Kept tasks come back instead, when there are any.
+        let engine = LocalFakeEngine(rule: rule, scripts: Self.liveScripts(), origin: Date() - 42)
+        if store.tasks.isEmpty && store.receipts.isEmpty {
+            engine.start(liveDentist)
+        }
+        engine.advance(by: 42)
+        let made = (rule: rule, engine: engine, store: store)
+        liveAsk = made
+        return made
+    }
+
+    /// Launch with this many seconds to make the held visit take that long
+    /// after a yes, so a UI test can close the app while it is under way.
+    public static let holdSecondsKey = "showcaseHoldSeconds"
+
+    /// Every sample script for `askLive`, the dentist search swapped for
+    /// `liveDentist` wherever it is in `all`.
+    static func liveScripts(_ all: [TaskScript] = SampleTasks.all) -> [TaskScript] {
+        [liveDentist] + all.filter { $0.title != SampleTasks.dentist.title }
+    }
+
+    /// The dentist search for `askLive`, its held visit as long as asked.
+    static var liveDentist: TaskScript {
+        let hold = UserDefaults.standard.double(forKey: holdSecondsKey)
+        guard hold > 0, let last = SampleTasks.dentist.steps.last else { return SampleTasks.dentist }
+        let held = TaskScript.Step(last.text, kind: last.kind, duration: hold, kept: last.kept, todo: last.todo)
+        return TaskScript(title: SampleTasks.dentist.title, steps: SampleTasks.dentist.steps.dropLast() + [held],
+                          determinate: SampleTasks.dentist.determinate, doneLine: SampleTasks.dentist.doneLine,
+                          result: SampleTasks.dentist.result)
+    }
+
+    /// The dentist search at its question, and after it is answered.
+    /// Nothing here is really done. Each call starts the scene's store over.
+    ///
+    /// The search asks at 42 seconds and holds the visit in 4 more after a
+    /// yes. The plan, started at 20, is done at 42.
+    @MainActor
+    static func askTasks(_ scene: ShowcaseScene, rule: AskFirst) -> LocalFakeEngine {
+        let store = scene.kept()
+        store?.reset()
+        // The waiting scene shows the offer of a nudge; the others have had it.
+        if scene != .askWaiting { store?.setNudges(.declined) }
+        let at: TimeInterval = scene == .askWaiting || scene == .askSheet ? 42 : 50
+        let engine = LocalFakeEngine(rule: rule, origin: morning - at)
+        engine.start(SampleTasks.dentist)
+        engine.advance(by: 20)
+        engine.start(SampleTasks.plan)
+        engine.advance(by: 22)
+        if let task = engine.tasks.first(where: { $0.title == SampleTasks.dentistTitle }), let question = task.question {
+            // Answered through the sheet's own state, as a tap would.
+            let sheet = ConfirmationState(request: question, rule: rule,
+                                          onApprove: { _ = engine.resume(task.id, with: $0) },
+                                          onDecline: { engine.questionClosed(question) })
+            switch scene {
+            case .askAnswered: sheet.tapPrimary()
+            case .askClosed: sheet.cancel()
+            default: break
+            }
+        }
+        engine.advance(by: at - 42)
+        return engine
+    }
+
+    /// Nudges for the still ask scenes: the system has not been asked, and
+    /// nothing is ever posted.
+    final class StillNotifier: QuestionNotifying, @unchecked Sendable {
+        func permission() async -> NudgePermission { .notDetermined }
+        func requestPermission() async -> Bool { false }
+        func post(_ nudge: QuestionNudge, after delay: TimeInterval) {}
+        func remove(_ ids: [String]) {}
+        func removeAll() {}
+        func forget() {}
+        func onOpen(_ handler: @escaping @MainActor @Sendable (String) -> Void) {}
+    }
+
+    /// For the UI tests, in `askLive` only: what the system says about
+    /// nudges as the scene opens, so a test meets a simulator that was
+    /// asked before with a clear failure, not a confusing one later. Too
+    /// small and clear to be seen.
+    struct NudgePermissionProbe: View {
+        @State private var permission = "checking"
+
+        var body: some View {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityElement()
+                .accessibilityLabel(permission)
+                .accessibilityIdentifier("nudgePermission")
+                .task {
+                    #if canImport(UserNotifications)
+                    guard LocalQuestionNotifier.shared.installed else { return }
+                    permission = String(describing: await LocalQuestionNotifier.shared.permission())
+                    #endif
+                }
+        }
+    }
+
+    /// How an ask scene nudges: the real notifications for `askLive`, so
+    /// the UI tests meet the system's own question, and none for the rest.
+    var notifier: (any QuestionNotifying)? {
+        switch self {
+        #if canImport(UserNotifications)
+        case .askLive: LocalQuestionNotifier.shared
+        #endif
+        case .askWaiting, .askSheet, .askAnswered, .askClosed: StillNotifier()
         default: nil
         }
     }
@@ -198,8 +357,10 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// share one rule of their own, so the showcase never touches the app's.
     @MainActor
     private func taskHome(brand: Brand, looks: UserDefaults) -> HomeView {
-        let rule = AskFirst.isolated()
-        let live = self == .tasksLive
+        // The live ask scene keeps one rule for the launch, the one its
+        // kept question is asked again through.
+        let rule = self == .askLive ? Self.liveAsks().rule : AskFirst.isolated()
+        let live = self == .tasksLive || self == .askLive
         let morning = Self.morning
         return HomeView(
             brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
@@ -208,6 +369,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
             feed: [SampleFeedSource()], needsYou: needsYou(at: morning, rule: rule) ?? NeedsYou(rule: rule),
             tasks: tasks(rule: rule),
             drivesTasks: live,
+            kept: kept(), notifier: notifier, opensQuestion: self == .askSheet,
             now: live ? { Date() } : { morning }
         )
     }
@@ -366,7 +528,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     }
 
     static func sampleMemory() -> MemoryStore {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("pebble-showcase-memory.json")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("showcase-memory.json")
         let store = MemoryStore(fileURL: url)
         try? store.forgetEverything()
         let day: TimeInterval = 86_400

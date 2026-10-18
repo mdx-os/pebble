@@ -2,15 +2,17 @@ import Foundation
 import PebbleCore
 
 /// The app's real task engine. It runs only with a model on this device,
-/// reads and writes nothing but the person's notes and its own file, and
-/// never reaches the network.
+/// reads and writes nothing but the person's notes and its own part of the
+/// app's one `TaskStore`, and never reaches the network.
 ///
 /// It does one built-in task, `DigestTask`: it reads the notes from the
 /// past week, writes a short digest, and asks through `AskFirst` before it
 /// keeps the digest as a new note. Nothing is saved without that yes.
 ///
-/// Its tasks are kept in a file next to the notes, so they come back after
-/// the app closes. A task that was still going comes back stopped, with a
+/// Its tasks are kept in the `TaskStore`, the same file as the receipts
+/// and the Needs you flow's tasks, so they come back after the app closes
+/// and Forget everything takes them all at once. Its question waits in
+/// Needs you like any other. A task that was still going comes back stopped, with a
 /// line that says so, never as finished. One that had a yes and was saving
 /// when the app closed comes back saying the save may be done.
 ///
@@ -138,8 +140,8 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     public let place: PrivacyPlace
     /// The notes it reads, and the only place it ever writes a note.
     public let notes: MemoryStore
-    /// Its own file, next to the notes.
-    public let fileURL: URL
+    /// Where its tasks are kept: the app's one task store.
+    public let store: TaskStore
     private let pace: Duration?
     private let clock: @Sendable () -> Date
     private let lock = NSLock()
@@ -195,11 +197,11 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
     /// Ended tasks kept at most, like `LocalFakeEngine.endedLimit`.
     public static let endedLimit = 12
 
-    init(key: OnDeviceTasks.Key, notes: MemoryStore, fileURL: URL, rule: AskFirst,
+    init(key: OnDeviceTasks.Key, notes: MemoryStore, store: TaskStore, rule: AskFirst,
          pace: Duration?, clock: @escaping @Sendable () -> Date) {
         self.place = key.place
         self.notes = notes
-        self.fileURL = fileURL
+        self.store = store
         self.rule = rule
         self.pace = pace
         self.clock = clock
@@ -229,12 +231,6 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         sweep()
     }
 
-    /// The task file sits next to the notes file, so it is in the same
-    /// folder, left out of backups, and erased the same way.
-    public static func fileURL(besides notes: MemoryStore) -> URL {
-        notes.fileURL.deletingLastPathComponent().appendingPathComponent("tasks.json")
-    }
-
     /// What this engine can do, for Today to offer.
     public var builtIns: [TaskRequest] { [DigestTask.request] }
 
@@ -243,12 +239,9 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         return shown()
     }
 
-    /// True while the task file is on disk, readable or not, so Forget
-    /// everything is offered while there is anything to erase.
-    public var hasStoredFile: Bool {
-        FileManager.default.fileExists(atPath: fileURL.path)
-            || FileManager.default.fileExists(atPath: stagingURL.path)
-    }
+    /// True while the task store's file is on disk, readable or not, so
+    /// Forget everything is offered while there is anything to erase.
+    public var hasStoredFile: Bool { store.hasFile }
 
     @discardableResult
     public func start(_ request: TaskRequest) -> String {
@@ -372,9 +365,10 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         } + letGo
     }
 
-    /// Stops and forgets every task, and erases the task file. If the file
-    /// can't be erased, `ClearedTasks.erased` says so, and the tasks are
-    /// still gone from the screen.
+    /// Stops and forgets every task, and erases the task store's file with
+    /// `TaskStore.forget()`, so receipts and the Needs you flow's tasks go
+    /// in the same forget. If the file can't be erased, `ClearedTasks.erased`
+    /// says so, and the tasks are still gone from the screen.
     @discardableResult
     public func clear() -> ClearedTasks {
         mutate {
@@ -395,7 +389,8 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
             // no note the agent kept, a digest may still quote a note.
             tasksLost = true
             unsaved = false
-            let erased = (try? removeFile()) != nil
+            store.forget()
+            let erased = !store.hasFile
             return ClearedTasks(forgotten: forgotten, underway: underway, erased: erased)
         }
     }
@@ -1029,35 +1024,20 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         return more
     }
 
-    // MARK: The task file
+    // MARK: The task store
 
-    var stagingURL: URL {
-        fileURL.deletingLastPathComponent().appendingPathComponent("." + fileURL.lastPathComponent + ".next")
-    }
-
-    /// Reads the file. A task that was still going when the app closed
-    /// comes back stopped, and says so. Read late, as once a locked device
-    /// opens, the tasks it holds join any started since, which stay as
-    /// they are.
+    /// Reads what the store keeps for this engine. A task that was still
+    /// going when the app closed comes back stopped, and says so. Read
+    /// late, as once a locked device opens, the tasks it holds join any
+    /// started since, which stay as they are. A file the store let go
+    /// unread, as one it couldn't understand, leaves the tasks that kept
+    /// digests unknown.
     private func loadFile() {
-        let manager = FileManager.default
-        try? manager.removeItem(at: stagingURL)
-        guard manager.fileExists(atPath: fileURL.path) else {
-            loaded = true
-            return
-        }
         // Can't be opened right now: leave it, and look again on refresh.
-        guard let data = try? Data(contentsOf: fileURL) else { return }
+        guard let read = store.deviceTasks() else { return }
         loaded = true
-        // Unreadable: start with none. The file is replaced on the next
-        // change, or erased by Forget everything.
-        // A file from before kept digests were written down beside the
-        // tasks holds only the tasks.
-        guard let stored = (try? Self.decoder.decode(StoredFile.self, from: data))
-                ?? (try? Self.decoder.decode([StoredTask].self, from: data)).map({ StoredFile(tasks: $0, kept: nil) }) else {
-            tasksLost = true
-            return
-        }
+        if read.lost { tasksLost = true }
+        guard let stored = read.file else { return }
         let going = Set(runs.map(\.task.id))
         let back = stored.tasks.filter { !going.contains($0.id) }.map { stored in
             Run(task: stored.restored(at: clock()), stage: .ended, kept: stored.kept, drewFrom: stored.drewFrom ?? [],
@@ -1073,8 +1053,8 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         orphans += Self.open.take(Set(back.map(\.task.id)), notOwnedBy: ObjectIdentifier(self))
     }
 
-    /// Writes every task and the ids of every digest let go, or removes
-    /// the file once there are none. Only what the card shows is kept,
+    /// Keeps every task and the ids of every digest let go in the store,
+    /// or nothing once there are none. Only what the card shows is kept,
     /// and never a note's words: not the notes read, not a draft, and not
     /// a digest once kept.
     private func saveFile() {
@@ -1084,38 +1064,14 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         }
         unsaved = false
         if runs.isEmpty && letGo.isEmpty {
-            try? removeFile()
+            store.keepDevice(nil)
             return
         }
-        let stored = StoredFile(tasks: runs.map {
+        store.keepDevice(StoredFile(tasks: runs.map {
             StoredTask($0.task, saving: $0.stage == .saving, kept: $0.kept, drewFrom: $0.drewFrom,
                        quoted: $0.quoted, more: $0.more, byHand: $0.byHand, hidesQuote: $0.hidesQuote, gone: $0.gone)
-        }, kept: letGo.isEmpty ? nil : letGo)
-        guard let data = try? Self.encoder.encode(stored) else { return }
-        let manager = FileManager.default
-        try? manager.removeItem(at: stagingURL)
-        #if os(macOS)
-        let options: Data.WritingOptions = [.withoutOverwriting]
-        #else
-        let options: Data.WritingOptions = [.withoutOverwriting, .completeFileProtection]
-        #endif
-        guard (try? data.write(to: stagingURL, options: options)) != nil else { return }
-        if rename(stagingURL.path, fileURL.path) != 0 { try? manager.removeItem(at: stagingURL) }
+        }, kept: letGo.isEmpty ? nil : letGo))
     }
-
-    private func removeFile() throws {
-        let manager = FileManager.default
-        if manager.fileExists(atPath: stagingURL.path) { try manager.removeItem(at: stagingURL) }
-        if manager.fileExists(atPath: fileURL.path) { try manager.removeItem(at: fileURL) }
-    }
-
-    private static let encoder: JSONEncoder = {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        return encoder
-    }()
-
-    private static let decoder = JSONDecoder()
 
     /// Every engine's open questions in this app.
     private static let open = OpenQuestions()
@@ -1158,119 +1114,5 @@ private final class OpenQuestions: @unchecked Sendable {
         let taken = byTask.filter { $0.value.owner == owner }
         for task in taken.keys { byTask[task] = nil }
         return taken.values.map { ($0.rule, $0.request) }
-    }
-}
-
-/// How a kept digest note went.
-enum DigestGone: String, Codable, Equatable {
-    /// The person, or another writer, removed it.
-    case removed
-    /// The engine took it out, since no line was left once the notes it
-    /// quoted went or changed.
-    case tookOut
-}
-
-/// A kept digest whose card was put away or let go, as the file keeps it.
-/// Ids only: the digest note, the notes with a line in it, in order, and
-/// those its last line counts, so a note forgotten later still leaves it,
-/// and whether the person changed it. No words, and nothing worked out
-/// from them. It goes once the digest note does, so nothing here says
-/// how a digest went.
-struct KeptDigest: Codable, Equatable {
-    let note: UUID
-    var quoted: [UUID]?
-    var more: [UUID]?
-    var byHand: Bool
-}
-
-/// The task file: every task, and the kept digests let go.
-struct StoredFile: Codable, Equatable {
-    let tasks: [StoredTask]
-    let kept: [KeptDigest]?
-}
-
-/// A task as the file keeps it: what its card shows, whether a save the
-/// person said yes to was under way, and for a kept digest, which notes
-/// to read its words from. Never a note's words. Its history does keep
-/// the person's own instructions, as they typed them to change course,
-/// until the card is put away or Forget everything erases the file.
-struct StoredTask: Codable, Equatable {
-    struct Step: Codable, Equatable {
-        let text: String
-        let mark: String
-        let at: Date
-    }
-
-    struct WrapUp: Codable, Equatable {
-        let kept: [String]
-        let notDone: [String]
-        let underway: String?
-    }
-
-    let id: String
-    let title: String
-    let step: String
-    let state: String
-    let history: [Step]
-    let wrapUp: WrapUp?
-    let startedAt: Date
-    let updatedAt: Date
-    /// The person said yes and the note was being written.
-    let saving: Bool
-    /// The note the digest was kept as.
-    let kept: UUID?
-    /// The notes a kept digest drew from.
-    let drewFrom: [UUID]?
-    /// The notes with a line in a kept digest, in order, and those its
-    /// last line counts, so a forgotten note's line can be taken out.
-    let quoted: [UUID]?
-    let more: [UUID]?
-    /// True once the person changed the kept digest, so it is left as
-    /// theirs. Absent otherwise.
-    let byHand: Bool?
-    /// True once a note the kept digest drew from went while the digest
-    /// may still hold its words. Absent otherwise.
-    let hidesQuote: Bool?
-    /// How the kept digest note went, once it has, with no id left.
-    let gone: DigestGone?
-
-    init(_ task: AgentTask, saving: Bool, kept: UUID? = nil, drewFrom: [UUID] = [], quoted: [UUID]? = nil,
-         more: [UUID]? = nil, byHand: Bool = false, hidesQuote: Bool = false, gone: DigestGone? = nil) {
-        id = task.id
-        title = task.title
-        step = task.step
-        state = task.state.rawValue
-        history = task.history.map { Step(text: $0.text, mark: $0.mark.rawValue, at: $0.at) }
-        wrapUp = task.wrapUp.map { WrapUp(kept: $0.kept, notDone: $0.notDone, underway: $0.underway) }
-        startedAt = task.startedAt
-        updatedAt = task.updatedAt
-        self.saving = saving
-        self.kept = kept
-        self.drewFrom = kept == nil ? nil : drewFrom
-        self.quoted = kept == nil ? nil : quoted
-        self.more = kept == nil ? nil : more
-        self.byHand = kept != nil && byHand ? true : nil
-        self.hidesQuote = kept != nil && hidesQuote ? true : nil
-        self.gone = gone
-    }
-
-    /// The task as it comes back after the app closed. One that ended
-    /// comes back as it was, full only if it was done. One that was still
-    /// going comes back stopped, never done, and a save said yes to may be
-    /// done.
-    func restored(at now: Date) -> AgentTask {
-        let steps = history.map { TaskStep($0.text, mark: TaskStep.Mark(rawValue: $0.mark) ?? .done, at: $0.at) }
-        let state = TaskState(rawValue: self.state) ?? .stopped
-        guard !state.isFinished else {
-            return AgentTask(id: id, title: title, step: step, progress: state == .done ? .fraction(1) : .indeterminate,
-                             state: state, history: steps,
-                             wrapUp: wrapUp.map { TaskWrapUp(kept: $0.kept, notDone: $0.notDone, underway: $0.underway) },
-                             startedAt: startedAt, updatedAt: updatedAt)
-        }
-        return AgentTask(id: id, title: title, step: DigestWords.stoppedWhenClosed, progress: .indeterminate,
-                         state: .stopped, history: steps,
-                         wrapUp: TaskWrapUp(kept: [], notDone: saving ? [] : [DigestTask.saveTodo],
-                                            underway: saving ? DigestTask.saveTodo : nil),
-                         startedAt: startedAt, updatedAt: now)
     }
 }

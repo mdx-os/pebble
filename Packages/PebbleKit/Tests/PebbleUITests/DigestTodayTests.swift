@@ -14,6 +14,7 @@ struct DigestTodayTests {
     let folder: URL
     let notes: MemoryStore
     let rule = AskFirst.isolated()
+    let store: TaskStore
     let engine: DeviceTaskEngine
     let feed: FeedModel
 
@@ -22,11 +23,19 @@ struct DigestTodayTests {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         notes = MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
         try notes.remember("Dentist on Thursday at 3", at: Date() - 3_600, source: .toldMe)
-        engine = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, rule: rule, pace: nil))
+        store = Self.openStore(in: folder)
+        engine = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: store, rule: rule,
+                                                   pace: nil))
         feed = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: rule), tasks: engine, place: .onDevice)
     }
 
     var tasksFile: URL { folder.appendingPathComponent("tasks.json") }
+
+    /// The app's one task store, over the file in `folder`.
+    static func openStore(in folder: URL) -> TaskStore {
+        TaskStore(fileURL: folder.appendingPathComponent("tasks.json"),
+                  forgetMarker: folder.appendingPathComponent("pending/tasks-forgotten"))
+    }
 
     /// Starts the digest from Today's offer and runs it to its question.
     func startAndAsk() throws -> AgentTask {
@@ -326,7 +335,8 @@ struct DigestTodayTests {
         let week = DigestTask.thisWeek(notes.notes(), now: Date())
         try notes.remember(DigestTask.write(week, now: Date()).text, source: .inferred)
         try Data("not tasks".utf8).write(to: tasksFile)
-        let engine = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, rule: rule, pace: nil))
+        let engine = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes,
+                                                       store: Self.openStore(in: folder), rule: rule, pace: nil))
         let feed = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: rule), tasks: engine, place: .onDevice)
         let memory = HomeView.memoryModel(store: notes, place: .onDevice, onNotesChanged: { feed.notesChanged() },
                                           forgetQuotes: { feed.forgetQuotes(of: $0) })
@@ -467,5 +477,126 @@ struct DigestTodayTests {
         #expect(memory.status?.contains(TaskWords.couldNotEraseTasks) == true)
         #expect(memory.hasStoredFile)
     }
+
+    // MARK: With the Needs you flow, as the app wires it
+
+    /// The digest's question is the one step that needs a yes, and it
+    /// waits in Needs you like any other: pinned there, nudged about while
+    /// the app is away, and its nudge taken back once it is answered.
+    @Test func theDigestsQuestionAsksThroughTheNeedsYouFlow() throws {
+        let notifier = DigestNotifier()
+        store.setNudges(.allowed)
+        let flow = NeedsYouFlow(store: store, notifier: notifier, agentName: { "Pip" })
+        let feed = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: rule), tasks: engine,
+                             place: .onDevice, flow: flow)
+        feed.start(DigestTask.request)
+        for _ in 0..<3 { engine.runPending() }
+        feed.refresh()
+        let task = try #require(FeedModel.pinnedTasks(in: feed.feed).first)
+        #expect(task.title == DigestTask.title)
+        #expect(feed.canApprove(task))
+        let question = try #require(task.question)
+        feed.scene(isActive: false)
+        #expect(notifier.posted.map(\.taskID) == [task.id])
+        #expect(notifier.posted.map(\.title) == [NudgeWords.question("Pip")])
+        feed.scene(isActive: true)
+        feed.review(task)
+        let request = try #require(feed.reviewing)
+        #expect(request == question)
+        ConfirmationState(request: request, rule: rule, onApprove: { feed.approved($0) }, onDecline: {}).tapPrimary()
+        feed.refresh()
+        #expect(FeedModel.pinnedTasks(in: feed.feed).isEmpty)
+        #expect(notifier.live.isEmpty)
+        #expect(engine.tasks.first?.state == .done)
+    }
+
+    /// One store and one forget. A kept digest, a digest still asking, and
+    /// the Needs you flow's ask and receipt all sit in the same file, and
+    /// Forget everything takes every one of them at once, with nothing left
+    /// for a relaunch to find.
+    @Test func forgetEverythingTakesTheDigestTheAskAndTheReceiptInOneForget() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("digest-forget-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let notes = MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
+        try notes.remember("Dentist on Thursday at 3", at: Date() - 3_600, source: .toldMe)
+        // Left by an earlier launch: a question still waiting, and a receipt.
+        let now = Date()
+        let ask = SavedTask(id: "task:dentist", title: "Find a dentist near you open Saturdays", step: 1,
+                            phase: .waiting, askedAt: now - 60, startedAt: now - 120)
+        let receipt = Receipt(action: ProposedAction(kind: .sharePersonalInfo,
+                                                     recipient: Recipient(id: "maple", displayName: "Maple Dental",
+                                                                          handle: "hello@mapledental.example"),
+                                                     details: "Your name and phone number"),
+                              taskTitle: ask.title, approvedAt: now - 600, endedAt: now - 590, outcome: .done,
+                              isSample: false)
+        let file = folder.appendingPathComponent("tasks.json")
+        try JSONEncoder().encode(TaskStore.State(tasks: [ask], receipts: [receipt])).write(to: file)
+
+        let store = Self.openStore(in: folder)
+        let engine = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: store,
+                                                       rule: rule, pace: nil))
+        let flow = NeedsYouFlow(store: store, notifier: DigestNotifier(), agentName: { "Pip" })
+        let feed = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: rule), tasks: engine,
+                             place: .onDevice, flow: flow)
+        // A digest kept, then another waiting on its yes.
+        let first = engine.start(DigestTask.request)
+        for _ in 0..<3 { engine.runPending() }
+        let asked = try #require(engine.tasks.first { $0.id == first }?.question)
+        guard case .approved(let approval) = rule.sayYes(to: asked) else { Issue.record("no approval"); return }
+        #expect(engine.resume(first, with: approval) == .proceeding)
+        let second = engine.start(DigestTask.request)
+        for _ in 0..<3 { engine.runPending() }
+        let waiting = try #require(engine.tasks.first { $0.id == second }?.question)
+        feed.refresh()
+
+        let onDisk = try JSONDecoder().decode(TaskStore.State.self, from: Data(contentsOf: file))
+        #expect(onDisk.tasks.map(\.id) == [ask.id])
+        #expect(onDisk.receipts.map(\.id) == [receipt.id])
+        #expect(Set(onDisk.device?.tasks.map(\.id) ?? []) == [first, second])
+        #expect(feed.hasSomethingToForget)
+        let files = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { !$0.hasPrefix(".") }
+        #expect(Set(files) == ["memory.json", "tasks.json"], "one task file")
+
+        let memory = MemoryModel(store: notes, place: .onDevice, onForgetEverything: { feed.forgetTasks() },
+                                 othersStored: { feed.tasksStored })
+        memory.forgetEverything()
+        #expect(memory.status == MemoryWords.forgotten)
+        #expect(engine.tasks.isEmpty)
+        #expect(store.tasks.isEmpty)
+        #expect(store.receipts.isEmpty)
+        #expect(store.deviceTasks()?.file == nil)
+        #expect(rule.isClosed(waiting))
+        #expect(notes.notes().isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        #expect(!feed.hasSomethingToForget)
+        // Nothing comes back on the next launch.
+        let reopened = Self.openStore(in: folder)
+        #expect(reopened.tasks.isEmpty)
+        #expect(reopened.receipts.isEmpty)
+        let again = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: reopened,
+                                                      rule: rule, pace: nil))
+        #expect(again.tasks.isEmpty)
+        #expect(!again.hasStoredFile)
+    }
+}
+
+/// Stands in for the system's notifications, writing down what it is told.
+private final class DigestNotifier: QuestionNotifying, @unchecked Sendable {
+    private let lock = NSLock()
+    private var nudges: [QuestionNudge] = []
+    private var shown: [String] = []
+    var posted: [QuestionNudge] { lock.lock(); defer { lock.unlock() }; return nudges }
+    /// Nudges posted and not taken away since.
+    var live: [String] { lock.lock(); defer { lock.unlock() }; return shown }
+
+    func permission() async -> NudgePermission { .allowed }
+    func requestPermission() async -> Bool { true }
+    func post(_ nudge: QuestionNudge, after delay: TimeInterval) {
+        lock.lock(); nudges.append(nudge); shown.append(nudge.id); lock.unlock()
+    }
+    func remove(_ ids: [String]) { lock.lock(); shown.removeAll { ids.contains($0) }; lock.unlock() }
+    func removeAll() { lock.lock(); shown = []; lock.unlock() }
+    func forget() { removeAll() }
+    func onOpen(_ handler: @escaping @MainActor @Sendable (String) -> Void) {}
 }
 #endif
