@@ -773,10 +773,6 @@ struct WarmthTests {
         }
     }
 
-    /// A file with no read permission stands in for locked notes, which only
-    /// works when permissions apply, as for anyone but root.
-    nonisolated static var permissionsAreEnforced: Bool { getuid() != 0 }
-
     @Test func unreadableNotesTurnOffAddingAndStayOnDisk() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("warmth-unreadable-\(UUID().uuidString).json")
         let bytes = Data("not notes".utf8)
@@ -798,8 +794,9 @@ struct WarmthTests {
 
     /// Notes that can't be opened right now, such as on a locked iPhone, are
     /// never written over. A file with no read permission stands in for the
-    /// locked file here, so the test is skipped as root, which reads it anyway.
-    @Test(.enabled(if: Self.permissionsAreEnforced, "root reads a file with no read permission"))
+    /// locked file here, which only works where file modes hold, so it uses
+    /// the traits in `FileModes.swift`: it fails as root in CI, never skips.
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
     func lockedNotesTurnOffAddingAndStayOnDisk() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("warmth-locked-\(UUID().uuidString).json")
         let seed = MemoryStore(fileURL: url)
@@ -830,8 +827,8 @@ struct WarmthTests {
 
     /// The screen's own guard holds even when the store would now accept the
     /// note: what the screen last saw as locked is not written to until it
-    /// looks again. Skipped as root, like the test above.
-    @Test(.enabled(if: Self.permissionsAreEnforced, "root reads a file with no read permission"))
+    /// looks again. With the same traits as the test above.
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
     func theScreenRefusesNotesItLastSawAsLocked() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("warmth-guard-\(UUID().uuidString).json")
         let seed = MemoryStore(fileURL: url)

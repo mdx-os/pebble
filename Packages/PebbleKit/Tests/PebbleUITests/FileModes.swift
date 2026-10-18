@@ -15,9 +15,10 @@ enum FileModes {
     /// only variables named `TEST_RUNNER_` something, with the prefix taken
     /// off, so CI that sets `TEST_RUNNER_CI` arrives as `CI`. That name is
     /// read too, for a runner that passes it on as it is.
-    static var inCI: Bool {
-        let environment = ProcessInfo.processInfo.environment
-        return environment["CI"] != nil || environment["TEST_RUNNER_CI"] != nil
+    static var inCI: Bool { inCI(ProcessInfo.processInfo.environment) }
+
+    static func inCI(_ environment: [String: String]) -> Bool {
+        environment["CI"] != nil || environment["TEST_RUNNER_CI"] != nil
     }
 }
 

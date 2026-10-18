@@ -2,7 +2,7 @@ import Foundation
 
 // Work the agent does on its own while the app is closed, and the cards it
 // leaves in Today. The runner here decides and remembers; the platform
-// (`PebbleBackground`) only gives it time and says what the moment is like.
+// layer only gives it time and says what the moment is like.
 //
 // The runner never sends, buys or shares. Its one job reads what is
 // already here. Anything consequential is asked through `AskFirst` and
@@ -310,8 +310,11 @@ public struct BackgroundResult: Codable, Sendable, Equatable, Identifiable {
 
     /// The card in Today. Words are made here, when shown, from
     /// `BackgroundWords`, so the file holds no copy that could go stale.
+    /// Its card's id in Today.
+    public var itemID: String { BackgroundFeed.idPrefix + id.uuidString }
+
     public func item(calendar: Calendar = .current, locale: Locale = .current) -> FeedItem {
-        let id = "background:\(id.uuidString)"
+        let id = itemID
         switch content {
         case .morningSummary(let summary):
             let body = BackgroundWords.summaryBody(summary, now: madeAt, calendar: calendar, locale: locale)
@@ -414,12 +417,28 @@ public struct BackgroundHeldRun: Codable, Sendable, Equatable {
 /// has ever been kept here, it is read from there, and moved here the
 /// first time `UserDefaults` has it, so a launch before the first unlock,
 /// which sees nothing there, never writes it over as off. Once on or off
-/// has been kept here, an empty marker file beside this one says so, and
-/// nothing moves from `UserDefaults` again, even after the file is gone.
+/// is kept here, this file says so, and nothing in `UserDefaults` moves
+/// over it.
 ///
 /// Once a Forget everything has erased the runner's file, this file goes
-/// too, and the old keys with it. The marker stays, so old keys that come
-/// back later, as from an old backup, can never turn work on without a tap.
+/// too, and the old keys with it. If old keys were ever seen, an empty
+/// marker file beside this one stays: it holds no data, but its being there
+/// says the switch was set at least once on this device. While it is there,
+/// old keys that come back are never moved over. Someone who never had the
+/// earlier version gets no marker. The marker is written as a best effort,
+/// and the folder is left out of backups while `UserDefaults` isn't, so a
+/// backup from before the move, restored where there is no marker, can
+/// bring the old on back once: an earlier tap of the person's own.
+///
+/// A write that fails, as on a full disk, is tried again at the next read.
+/// While an off hasn't gone in, the switch isn't known, so the runner never
+/// trusts the on the disk may still say, and the file is removed if it can
+/// be, so a new launch never reads that on either.
+///
+/// In Release a launch argument such as `-backgroundWork.on YES` still
+/// reaches `UserDefaults` through its argument domain, so it could move on
+/// over once where no marker is. Only Xcode passes launch arguments, and
+/// the marker it leaves fences them after that.
 public final class FileBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
     /// No protection: what this file holds is safe to read before the
     /// first unlock, and has to be.
@@ -459,6 +478,11 @@ public final class FileBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
     private var unreadable = false
     /// Changes made while the file couldn't be read, laid over it once it can.
     private var waiting: [(inout Saved) -> Void] = []
+    /// True while what is in `saved` couldn't be written, so the next read
+    /// tries again.
+    private var unwritten = false
+    /// True once old keys moved over from `UserDefaults` in this launch.
+    private var moved = false
 
     /// `defaults` is where an earlier version kept the switch, to move from.
     /// Tests may stand in for a file that won't read with `faults`, so they
@@ -491,8 +515,8 @@ public final class FileBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
         fileURL.deletingLastPathComponent().appendingPathComponent("." + fileURL.lastPathComponent + ".next")
     }
 
-    /// Empty, and there once on or off has been kept here. It holds no
-    /// data, not even a date, and Forget everything leaves it.
+    /// Empty, and there once old keys from `UserDefaults` were seen. It
+    /// holds no data, not even a date, and Forget everything leaves it.
     package var markerURL: URL {
         fileURL.deletingLastPathComponent().appendingPathComponent("." + fileURL.lastPathComponent + ".kept")
     }
@@ -500,7 +524,9 @@ public final class FileBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
     public var isOn: Bool { read { $0.on ?? false } }
     public func set(_ on: Bool) { update { $0.on = on } }
 
-    public var isKnown: Bool { read { _ in !unreadable } }
+    /// False while the file won't read, and while an off couldn't be
+    /// written: the disk may still say on.
+    public var isKnown: Bool { read { !unreadable && !(unwritten && $0.on != true) } }
     public var hasBeenSet: Bool { read { $0.on != nil } }
 
     public var nextDue: Date? { read(\.nextDue) }
@@ -535,20 +561,21 @@ public final class FileBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
         if latest.on == true {
             let kept = Saved(on: true, nextDue: latest.nextDue)
             saved = kept
-            write(kept)
+            keep(kept)
             return
         }
-        // Forget everything is done, so the file goes too: a forgotten
-        // device keeps no trace that this was ever used, only the empty
-        // marker that keeps old keys from moving over again.
+        // Forget everything is done, so the file goes too. What stays is
+        // the empty marker, if old keys were ever seen, which says only
+        // that the switch was set once.
         if hasMarker || defaults?.object(forKey: LegacyKeys.on) == nil, removeFiles() {
             saved = Saved()
+            unwritten = false
             return
         }
         // Off alone, then: set here, nothing kept in `UserDefaults` moves
         // over it.
         saved = Saved(on: false)
-        write(Saved(on: false))
+        keep(Saved(on: false))
     }
 
     /// With the lock held.
@@ -586,16 +613,30 @@ public final class FileBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
         }
         guard next != saved else { return }
         saved = next
-        write(next)
+        keep(next)
     }
 
     /// With the lock held. What the file says, with anything still kept in
-    /// `UserDefaults` moved over.
+    /// `UserDefaults` moved over. A write that failed is tried again first.
     private func current() -> Saved {
         if saved == nil || unreadable { reload() }
+        if unwritten, !unreadable, let saved { keep(saved) }
         var value = saved ?? Saved()
         if value.on == nil { moveFromDefaults(&value) }
         return value
+    }
+
+    /// With the lock held. Writes `value`, or keeps it to write at the next
+    /// read. An off that can't be written takes the file with it if it can,
+    /// so no launch reads the on from before; never one that keeps a Forget
+    /// everything waiting, which the next launch must find.
+    private func keep(_ value: Saved) {
+        if write(value) {
+            unwritten = false
+            return
+        }
+        unwritten = true
+        if value.on != true, value.forgetPending != true { _ = removeFiles() }
     }
 
     /// With the lock held.
@@ -609,7 +650,7 @@ public final class FileBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
             waiting = []
             unreadable = false
             saved = read
-            if changed { write(read) }
+            if changed { keep(read) }
         } else if FileManager.default.fileExists(atPath: fileURL.path) {
             unreadable = true
             if saved == nil { saved = Saved() }
@@ -619,13 +660,14 @@ public final class FileBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
             waiting = []
             unreadable = false
             if saved == nil { saved = Saved() }
-            if changed, let saved { write(saved) }
+            if changed, let saved { keep(saved) }
         }
     }
 
     /// With the lock held. Until on or off has ever been kept here,
     /// `UserDefaults` is read each time, since before the first unlock it
-    /// reads as empty. Once it has, the marker says so, and nothing moves.
+    /// reads as empty. Once it has, this file says so; once the old keys
+    /// were seen, the marker does too, and nothing moves.
     private func moveFromDefaults(_ value: inout Saved) {
         guard let defaults, !hasMarker, defaults.object(forKey: LegacyKeys.on) != nil else { return }
         value.on = defaults.bool(forKey: LegacyKeys.on)
@@ -635,15 +677,18 @@ public final class FileBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
             value.held = BackgroundHeldRun(hold: hold, at: at)
         }
         saved = value
+        moved = true
         // Moved once: the old keys go only once the file has it.
-        guard !unreadable, write(value) else { return }
-        removeLegacyKeys()
+        guard !unreadable else { return }
+        keep(value)
+        if !unwritten { removeLegacyKeys() }
     }
 
     /// With the lock held. Staged and renamed over the file, as the other
-    /// stores write theirs.
-    @discardableResult
+    /// stores write theirs. The marker goes in beside it only once old keys
+    /// have been seen, where it has something to keep from moving.
     private func write(_ value: Saved) -> Bool {
+        if faults?.writeFails == true { return false }
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
@@ -656,7 +701,8 @@ public final class FileBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
                 try? FileManager.default.removeItem(at: stagingURL)
                 return false
             }
-            if value.on != nil, !hasMarker { try? writer.write(Data(), markerURL, Self.fileProtection) }
+            let sawOldKeys = moved || defaults?.object(forKey: LegacyKeys.on) != nil
+            if value.on != nil, sawOldKeys, !hasMarker { try? writer.write(Data(), markerURL, Self.fileProtection) }
             return true
         } catch {
             return false
@@ -671,23 +717,33 @@ public final class FileBackgroundSwitch: BackgroundSwitch, @unchecked Sendable {
         try? FileManager.default.removeItem(at: stagingURL)
         try? FileManager.default.removeItem(at: markerURL)
         saved = nil
+        unwritten = false
     }
 }
 
 /// What a test has the switch's file do in place of the disk: there, but
-/// won't read, as it would with a disk error. Nothing is written over it
-/// then; a change waits until it reads again.
+/// won't read, as it would with a disk error, or won't take a write, as on
+/// a full disk. Nothing is written over a file that won't read; a change
+/// waits until it reads again. A write that fails is tried again at the
+/// next read.
 package final class BackgroundSwitchFaults: @unchecked Sendable {
     private let lock = NSLock()
     private var read = false
+    private var write = false
 
-    package init(readFails: Bool = false) {
+    package init(readFails: Bool = false, writeFails: Bool = false) {
         read = readFails
+        write = writeFails
     }
 
     package var readFails: Bool {
         get { lock.withLock { read } }
         set { lock.withLock { read = newValue } }
+    }
+
+    package var writeFails: Bool {
+        get { lock.withLock { write } }
+        set { lock.withLock { write = newValue } }
     }
 }
 
@@ -810,6 +866,8 @@ public final class BackgroundStore: @unchecked Sendable {
     public let fileURL: URL
     /// True for a store that keeps nothing on disk, for the showcase.
     private let diskless: Bool
+    /// What a diskless store holds in place of its file. Nil with none.
+    private var held: BackgroundState?
     private let writer: ProtectedWriter
     private let faults: BackgroundStoreFaults?
     private let lock = NSLock()
@@ -824,18 +882,19 @@ public final class BackgroundStore: @unchecked Sendable {
         self.faults = faults
     }
 
-    private init(diskless: Void) {
+    private init(diskless faults: BackgroundStoreFaults?) {
         fileURL = URL(fileURLWithPath: "/dev/null")
-        self.diskless = true
+        diskless = true
         writer = .disk
-        faults = nil
+        self.faults = faults
     }
 
     /// A store that writes nothing anywhere, so the showcase leaves no file
     /// behind however often it launches. What its runner makes lives only
-    /// in memory.
-    package static func memoryOnly() -> BackgroundStore {
-        BackgroundStore(diskless: ())
+    /// in memory, held as the file would hold it. `faults` may say it won't
+    /// erase, so the showcase can show what a real Forget everything leaves.
+    package static func memoryOnly(faults: BackgroundStoreFaults? = nil) -> BackgroundStore {
+        BackgroundStore(diskless: faults)
     }
 
     /// Where a save is written before it takes the file's place.
@@ -858,7 +917,7 @@ public final class BackgroundStore: @unchecked Sendable {
     }
 
     public var hasStoredFile: Bool {
-        guard !diskless else { return false }
+        guard !diskless else { return lock.withLock { held != nil } }
         return FileManager.default.fileExists(atPath: fileURL.path)
             || FileManager.default.fileExists(atPath: stagingURL.path)
     }
@@ -900,7 +959,8 @@ public final class BackgroundStore: @unchecked Sendable {
     public func load() throws -> BackgroundState {
         lock.lock()
         defer { lock.unlock() }
-        guard !diskless, FileManager.default.fileExists(atPath: fileURL.path) else { return .empty }
+        if diskless { return held ?? .empty }
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return .empty }
         guard faults?.openError == nil, let data = try? Data(contentsOf: fileURL) else { throw Unavailable() }
         return (try? JSONDecoder().decode(BackgroundState.self, from: data)) ?? .empty
     }
@@ -908,7 +968,10 @@ public final class BackgroundStore: @unchecked Sendable {
     public func save(_ state: BackgroundState) throws {
         lock.lock()
         defer { lock.unlock() }
-        guard !diskless else { return }
+        guard !diskless else {
+            held = state
+            return
+        }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(state)
@@ -926,8 +989,11 @@ public final class BackgroundStore: @unchecked Sendable {
     public func forget() throws {
         lock.lock()
         defer { lock.unlock() }
-        guard !diskless else { return }
         if faults?.eraseFails == true { throw Unavailable() }
+        guard !diskless else {
+            held = nil
+            return
+        }
         try removeStaged()
         if FileManager.default.fileExists(atPath: fileURL.path) {
             try FileManager.default.removeItem(at: fileURL)
@@ -1002,6 +1068,9 @@ public final class BackgroundRunner: @unchecked Sendable {
     /// A Forget everything whose file is still to be erased, kept here too
     /// in case the switch couldn't keep it.
     private var forgetWaiting = false
+    /// When this launch first found the switch couldn't be read, so the
+    /// asks for time while it can't stop once a morning has passed.
+    private var unknownSince: Date?
     /// Questions `propose` asked and not yet answered, so turning off or
     /// forgetting can withdraw them.
     private var proposals: [ConfirmationRequest] = []
@@ -1075,7 +1144,9 @@ public final class BackgroundRunner: @unchecked Sendable {
         /// it has never been set and the runner's file is shut, before the
         /// first unlock, when what an earlier version kept where nothing
         /// opens then can't be read yet. Never taken as off, so nothing is
-        /// cancelled on its word. Off once set is off, even then.
+        /// cancelled on its word at once; a switch that can't be read stops
+        /// asking for time only after a morning (`nextWake`). Off once set
+        /// is off, even then.
         case unknown
     }
 
@@ -1140,28 +1211,48 @@ public final class BackgroundRunner: @unchecked Sendable {
         return state.queue
     }
 
-    /// Every card, newest first.
+    /// Every card, newest first. None while the switch can't be read: a
+    /// Forget everything may be waiting there.
     public var results: [BackgroundResult] {
         lock.lock(); defer { lock.unlock() }
         loadIfNeeded()
+        guard toggle.isKnown else { return [] }
         return state.results.sorted { $0.madeAt > $1.madeAt }
     }
 
     /// When the platform should give the runner time next. Nil while off
     /// or with nothing queued. While the switch is on but the file can't
-    /// be read yet, or the switch can't be told from off, the queue may
-    /// still be in the file, so the ask is never cancelled: it asks for
-    /// the due time the switch keeps, or a little later if that has come
-    /// or isn't known, backing off as the holds add up.
+    /// be read yet, or the switch is never set and the file is shut, the
+    /// queue may still be in the file, so the ask is never cancelled: it
+    /// asks for the due time the switch keeps, or a little later if that
+    /// has come or isn't known, backing off as the holds add up.
+    ///
+    /// While the switch itself can't be read, as after a disk error, it may
+    /// be off, so this asks only for the first morning after it was found
+    /// so, and for nothing once that morning has come in this launch: an
+    /// unreadable switch never wakes the device all night.
     public func nextWake(now: Date) -> Date? {
         let reading = switchReading
         guard reading != .off else { return nil }
+        let known = toggle.isKnown
         lock.lock()
         loadIfNeeded()
         let isLoaded = loaded
         let queue = state.queue
         let holds = latestHeld?.count ?? 0
+        if known {
+            unknownSince = nil
+        } else if unknownSince == nil {
+            unknownSince = now
+        }
+        let since = unknownSince
         lock.unlock()
+        if let since {
+            let morning = BackgroundPlan.nextMorning(after: since, calendar: calendar)
+            guard now < morning else { return nil }
+            if let due = toggle.nextDue, due > now, due < morning { return due }
+            return morning
+        }
         guard isLoaded, reading == .on else {
             if let due = toggle.nextDue, due > now { return due }
             return now + BackgroundPlan.retry(afterHolds: holds)
@@ -1464,6 +1555,8 @@ public final class BackgroundRunner: @unchecked Sendable {
     /// the next look; anything changed meanwhile is laid over it then.
     /// A file Forget everything couldn't erase is erased first, and while
     /// it still can't be, it is never read: none of its cards come back.
+    /// Nor is it read while the switch can't be, since that is where a
+    /// Forget everything still waiting is kept. It waits for a later look.
     private func loadIfNeeded() {
         let erased = (try? eraseForgottenFile()) != nil
         guard !loaded else { return }
@@ -1474,6 +1567,7 @@ public final class BackgroundRunner: @unchecked Sendable {
             applyHeldBeforeLoad()
             return
         }
+        guard toggle.isKnown else { return }
         do {
             let saved = try store.load()
             if unsaved {
@@ -1529,10 +1623,11 @@ public final class BackgroundRunner: @unchecked Sendable {
     }
 
     /// With the lock held. Writes only once the file has been read, never
-    /// while a Forget everything still has it to erase, and keeps the
-    /// change for later if it can't be written now.
+    /// while a Forget everything still has it to erase or the switch that
+    /// would say so can't be read, and keeps the change for later if it
+    /// can't be written now.
     private func saveIfNeeded() {
-        guard unsaved, loaded, !forgetIsPending else { return }
+        guard unsaved, loaded, toggle.isKnown, !forgetIsPending else { return }
         if (try? store.save(state)) != nil { unsaved = false }
     }
 
@@ -1545,6 +1640,10 @@ public final class BackgroundRunner: @unchecked Sendable {
 
 /// The runner's cards, as a source for Today. Local only.
 public struct BackgroundFeed: FeedSource {
+    /// What every card of the runner's id starts with, so Today can tell
+    /// them from the rest.
+    public static let idPrefix = "background:"
+
     public let runner: BackgroundRunner
     public let calendar: Calendar
     public let locale: Locale
@@ -1572,13 +1671,19 @@ public enum BackgroundWords {
                                    locale: Locale = .current) -> String {
         var lines: [String] = []
         if let count = summary.waiting { lines.append(waiting(count)) }
-        if let count = summary.finished {
-            lines.append(finished(count, since: summary.since, now: now, calendar: calendar, locale: locale))
-        }
+        if let line = finishedLine(summary, now: now, calendar: calendar, locale: locale) { lines.append(line) }
         if let count = summary.couldNotFinish, count > 0 { lines.append(couldNotFinish(count)) }
         if summary.countedNothing { lines.append(countedNothing) }
         if let hold = summary.late { lines.append(late(hold)) }
         return lines.joined(separator: " ")
+    }
+
+    /// What finished, when it is known. "Nothing finished" is left out
+    /// when some couldn't: that line says what happened, and the two
+    /// together would read as if they disagreed.
+    static func finishedLine(_ summary: MorningSummary, now: Date, calendar: Calendar, locale: Locale) -> String? {
+        guard let count = summary.finished, count > 0 || (summary.couldNotFinish ?? 0) == 0 else { return nil }
+        return finished(count, since: summary.since, now: now, calendar: calendar, locale: locale)
     }
 
     /// The summary opened to read: the counts, where to find what waits,
@@ -1590,9 +1695,7 @@ public enum BackgroundWords {
             lines.append(waiting(count))
             if count > 0 { lines.append(whereWaiting) }
         }
-        if let count = summary.finished {
-            lines.append(finished(count, since: summary.since, now: now, calendar: calendar, locale: locale))
-        }
+        if let line = finishedLine(summary, now: now, calendar: calendar, locale: locale) { lines.append(line) }
         if let count = summary.couldNotFinish, count > 0 { lines.append(couldNotFinish(count)) }
         if summary.countedNothing { lines.append(countedNothing) }
         lines.append(countedSince(summary.since, now: now, calendar: calendar, locale: locale))
@@ -1703,7 +1806,7 @@ public enum BackgroundWords {
     /// Why a summary's day ended before it could be made.
     public static func missed(_ hold: BackgroundHold?) -> String {
         switch hold {
-        case .locked: "It stayed locked that morning, so I couldn't look in time."
+        case .locked: "You hadn't unlocked since your last restart, so I couldn't look in time."
         case .lowPower: "Low Power Mode was on that morning, so I let it go to save battery."
         case .outOfTime: "I ran out of time before I could make it."
         case nil: "I didn't get a chance to make it while the app was closed."
@@ -1720,10 +1823,13 @@ public enum BackgroundWords {
     ///
     /// It names what finished only when `countsTasks`: the runner has tasks
     /// to count. Without them no summary could ever say it, so the line
-    /// the person reads as they turn it on doesn't promise it. A quiet
-    /// morning leaves no card, so it says "when there's something".
+    /// the person reads as they turn it on doesn't promise it. Nor while
+    /// closed: what finished is known only if the app was running since
+    /// the evening before, and on iPhone and iPad a summary made overnight
+    /// almost always comes from a fresh launch, so it could rarely say it.
+    /// A quiet morning leaves no card, so it says "when there's something".
     public static func settingDetail(whileClosed: Bool, countsTasks: Bool) -> String {
-        let what = countsTasks
+        let what = countsTasks && !whileClosed
             ? "When there's something to tell you in the morning, I'll put a short summary in Today of what's waiting for you and what finished overnight."
             : "When there's something to tell you in the morning, I'll put a short summary in Today of what's waiting for you."
         let when = whileClosed

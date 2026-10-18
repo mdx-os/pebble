@@ -77,9 +77,9 @@ struct CopyDashTests {
     /// The Forget everything lines about the morning summaries come in
     /// through `CloudWords.all` and `MemoryWords`, so they are swept too.
     @Test func theSummaryLinesAreChecked() {
-        for line in [CloudWords.forgetEverythingWithSummariesDetail, CloudWords.forgotAndCloudOffNotSummaries,
-                     MemoryWords.summariesGone, MemoryWords.summariesStayed,
-                     MemoryWords.forgetEverythingDetail(background: true)] + MemoryWords.couldNotForgetSummariesLines {
+        for line in [CloudWords.forgetEverythingWithSummariesDetail, MemoryWords.summariesGone,
+                     MemoryWords.summariesStayed, MemoryWords.forgetEverythingDetail(background: true)]
+            + MemoryWords.couldNotForgetSummariesLines + CloudWords.forgotAndCloudOffNotSummariesLines {
             #expect(Self.copy.contains(line), "unchecked: \(line)")
         }
     }

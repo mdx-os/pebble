@@ -12,11 +12,19 @@ real_ignore="$(cd "$(dirname "$0")/.." && pwd)/.gitignore"
 repo="$(mktemp -d)"
 # Outside the scratch repository, so the log is never part of its tree.
 err="$(mktemp)"
-trap 'rm -rf "$repo" "$err"' EXIT
+# A global setting that signs every commit, with a signer that always
+# fails, so the test passes whatever anyone's own setting is: the scratch
+# repository turns signing off for itself.
+global="$(mktemp)"
+printf '[commit]\n\tgpgsign = true\n[tag]\n\tgpgsign = true\n[gpg]\n\tprogram = false\n' > "$global"
+export GIT_CONFIG_GLOBAL="$global"
+trap 'rm -rf "$repo" "$err" "$global"' EXIT
 cd "$repo"
 git init -q
 git config user.email test@example.com
 git config user.name test
+git config commit.gpgsign false
+git config tag.gpgsign false
 printf 'build/\n' > .gitignore
 echo one > a.txt
 git add -A

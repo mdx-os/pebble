@@ -53,8 +53,9 @@ public final class BackgroundService {
     }
 
     /// Asks the system for time at the runner's next wake, or stops asking.
-    /// The runner gives no wake only when it is off for certain, so a
-    /// switch that can't be read yet never cancels an ask.
+    /// The runner gives no wake when it is off for certain, so a switch
+    /// that can't be read yet never cancels an ask at once; one that still
+    /// can't be read once a morning has passed stops asking.
     func plan() {
         guard let wake = runner?.nextWake(now: clock()) else {
             scheduler?.cancel()

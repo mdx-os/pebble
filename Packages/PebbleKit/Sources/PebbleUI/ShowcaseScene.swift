@@ -306,8 +306,8 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// first unlock, then made at `morning`. It has no tasks, as the app
     /// has none yet, so the missed day leaves no card, just as in the app.
     static func sampleBackground(on: Bool, needsYou: NeedsYou? = nil, played: Bool = false,
-                                 at morning: Date) -> BackgroundRunner {
-        let runner = BackgroundRunner(store: .memoryOnly(), toggle: InMemoryBackgroundSwitch(),
+                                 at morning: Date, store: BackgroundStore = .memoryOnly()) -> BackgroundRunner {
+        let runner = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(),
                                       needsYou: needsYou, watchingSince: .distantPast, sample: true)
         guard on else { return runner }
         let calendar = Calendar.current
@@ -383,18 +383,33 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     }
 
     /// The memory screen just after Forget everything, when every note and
-    /// private word went but the summaries' file couldn't be erased: work
-    /// while away is off, its cards stay so it can be tried again, and the
-    /// line is the one `forgotLine` gives for that outcome.
+    /// private word went but the summaries' file couldn't be erased. It runs
+    /// a real Forget everything against a store that won't erase, so it
+    /// shows what that leaves: work while away is off, its cards are gone,
+    /// Forget everything stays so it can be tried again, and the line is
+    /// the one said for that outcome. Nothing here is kept anywhere: the
+    /// note's scratch file goes with the forget.
     @MainActor
     static func summariesStayedMemory(at morning: Date) -> some View {
-        let runner = sampleBackground(on: true, needsYou: sampleQuestion(at: morning), played: true, at: morning)
-        runner.turnOff()
-        let model = MemoryModel(store: emptyMemory(), place: LocalStubModel().privacyPlace,
-                                background: runner, now: { morning })
-        model.showAfterForgetting(MemoryModel.forgotLine(notesGone: true, rest: .some(.privateWords),
-                                                         tasksGone: false, summaries: .stayed))
-        return MemoryView(model: model, place: LocalStubModel().privacyPlace, cloud: sampleCloud(privateWords: []))
+        let (model, cloud) = summariesStayedModel(at: morning)
+        return MemoryView(model: model, place: LocalStubModel().privacyPlace, cloud: cloud)
+    }
+
+    /// The memory screen's model for `summariesStayedMemory`, after its
+    /// Forget everything has run.
+    @MainActor
+    static func summariesStayedModel(at morning: Date) -> (MemoryModel, CloudHelp) {
+        let store = BackgroundStore.memoryOnly(faults: BackgroundStoreFaults(eraseFails: true))
+        let runner = sampleBackground(on: true, needsYou: sampleQuestion(at: morning), played: true, at: morning,
+                                      store: store)
+        let notes = MemoryStore(fileURL: FileManager.default.temporaryDirectory
+            .appendingPathComponent("showcase-forgotten-memory-\(UUID().uuidString).json"))
+        _ = try? notes.remember("Sam's birthday is May 14. Loves lemon cake.", source: .toldMe)
+        let cloud = sampleCloud()
+        let model = MemoryModel(store: notes, place: LocalStubModel().privacyPlace,
+                                alsoForget: MemoryView.alsoForget(cloud), background: runner, now: { morning })
+        model.forgetEverything()
+        return (model, cloud)
     }
 
     /// A chat on the cloud model with its preview showing, presented the

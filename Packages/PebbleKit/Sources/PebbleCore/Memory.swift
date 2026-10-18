@@ -131,10 +131,10 @@ public enum MemoryWords {
     // engine on this device, whatever the model is, so this is true even
     // with a cloud model. It makes no promise about the chat. Don't gate it
     // like the lines above. Forget everything forgets tasks too, so it says
-    // running ones stop. With `background`, the screen has the switch for
-    // work while away, and it says that turns off and its summaries, kept
-    // in the same folder as the notes, are erased. Without, it never names
-    // a switch that isn't there.
+    // running ones stop. With `background`, work while away is on or has
+    // summaries to erase, and it says that turns off and its summaries,
+    // kept in the same folder as the notes, are erased. Without, it never
+    // promises to turn off what is already off, or to erase what isn't there.
     public static func forgetEverythingDetail(background: Bool) -> String {
         background
             ? "This removes every note, every task and every morning summary from this device, stops any task still going, and turns off work while you're away. It can't be undone."
@@ -156,20 +156,33 @@ public enum MemoryWords {
     public static let couldNotForget = "Sorry, I couldn't erase that just now. Please try again in a moment."
     /// Forget everything when the tasks went but the notes couldn't be erased.
     public static let couldNotForgetNotes = "I forgot your tasks, but I couldn't erase your notes just now. Please try again in a moment."
+    /// How a Forget everything line opens when the summaries' file stayed:
+    /// "I forgot your notes and tasks, and turned off work while you're
+    /// away". It names only what went: the notes and the tasks only when
+    /// there were some, and the hidden words only when they were erased.
+    /// With none of them, it says only that work while away is off.
+    public static func forgotAndTurnedOff(notes: Bool, tasks: Bool, words: Bool) -> String {
+        let yours = (notes ? ["notes"] : []) + (tasks ? ["tasks"] : [])
+        let went = yours + (words ? ["any words you asked me to hide"] : [])
+        guard let last = went.last else { return "I turned off work while you're away" }
+        let listed = went.count == 1 ? last : went.dropLast().joined(separator: ", ") + " and " + last
+        let named = (yours.isEmpty ? "" : "your ") + listed
+        return went.count == 1
+            ? "I forgot \(named) and turned off work while you're away"
+            : "I forgot \(named), and turned off work while you're away"
+    }
     /// Forget everything when the rest went but the morning summaries'
     /// file couldn't be erased. Work while you're away is off either way.
-    /// It opens with what went: the notes, then the tasks only when there
-    /// were some, and the hidden words only when they were erased too.
-    public static func couldNotForgetSummaries(tasks: Bool, words: Bool) -> String {
-        let went = ["notes"] + (tasks ? ["tasks"] : []) + (words ? ["any words you asked me to hide"] : [])
-        let named = went.count > 2
-            ? went.dropLast().joined(separator: ", ") + " and " + went[went.count - 1] + ","
-            : went.joined(separator: " and ") + (went.count > 1 && words ? "," : "")
-        return "I forgot your \(named) and turned off work while you're away, but I couldn't erase your morning summaries just now. Please try Forget everything again in a moment."
+    /// It opens with what went (`forgotAndTurnedOff`).
+    public static func couldNotForgetSummaries(notes: Bool, tasks: Bool, words: Bool) -> String {
+        forgotAndTurnedOff(notes: notes, tasks: tasks, words: words)
+            + ", but I couldn't erase your morning summaries just now. Please try Forget everything again in a moment."
     }
     /// Every form of `couldNotForgetSummaries`, for the word checks.
-    public static let couldNotForgetSummariesLines = [false, true].flatMap { tasks in
-        [false, true].map { couldNotForgetSummaries(tasks: tasks, words: $0) }
+    public static let couldNotForgetSummariesLines = [false, true].flatMap { notes in
+        [false, true].flatMap { tasks in
+            [false, true].map { couldNotForgetSummaries(notes: notes, tasks: tasks, words: $0) }
+        }
     }
     /// Follows a Forget everything line that says something else stayed,
     /// when the morning summaries' file was erased.

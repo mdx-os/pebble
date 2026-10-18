@@ -16,7 +16,10 @@ set -eu
 tree_hash() {
   # Paths are read one per line, so a path with a new line in it would
   # hash wrongly, and a symlink is hashed by what it points to, not as a
-  # link. The repository has neither; keep it that way.
+  # link. Only plain files are hashed, so a change inside a submodule or a
+  # nested repository, which git lists as one path that is not a file, or
+  # not at all, never makes the screenshots stale. The repository has none
+  # of these; keep it that way.
   scratch="$(mktemp -d)"
   # Tracked files still on disk, and new files .gitignore doesn't leave out.
   # A deleted file isn't listed, so deleting one changes the hash too.

@@ -210,7 +210,16 @@ final class FeedModel: ObservableObject {
     private func rebuild() {
         let next = Feed.build(from: sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
         if next != feed { feed = next }
+        closeSummaryGone()
         followCards()
+    }
+
+    /// A summary open to read whose card is gone, as after Forget
+    /// everything in another window, closes with it.
+    private func closeSummaryGone() {
+        guard let reading, reading.id.hasPrefix(BackgroundFeed.idPrefix) else { return }
+        let cards = background?.results ?? []
+        if !cards.contains(where: { $0.itemID == reading.id }) { self.reading = nil }
     }
 
     /// Each task card's section: Needs you, Working on it, or a time group.
@@ -396,7 +405,7 @@ final class FeedModel: ObservableObject {
     /// still open to read closes, and Today shows the cards gone.
     @discardableResult
     func forgetEverything() -> ClearedTasks {
-        if let reading, reading.id.hasPrefix("background:") { self.reading = nil }
+        if let reading, reading.id.hasPrefix(BackgroundFeed.idPrefix) { self.reading = nil }
         let cleared = forgetTasks()
         rebuild()
         return cleared

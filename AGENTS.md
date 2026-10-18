@@ -57,9 +57,14 @@ in lint, a skill, or CI.
   whether a Forget everything is pending), never anything of the person's.
   Keep it that way: nothing else goes in that file. `UserDefaults` can't be
   read before the first unlock, so the switch is not kept there. Beside it,
-  an empty `.background-switch.json.kept` marks that the switch was ever set
-  there, so the old `UserDefaults` keys never move over again. It holds no
-  data and stays through Forget everything.
+  an empty `.background-switch.json.kept` marks that an earlier version's
+  keys were seen in `UserDefaults`, so they never move over again. It holds
+  no data and stays through Forget everything, so it is the one sign left
+  that the switch was set; people who never had those keys get none.
+- A switch write that fails is tried again at the next read, and an off
+  that hasn't gone in makes the switch unknown. While the switch is
+  unknown the runner never reads or writes its own file and shows no cards:
+  a Forget everything still waiting is kept in the switch.
 - Most background runs end quiet. iOS usually starts a fresh process for
   them, and Needs you lives only in memory, so the run counts nothing, makes
   no card and moves the job to tomorrow. A missing morning card after a

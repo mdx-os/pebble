@@ -204,17 +204,101 @@ struct BackgroundFeedTests {
         let runner = runner(on: true, needsYou: asks)
         let proposed = runner.propose(Self.note, conditions: .foreground, at: Self.at(9), act: {})
         let asked = try #require(proposed)
+        // However often the runner tells its watchers, and from whichever
+        // turn, "background" is logged once: the first time its question
+        // is seen withdrawn.
+        let heard = Counter()
         let watch = runner.observe {
-            log.step(asks.rule.wasWithdrawn(asked) ? "background" : "background, question still open")
+            heard.add()
+            if asks.rule.wasWithdrawn(asked) { log.stepOnce("background") }
         }
         defer { runner.stopObserving(watch) }
         let memory = MemoryModel(store: notes, place: .onDevice,
                                  alsoForget: { log.step("private words"); return .privateWords },
                                  background: runner, now: { Self.at(9) },
-                                 onForgetEverything: { log.step("tasks"); return .none })
+                                 onForgetEverything: {
+                                     #expect(heard.value > 0, "the runner told its watchers before the tasks went")
+                                     log.step("tasks")
+                                     return .none
+                                 })
         memory.forgetEverything()
         log.step("done")
         #expect(log.steps == ["background", "tasks", "notes", "private words", "done"])
+    }
+
+    /// Another window's Today with a summary open to read: Forget
+    /// everything in this window takes its card away, and the open summary
+    /// closes with it there too.
+    @Test func anOpenSummaryInAnotherWindowClosesOnForget() async throws {
+        let runner = runner(on: true)
+        let other = model(runner) { Self.at(9) }
+        other.refresh()
+        let card = try #require(other.feed.groups.first?.items.first)
+        other.perform(card) { _ in }
+        #expect(other.reading?.id == card.id)
+
+        let here = model(runner) { Self.at(9) }
+        let memory = MemoryModel(store: scratchMemory(), place: .onDevice, background: runner,
+                                 now: { Self.at(9) }, onForgetEverything: { here.forgetEverything() })
+        memory.forgetEverything()
+        await other.settled()
+        #expect(other.reading == nil, "closed in the other window too")
+        #expect(other.feed.isEmpty)
+    }
+
+    /// A card from somewhere else stays open: only a summary whose card
+    /// went closes.
+    @Test func onlyAGoneSummaryCloses() async throws {
+        let runner = runner(on: true)
+        let model = model(runner) { Self.at(9) }
+        model.refresh()
+        let card = try #require(model.feed.groups.first?.items.first)
+        model.perform(card) { _ in }
+        runner.turnOff()
+        await model.settled()
+        #expect(model.reading?.id == card.id, "turning off keeps the cards, so it stays open")
+        #expect(card.id.hasPrefix(BackgroundFeed.idPrefix))
+        // Today's code names the prefix only through `BackgroundFeed`.
+        let feedView = try String(contentsOf: SwiftSource.repositoryRoot(from: #filePath)
+            .appendingPathComponent("Packages/PebbleKit/Sources/PebbleUI/FeedView.swift"), encoding: .utf8)
+        #expect(!SwiftSource(feedView).literals.contains { $0.text.hasPrefix("background") })
+    }
+
+    /// The question before Forget everything names work while away only
+    /// while it is on or has summaries to erase, so it promises only what
+    /// the tap will do. The screen asks it with that.
+    @Test func theForgetQuestionNamesWorkWhileAwayOnlyWhenThereIsSome() throws {
+        let runner = runner(on: false)
+        let memory = MemoryModel(store: scratchMemory(), place: .onDevice, background: runner, now: { Self.at(9) })
+        #expect(!memory.forgetNamesBackground, "off, with nothing stored")
+        memory.setBackground(true)
+        #expect(memory.forgetNamesBackground, "on")
+        runner.runDue(now: Self.at(7, days: 1), conditions: .foreground)
+        memory.setBackground(false)
+        #expect(memory.forgetNamesBackground, "off, but with summaries to erase")
+        memory.forgetEverything()
+        #expect(!memory.forgetNamesBackground)
+        #expect(MemoryView.forgetEverythingDetail(for: nil, background: memory.forgetNamesBackground)
+            == MemoryWords.forgetEverythingDetail(background: false))
+
+        let view = try String(contentsOf: SwiftSource.repositoryRoot(from: #filePath)
+            .appendingPathComponent("Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift"), encoding: .utf8)
+        let code = String(SwiftSource(view).code)
+        #expect(code.contains("ForgetEverythingDialog(cloud: cloud, background: model.forgetNamesBackground"))
+    }
+
+    /// The showcase's screen after Forget everything couldn't erase the
+    /// summaries runs a real Forget everything, so it shows what that
+    /// leaves: work while away off, its cards gone, Forget everything still
+    /// there to try again, and the line for what went.
+    @Test func theShowcaseShowsWhatAFailedForgetLeaves() {
+        let (model, cloud) = ShowcaseScene.summariesStayedModel(at: ShowcaseScene.morning)
+        #expect(model.background?.isOn == false)
+        #expect(model.background?.results.isEmpty == true, "its cards went from memory")
+        #expect(model.hasSomethingToForget, "the summaries stayed, so it can be tried again")
+        #expect(model.notes.isEmpty)
+        #expect(cloud.settings.privateWords.isEmpty)
+        #expect(model.status == MemoryWords.couldNotForgetSummaries(notes: true, tasks: false, words: true))
     }
 
     /// With nothing of background work to forget, its summaries are not
@@ -274,10 +358,10 @@ struct BackgroundFeedTests {
         #expect(toggle.nextDue == nil)
         #expect(asks.rule.wasWithdrawn(asked), "a yes on a sheet still open does nothing")
         #expect(!asks.items(now: Self.at(9)).contains { $0.request == asked })
-        #expect(memory.status == MemoryWords.couldNotForgetSummaries(tasks: false, words: false))
-        #expect(memory.status == "I forgot your notes and turned off work while you're away, but I couldn't erase "
+        #expect(memory.status == MemoryWords.couldNotForgetSummaries(notes: false, tasks: false, words: false))
+        #expect(memory.status == "I turned off work while you're away, but I couldn't erase "
                 + "your morning summaries just now. Please try Forget everything again in a moment.",
-                "no tasks and no hidden words went, so it names neither")
+                "no notes, no tasks and no hidden words went, so it names none")
         #expect(memory.hasSomethingToForget, "still there, so it can be tried again")
 
         faults.eraseFails = false
@@ -447,51 +531,106 @@ struct BackgroundFeedTests {
 
     /// The notes and the private words are the only words of the person's
     /// kept on disk, each with the strictest protection, and the summary
-    /// copies neither. The chat is kept nowhere: nothing that holds it
-    /// writes a file, encodes it, or puts it in `UserDefaults` or scene
-    /// storage. The one `UserDefaults` it touches keeps the agent's name.
+    /// copies neither (`theSummaryAndSwitchFilesCopyNothingOfThePersons`
+    /// reads their bytes). The chat is kept nowhere: no file that can hold
+    /// it, found by what its code names in the packages and the app, writes
+    /// a file, encodes it, or puts it in `UserDefaults` or scene storage,
+    /// but for the passes below, each with its reason. The one
+    /// `UserDefaults` the chat screen touches keeps the agent's name.
     @Test func theChatIsNeverKeptOnDisk() throws {
-        let sources = SwiftSource.repositoryRoot(from: #filePath).appendingPathComponent("Packages/PebbleKit/Sources")
-        let chat = ["PebbleModel/Conversation.swift", "PebbleModel/ModelClient.swift", "PebbleUI/ChatView.swift",
-                    "PebbleUI/Composer.swift"]
         let keeping = ["write(to", "FileManager", "createFile", "FileHandle", "AppStorage", "SceneStorage",
                        "JSONEncoder", "PropertyListEncoder", "NSKeyedArchiver", "UserDefaults.", "UserDefaults(",
                        "BackgroundStore", "MemoryStore", "CloudHelpFileStore"]
-        for name in chat {
-            let code = String(SwiftSource(try String(contentsOf: sources.appendingPathComponent(name), encoding: .utf8))
-                .code)
-            for word in keeping { #expect(!code.contains(word), "\(word) in \(name)") }
+        var found: [String] = []
+        let files = try Self.chatFiles()
+        for file in files {
+            for word in keeping where file.code.contains(word) {
+                let pass = Self.keepsNoChat["\(file.name): \(word)"]
+                #expect(pass != nil, "\(word) in \(file.name), which can hold the chat")
+                found.append("\(file.name): \(word)")
+            }
         }
-        #expect(String(SwiftSource(try String(contentsOf: sources.appendingPathComponent("PebbleUI/ChatView.swift"),
-                                              encoding: .utf8)).code).contains("UserDefaultsAgentNameStore()"),
-                "the name, and only the name")
+        // Every pass is still needed and says why, so none outlives its reason.
+        for (place, reason) in Self.keepsNoChat {
+            #expect(found.contains(place), "no longer needed: \(place)")
+            #expect(reason.count > 40, "say why: \(place)")
+        }
+        for name in ["PebbleModel/Conversation.swift", "PebbleModel/ModelClient.swift", "PebbleModel/CloudModel.swift",
+                     "PebbleUI/ChatView.swift", "PebbleUI/Composer.swift", "PebbleUI/HomeView.swift"] {
+            #expect(files.contains { $0.name == name }, "the sweep finds \(name)")
+        }
+        let chatView = try #require(files.first { $0.name == "PebbleUI/ChatView.swift" })
+        #expect(chatView.code.contains("UserDefaultsAgentNameStore()"), "the name, and only the name")
+    }
+
+    /// Where a file that can hold the chat names something that keeps
+    /// words on disk, and why that is never the chat. By file and word.
+    static let keepsNoChat: [String: String] = [
+        "PebbleModel/CloudModel.swift: JSONEncoder":
+            "CloudRequest.encoded turns the request into bytes in memory, for the preview and for the one ephemeral "
+            + "session that sends it. The file writes nothing: no write(to, FileManager or UserDefaults, which this "
+            + "same sweep checks.",
+        "PebbleUI/CloudHelpView.swift: MemoryStore":
+            "CloudHelp reads the notes' store to build the redactor, so names from the notes are taken out of a "
+            + "cloud request. It only reads the notes; it never hands the store a chat.",
+        "PebbleUI/HomeView.swift: MemoryStore":
+            "The home screen hands the notes' store to the memory screen and to CloudHelp, the same one for both. "
+            + "Only the memory screen writes notes the person adds; no chat goes in.",
+        "PebbleUI/ShowcaseScene.swift: MemoryStore":
+            "The showcase, Debug only, fills scratch notes stores with sample notes for its screens. Its sample "
+            + "chats are made in memory and never put in a store.",
+        "PebbleUI/ShowcaseScene.swift: FileManager":
+            "The showcase, Debug only, names scratch files in the temporary folder for its sample notes. No chat "
+            + "is written to them.",
+        "PebbleUI/ShowcaseScene.swift: UserDefaults(":
+            "The showcase, Debug only, uses a throwaway UserDefaults suite for the look it shows, emptied each "
+            + "launch. It holds no chat.",
+        "PebbleUI/ShowcaseScene.swift: BackgroundStore":
+            "The showcase, Debug only, runs background work on BackgroundStore.memoryOnly, which writes nothing "
+            + "anywhere and holds only counts and times.",
+    ]
+
+    /// Every source that can hold chat text, in the packages and the app,
+    /// found by what its code names, not from a list. The competitor
+    /// watch never sees a chat.
+    static func chatFiles() throws -> [(name: String, code: String)] {
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        let package = try SwiftSource.files(under: root.appendingPathComponent("Packages/PebbleKit/Sources"))
+        let app = try SwiftSource.files(under: root.appendingPathComponent("App/Sources"))
+        let chatWords = ["ChatTurn", "Conversation", "ModelClient", "CloudRequest", "ChatController", "messages"]
+        return (package.map { ($0.name, $0.text) } + app.map { ("App/" + $0.name, $0.text) })
+            .filter { !$0.0.hasPrefix("PebblePulse/") && !$0.0.hasPrefix("pulse/") }
+            .map { (name: $0.0, code: String(SwiftSource($0.1).code)) }
+            .filter { file in chatWords.contains(where: file.code.contains) }
     }
 
     /// Nor does the chat reach the disk another way. Every source in the
-    /// app's packages that can hold chat text, found by what it names, not
+    /// app's packages and the app itself, found by what it names, not
     /// from a list, writes nothing to the system log, which keeps it on
     /// disk, and the one session that sends a chat to the cloud keeps no
     /// cache. Only the competitor watch, which never sees a chat, prints.
     @Test func theChatNeverReachesTheLogOrACache() throws {
-        let sources = SwiftSource.repositoryRoot(from: #filePath).appendingPathComponent("Packages/PebbleKit/Sources")
-        let chatWords = ["ChatTurn", "Conversation", "ModelClient", "CloudRequest", "ChatController", "messages"]
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        let sources = root.appendingPathComponent("Packages/PebbleKit/Sources")
         let logging = try NSRegularExpression(pattern: #"\b(Logger|os_log|os_signpost|NSLog|print|debugPrint|dump|OSLog)\b"#)
-        var chatFiles: [String] = []
-        for file in try SwiftSource.files(under: sources)
-        where !file.name.hasPrefix("PebblePulse/") && !file.name.hasPrefix("pulse/") {
-            let code = String(SwiftSource(file.text).code)
+        let everyFile = try SwiftSource.files(under: sources).map { ($0.name, $0.text) }
+            + SwiftSource.files(under: root.appendingPathComponent("App/Sources")).map { ("App/" + $0.name, $0.text) }
+        #expect(everyFile.contains { $0.0 == "App/PebbleApp.swift" }, "the app's own sources are swept")
+        for (name, text) in everyFile where !name.hasPrefix("PebblePulse/") && !name.hasPrefix("pulse/") {
+            let code = String(SwiftSource(text).code)
             let range = NSRange(code.startIndex..., in: code)
             // No logging anywhere a chat could pass through, which is every
             // file but the competitor watch's.
-            #expect(logging.firstMatch(in: code, range: range) == nil, "logging in \(file.name)")
-            guard chatWords.contains(where: code.contains) else { continue }
-            chatFiles.append(file.name)
-            #expect(!code.contains("URLSession.shared"), "a shared session, with its cache, in \(file.name)")
-            #expect(!code.contains("URLCache"), "a response cache in \(file.name)")
-            #expect(!code.contains("URLSessionConfiguration.default"), "a default session in \(file.name)")
+            #expect(logging.firstMatch(in: code, range: range) == nil, "logging in \(name)")
+        }
+        let chatFiles = try Self.chatFiles()
+        for file in chatFiles {
+            #expect(!file.code.contains("URLSession.shared"), "a shared session, with its cache, in \(file.name)")
+            #expect(!file.code.contains("URLCache"), "a response cache in \(file.name)")
+            #expect(!file.code.contains("URLSessionConfiguration.default"), "a default session in \(file.name)")
         }
         for name in ["PebbleModel/ModelClient.swift", "PebbleModel/CloudModel.swift", "PebbleUI/ChatView.swift"] {
-            #expect(chatFiles.contains(name), "the sweep finds \(name)")
+            #expect(chatFiles.contains { $0.name == name }, "the sweep finds \(name)")
         }
         // The cloud session: ephemeral, with no cache at all.
         let cloud = String(SwiftSource(try String(contentsOf: sources.appendingPathComponent("PebbleModel/CloudModel.swift"),
@@ -535,6 +674,14 @@ struct BackgroundFeedTests {
     }
 }
 
+/// Counts calls, from any thread.
+final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func add() { lock.withLock { count += 1 } }
+    var value: Int { lock.withLock { count } }
+}
+
 /// The steps of Forget everything as they happen, from any thread. The
 /// notes have no hook of their own, so their erase is logged when the next
 /// step finds their file gone.
@@ -556,6 +703,12 @@ final class StepLog: @unchecked Sendable {
             list.append("notes")
         }
         list.append(name)
+    }
+
+    /// `step`, unless `name` was logged already.
+    func stepOnce(_ name: String) {
+        let logged = lock.withLock { list.contains(name) }
+        if !logged { step(name) }
     }
 
     var steps: [String] { lock.lock(); defer { lock.unlock() }; return list }

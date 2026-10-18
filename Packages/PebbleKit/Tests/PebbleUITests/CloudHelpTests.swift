@@ -824,16 +824,27 @@ struct CloudHelpTests {
                 for rest in everyRest where line(notes, rest, tasks) == MemoryWords.forgotten {
                     allWent += 1
                     #expect(withSummaries(notes, rest, tasks, .erased) == line(notes, rest, tasks))
-                    // It names the tasks and the hidden words only when they went.
-                    #expect(withSummaries(notes, rest, tasks, .stayed)
-                            == MemoryWords.couldNotForgetSummaries(tasks: tasks,
-                                                                   words: rest == .some(.some(.privateWords))))
+                    // It names the notes, the tasks and the hidden words
+                    // only when they went.
+                    for hadNotes in [false, true] {
+                        #expect(MemoryModel.forgotLine(notesGone: notes, rest: rest, tasksGone: tasks,
+                                                       summaries: .stayed, hadNotes: hadNotes)
+                                == MemoryWords.couldNotForgetSummaries(notes: hadNotes, tasks: tasks,
+                                                                       words: rest == .some(.some(.privateWords))))
+                    }
                 }
             }
             #expect(withSummaries(true, .privateWordsAndCloud, tasks, .erased)
                     == line(true, .privateWordsAndCloud, tasks))
-            #expect(withSummaries(true, .privateWordsAndCloud, tasks, .stayed)
-                    == CloudWords.forgotAndCloudOffNotSummaries)
+            // The cloud's form names the tasks only when they went, and the
+            // notes only when there were some.
+            for hadNotes in [false, true] {
+                let stayed = MemoryModel.forgotLine(notesGone: true, rest: .privateWordsAndCloud, tasksGone: tasks,
+                                                    summaries: .stayed, hadNotes: hadNotes)
+                #expect(stayed == CloudWords.forgotAndCloudOffNotSummaries(notes: hadNotes, tasks: tasks))
+                #expect(stayed.contains("tasks") == tasks, "\(stayed)")
+                #expect(stayed.contains("notes") == hadNotes, "\(stayed)")
+            }
             // Something else stayed: its own line, then what happened to
             // the summaries, and the advice to try again last of all.
             let someStayed: [(Bool, CloudHelp.Forgot??)] = [
@@ -863,12 +874,12 @@ struct CloudHelpTests {
                                        underway: TaskWords.forgotUnderway(1))
                 == MemoryWords.forgotten + " " + TaskWords.forgotUnderway(1))
         // Each line where the summaries stayed and the rest went ends with the advice.
-        for stayed in MemoryWords.couldNotForgetSummariesLines + [CloudWords.forgotAndCloudOffNotSummaries] {
+        for stayed in MemoryWords.couldNotForgetSummariesLines + CloudWords.forgotAndCloudOffNotSummariesLines {
             #expect(MemoryWords.retryAdvice.contains { stayed.hasSuffix(" " + $0) }, "\(stayed)")
         }
         // Each line where the summaries stayed says so, and that the switch is off.
-        for stayed in MemoryWords.couldNotForgetSummariesLines + [CloudWords.forgotAndCloudOffNotSummaries,
-                                                                  MemoryWords.summariesStayed] {
+        for stayed in MemoryWords.couldNotForgetSummariesLines + CloudWords.forgotAndCloudOffNotSummariesLines
+            + [MemoryWords.summariesStayed] {
             #expect(stayed.contains("couldn't erase your morning summaries"), "\(stayed)")
             #expect(stayed.lowercased().contains("work while you're away"), "\(stayed)")
         }

@@ -362,8 +362,26 @@ public enum CloudWords {
     /// be erased with the whole cloud setting, which turned it off.
     public static let forgotAndCloudOff = "Gone. I no longer have it. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. You can turn it on again anytime."
     /// The same, but the morning summaries' file couldn't be erased, like
-    /// `MemoryWords.couldNotForgetSummaries(tasks:words:)`.
-    public static let forgotAndCloudOffNotSummaries = "I forgot your notes and tasks and turned off work while you're away, but I couldn't erase your morning summaries just now. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. Please try Forget everything again in a moment."
+    /// `MemoryWords.couldNotForgetSummaries(notes:tasks:words:)`. It opens
+    /// with what went, the notes and the tasks only when there were some,
+    /// as `MemoryWords.forgotAndTurnedOff` says it. Each form is written
+    /// out whole, so the device promise guard checks each word for word.
+    public static func forgotAndCloudOffNotSummaries(notes: Bool, tasks: Bool) -> String {
+        switch (notes, tasks) {
+        case (true, true):
+            "I forgot your notes and tasks, and turned off work while you're away, but I couldn't erase your morning summaries just now. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. Please try Forget everything again in a moment."
+        case (true, false):
+            "I forgot your notes and turned off work while you're away, but I couldn't erase your morning summaries just now. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. Please try Forget everything again in a moment."
+        case (false, true):
+            "I forgot your tasks and turned off work while you're away, but I couldn't erase your morning summaries just now. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. Please try Forget everything again in a moment."
+        case (false, false):
+            "I turned off work while you're away, but I couldn't erase your morning summaries just now. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. Please try Forget everything again in a moment."
+        }
+    }
+    /// Every form of `forgotAndCloudOffNotSummaries`, for the word checks.
+    public static let forgotAndCloudOffNotSummariesLines = [false, true].flatMap { notes in
+        [false, true].map { forgotAndCloudOffNotSummaries(notes: notes, tasks: $0) }
+    }
     /// The same, but the notes couldn't be erased.
     public static let forgotWordsAndCloudNotNotes = "Your private words are gone. To be sure of that I cleared the cloud setting too, so help from the cloud is off. I couldn't erase your notes just now. Please try Forget everything again in a moment."
     /// The same, when there were tasks and they went too.
@@ -396,6 +414,6 @@ public enum CloudWords {
         forgotNotesAndTasksNotWords, forgotTasksAndWordsNotNotes, forgotTasksNotNotesOrWords,
         forgotTasksAndWordsAndCloudNotNotes, forgetTasksAndWordsDetail, tasksAndWordsForgotten,
         tasksAndWordsAndCloudForgotten, tasksForgottenNotWords,
-        forgetEverythingWithSummariesDetail, forgotAndCloudOffNotSummaries,
-    ] + askPoints + Redaction.Kind.allCases.map(\.spoken)
+        forgetEverythingWithSummariesDetail,
+    ] + forgotAndCloudOffNotSummariesLines + askPoints + Redaction.Kind.allCases.map(\.spoken)
 }

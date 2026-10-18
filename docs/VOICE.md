@@ -188,7 +188,9 @@ otherwise when you open the app." on iPhone and iPad, since the summary's
 file opens only after that first unlock, and the system may not give it
 time even then. It says "try", never that it will. On the Mac it says
 "while the app is open". It
-names "what finished overnight" only when there are tasks to count, and says
+names "what finished overnight" only when there are tasks to count and the
+app keeps running, as on the Mac: on iPhone and iPad a summary made while
+closed almost never knows what finished. It says
 "when there's something to tell you", since a quiet morning leaves no card.
 Under it, "I'll look next at 7:00 AM tomorrow." says when it looks, not that
 a card comes. It always ends by saying nothing is sent, bought or shared
@@ -210,6 +212,13 @@ each. With no tasks to count, that morning would almost always have been
 quiet, so no card claims a summary was missed. None of these lines
 mention the device: they are about time and power, not where words go.
 The words live in `BackgroundWords`.
+
+Forget everything says what went in plain words, and names only what was
+really there: the notes and the tasks only when there were some, and the
+words to hide only when they were erased. If the summaries' file couldn't
+be erased, it says so and asks to try again. It never says "no trace": once
+an earlier version's setting was seen, an empty marker file stays beside the
+switch, holding nothing, but its being there shows the switch was once set.
 
 ### Confirmations
 

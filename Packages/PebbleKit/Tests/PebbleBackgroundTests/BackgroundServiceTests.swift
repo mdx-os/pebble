@@ -175,7 +175,8 @@ struct BackgroundServiceTests {
     /// again after its first unlock, whose file opens, is this case.
     @Test func aRunWhoseFileOpensMakesTheSummaryAndSucceeds() throws {
         let store = scratchStore()
-        let runner = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(), needsYou: oneWaiting(),
+        let asks = oneWaiting()
+        let runner = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(), needsYou: asks,
                                       watchingSince: .distantPast, calendar: calendar)
         runner.turnOn(now: at(6))
         let scheduler = RecordingScheduler()
@@ -186,24 +187,69 @@ struct BackgroundServiceTests {
         #expect(runner.results.count == 1)
         #expect(scheduler.asks.last == at(7, days: 1), "asks for tomorrow before it can be suspended")
 
-        // Out of time, it says so to the system.
-        runner.turnOff()
-        runner.turnOn(now: at(6, days: 1))
+        // The next morning, with time enough: the system taking its time
+        // back is all that differs between the two runs below, so the one
+        // out of time fails for that and nothing else.
+        let tomorrow = at(7, 1, days: 1)
+        let enough = BackgroundConditions.background(store: store, lowPower: false, deadline: tomorrow + 20)
+        let cards = runner.results
+        let queued = runner.queue
         let time = BackgroundTime()
         time.timeIsUp()
-        #expect(!service.run(now: at(7, 1, days: 1), conditions: conditions, time: time))
+        #expect(!service.run(now: tomorrow, conditions: enough, time: time), "out of time, it says so to the system")
+        #expect(runner.results == cards, "no half made card")
+        #expect(runner.queue.map(\.due) == queued.map(\.due), "the morning's job still waits")
+        #expect(runner.queue.first?.held == .outOfTime)
+        #expect(!scheduler.asks.isEmpty)
+
+        _ = asks.ask(ProposedAction(kind: .send, recipient: Recipient(id: "contact:sam", displayName: "Sam",
+                                                                      handle: "sam@example.com"),
+                                    details: "See you at 5"), at: at(6, 50, days: 1))
+        #expect(service.run(now: tomorrow + 60, conditions: BackgroundConditions.background(
+            store: store, lowPower: false, deadline: tomorrow + 80), time: BackgroundTime()), "with its time, it runs")
+        #expect(runner.results.count == cards.count + 1)
+        #expect(runner.queue.first?.due == at(7, days: 2))
+    }
+
+    /// Forget everything turns work while away off, and that means no more
+    /// asks to be woken: the ask is cancelled, and none is made again.
+    @Test(.timeLimit(.minutes(1))) func forgetEverythingCancelsTheWake() async throws {
+        let store = scratchStore()
+        let runner = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(), needsYou: oneWaiting(),
+                                      watchingSince: .distantPast, calendar: calendar)
+        runner.turnOn(now: at(6))
+        let scheduler = RecordingScheduler()
+        let service = BackgroundService(runner: runner, scheduler: scheduler, clock: { at(6, 30) })
+        service.start()
+        #expect(scheduler.asks == [at(7)])
+        #expect(scheduler.cancels == 0)
+
+        try runner.forget()
+        // The service hears of it on a later turn of the main actor. A
+        // service that never hears ends the wait at the time limit.
+        while scheduler.cancels == 0, !Task.isCancelled { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(scheduler.cancels == 1)
+        #expect(scheduler.asks == [at(7)], "nothing asked since")
+        #expect(!service.run(now: at(7, 1), conditions: BackgroundConditions.background(
+            store: store, lowPower: false, deadline: at(7, 1) + 20), time: BackgroundTime()))
+        #expect(scheduler.asks == [at(7)], "a wake that still comes asks for none")
     }
 
     /// The service finds the lock by trying the file, through the one
-    /// helper the tests drive, and nothing in PebbleBackground, nor the
-    /// runner, reads the screen or protected data.
+    /// helper the tests drive, and nothing in PebbleBackground, the runner,
+    /// or the app's own sources, where the system's task arrives, reads the
+    /// screen or protected data.
     @Test func theServiceNeverReadsTheScreenForTheLock() throws {
-        let sources = SwiftSource.repositoryRoot(from: #filePath).appendingPathComponent("Packages/PebbleKit/Sources")
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        let sources = root.appendingPathComponent("Packages/PebbleKit/Sources")
         let target = try SwiftSource.files(under: sources.appendingPathComponent("PebbleBackground"))
         #expect(target.map(\.name).contains("BackgroundService.swift"), "the sweep sees the target")
+        let app = try SwiftSource.files(under: root.appendingPathComponent("App/Sources"))
+        #expect(app.map(\.name).contains("PebbleApp.swift"), "the sweep sees the app")
         let runner = try String(contentsOf: sources.appendingPathComponent("PebbleCore/Background.swift"),
                                 encoding: .utf8)
-        for (name, text) in target.map({ ("PebbleBackground/" + $0.name, $0.text) }) + [("Background", runner)] {
+        for (name, text) in target.map({ ("PebbleBackground/" + $0.name, $0.text) }) + [("Background", runner)]
+            + app.map({ ("App/" + $0.name, $0.text) }) {
             let code = String(SwiftSource(text).code)
             for screen in ["isProtectedDataAvailable", "protectedDataWillBecomeUnavailable",
                            "protectedDataDidBecomeAvailable", "applicationState"] {
@@ -234,33 +280,76 @@ struct BackgroundServiceTests {
             named += text.contains("BackgroundSeed") ? 1 : 0
             let release = Self.outsideDebug(String(SwiftSource(text).code))
             #expect(!release.contains("BackgroundSeed"), "\(name) reads the seed outside #if DEBUG")
-            #expect(!SwiftSource(text).literals.contains { $0.text.contains(BackgroundSeed.launchKey) },
+            #expect(!SwiftSource(text).literals.contains { $0.text.contains(Self.seedKey) },
                     "\(name) spells the seed's launch argument")
         }
         #expect(named > 0, "the app does read it in Debug")
     }
 
+    /// The seed's launch argument, written here so this file builds in
+    /// Release, where the seed isn't. `theSeedKeyIsTheSeeds` pins it.
+    static let seedKey = "pebbleBackgroundSeed"
+
+    #if DEBUG
+    @Test func theSeedKeyIsTheSeeds() {
+        #expect(Self.seedKey == BackgroundSeed.launchKey)
+    }
+    #endif
+
     /// The lines of `code` a Release build compiles: everything but the
-    /// `#if DEBUG` branches. Other conditions are taken as compiled.
-    private static func outsideDebug(_ code: String) -> String {
+    /// `#if DEBUG` branches. Other conditions are taken as compiled. Each
+    /// directive is read without what trails it, so `#if DEBUG // why`
+    /// is `#if DEBUG`.
+    static func outsideDebug(_ code: String) -> String {
         var stack: [Bool] = []
         var kept: [Substring] = []
         for line in code.split(separator: "\n", omittingEmptySubsequences: false) {
-            let directive = line.trimmingCharacters(in: .whitespaces)
-            if directive.hasPrefix("#if") {
-                stack.append(directive == "#if DEBUG")
-            } else if directive.hasPrefix("#else") {
+            let words = line.split(whereSeparator: \.isWhitespace)
+            let directive = words.first.map(String.init) ?? ""
+            let condition = words.dropFirst().first.map(String.init)
+            switch directive {
+            case "#if":
+                stack.append(condition == "DEBUG" && words.count == 2)
+            case "#elseif":
+                // A later branch of `#if DEBUG` is compiled where DEBUG isn't.
+                if !stack.isEmpty { stack[stack.count - 1] = false }
+            case "#else":
                 // The other branch of `#if DEBUG` is what Release compiles.
                 if !stack.isEmpty { stack[stack.count - 1] = false }
-            } else if directive.hasPrefix("#endif") {
+            case "#endif":
                 _ = stack.popLast()
-            } else if !stack.contains(true) {
-                kept.append(line)
+            default:
+                if !stack.contains(true) { kept.append(line) }
             }
         }
         return kept.joined(separator: "\n")
     }
 
+    /// The reading of directives, on the forms it has to tell apart.
+    @Test func outsideDebugReadsEachDirective() {
+        let code = """
+            a
+            #if DEBUG
+            b
+            #elseif os(iOS)
+            c
+            #else
+            d
+            #endif
+            #if DEBUG
+            e
+            #endif
+            #if DEBUG && os(iOS)
+            f
+            #endif
+            g
+            """
+        let kept = Self.outsideDebug(String(SwiftSource(code + "\n#if DEBUG // a reason\nh\n#endif").code))
+            .split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        #expect(kept == ["a", "c", "d", "f", "g"])
+    }
+
+    #if DEBUG
     /// The UI test's seed leaves no scratch folder behind: any launch
     /// without the seed removes the one an earlier seeded launch made.
     @Test func theSeedsScratchFolderGoesOnTheNextLaunch() throws {
@@ -285,4 +374,5 @@ struct BackgroundServiceTests {
         #expect(BackgroundSeed.launched(defaults: defaults, folder: folder) == nil)
         #expect(!FileManager.default.fileExists(atPath: folder.path))
     }
+    #endif
 }

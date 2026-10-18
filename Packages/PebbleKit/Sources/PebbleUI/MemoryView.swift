@@ -130,7 +130,7 @@ public struct MemoryView: View {
         }
         .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(response: 0.4, dampingFraction: 0.85), value: model.notes)
         .animation(.easeInOut(duration: 0.2), value: model.editingID)
-        .modifier(ForgetEverythingDialog(cloud: cloud, background: model.background != nil,
+        .modifier(ForgetEverythingDialog(cloud: cloud, background: model.forgetNamesBackground,
                                          isPresented: $model.askForgetEverything) {
             model.forgetEverything()
         })
@@ -611,6 +611,11 @@ final class MemoryModel: ObservableObject {
     /// Forget everything shows while there is anything for it to remove.
     var hasSomethingToForget: Bool { hasStoredFile || hasBackgroundToForget }
 
+    /// Whether the question before Forget everything names work while away:
+    /// only while it is on or has summaries to erase, so it promises only
+    /// what this tap will do.
+    var forgetNamesBackground: Bool { backgroundOn || hasBackgroundToForget }
+
     /// What the switch does, true for where it runs and for what the runner
     /// counts: what finished is named only when it has tasks to count.
     var backgroundDetail: String {
@@ -751,23 +756,20 @@ final class MemoryModel: ObservableObject {
             (try? background.forget()) != nil ? .erased : .stayed
         }.flatMap { $0 == .erased && !hadSummaries ? nil : $0 }
         let tasks = onForgetEverything()
+        // Notes are named as gone only when there were some. Notes that
+        // can't be read or opened are there, so they count.
+        let hadNotes: Bool
+        if case .notes(let all) = store.contents() { hadNotes = !all.isEmpty } else { hadNotes = store.hasStoredFile }
         let notesGone = (try? store.forgetEverything()) != nil
         // nil when there is nothing else; .some(nil) when it couldn't go.
         let rest = alsoForget.map { forget in try? forget() }
         // A step said yes to may have happened, so the line says so here too.
         status = Self.forgotLine(notesGone: notesGone, rest: rest, tasksGone: tasks.forgotten > 0,
-                                 summaries: summaries, underway: tasks.underwayLine)
+                                 summaries: summaries, underway: tasks.underwayLine, hadNotes: hadNotes)
         let restGone = rest.map { $0 != nil } == true
         if notesGone || restGone || tasks.forgotten > 0 || summaries == .erased { forgottenCount += 1 }
         refresh()
     }
-
-    #if DEBUG
-    /// For the showcase: the screen as it is once Forget everything has said `line`.
-    func showAfterForgetting(_ line: String) {
-        status = line
-    }
-    #endif
 
     /// What Forget everything says went, from what each part did. Tasks
     /// can't fail to go, so they are named only when something else stayed.
@@ -775,9 +777,10 @@ final class MemoryModel: ObservableObject {
     /// when all the rest went, the line says just what stayed, and when
     /// something else stayed too, a sentence about them follows. Then
     /// `underway`, if a step said yes to may have happened. Any advice to
-    /// try again always comes last.
+    /// try again always comes last. Where only the summaries stayed, the
+    /// line names only what went: the notes only with `hadNotes`.
     static func forgotLine(notesGone: Bool, rest: CloudHelp.Forgot??, tasksGone: Bool,
-                           summaries: Summaries? = nil, underway: String? = nil) -> String {
+                           summaries: Summaries? = nil, underway: String? = nil, hadNotes: Bool = true) -> String {
         let line = notesWordsAndTasksLine(notesGone: notesGone, rest: rest, tasksGone: tasksGone)
         let restWent = notesGone && (rest.map { $0 != nil } ?? true)
         let said: String
@@ -788,8 +791,10 @@ final class MemoryModel: ObservableObject {
         case (.erased?, false):
             said = line; aboutSummaries = MemoryWords.summariesGone
         case (.stayed?, true):
-            said = rest == .some(.some(.privateWordsAndCloud)) ? CloudWords.forgotAndCloudOffNotSummaries
-                : MemoryWords.couldNotForgetSummaries(tasks: tasksGone, words: rest == .some(.some(.privateWords)))
+            said = rest == .some(.some(.privateWordsAndCloud))
+                ? CloudWords.forgotAndCloudOffNotSummaries(notes: hadNotes, tasks: tasksGone)
+                : MemoryWords.couldNotForgetSummaries(notes: hadNotes, tasks: tasksGone,
+                                                      words: rest == .some(.some(.privateWords)))
             aboutSummaries = nil
         case (.stayed?, false):
             said = line; aboutSummaries = MemoryWords.summariesStayed
