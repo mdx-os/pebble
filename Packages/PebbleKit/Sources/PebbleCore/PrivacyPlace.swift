@@ -17,8 +17,8 @@ import Foundation
 /// opening line, nothing said to the old model, and no Forget everything left
 /// waiting for an answer. That is the privacy-safe default: words told to a
 /// model on this device are never carried to one whose words may leave, and
-/// a question asked under one promise is never answered under another. Mandeep
-/// decides whether a switch may keep the chat before any model picker ships.
+/// a question asked under one promise is never answered under another. Whether
+/// a switch may keep the chat is decided before any model picker ships.
 /// `aNewModelStartsAFreshChat` fails if a change keeps either one.
 public enum PrivacyPlace: Sendable, Hashable {
     /// The model runs here and nothing the person says leaves the device.

@@ -17,6 +17,8 @@ public struct SwiftSource: Sendable {
         public let line: Int
         /// Where the opening quote is in `code`.
         public let offset: Int
+        /// Just past the closing quote in `code`.
+        public let end: Int
     }
 
     /// One call, such as `.foregroundStyle(...)`, with its arguments.
@@ -147,7 +149,8 @@ public struct SwiftSource: Sendable {
                     j += 1
                 }
                 let contents = String(chars[opened..<min(end, chars.count)])
-                literals.append(Literal(text: contents, line: startLine, offset: start))
+                literals.append(Literal(text: contents, line: startLine, offset: start,
+                                        end: min(end + closer.count, chars.count)))
                 for k in opened..<min(end, chars.count) { blank(k) }
                 i = min(end + closer.count, chars.count)
             } else {

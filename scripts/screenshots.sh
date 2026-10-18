@@ -7,7 +7,17 @@ set -eu
 out="${1:-build/screenshots}"
 derived="build/DerivedData"
 bundle_id="com.mdxos.pebble"
-mkdir -p "$out"
+mkdir -p "$out" build
+
+# Simulators are shared with other worktrees, so whatever happens, one
+# switched to dark goes back to light.
+darkened=""
+restore_light() {
+  for sim in $darkened; do xcrun simctl ui "$sim" appearance light 2>/dev/null || true; done
+}
+trap restore_light EXIT
+
+swiftc -O scripts/same-shot.swift -o build/same-shot
 
 # First available simulator whose name starts with $1, unless $2 names one.
 pick_sim() {
@@ -24,7 +34,9 @@ print(match[0]["udid"])
 
 # A screenshot of simulator $1 once the screen has stopped changing, written
 # to $2. A fixed wait can catch a launch half drawn, or the home screen, on
-# a busy machine; two shots in a row that match mean it has settled.
+# a busy machine; two shots in a row that match mean it has settled. A
+# blinking caret never matches byte for byte, so build/same-shot lets a
+# thousandth of the pixels differ.
 settled_shot() {
   sleep 3
   xcrun simctl io "$1" screenshot "$2" >/dev/null 2>&1
@@ -32,7 +44,7 @@ settled_shot() {
   while [ "$tries" -lt 15 ]; do
     sleep 2
     xcrun simctl io "$1" screenshot "$2.next.png" >/dev/null 2>&1
-    if cmp -s "$2" "$2.next.png"; then break; fi
+    if build/same-shot "$2" "$2.next.png"; then break; fi
     mv "$2.next.png" "$2"
     tries=$((tries + 1))
   done
@@ -63,27 +75,32 @@ for kind in iPhone iPad; do
   xcrun simctl io "$udid" screenshot "$file" >/dev/null
   echo "screenshots: $file"
   # In dark mode, where white words on the orange fill are hardest to
-  # read: the iPad sidebar with Today selected, and the memory sheet with
-  # its Done button on iPhone. scripts/check-screenshots.sh checks both.
+  # read: the iPad sidebar with Today selected, then with a question
+  # waiting so its count shows on the chosen row, and the memory sheet with
+  # its Done button on iPhone. scripts/check-screenshots.sh checks each.
   if [ "$kind" = iPad ]; then
-    scene=today; file="$out/ipad-sidebar-dark.png"
+    shots="today:ipad-sidebar-dark todayNeedsYou:ipad-sidebar-badge-dark"
   else
-    scene=homeMemory; file="$out/iphone-sheet-dark.png"
+    shots="homeMemory:iphone-sheet-dark"
   fi
   xcrun simctl terminate "$udid" "$bundle_id" 2>/dev/null || true
   # Switching to dark can take an app launched at the same moment down with
   # it, so let it finish, and launch again if the app isn't up once the
   # screen settles.
+  darkened="$darkened $udid"
   xcrun simctl ui "$udid" appearance dark
   sleep 3
-  for attempt in 1 2 3; do
-    xcrun simctl launch --terminate-running-process "$udid" "$bundle_id" -pebbleScreen "$scene" >/dev/null
-    settled_shot "$udid" "$file"
-    if xcrun simctl spawn "$udid" launchctl list | grep -q "$bundle_id"; then break; fi
-    echo "screenshots: the app wasn't up for $file, launching again"
+  for shot in $shots; do
+    scene="${shot%%:*}"; file="$out/${shot#*:}.png"
+    for attempt in 1 2 3; do
+      xcrun simctl launch --terminate-running-process "$udid" "$bundle_id" -pebbleScreen "$scene" >/dev/null
+      settled_shot "$udid" "$file"
+      if xcrun simctl spawn "$udid" launchctl list | grep -q "$bundle_id"; then break; fi
+      echo "screenshots: the app wasn't up for $file, launching again"
+    done
+    echo "screenshots: $file"
   done
   xcrun simctl ui "$udid" appearance light
-  echo "screenshots: $file"
   xcrun simctl terminate "$udid" "$bundle_id" || true
   xcrun simctl shutdown "$udid" || true
 done

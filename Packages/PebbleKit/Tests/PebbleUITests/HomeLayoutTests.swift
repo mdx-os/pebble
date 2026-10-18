@@ -42,6 +42,19 @@ struct HomeLayoutTests {
         try smokeRender(view.frame(width: size.width, height: size.height))
     }
 
+    /// The row drawn chosen and the row VoiceOver hears chosen are the same
+    /// one, before the list has a selection too, when Today is drawn chosen.
+    @Test(arguments: [nil] + HomeSection.allCases.map(Optional.some))
+    func theChosenRowIsHeardChosen(section: HomeSection?) {
+        typealias Split = HomeSplit<EmptyView, EmptyView, EmptyView>
+        let chosen = HomeSection.allCases.filter { Split.isChosen($0, section: section) }
+        #expect(chosen == [section ?? .today], "exactly one row is drawn chosen")
+        for place in HomeSection.allCases {
+            #expect(Split.traits(place, section: section).contains(.isSelected) == Split.isChosen(place, section: section),
+                    "\(place) with \(String(describing: section))")
+        }
+    }
+
     @Test("Smoke: the shortcuts screen draws", arguments: [ColorScheme.light, .dark])
     func smokeTheShortcutsScreen(scheme: ColorScheme) throws {
         try smokeRender(KeyboardShortcutsView()

@@ -1,7 +1,9 @@
 // Checks that a screenshot shows the orange fill with white words on it.
-// Usage: swift scripts/fill-check.swift <png> <left> <top> <right> <bottom>
+// Usage: swift scripts/fill-check.swift <png> <left> <top> <right> <bottom> [--badge]
 // The region is in fractions of the image, 0 to 1. Run by
-// scripts/check-screenshots.sh after `make screenshots`.
+// scripts/check-screenshots.sh after `make screenshots`. With --badge the
+// region is the end of a row, where only a count of a digit or two sits, so
+// a smaller patch of fill and fewer white pixels will do.
 //
 // Passes when the region holds a patch of Theme.tintFill in dark mode
 // (0.74, 0.33, 0.08), and that patch has white words on it, not black or
@@ -17,8 +19,9 @@ func fail(_ reason: String) -> Never {
 }
 
 let args = CommandLine.arguments
-guard args.count == 6, let box = Optional(args[2...5].compactMap(Double.init)), box.count == 4 else {
-    fail("usage: fill-check.swift <png> <left> <top> <right> <bottom>")
+let badge = args.count == 7 && args[6] == "--badge"
+guard args.count == 6 || badge, let box = Optional(args[2...5].compactMap(Double.init)), box.count == 4 else {
+    fail("usage: fill-check.swift <png> <left> <top> <right> <bottom> [--badge]")
 }
 let path = args[1]
 guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
@@ -56,8 +59,8 @@ for y in y0..<y1 {
         }
     }
 }
-// About a row of a sidebar or a Done button at 2x or 3x.
-guard count >= 4_000 else { fail("\(path): no orange fill in the region (\(count) pixels)") }
+// About a row of a sidebar or a Done button at 2x or 3x, or the end of a row.
+guard count >= (badge ? 1_500 : 4_000) else { fail("\(path): no orange fill in the region (\(count) pixels)") }
 
 // The words on the fill: white, never black or gray.
 var white = 0, dark = 0
@@ -68,6 +71,6 @@ for (y, span) in spans {
         if r <= 90, g <= 90, b <= 90 { dark += 1 }
     }
 }
-guard white >= 150 else { fail("\(path): the words on the fill aren't white (\(white) white pixels)") }
+guard white >= (badge ? 30 : 150) else { fail("\(path): the words on the fill aren't white (\(white) white pixels)") }
 guard dark * 4 < white else { fail("\(path): dark words on the fill (\(dark) dark, \(white) white pixels)") }
 print("fill-check: \(path): \(count) fill pixels, \(white) white on it")

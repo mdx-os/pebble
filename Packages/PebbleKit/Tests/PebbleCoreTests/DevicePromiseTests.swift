@@ -91,9 +91,26 @@ enum DevicePromise {
     /// The words the competitor watch's fit score looks for.
     static let ideaFitKeywords = ["upload", "cloud data storage", "on our servers", "requires cloud", "cloud only"]
 
-    /// True when `literal` in `file` is an allowed line, word for word.
-    static func isAllowed(_ literal: SwiftSource.Literal, in file: String) -> Bool {
-        allowed.contains { $0.file == file && $0.literal == literal.text }
+    /// True when `text` in `file` is an allowed line, word for word.
+    static func isAllowed(_ text: String, in file: String) -> Bool {
+        allowed.contains { $0.file == file && $0.literal == text }
+    }
+
+    /// The literals in `source`, with those written one after another with
+    /// only `+` between them (`"never " + "leaves"`) kept together, in order.
+    static func joined(_ source: SwiftSource) -> [[SwiftSource.Literal]] {
+        var chains: [[SwiftSource.Literal]] = []
+        for literal in source.literals {
+            if let last = chains.last?.last, last.end <= literal.offset {
+                let between = String(source.code[last.end..<literal.offset])
+                if between.range(of: #"^\s*\+\s*$"#, options: .regularExpression) != nil {
+                    chains[chains.count - 1].append(literal)
+                    continue
+                }
+            }
+            chains.append([literal])
+        }
+        return chains
     }
 
     /// Lines the copy lists hold that the guard lets by, each with its
@@ -107,13 +124,17 @@ enum DevicePromise {
     /// A literal is gated when it is the true branch of a ternary whose
     /// whole condition is `.staysOnDevice` read inline from a
     /// `PrivacyPlace`: `place.staysOnDevice ? "..."`,
-    /// `self.place.staysOnDevice ? "..."` or
+    /// `self.place.staysOnDevice ? "..."`,
+    /// `privacyPlace.staysOnDevice ? "..."` or
     /// `model.privacyPlace.staysOnDevice ? "..."`, on one line or across
     /// several. The false branch comes after `:` and is never gated.
     ///
-    /// It must be a member read, `something.staysOnDevice`, and
+    /// It must be read from one of those receivers and no other, so a call
+    /// result (`flipped().staysOnDevice`) or some other value never gates.
     /// `everyPlaceIsAPrivacyPlace` keeps `staysOnDevice` declared on
-    /// `PrivacyPlace` alone, so only a `PrivacyPlace` can have it. A Bool of
+    /// `PrivacyPlace` alone, so only a `PrivacyPlace` can have it, and keeps
+    /// `.onDevice` from being written anywhere but where the model decides
+    /// it, so a place is always the model's. A Bool of
     /// its own, whatever it is called (`onDevice`, `staysOnDevice`), never
     /// gates, since nothing ties it to the flag: `let onDevice =
     /// !place.staysOnDevice` would turn the promise around.
@@ -127,8 +148,9 @@ enum DevicePromise {
         // All the code before it, so a condition that starts many lines up
         // is still seen whole.
         let before = String(source.code[..<literal.offset])
-        let pattern = #"(?:\A|[(\[{,:]|(?<![=!<>])=|\breturn)\s*(?:\(\s*)*(?:[\w()]+\s*\.\s*)+"#
-            + #"staysOnDevice\s*(?:\)\s*)*\?\s*\z"#
+        let receiver = #"(?:self\s*\.\s*place|place|model\s*\.\s*privacyPlace|privacyPlace)"#
+        let pattern = #"(?:\A|[(\[{,:]|(?<![=!<>])=|\breturn)\s*(?:\(\s*)*"# + receiver
+            + #"\s*\.\s*staysOnDevice\s*(?:\)\s*)*\?\s*\z"#
         return before.range(of: pattern, options: .regularExpression) != nil
     }
 
@@ -137,6 +159,11 @@ enum DevicePromise {
     ///
     /// - `staysOnDevice` is declared only in `PrivacyPlace.swift`, so a
     ///   `place.staysOnDevice` that compiles is read from a `PrivacyPlace`.
+    ///   Elsewhere the word is only ever a member read or the
+    ///   `PrivacyPlace(staysOnDevice:` label.
+    /// - `.onDevice` and `.mayLeaveDevice` are written only in
+    ///   `PrivacyPlace.swift` and `ModelClient.swift`, so every place comes
+    ///   from the model. A parameter may default to `.mayLeaveDevice`.
     /// - `PrivacyPlace(staysOnDevice:` is made only in `ModelClient.swift`,
     ///   from `runsOnDevice`, so a place is never built from a turned Bool.
     /// - A Bool named `onDevice`, as a `let`/`var` or as an argument, must
@@ -157,10 +184,29 @@ enum DevicePromise {
             let range = match.range(at: index)
             return range.location == NSNotFound ? nil : ns.substring(with: range).trimmingCharacters(in: .whitespaces)
         }
-        // A property, function or case called staysOnDevice, anywhere else.
+        // Anything else called staysOnDevice: a property, function, case
+        // (`case a, staysOnDevice` too), parameter or tuple label. Outside
+        // PrivacyPlace.swift the word may only be read as `.staysOnDevice`
+        // or be the label of `PrivacyPlace(staysOnDevice:`.
         if file != "PebbleCore/PrivacyPlace.swift" {
-            each(#"\b(?:let|var|func|case)\s+staysOnDevice\b"#) { _, _ in
+            each(#"(?<!\w)(?<!\.\s{0,40})(?<!\bPrivacyPlace\s{0,10}\(\s{0,40})staysOnDevice\b"#) { _, _ in
                 "staysOnDevice is declared only on PrivacyPlace, so the gate can trust it"
+            }
+        }
+        // The place itself, written out. Only the model decides it, so a
+        // screen never says `.onDevice` of its own accord, as in
+        // `let place: PrivacyPlace = .onDevice` or `isRemote ? .onDevice :
+        // .mayLeaveDevice`. A parameter may default to `.mayLeaveDevice`,
+        // which promises nothing.
+        if !["PebbleCore/PrivacyPlace.swift", "PebbleModel/ModelClient.swift"].contains(file) {
+            each(#"(?:\b(?:PrivacyPlace|Self)\s*|(?<![\w)\]]))\.\s*(onDevice|mayLeaveDevice)\b(?!\s*\()"#) { match, ns in
+                let start = match.range.location
+                let lead = ns.substring(to: start)
+                if group(match, 1, ns) == "mayLeaveDevice",
+                   lead.range(of: #":\s*PrivacyPlace\s*=\s*\z"#, options: .regularExpression) != nil {
+                    return nil
+                }
+                return "\(ns.substring(with: match.range)) is decided only by the model, as model.privacyPlace"
             }
         }
         for call in source.calls(named: ["PrivacyPlace"]) where call.arguments.contains("staysOnDevice:") {
@@ -194,15 +240,20 @@ struct DevicePromiseTests {
     }
 
     /// The literals that promise the device, and are neither gated nor allowed.
+    /// Literals joined with `+` are read as one, so `"never " + "leaves"` is
+    /// still the phrase. A joined line is gated by its first literal, and
+    /// allowed only as the whole joined text.
     static func ungated(in files: [(name: String, text: String)]) -> [String] {
         var problems: [String] = []
         for file in files {
             let source = SwiftSource(file.text)
-            for literal in source.literals where !DevicePromise.found(in: literal.text).isEmpty {
-                if DevicePromise.isGated(literal, in: source) { continue }
-                if DevicePromise.isAllowed(literal, in: file.name) { continue }
-                problems.append("\(file.name):\(literal.line): \"\(literal.text)\" promises "
-                                + "\(DevicePromise.found(in: literal.text)) without PrivacyPlace")
+            for chain in DevicePromise.joined(source) {
+                let text = chain.map(\.text).joined()
+                guard !DevicePromise.found(in: text).isEmpty, let first = chain.first else { continue }
+                if DevicePromise.isGated(first, in: source) { continue }
+                if DevicePromise.isAllowed(text, in: file.name) { continue }
+                problems.append("\(file.name):\(first.line): \"\(text)\" promises "
+                                + "\(DevicePromise.found(in: text)) without PrivacyPlace")
             }
         }
         return problems
@@ -283,6 +334,12 @@ struct DevicePromiseTests {
             #"let line = (onDevice) ? "It stays on this device." : "Hi.""#,
             #"let line = staysOnDevice ? "It stays on this device." : "Hi.""#,
             #"let line = !staysOnDevice ? "It stays on this device." : "Hi.""#,
+            // Only the place's own receivers gate: never a call's result or
+            // some other value's flag.
+            #"let line = flipped().staysOnDevice ? "It stays on this device." : "Hi.""#,
+            #"let line = other.place.staysOnDevice ? "It stays on this device." : "Hi.""#,
+            #"let line = settings.staysOnDevice ? "It stays on this device." : "Hi.""#,
+            #"let line = PrivacyPlace.onDevice.staysOnDevice ? "It stays on this device." : "Hi.""#,
             // The newer phrases.
             #"Text("Your privacy comes first.")"#,
             #"static let x = "It's all on this Mac.""#,
@@ -302,6 +359,10 @@ struct DevicePromiseTests {
             #"static let x = "Only\nyou can read it.""#,
             #"static let x = "It runs on this\ndevice.""#,
             #"static let x = "Nothing\tleaves.""#,
+            // Split into literals joined with +, a phrase is still one phrase.
+            #"static let x = "It never " + "leaves.""#,
+            "static let x = \"Your words stay on this \"\n    + \"device.\"",
+            #"static let x = "Kept on " + /* here */ "this Mac.""#,
         ]
         for text in wrong {
             #expect(!Self.ungated(in: [("PebbleCore/Wrong.swift", text)]).isEmpty, "missed: \(text)")
@@ -311,11 +372,14 @@ struct DevicePromiseTests {
             "place.staysOnDevice\n    ? \"I run on this device.\"\n    : \"Hi.\"",
             #"return (place.staysOnDevice) ? "I run on this device." : "Hi.""#,
             #"return model.privacyPlace.staysOnDevice ? "I run on this device." : "Hi.""#,
+            #"return privacyPlace.staysOnDevice ? "I run on this device." : "Hi.""#,
             #"Text(place.staysOnDevice ? "Kept only on this device." : "Kept.")"#,
             "func f() -> String {\n    self.place.staysOnDevice\n        ? \"It stays on this device.\"\n        : \"Hi.\"\n}",
             #"// Says "on this device" only when the flag says so."#,
             "/* \"stays on this device\" */",
             #"static let x = "Only one note at a time.""#,
+            #"place.staysOnDevice ? "It stays on " + "this device." : "Hi.""#,
+            #"let x = "Only " + name + " leaves.""#,
         ]
         for text in right {
             #expect(Self.ungated(in: [("PebbleCore/Right.swift", text)]).isEmpty, "flagged: \(text)")
@@ -347,6 +411,21 @@ struct DevicePromiseTests {
             "f(onDevice: !place.staysOnDevice)",
             "f(onDevice: model.runsOnDevice)",
             "init(onDevice: Bool = false) {}",
+            // A case or label called staysOnDevice is a staysOnDevice too.
+            "enum Where { case a, staysOnDevice }",
+            "enum Where {\n    case here,\n        staysOnDevice\n}",
+            "let identity: (kind: String, staysOnDevice: Bool)",
+            "func f(staysOnDevice: Bool) {}",
+            "let (name, staysOnDevice) = pair",
+            "let place: PrivacyPlace = .init(staysOnDevice: true)",
+            // The place written out, rather than taken from the model.
+            "let place: PrivacyPlace = .onDevice",
+            "let place = PrivacyPlace.onDevice",
+            "let x = flag ? .onDevice : .mayLeaveDevice",
+            "let x = flag ? PrivacyPlace.mayLeaveDevice : .onDevice",
+            "f(place: .onDevice)",
+            "f(place: isRemote ? .mayLeaveDevice : model.privacyPlace)",
+            "switch place { case .onDevice: return true default: return false }",
         ]
         for text in wrong {
             #expect(!DevicePromise.placeProblems(in: SwiftSource(text), file: "PebbleUI/Wrong.swift").isEmpty, "missed: \(text)")
@@ -356,7 +435,11 @@ struct DevicePromiseTests {
             "let place = model.privacyPlace",
             "f(place: model.privacyPlace, onDevice: model.privacyPlace.staysOnDevice)",
             "// var staysOnDevice: Bool, in a comment",
-            "let x = flag ? .onDevice : .mayLeaveDevice",
+            "let note = \"staysOnDevice and .onDevice, in words\"",
+            "if place.staysOnDevice && !model.privacyPlace.staysOnDevice { throw Oops.leaves }",
+            "let x = place\n    .staysOnDevice",
+            "public init(turns: [ChatTurn], place: PrivacyPlace = .mayLeaveDevice) {}",
+            "let store = try? MemoryStore.onDevice()",
         ]
         for text in right {
             #expect(DevicePromise.placeProblems(in: SwiftSource(text), file: "PebbleUI/Right.swift").isEmpty, "flagged: \(text)")
@@ -366,6 +449,7 @@ struct DevicePromiseTests {
         #expect(!DevicePromise.placeProblems(in: SwiftSource(model), file: "PebbleUI/Other.swift").isEmpty)
         let flag = "public var staysOnDevice: Bool { self == .onDevice }"
         #expect(DevicePromise.placeProblems(in: SwiftSource(flag), file: "PebbleCore/PrivacyPlace.swift").isEmpty)
+        #expect(!DevicePromise.placeProblems(in: SwiftSource(flag), file: "PebbleCore/Other.swift").isEmpty)
     }
 
     /// An allowed line passes only word for word. Anything added to it,

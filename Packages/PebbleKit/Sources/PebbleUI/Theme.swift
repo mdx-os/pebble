@@ -71,7 +71,8 @@ enum Theme {
     static let onAccent = onAccentRGB.color
 
     /// Words on `tintFill`, as on the sidebar's chosen row: white, which
-    /// reads at over 4.5 to 1 there in both schemes. Only ever on that fill.
+    /// reads at over 4.5 to 1 there in both schemes. Only ever on that fill:
+    /// `ContrastLint` keeps it to `FillButtonStyle` and HomeSplit's chosen row.
     static let onTintFill = RGB.white.color
     static let onAccentRGB = RGB(red: 0.20, green: 0.10, blue: 0.04)
 
@@ -325,15 +326,19 @@ struct DoneButton: View {
     }
 }
 
-/// White words on a capsule of `Theme.tintFill`, for `DoneButton`.
+/// White words on a capsule of `Theme.tintFill`, for `DoneButton`. Not
+/// ready yet, it goes quiet gray on a neutral fill, as the other buttons do.
 struct FillButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.body.weight(.semibold))
-            .foregroundStyle(Theme.onTintFill)
+            .foregroundStyle(isEnabled ? AnyShapeStyle(Theme.onTintFill) : AnyShapeStyle(Theme.secondaryText))
             .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(Theme.tintFill, in: Capsule())
+            .frame(minHeight: 44)
+            .background(isEnabled ? AnyShapeStyle(Theme.tintFill) : AnyShapeStyle(Color.primary.opacity(Theme.disabledTint)),
+                        in: Capsule())
             .contentShape(Capsule())
             .opacity(configuration.isPressed ? 0.7 : 1)
     }

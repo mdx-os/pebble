@@ -137,6 +137,17 @@ struct ContrastGuardTests {
                 + "        .tint(Theme.tintFill)\n    }\n}",
             "struct HomeSplit: View {\n    var body: some View {\n        List {\n            Text(\"a\")\n        }\n"
                 + "        .tint(Theme.tintFill)\n    }\n}",
+            // White for words on the fill, anywhere the fill isn't under it.
+            #"Text("Open").foregroundStyle(Theme.onTintFill)"#,
+            "struct Card: View {\n    var body: some View {\n        Text(\"a\").foregroundStyle(Theme.onTintFill)\n"
+                + "            .background(Theme.accent)\n    }\n}",
+            "struct HomeSplit: View {\n    var body: some View {\n        Text(\"a\").foregroundStyle(Theme.onTintFill)\n    }\n}",
+            "struct HomeSplit: View {\n    var body: some View {\n"
+                + "        Text(\"a\").foregroundStyle(chosen ? AnyShapeStyle(.primary) : AnyShapeStyle(Theme.onTintFill))\n    }\n}",
+            "struct HomeSplit: View {\n    var body: some View {\n        Text(\"a\").tint(flag ? Theme.onTintFill : .primary)\n    }\n}",
+            "struct FillButtonStyle: ButtonStyle {}\nstruct Other: View {\n"
+                + "    var body: some View { Text(\"a\").foregroundStyle(Theme.onTintFill) }\n}",
+            "let ink = Theme.onTintFill",
         ]
         for line in wrong {
             #expect(!ContrastLint.problems(in: line).isEmpty, "missed: \(line)")
@@ -159,6 +170,13 @@ struct ContrastGuardTests {
             "ToolbarItem(placement: .confirmationAction) {\n    DoneButton { dismiss() }\n}",
             // Art, not words: the character's highlights.
             #".fill(.white.opacity(0.35))"#,
+            // White on the fill: the chosen sidebar row, its badge, and Done.
+            "struct HomeSplit: View {\n    var body: some View {\n        HStack { Text(\"a\"); Text(\"3\") }\n"
+                + "            .foregroundStyle(chosen ? AnyShapeStyle(Theme.onTintFill) : AnyShapeStyle(.primary))\n    }\n}",
+            "struct FillButtonStyle: ButtonStyle {\n    func makeBody(configuration: Configuration) -> some View {\n"
+                + "        configuration.label.foregroundStyle(Theme.onTintFill)\n    }\n}",
+            "static let onTintFill = RGB.white.color",
+            "// Theme.onTintFill only on the fill",
         ]
         for line in right {
             #expect(ContrastLint.problems(in: line).isEmpty, "flagged: \(line)")
@@ -281,6 +299,21 @@ enum ContrastLint {
         for call in source.calls(named: ["foregroundStyle", "foregroundColor"]) where call.arguments.contains("Theme.tintFill") {
             found.append(Problem(line: call.line, reason: "Theme.tintFill is a fill, never words"))
         }
+        // White is only readable on `tintFill`, so `onTintFill` is written
+        // only where that fill is under it: FillButtonStyle, and the
+        // sidebar's chosen row in HomeSplit, its badge included.
+        let code = String(source.code)
+        var at = code.startIndex
+        while let match = code.range(of: #"\bonTintFill\b"#, options: .regularExpression, range: at..<code.endIndex) {
+            at = match.upperBound
+            let offset = code.distance(from: code.startIndex, to: match.lowerBound)
+            if code[..<match.lowerBound].range(of: #"\blet\s+\z"#, options: .regularExpression) != nil { continue }
+            if !onTheFill(offset, in: source) {
+                found.append(Problem(line: source.line(at: offset),
+                                     reason: "Theme.onTintFill is only for words on tintFill: FillButtonStyle "
+                                        + "and HomeSplit's chosen row"))
+            }
+        }
         // A confirmation button is drawn filled with the tint, with white
         // words on it, so it must be a DoneButton, which tints it to keep
         // those words readable.
@@ -293,7 +326,6 @@ enum ContrastLint {
                                      reason: "a confirmation button fills with the tint; use DoneButton so its words stay readable"))
             }
         }
-        let code = String(source.code)
         for rule in codeRules {
             var searched = code.startIndex
             while let match = code.range(of: rule.pattern, options: .regularExpression, range: searched..<code.endIndex) {
@@ -320,6 +352,20 @@ enum ContrastLint {
             }
         }
         return inside("DoneButton", call.offset, source)
+    }
+
+    /// True when `onTintFill` at `offset` has `tintFill` under it: anywhere
+    /// in `FillButtonStyle`, which draws that fill, or in HomeSplit as the
+    /// chosen branch of a `foregroundStyle(chosen ? ...)`, where the chosen
+    /// row draws it.
+    static func onTheFill(_ offset: Int, in source: SwiftSource) -> Bool {
+        if inside("FillButtonStyle", offset, source) { return true }
+        guard inside("HomeSplit", offset, source) else { return false }
+        return source.calls(named: ["foregroundStyle"]).contains { call in
+            guard call.offset < offset, offset < call.end,
+                  let branches = call.arguments.wholeMatch(of: #/chosen\s*\?\s*(.*?)\s*:\s*(.*)/#) else { return false }
+            return branches.1.contains("onTintFill") && !branches.2.contains("onTintFill")
+        }
     }
 
     /// True when `offset` is after `struct name` with no other type

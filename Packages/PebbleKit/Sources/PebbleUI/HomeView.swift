@@ -54,8 +54,29 @@ public struct HomeView: View {
         needsYou: NeedsYou,
         tasks: (any TaskEngine)? = nil,
         drivesTasks: Bool = false,
+        now: @escaping () -> Date = { Date() }
+    ) {
+        self.init(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
+                  looks: looks, conversation: conversation, section: section, feed: feed,
+                  needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, now: now, log: nil)
+    }
+
+    /// The same, writing down what the screen makes in `log`, for tests.
+    init(
+        brand: Brand,
+        model: any ModelClient,
+        names: any AgentNameStoring,
+        onboarding: any OnboardingStoring,
+        memory: MemoryStore?,
+        looks: UserDefaults,
+        conversation: Conversation?,
+        section: HomeSection,
+        feed: [any FeedSource] = [EmptyFeedSource()],
+        needsYou: NeedsYou,
+        tasks: (any TaskEngine)? = nil,
+        drivesTasks: Bool = false,
         now: @escaping () -> Date = { Date() },
-        log: HomeScreenLog? = nil
+        log: HomeScreenLog?
     ) {
         screen = HomeScreen(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                             looks: looks, conversation: conversation, section: section, feed: feed,
@@ -108,11 +129,9 @@ public struct HomeView: View {
 /// each memory model. Only tests pass one, to see that another model makes
 /// all of it again.
 @MainActor
-package final class HomeScreenLog {
+final class HomeScreenLog {
     var chats: [ChatController] = []
     var memories: [MemoryModel] = []
-
-    package init() {}
 }
 
 /// The home screen itself, for one model. See `HomeView`.
@@ -639,15 +658,28 @@ struct HomeSplit<TodayScreen: View, ChatScreen: View, MemoryScreen: View>: View 
         NavigationSplitView {
             List(selection: $section) {
                 ForEach(HomeSection.allCases, id: \.self) { place in
-                    let chosen = place == (section ?? .today)
+                    let chosen = Self.isChosen(place, section: section)
+                    let count = place == .today ? needsYouCount : 0
                     NavigationLink(value: place) {
-                        Label(place.title, systemImage: place.symbol)
-                            .foregroundStyle(chosen ? AnyShapeStyle(Theme.onTintFill) : AnyShapeStyle(.primary))
+                        HStack {
+                            Label(place.title, systemImage: place.symbol)
+                            // The system's badge is in its secondary ink,
+                            // faint on the fill, so the chosen row draws its own.
+                            if chosen, count > 0 {
+                                Spacer()
+                                Text(count, format: .number)
+                                    .monospacedDigit()
+                            }
+                        }
+                        .foregroundStyle(chosen ? AnyShapeStyle(Theme.onTintFill) : AnyShapeStyle(.primary))
                     }
-                    .badge(place == .today ? needsYouCount : 0)
+                    .badge(chosen ? 0 : count)
                     // iOS 26 draws a chosen sidebar row in gray glass, whatever
                     // the tint, so the row draws its own fill, with white words.
                     .listRowBackground(chosen ? Capsule().fill(Theme.tintFill).padding(.horizontal, 10) : nil)
+                    // Today is drawn chosen before the list has a selection,
+                    // so VoiceOver hears it chosen too.
+                    .accessibilityAddTraits(Self.traits(place, section: section))
                 }
             }
             // The deep fill tint, not the root's `accentText`, which is too
@@ -670,6 +702,16 @@ struct HomeSplit<TodayScreen: View, ChatScreen: View, MemoryScreen: View>: View 
                 }
             }
         }
+    }
+
+    /// The row drawn chosen: the selection, or Today before there is one.
+    static func isChosen(_ place: HomeSection, section: HomeSection?) -> Bool {
+        place == (section ?? .today)
+    }
+
+    /// What VoiceOver hears of a row: chosen exactly when it is drawn so.
+    static func traits(_ place: HomeSection, section: HomeSection?) -> AccessibilityTraits {
+        isChosen(place, section: section) ? .isSelected : []
     }
 
     private var newChatButton: some View {

@@ -703,7 +703,7 @@ struct TodayFollowupsTests {
         for file in files {
             let source = SwiftSource(file.text)
             for call in source.calls(named: ["ConfirmationSheet"]) {
-                let arguments = call.arguments.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                let arguments = call.arguments.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 guard let wanted = sheetExamples[file.name] else {
                     problems.append("\(file.name):\(call.line): a ConfirmationSheet here has no isExample rule in sheetExamples")
                     continue
@@ -718,7 +718,8 @@ struct TodayFollowupsTests {
             }
             // The showcase's sample sheet is always an example.
             for sheet in source.calls(named: ["SampleSheet"])
-            where !sheet.arguments.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespaces) }).contains("isExample: true") {
+            where !sheet.arguments.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+                .contains("isExample: true") {
                 problems.append("\(file.name):\(sheet.line): a SampleSheet must be made with isExample: true")
             }
         }
@@ -754,6 +755,10 @@ struct TodayFollowupsTests {
         let right = "ConfirmationSheet(request: sheet.request, rule: sheet.rule, isExample: sheet.isExample,\n"
             + "    onApprove: { _ in }, onDecline: {})\nSampleSheet(request: request, rule: rule, isExample: true)"
         #expect(Self.sheetProblems(in: [("PebbleUI/ShowcaseScene.swift", right)]).isEmpty)
+        // Each argument wrapped onto a line of its own still reads the same.
+        let wrapped = "ConfirmationSheet(\n    request: sheet.request,\n    rule: sheet.rule,\n    isExample:\n"
+            + "        sheet.isExample\n)\nSampleSheet(\n    request: request,\n    isExample: true\n)"
+        #expect(Self.sheetProblems(in: [("PebbleUI/ShowcaseScene.swift", wrapped)]).isEmpty)
     }
 
     @Test func theShowcaseBakeryUsesAnExampleDomain() throws {
