@@ -19,7 +19,7 @@ in lint, a skill, or CI.
 - `make test`: package unit tests (Swift Testing)
 - `make build-release`: Release builds for macOS and the iOS Simulator (part of verify). Anything behind `#if DEBUG`, like the showcase, must only be used behind it too
 - `make pulse`: fetch the competitor watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
-- `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`, plus a `STAMP` with the commit and the working tree's hash. `make verify` makes them and then fails with "screenshots are stale, rerun make screenshots" if the stamp is missing or the tree has changed since. Screenshots always show the code as it is now
+- `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`, plus a `STAMP` with the commit and the working tree's hash. `make verify` makes them and then fails with "screenshots are stale, rerun make screenshots" if the stamp is missing or the tree has changed since. The tree hash is the contract: the same files make the same screenshots, so committing or amending them with nothing changed keeps them fresh. The commit line is only there to read. Screenshots always show the code as it is now
 - `make screenshots-check`: that check alone, and `make screenshots-check-test` its self-test
 - `make generate`: regenerate `Pebble.xcodeproj` after editing `project.yml`
 - `make secrets-check`: gitleaks over git history
@@ -61,6 +61,20 @@ in lint, a skill, or CI.
   trying the file (`BackgroundConditions.background(store:...)`). Never
   derive it from `isProtectedDataAvailable` or the screen lock: a phone
   locked after its first unlock still makes the summary overnight.
+- After a Forget everything erases the summary's file, the switch file
+  goes too, with the keys an earlier version kept in `UserDefaults`.
+
+## Manual checks before release
+
+Things no test here can reach. Check each on a real iPhone before a release.
+
+- `BackgroundStore.shutError` is `EPERM`. With "Work while you're away" on,
+  restart the phone in the evening and leave it locked, never unlocked,
+  until after 7:00. Unlock it but don't open the app, and download the
+  app's container from Xcode's Devices window: `background-switch.json`
+  (or the job in `background.json`) should hold `"locked"`. If neither
+  does, opening the file failed with another error, and the runner took
+  it as a disk error.
 
 ## The name
 

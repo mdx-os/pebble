@@ -3,7 +3,8 @@
 # a fresh stamp passes, a missing stamp fails, an edited, new or deleted
 # file fails, an ignored file doesn't count, what `make test` and the
 # builds write between the stamp and the check doesn't count, the real
-# index is never touched, and hashing writes nothing into .git/objects.
+# index is never touched, hashing writes nothing into .git/objects, and a
+# new commit of the same files keeps the stamp.
 set -eu
 
 stamp="$(cd "$(dirname "$0")" && pwd)/screenshot-stamp.sh"
@@ -102,6 +103,13 @@ echo build > build/DerivedData/info.plist
 echo project > Pebble.xcodeproj/project.pbxproj
 echo found > .DS_Store
 expect pass "what make test and the builds write"
+
+# The tree hash is the contract, not the commit: committing what the
+# screenshots show, or amending that commit, changes nothing they show.
+git add -A
+git commit -q -m "the same files"
+git commit -q --amend -m "the same files, amended"
+expect pass "a new commit with the same files"
 
 if [ "$failures" -ne 0 ]; then
   echo "screenshot-stamp-test: $failures failed" >&2

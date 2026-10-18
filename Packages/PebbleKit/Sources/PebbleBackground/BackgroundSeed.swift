@@ -7,14 +7,20 @@ import PebbleCore
 /// a scratch folder set up as an earlier version left it: the switch on in
 /// `UserDefaults`, which the test's launch arguments give, and the morning
 /// summary queued in the runner's file. Nothing of the person's is touched.
+/// Any launch without it removes that folder, so the test leaves nothing
+/// behind once the app opens again.
 public enum BackgroundSeed {
     public static let launchKey = "pebbleBackgroundSeed"
 
-    public static func launched(defaults: UserDefaults = .standard)
+    /// Where the seeded runner keeps its files.
+    public static var scratchFolder: URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("pebble-ui-background-seed")
+    }
+
+    public static func launched(defaults: UserDefaults = .standard, folder: URL = scratchFolder)
         -> (store: BackgroundStore, toggle: any BackgroundSwitch)? {
-        guard defaults.string(forKey: launchKey) == "on" else { return nil }
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("pebble-ui-background-seed")
         try? FileManager.default.removeItem(at: folder)
+        guard defaults.string(forKey: launchKey) == "on" else { return nil }
         guard (try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)) != nil else {
             return nil
         }

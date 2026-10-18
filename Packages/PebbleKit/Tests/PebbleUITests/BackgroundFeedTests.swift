@@ -6,12 +6,14 @@ import PebbleCore
 import PebbleModel
 import SourceScan
 import SwiftUI
+import TestScratch
 import Testing
 @testable import PebbleUI
 
 /// Background work as Today and the memory screen show it: the cards it
 /// leaves, the catch up when the app opens, the switch, and Forget everything.
 @MainActor
+@Suite(.scratchFiles)
 struct BackgroundFeedTests {
     static let calendar: Calendar = {
         var calendar = Calendar(identifier: .gregorian)
@@ -36,9 +38,8 @@ struct BackgroundFeedTests {
         return asks
     }
 
-    private func scratchStore() -> BackgroundStore {
-        BackgroundStore(fileURL: FileManager.default.temporaryDirectory
-            .appendingPathComponent("background-ui-\(UUID().uuidString).json"))
+    private func scratchStore(faults: BackgroundStoreFaults? = nil) -> BackgroundStore {
+        BackgroundStore(fileURL: Scratch.url("background-ui"), faults: faults)
     }
 
     private func runner(on: Bool, needsYou: NeedsYou? = BackgroundFeedTests.oneWaiting(),
@@ -60,8 +61,7 @@ struct BackgroundFeedTests {
     }
 
     private func scratchMemory() -> MemoryStore {
-        MemoryStore(fileURL: FileManager.default.temporaryDirectory
-            .appendingPathComponent("memory-ui-\(UUID().uuidString).json"))
+        MemoryStore(fileURL: Scratch.url("memory-ui"))
     }
 
     /// The system may never wake the app. Opening it makes the summary
@@ -220,14 +220,11 @@ struct BackgroundFeedTests {
     /// With nothing of background work to forget, its summaries are not
     /// said to go, and nothing erased means no "forgotten" tap: the line
     /// and the tap agree.
-    @Test(.enabled(if: geteuid() != 0, "file permissions don't hold for root"))
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
     func theForgottenTapNeedsSomethingErased() throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("memory-ro-\(UUID().uuidString)")
+        let folder = Scratch.url("memory-ro").deletingPathExtension()
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer {
-            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
-            try? FileManager.default.removeItem(at: folder)
-        }
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
         let notes = MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
         _ = try notes.remember("Sam's birthday is May 14.", source: .toldMe)
         try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
@@ -252,21 +249,12 @@ struct BackgroundFeedTests {
 
     /// If the summaries' file can't be erased, the line says so rather
     /// than read as done, and Forget everything stays to try again.
-    /// Root ignores file permissions, so the file would be erased and the
-    /// test would pass without showing anything.
-    @Test(.enabled(if: geteuid() != 0, "file permissions don't hold for root"))
-    func aSummaryFileThatCantBeErasedIsSaid() throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("background-ro-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer {
-            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
-            try? FileManager.default.removeItem(at: folder)
-        }
+    @Test func aSummaryFileThatCantBeErasedIsSaid() throws {
+        let faults = BackgroundStoreFaults()
         let toggle = InMemoryBackgroundSwitch()
         let asks = Self.oneWaiting()
-        let runner = BackgroundRunner(store: BackgroundStore(fileURL: folder.appendingPathComponent("background.json")),
-                                      toggle: toggle, needsYou: asks, watchingSince: .distantPast,
-                                      calendar: Self.calendar)
+        let runner = BackgroundRunner(store: scratchStore(faults: faults), toggle: toggle, needsYou: asks,
+                                      watchingSince: .distantPast, calendar: Self.calendar)
         runner.turnOn(now: Self.at(6))
         runner.runDue(now: Self.at(7), conditions: .foreground)
         #expect(!runner.results.isEmpty)
@@ -274,7 +262,7 @@ struct BackgroundFeedTests {
         let proposed = runner.propose(Self.note, conditions: .foreground, at: Self.at(9), act: {})
         let asked = try #require(proposed)
         #expect(runner.store.hasStoredFile)
-        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        faults.eraseFails = true
 
         let memory = MemoryModel(store: scratchMemory(), place: .onDevice, background: runner, now: { Self.at(9) })
         #expect(memory.hasSomethingToForget)
@@ -289,7 +277,7 @@ struct BackgroundFeedTests {
         #expect(memory.status == MemoryWords.couldNotForgetSummaries)
         #expect(memory.hasSomethingToForget, "still there, so it can be tried again")
 
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+        faults.eraseFails = false
         memory.forgetEverything()
         #expect(memory.status == MemoryWords.forgotten)
         #expect(!memory.hasSomethingToForget)
@@ -299,18 +287,12 @@ struct BackgroundFeedTests {
     /// The summaries go first, and when their file can't be erased every
     /// later step still runs: the note, the tasks and the private words all
     /// go, and the line says only the summaries stayed.
-    @Test(.enabled(if: geteuid() != 0, "file permissions don't hold for root"))
-    func aSummaryFileThatCantBeErasedStopsNothingElse() throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("background-ro-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer {
-            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
-            try? FileManager.default.removeItem(at: folder)
-        }
-        let runner = runner(on: true, store: BackgroundStore(fileURL: folder.appendingPathComponent("background.json")))
+    @Test func aSummaryFileThatCantBeErasedStopsNothingElse() throws {
+        let faults = BackgroundStoreFaults()
+        let runner = runner(on: true, store: scratchStore(faults: faults))
         runner.runDue(now: Self.at(7), conditions: .foreground)
         #expect(runner.store.hasStoredFile)
-        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        faults.eraseFails = true
 
         let notes = scratchMemory()
         _ = try notes.remember("Sam's birthday is May 14.", source: .toldMe)
@@ -338,14 +320,11 @@ struct BackgroundFeedTests {
     /// With the private words too, each step runs whatever the others did:
     /// the notes can't be erased here, but the summaries and the words go,
     /// and the line says exactly that.
-    @Test(.enabled(if: geteuid() != 0, "file permissions don't hold for root"))
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
     func forgetEverythingSaysWhatWentWithTheWordsAndSummaries() throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("memory-ro-\(UUID().uuidString)")
+        let folder = Scratch.url("memory-ro").deletingPathExtension()
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer {
-            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
-            try? FileManager.default.removeItem(at: folder)
-        }
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
         let notes = MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
         _ = try notes.remember("Sam's birthday is May 14.", source: .toldMe)
         try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
@@ -459,6 +438,28 @@ struct BackgroundFeedTests {
                 #expect(spoken.contains(item.body), "the body is read too: \(spoken)")
             }
         }
+    }
+
+    /// The notes and the private words are the only words of the person's
+    /// kept on disk, each with the strictest protection, and the summary
+    /// copies neither. The chat is kept nowhere: nothing that holds it
+    /// writes a file, encodes it, or puts it in `UserDefaults` or scene
+    /// storage. The one `UserDefaults` it touches keeps the agent's name.
+    @Test func theChatIsNeverKeptOnDisk() throws {
+        let sources = SwiftSource.repositoryRoot(from: #filePath).appendingPathComponent("Packages/PebbleKit/Sources")
+        let chat = ["PebbleModel/Conversation.swift", "PebbleModel/ModelClient.swift", "PebbleUI/ChatView.swift",
+                    "PebbleUI/Composer.swift"]
+        let keeping = ["write(to", "FileManager", "createFile", "FileHandle", "AppStorage", "SceneStorage",
+                       "JSONEncoder", "PropertyListEncoder", "NSKeyedArchiver", "UserDefaults.", "UserDefaults(",
+                       "BackgroundStore", "MemoryStore", "CloudHelpFileStore"]
+        for name in chat {
+            let code = String(SwiftSource(try String(contentsOf: sources.appendingPathComponent(name), encoding: .utf8))
+                .code)
+            for word in keeping { #expect(!code.contains(word), "\(word) in \(name)") }
+        }
+        #expect(String(SwiftSource(try String(contentsOf: sources.appendingPathComponent("PebbleUI/ChatView.swift"),
+                                              encoding: .utf8)).code).contains("UserDefaultsAgentNameStore()"),
+                "the name, and only the name")
     }
 
     /// Forget everything names work while away only where there is a switch for it.

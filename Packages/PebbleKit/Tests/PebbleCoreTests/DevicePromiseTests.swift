@@ -155,7 +155,7 @@ enum DevicePromise {
                     + "background work: it names where the notes, tasks, summaries and private words are erased from, "
                     + "all local files, whatever the model is."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
-                literal: "I forgot the rest and turned off work while you're away, but I couldn't erase your morning summaries just now. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. Please try again in a moment.",
+                literal: "I forgot your notes and tasks and turned off work while you're away, but I couldn't erase your morning summaries just now. To be sure your private words were gone, I cleared the cloud setting too, so help from the cloud is off. Please try Forget everything again in a moment.",
                 reason: "CloudWords.forgotAndCloudOffNotSummaries, a Forget everything status line. Its only phrase is "
                     + "\"private words\", the name of the person's list in the cloud setting, which it says went. "
                     + "The summaries clause says what stayed, BackgroundStore's local file, and promises nothing "

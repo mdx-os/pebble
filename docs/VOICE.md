@@ -183,9 +183,11 @@ scripted task's card says "Example", like every other example.
 
 Background work is off until the person turns it on, from the switch on the
 memory screen, and the line under the switch says what it does and when:
-"overnight if you've unlocked since your last restart, and otherwise when you
-open the app" on iPhone and iPad, since the summary's file opens only after
-that first unlock, and "while the app is open" on the Mac. It
+"I try to make it overnight if you've unlocked since your last restart, and
+otherwise when you open the app." on iPhone and iPad, since the summary's
+file opens only after that first unlock, and the system may not give it
+time even then. It says "try", never that it will. On the Mac it says
+"while the app is open". It
 names "what finished overnight" only when there are tasks to count, and says
 "when there's something to tell you", since a quiet morning leaves no card.
 Under it, "I'll look next at 7:00 AM tomorrow." says when it looks, not that

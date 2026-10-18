@@ -158,7 +158,7 @@ public enum MemoryWords {
     public static let couldNotForgetNotes = "I forgot your tasks, but I couldn't erase your notes just now. Please try again in a moment."
     /// Forget everything when the rest went but the morning summaries'
     /// file couldn't be erased. Work while you're away is off either way.
-    public static let couldNotForgetSummaries = "I forgot the rest and turned off work while you're away, but I couldn't erase your morning summaries just now. Please try again in a moment."
+    public static let couldNotForgetSummaries = "I forgot your notes and tasks and turned off work while you're away, but I couldn't erase your morning summaries just now. Please try Forget everything again in a moment."
     /// Follows a Forget everything line that says something else stayed,
     /// when the morning summaries' file was erased.
     public static let summariesGone = "Your morning summaries are gone, and work while you're away is off."

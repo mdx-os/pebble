@@ -180,7 +180,11 @@ final class HomeLayoutUITests: XCTestCase {
             for _ in 0..<8 where !toggle.isHittable { app.swipeUp() }
             XCTAssertTrue(toggle.isHittable)
             XCTAssertGreaterThanOrEqual(toggle.frame.height, 44, "a comfortable target at \(textSize ?? "default")")
+            // VoiceOver hears one switch, by its title, and whether it is on.
+            XCTAssertEqual(toggle.label, "Work while you're away")
             XCTAssertEqual(toggle.value as? String, "0")
+            XCTAssertEqual(app.switches.matching(NSPredicate(format: "label == %@", "Work while you're away")).count, 1,
+                           "the switch inside the row only shows the state")
             XCTAssertFalse(app.staticTexts["backgroundNext"].exists)
             let detail = app.staticTexts["backgroundDetail"]
             XCTAssertTrue(detail.exists)
@@ -189,6 +193,7 @@ final class HomeLayoutUITests: XCTestCase {
             toggle.tap()
             XCTAssertTrue(app.staticTexts["backgroundNext"].waitForExistence(timeout: 5))
             XCTAssertEqual(toggle.value as? String, "1", "one tap, turned on once")
+            XCTAssertEqual(toggle.label, "Work while you're away", "the same title while on")
             toggle.tap()
             XCTAssertTrue(app.staticTexts["backgroundNext"].waitForNonExistence(timeout: 5))
             XCTAssertEqual(toggle.value as? String, "0")
@@ -213,6 +218,14 @@ final class HomeLayoutUITests: XCTestCase {
     /// points the runner at a scratch folder, so nothing of the person's is
     /// touched, and it is the app's own home screen, not the showcase.
     func testALaunchWithBackgroundWorkAlreadyOnKeepsItOn() throws {
+        // A launch without the seed removes its scratch folder, so the
+        // test leaves nothing behind in the app's temporary folder.
+        addTeardownBlock {
+            let clean = XCUIApplication()
+            clean.launchArguments = ["-pebble.onboarding.finished", "YES"]
+            clean.launch()
+            clean.terminate()
+        }
         let app = XCUIApplication()
         app.launchArguments = ["-pebbleBackgroundSeed", "on", "-backgroundWork.on", "YES",
                                "-pebble.onboarding.finished", "YES", "-pebble.agent.displayName", "Pip"]

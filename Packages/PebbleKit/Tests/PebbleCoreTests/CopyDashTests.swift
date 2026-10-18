@@ -73,6 +73,16 @@ struct CopyDashTests {
         #expect(Set(TaskState.allCases.map(\.label)).isSubset(of: Set(all)))
     }
 
+    /// The Forget everything lines about the morning summaries come in
+    /// through `CloudWords.all` and `MemoryWords`, so they are swept too.
+    @Test func theSummaryLinesAreChecked() {
+        for line in [CloudWords.forgetEverythingWithSummariesDetail, CloudWords.forgotAndCloudOffNotSummaries,
+                     MemoryWords.couldNotForgetSummaries, MemoryWords.summariesGone, MemoryWords.summariesStayed,
+                     MemoryWords.forgetEverythingDetail(background: true)] {
+            #expect(Self.copy.contains(line), "unchecked: \(line)")
+        }
+    }
+
     /// Catches new words too: no source file and not the voice guide.
     @Test func noSourceFileOrTheVoiceGuideUsesADash() throws {
         let root = URL(fileURLWithPath: #filePath)

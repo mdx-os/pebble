@@ -2,6 +2,7 @@ import Foundation
 @testable import PebbleBackground
 import PebbleCore
 import SourceScan
+import TestScratch
 import Testing
 
 private let calendar: Calendar = {
@@ -16,34 +17,23 @@ private func at(_ hour: Int, _ minute: Int = 0, days: Int = 0) -> Date {
     return calendar.date(byAdding: .day, value: days, to: base)!
 }
 
-extension Trait where Self == ConditionTrait {
-    /// Root reads a file at mode 0o000 anyway, so the lock can't be faked.
-    static var fakesALock: Self { .enabled(if: geteuid() != 0, "file permissions don't hold for root") }
-}
-
-/// A file that is there but won't open: a regular file at mode 0o000, so
-/// opening it fails with `EACCES`. `asLock` makes the store take that
-/// error as its protection keeping it shut, as `EPERM` is before the first
-/// unlock; without it, the same file is a disk error.
+/// A file that is there but won't open. Opening it fails with
+/// `BackgroundStore.shutError`, as before the first unlock, through the
+/// store's faults, so no file modes are needed and root runs it the same.
+/// With `asLock` false it fails with `EIO`, a disk error.
 private func lockedStore(saved: BackgroundState, asLock: Bool = true) throws
-    -> (BackgroundStore, unlock: () throws -> Void, remove: () -> Void) {
-    let url = FileManager.default.temporaryDirectory.appendingPathComponent("background-service-\(UUID().uuidString).json")
-    let store = BackgroundStore(fileURL: url, shutErrors: asLock ? [EPERM, EACCES] : [EPERM])
+    -> (BackgroundStore, unlock: () throws -> Void) {
+    let faults = BackgroundStoreFaults()
+    let store = BackgroundStore(fileURL: Scratch.url("background-service"), faults: faults)
     try store.save(saved)
-    try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+    faults.openError = asLock ? BackgroundStore.shutError : EIO
     #expect(!store.canOpen)
     #expect(store.isShut == asLock)
-    return (store, {
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-    }, {
-        try? FileManager.default.removeItem(at: url)
-        try? FileManager.default.removeItem(at: store.stagingURL)
-    })
+    return (store, { faults.openError = nil })
 }
 
 private func scratchStore() -> BackgroundStore {
-    BackgroundStore(fileURL: FileManager.default.temporaryDirectory
-        .appendingPathComponent("background-service-\(UUID().uuidString).json"))
+    BackgroundStore(fileURL: Scratch.url("background-service"))
 }
 
 /// Needs you with one question open, so a summary has something to say.
@@ -72,6 +62,12 @@ final class RecordingScheduler: BackgroundScheduling {
 /// A switch kept where nothing opens before the first unlock, as
 /// `UserDefaults` is: while shut it reads off, with no sign that anything
 /// is wrong, and every write is lost. Once unlocked it reads what it held.
+///
+/// `isKnown` stays true while shut, on purpose: `UserDefaults` gives no
+/// sign either. What makes the runner read it as unknown is that it reads
+/// as never set (`hasBeenSet` false) while the store's file is shut.
+/// Don't make `isKnown` false to "fix" this, or the test no longer shows
+/// the case it is for.
 final class LockedSwitch: BackgroundSwitch, @unchecked Sendable {
     let real: InMemoryBackgroundSwitch
     private let lock = NSLock()
@@ -87,6 +83,7 @@ final class LockedSwitch: BackgroundSwitch, @unchecked Sendable {
     var isOn: Bool { isShut ? false : real.isOn }
     func set(_ on: Bool) { if !isShut { real.set(on) } }
     var isKnown: Bool { true }
+    var hasBeenSet: Bool { isShut ? false : real.hasBeenSet }
     var nextDue: Date? { isShut ? nil : real.nextDue }
     func setNextDue(_ due: Date?) { if !isShut { real.setNextDue(due) } }
     var heldBeforeLoad: BackgroundHeldRun? { isShut ? nil : real.heldBeforeLoad }
@@ -96,14 +93,14 @@ final class LockedSwitch: BackgroundSwitch, @unchecked Sendable {
 }
 
 @MainActor
+@Suite(.scratchFiles)
 struct BackgroundServiceTests {
     /// Before the first unlock, a switch that reads off may only be unread.
     /// The service never cancels the ask on its word, the run reports no
     /// success, and once the device is unlocked the card says it waited,
     /// though the switch lost the note.
-    @Test(.fakesALock) func aSwitchThatReadsOffBeforeTheFirstUnlockNeverCancels() throws {
-        let (store, unlock, remove) = try lockedStore(saved: morningJob)
-        defer { remove() }
+    @Test func aSwitchThatReadsOffBeforeTheFirstUnlockNeverCancels() throws {
+        let (store, unlock) = try lockedStore(saved: morningJob)
         let toggle = LockedSwitch(InMemoryBackgroundSwitch(on: true, nextDue: at(7)))
         let runner = BackgroundRunner(store: store, toggle: toggle, needsYou: oneWaiting(),
                                       watchingSince: .distantPast, calendar: calendar)
@@ -155,9 +152,8 @@ struct BackgroundServiceTests {
 
     /// A file that won't open for another reason, such as a disk error, is
     /// no lock: no reason is claimed, and the run reports no success.
-    @Test(.fakesALock) func aDiskErrorIsNoSuccess() throws {
-        let (store, unlock, remove) = try lockedStore(saved: morningJob, asLock: false)
-        defer { remove() }
+    @Test func aDiskErrorIsNoSuccess() throws {
+        let (store, unlock) = try lockedStore(saved: morningJob, asLock: false)
         let toggle = InMemoryBackgroundSwitch(on: true, nextDue: at(7))
         let runner = BackgroundRunner(store: store, toggle: toggle, needsYou: oneWaiting(),
                                       watchingSince: .distantPast, calendar: calendar)
@@ -173,11 +169,12 @@ struct BackgroundServiceTests {
         #expect(summary.late == nil)
     }
 
-    /// With the screen locked after the first unlock, the file opens, so
-    /// the run makes the summary and reports success.
-    @Test func aRunWithTheScreenLockedAfterTheFirstUnlockMakesTheSummary() throws {
+    /// A run whose file opens makes the summary and reports success. No
+    /// screen is locked here: the service never reads the screen, which
+    /// `theServiceNeverReadsTheScreenForTheLock` pins, so a phone locked
+    /// again after its first unlock, whose file opens, is this case.
+    @Test func aRunWhoseFileOpensMakesTheSummaryAndSucceeds() throws {
         let store = scratchStore()
-        defer { try? store.forget() }
         let runner = BackgroundRunner(store: store, toggle: InMemoryBackgroundSwitch(), needsYou: oneWaiting(),
                                       watchingSince: .distantPast, calendar: calendar)
         runner.turnOn(now: at(6))
@@ -198,14 +195,37 @@ struct BackgroundServiceTests {
     }
 
     /// The service finds the lock by trying the file, through the one
-    /// helper the tests drive, and never from the screen or protected data.
+    /// helper the tests drive, and neither it nor the runner reads the
+    /// screen or protected data.
     @Test func theServiceNeverReadsTheScreenForTheLock() throws {
-        let source = try String(contentsOf: SwiftSource.repositoryRoot(from: #filePath)
-            .appendingPathComponent("Packages/PebbleKit/Sources/PebbleBackground/BackgroundService.swift"),
-            encoding: .utf8)
-        for screen in ["isProtectedDataAvailable", "protectedDataWillBecomeUnavailable", "applicationState"] {
-            #expect(!source.contains(screen), "\(screen) in BackgroundService")
+        let sources = SwiftSource.repositoryRoot(from: #filePath).appendingPathComponent("Packages/PebbleKit/Sources")
+        let service = try String(contentsOf: sources.appendingPathComponent("PebbleBackground/BackgroundService.swift"),
+                                 encoding: .utf8)
+        let runner = try String(contentsOf: sources.appendingPathComponent("PebbleCore/Background.swift"),
+                                encoding: .utf8)
+        for (name, text) in [("BackgroundService", service), ("Background", runner)] {
+            let code = String(SwiftSource(text).code)
+            for screen in ["isProtectedDataAvailable", "protectedDataWillBecomeUnavailable", "applicationState"] {
+                #expect(!code.contains(screen), "\(screen) in \(name)")
+            }
         }
-        #expect(source.contains(".background(store:"))
+        #expect(service.contains(".background(store:"))
+    }
+
+    /// The UI test's seed leaves no scratch folder behind: any launch
+    /// without the seed removes the one an earlier seeded launch made.
+    @Test func theSeedsScratchFolderGoesOnTheNextLaunch() throws {
+        let suite = "background-seed-test.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let folder = Scratch.url("seed").deletingPathExtension()
+        defaults.set("on", forKey: BackgroundSeed.launchKey)
+        let seeded = try #require(BackgroundSeed.launched(defaults: defaults, folder: folder))
+        #expect(seeded.store.hasStoredFile)
+        #expect(FileManager.default.fileExists(atPath: folder.path))
+
+        defaults.removeObject(forKey: BackgroundSeed.launchKey)
+        #expect(BackgroundSeed.launched(defaults: defaults, folder: folder) == nil)
+        #expect(!FileManager.default.fileExists(atPath: folder.path))
     }
 }
