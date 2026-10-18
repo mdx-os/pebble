@@ -314,22 +314,30 @@ public enum CloudEndpoint {
     /// system leaves out of the Host line it sends, and a host with capital
     /// letters, which the system may send in lower case.
     ///
-    /// Always nil outside a Debug build, whatever the build settings say,
-    /// so a build that ships can't reach a cloud model even if the build
+    /// Outside a Debug build it is nil unless `policy` is the policy this
+    /// code shows (`CloudPolicy.currentVersion`), whatever the build
+    /// settings say, so a build that ships reaches a cloud model only when
+    /// it was checked against the very words it shows, even if the build
     /// checks were skipped (`scripts/release-endpoint-check.sh`).
-    public static func url(from raw: String?) -> URL? {
-        url(from: raw, buildMayReachTheCloud: buildMayReachTheCloud)
+    public static func url(from raw: String?, policy: String? = nil) -> URL? {
+        url(from: raw, policy: policy, isDebugBuild: isDebugBuild)
     }
 
     #if DEBUG
-    static let buildMayReachTheCloud = true
+    static let isDebugBuild = true
     #else
-    static let buildMayReachTheCloud = false
+    static let isDebugBuild = false
     #endif
 
-    /// `url(from:)` as a build that may, or may not, reach the cloud reads it.
-    package static func url(from raw: String?, buildMayReachTheCloud: Bool) -> URL? {
-        guard buildMayReachTheCloud, let raw else { return nil }
+    /// True when a build may read an address: any Debug build, and a build
+    /// that ships only with the current policy named.
+    package static func buildMayReachTheCloud(policy: String?, isDebugBuild: Bool) -> Bool {
+        isDebugBuild || policy == CloudPolicy.currentVersion
+    }
+
+    /// `url(from:policy:)` as a Debug build, or one that ships, reads it.
+    package static func url(from raw: String?, policy: String?, isDebugBuild: Bool) -> URL? {
+        guard buildMayReachTheCloud(policy: policy, isDebugBuild: isDebugBuild), let raw else { return nil }
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !text.hasPrefix("$("), !text.contains(where: { "?#@".contains($0) }),
               text.allSatisfy({ $0.isASCII }),
@@ -339,8 +347,18 @@ public enum CloudEndpoint {
         return url
     }
 
+    /// The Info.plist key that names the policy the build was checked
+    /// against, from `PEBBLE_CLOUD_POLICY` in `Config/Cloud.xcconfig`.
+    public static let policyKey = "PebbleCloudPolicy"
+
     public static func url(infoDictionary: [String: Any]?) -> URL? {
-        url(from: infoDictionary?[infoKey] as? String)
+        url(infoDictionary: infoDictionary, isDebugBuild: isDebugBuild)
+    }
+
+    /// `url(infoDictionary:)` as a Debug build, or one that ships, reads it.
+    package static func url(infoDictionary: [String: Any]?, isDebugBuild: Bool) -> URL? {
+        url(from: infoDictionary?[infoKey] as? String, policy: infoDictionary?[policyKey] as? String,
+            isDebugBuild: isDebugBuild)
     }
 }
 
@@ -386,11 +404,23 @@ public enum CloudWords {
         "Signing in never carries your chats, notes or private words.",
         "Your notes themselves never leave this device.",
         "Like any website, the computer it goes to can see this device's internet address.",
+        // Who runs it, what it keeps and what signing in sends, read from
+        // the one policy every check compares against.
+        CloudPolicy.current.whoLine,
+        CloudPolicy.current.keepsLine,
+        CloudPolicy.current.signInLine,
         "If you tell me you might be in danger, I answer here and send nothing.",
         "You can turn this off anytime.",
     ]
     public static let askYes = "Turn it on"
     public static let askNo = "Not now"
+
+    /// The cloud setting's card that says who runs the server, what it
+    /// keeps and what signing in sends (`CloudPolicy.lines`).
+    public static let policyTitle = "Where it goes"
+    public static var policyLines: [String] { CloudPolicy.current.lines }
+    /// The preview's line under where it goes (`CloudPolicy.previewLine`).
+    public static var previewPolicy: String { CloudPolicy.current.previewLine }
 
     public static let privateTitle = "Words I always hide"
     // Says "this device" without asking `PrivacyPlace`, like
@@ -578,5 +608,6 @@ public enum CloudWords {
         forgotTasksAndWordsAndCloudNotNotes, forgetTasksAndWordsDetail, tasksAndWordsForgotten,
         tasksAndWordsAndCloudForgotten, tasksForgottenNotWords,
         chatEnded, signInRefused, forgotAfterSending, forgotAndCloudOffAfterSending, sentCantBeErased,
-    ] + askPoints + Redaction.Kind.allCases.map(\.spoken)
+        policyTitle, previewPolicy,
+    ] + askPoints + policyLines + Redaction.Kind.allCases.map(\.spoken)
 }

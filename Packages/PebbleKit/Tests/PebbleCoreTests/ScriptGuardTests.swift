@@ -169,6 +169,7 @@ struct ScriptGuardTests {
         func status(_ configuration: String, _ endpoint: String, action: String = "build") throws -> Int32 {
             try Self.run(["sh", check], in: folder, environment: Self.inBuild(folder).merging([
                 "CONFIGURATION": configuration, "PEBBLE_CLOUD_ENDPOINT": endpoint, "ACTION": action,
+                "PEBBLE_CLOUD_POLICY": "",
             ]) { $1 })
         }
         let address = "https://cloud.example.com"
@@ -185,6 +186,105 @@ struct ScriptGuardTests {
         }
         #expect(try status("Debug", address) == 0)
         #expect(try status("Debug", address, action: "") == 0)
+    }
+
+    /// The policy version the app's words describe, read from the source
+    /// as the check reads it.
+    static func currentPolicy() throws -> String {
+        let source = try String(contentsOf: root.appendingPathComponent(
+            "Packages/PebbleKit/Sources/PebbleCore/CloudPolicy.swift"), encoding: .utf8)
+        let line = try #require(source.split(separator: "\n").first { $0.contains("public static let currentVersion = ") })
+        return String(try #require(line.split(separator: "\"").dropFirst().first))
+    }
+
+    /// A build that could ship may keep an address only with
+    /// PEBBLE_CLOUD_POLICY equal to the policy the app shows and a plain
+    /// https address. No policy, another one, or http fails, each saying
+    /// what to fix and never the address. An empty address passes, and
+    /// then the cloud can't be turned on (`anEmptyAddressCantBeTurnedOn`).
+    @Test func theReleaseCheckPassesAShippedBuildOnlyWithTheCurrentPolicy() throws {
+        let folder = try scratchFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let check = Self.script("release-endpoint-check.sh")
+        let policy = try Self.currentPolicy()
+        #expect(policy == "mdx-zero-retention-1")
+        func run(_ endpoint: String, _ policy: String, configuration: String = "Release",
+                 action: String = "build") throws -> (status: Int32, text: String) {
+            try Self.output(["sh", check], in: folder, environment: Self.inBuild(folder).merging([
+                "CONFIGURATION": configuration, "PEBBLE_CLOUD_ENDPOINT": endpoint, "ACTION": action,
+                "PEBBLE_CLOUD_POLICY": policy,
+            ]) { $1 })
+        }
+        let address = "https://secret-host.example.com/base"
+        // No policy key with an address fails, and says to set it.
+        let none = try run(address, "")
+        #expect(none.status == 1)
+        #expect(none.text.contains("PEBBLE_CLOUD_POLICY is not set"))
+        #expect(none.text.contains("Set PEBBLE_CLOUD_POLICY = \(policy) in Config/Cloud.xcconfig"))
+        // Another policy version fails, and names both.
+        for other in ["mdx-zero-retention-0", policy + "x", "MDX-ZERO-RETENTION-1"] {
+            let wrong = try run(address, other)
+            #expect(wrong.status == 1, "\(other)")
+            #expect(wrong.text.contains("PEBBLE_CLOUD_POLICY is \(other), but the app shows the \(policy) policy."), "\(other)")
+        }
+        // Plain http, or an address that isn't plain, fails.
+        for bad in ["http://secret-host.example.com", "HTTPS://secret-host.example.com", "https://",
+                    "https://user@secret-host.example.com", "https://secret-host.example.com/?key=1",
+                    "https://secret-host.example.com/#x", "https://secret host.example.com", "secret-host.example.com"] {
+            let refused = try run(bad, policy)
+            #expect(refused.status == 1, "\(bad)")
+            #expect(refused.text.contains("Write it as https:// and a host"), "\(bad)")
+            #expect(!refused.text.contains("secret"), "\(bad)")
+        }
+        // The current policy and a plain https address pass, in every
+        // configuration and an archive too.
+        for configuration in ["Release", "TestFlight", "Debug"] {
+            for action in ["build", "install", "archive"] {
+                #expect(try run(address, policy, configuration: configuration, action: action).status == 0,
+                        "\(configuration) \(action)")
+            }
+        }
+        #expect(try run(" \(address) ", " \(policy) ").status == 0)
+        // An empty address passes with or without a policy.
+        for empty in ["", "  "] {
+            #expect(try run(empty, "").status == 0)
+            #expect(try run(empty, policy).status == 0)
+            #expect(try run(empty, "mdx-zero-retention-0").status == 0)
+        }
+        #expect(!none.text.contains("secret-host"))
+    }
+
+    /// On its own, the check reads the policy from the settings beside the
+    /// address, the same way.
+    @Test func theReleaseCheckOnItsOwnPassesOnlyWithTheCurrentPolicy() throws {
+        let folder = try scratchFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let check = Self.script("release-endpoint-check.sh")
+        let policy = try Self.currentPolicy()
+        func settings(_ endpoint: String, _ policy: String?) -> String {
+            let address = "    PEBBLE_CLOUD_ENDPOINT = \(endpoint)"
+            return policy.map { address + "' '    PEBBLE_CLOUD_POLICY = \($0)" } ?? address
+        }
+        func status(_ endpoint: String, _ policy: String?) throws -> (status: Int32, text: String) {
+            let environment = try fakeXcodebuild(in: folder, configurations: ["Debug", "Release"],
+                                                 settings: ["Release": settings(endpoint, policy)])
+            return try Self.output(["sh", check], in: folder, environment: environment)
+        }
+        let address = "https://secret-host.example.com"
+        let none = try status(address, nil)
+        #expect(none.status == 1)
+        #expect(none.text.contains("PEBBLE_CLOUD_POLICY is not set"))
+        #expect(try status(address, "").status == 1)
+        #expect(try status(address, "mdx-zero-retention-0").status == 1)
+        #expect(try status("http://secret-host.example.com", policy).status == 1)
+        #expect(try status(address, policy).status == 0)
+        #expect(try status("", nil).status == 0)
+        #expect(try status("", policy).status == 0)
+        // Two policies that disagree fail.
+        let two = settings(address, policy) + "' '    PEBBLE_CLOUD_POLICY = mdx-zero-retention-0"
+        let environment = try fakeXcodebuild(in: folder, configurations: ["Debug", "Release"], settings: ["Release": two])
+        #expect(try Self.run(["sh", check], in: folder, environment: environment) == 1)
+        #expect(!none.text.contains("secret-host"))
     }
 
     /// The address is meant for one machine, so a failing build says only
@@ -515,7 +615,12 @@ struct ScriptGuardTests {
         let probe = try String(contentsOf: URL(fileURLWithPath: Self.script("release-probe.sh")), encoding: .utf8)
         #expect(probe.contains(#"swift run --package-path "$probe" -c release"#))
         #expect(probe.contains("#if DEBUG\nprint(\"release-probe: built as Debug, so it proves nothing\")\nexit(1)\n#else"))
-        #expect(probe.contains("if CloudEndpoint.url(from: raw) != nil || CloudEndpoint.url(infoDictionary: [CloudEndpoint.infoKey: raw]) != nil {"))
+        #expect(probe.contains("if CloudEndpoint.url(from: raw) != nil || reads([CloudEndpoint.infoKey: raw])\n"))
+        #expect(probe.contains("    || reads([CloudEndpoint.infoKey: raw, CloudEndpoint.policyKey: policy + \"-other\"])\n"))
+        #expect(probe.contains("    || reads([CloudEndpoint.infoKey: \"http://cloud.example.com\", CloudEndpoint.policyKey: policy])\n"))
+        #expect(probe.contains("    || reads([CloudEndpoint.infoKey: \"\", CloudEndpoint.policyKey: policy]) {\n"))
+        #expect(probe.contains("if !reads([CloudEndpoint.infoKey: raw, CloudEndpoint.policyKey: policy]) {\n"))
+        #expect(probe.contains("let policy = CloudPolicy.currentVersion\n"))
         #expect(probe.contains("set -eu"))
         for loophole in ["|| true", "exit 0"] {
             #expect(!probe.contains(loophole), "\(loophole)")
@@ -533,11 +638,11 @@ struct ScriptGuardTests {
     /// file `HELPERS` names, when it is set.
     func mutationRepo(manifest: String) throws -> (root: URL, environment: [String: String]) {
         let root = try scratchFolder()
-        for part in ["scripts", "App", "AppUITests", ".github", "Packages/PebbleKit/Sources/Fixture"] {
+        for part in ["scripts", "App", "AppUITests", ".github", "docs", "Packages/PebbleKit/Sources/Fixture"] {
             try FileManager.default.createDirectory(at: root.appendingPathComponent(part),
                                                     withIntermediateDirectories: true)
         }
-        for file in ["Makefile", "project.yml", ".gitignore"] {
+        for file in ["Makefile", "project.yml", ".gitignore", "README.md", "AGENTS.md"] {
             try Data().write(to: root.appendingPathComponent(file))
         }
         try FileManager.default.copyItem(atPath: Self.script("mutation-check.sh"),

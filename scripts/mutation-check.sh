@@ -78,10 +78,10 @@ fi
 # the first only compiles what an entry changed.
 mkdir -p "$package"
 rsync -a --delete --exclude .build --exclude .swiftpm "$root/Packages/PebbleKit/" "$package/"
-for part in scripts Config App AppUITests .github; do
+for part in scripts Config App AppUITests .github docs; do
   rsync -a --delete "$root/$part/" "$work/$part/"
 done
-for file in Makefile project.yml .gitignore; do
+for file in Makefile project.yml .gitignore README.md AGENTS.md; do
   cp "$root/$file" "$work/$file"
 done
 : > "$results"

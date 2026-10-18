@@ -92,6 +92,10 @@ when the code makes them true.
   bytes that will be sent. `CloudModel` reports `.mayLeaveDevice`, so a
   chat on the cloud, and every line that reads the flag from it, never
   says "on this device".
+- Who runs the cloud service, what it keeps and what signing in sends are
+  said only in `CloudPolicy`'s lines, which `docs/CLOUD.md` repeats word
+  for word. Change the words there, with a new policy version, never in a
+  screen.
 
 ## When someone may be in danger
 

@@ -311,34 +311,65 @@ struct CloudHelpSettingsTests {
         #expect(CloudEndpoint.url(from: raw.replacingOccurrences(of: ":443", with: ":8443")) != nil)
     }
 
-    /// A build that isn't Debug never reaches a cloud model, whatever its
-    /// settings hold: the address reads as none. These tests run in Debug,
-    /// where the `#else` branch isn't compiled, so here the Release reading
-    /// is driven through its flag and the flag is pinned in the source.
-    /// The executed check is `make release-test`
-    /// (`scripts/release-probe.sh`), which builds PebbleCore in Release and
-    /// fails if it reads an address (`theReleaseProbeRunsTheShippedCode`).
-    @Test func onlyADebugBuildReadsAnAddress() throws {
+    /// A build that ships reaches a cloud model only when its settings name
+    /// the current policy: with none, or another, the address reads as
+    /// none, and plain http or an empty address never reads at all. These
+    /// tests run in Debug, where the `#else` branch isn't compiled, so here
+    /// the Release reading is driven through its flag and the flag is
+    /// pinned in the source. The executed check is `make release-test`
+    /// (`scripts/release-probe.sh`), which builds PebbleCore in Release
+    /// (`theReleaseProbeRunsTheShippedCode`).
+    @Test func aShippedBuildReadsAnAddressOnlyWithTheCurrentPolicy() throws {
         let raw = "https://cloud.example.com"
-        #expect(CloudEndpoint.url(from: raw, buildMayReachTheCloud: false) == nil)
-        #expect(CloudEndpoint.url(from: raw, buildMayReachTheCloud: true) != nil)
+        let policy = CloudPolicy.currentVersion
+        #expect(CloudEndpoint.url(from: raw, policy: nil, isDebugBuild: false) == nil)
+        #expect(CloudEndpoint.url(from: raw, policy: "", isDebugBuild: false) == nil)
+        #expect(CloudEndpoint.url(from: raw, policy: policy + "-other", isDebugBuild: false) == nil)
+        #expect(CloudEndpoint.url(from: raw, policy: "mdx-zero-retention-0", isDebugBuild: false) == nil)
+        #expect(CloudEndpoint.url(from: "http://cloud.example.com", policy: policy, isDebugBuild: false) == nil)
+        #expect(CloudEndpoint.url(from: "", policy: policy, isDebugBuild: false) == nil)
+        #expect(CloudEndpoint.url(from: raw, policy: policy, isDebugBuild: false) != nil)
+        // Debug reads any plain https address, as before.
+        #expect(CloudEndpoint.url(from: raw, policy: nil, isDebugBuild: true) != nil)
         #expect(CloudEndpoint.url(from: raw) != nil, "tests run in Debug")
         let source = try String(contentsOf: Self.root.appendingPathComponent(
             "Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift"), encoding: .utf8)
         #expect(source.contains("""
                 #if DEBUG
-                    static let buildMayReachTheCloud = true
+                    static let isDebugBuild = true
                     #else
-                    static let buildMayReachTheCloud = false
+                    static let isDebugBuild = false
                     #endif
                 """))
-        #expect(source.contains("url(from: raw, buildMayReachTheCloud: buildMayReachTheCloud)"))
+        #expect(source.contains("url(from: raw, policy: policy, isDebugBuild: isDebugBuild)"))
     }
 
     @Test func theAppAddressIsReadFromInfoPlist() {
         #expect(CloudEndpoint.url(infoDictionary: [:]) == nil)
         #expect(CloudEndpoint.url(infoDictionary: [CloudEndpoint.infoKey: ""]) == nil)
         #expect(CloudEndpoint.url(infoDictionary: [CloudEndpoint.infoKey: "https://cloud.example.com"]) != nil)
+        #expect(CloudEndpoint.policyKey == "PebbleCloudPolicy")
+        // A build that ships reads the policy from Info.plist beside the address.
+        let address = "https://cloud.example.com"
+        func shipped(_ info: [String: Any]) -> URL? { CloudEndpoint.url(infoDictionary: info, isDebugBuild: false) }
+        #expect(shipped([CloudEndpoint.infoKey: address]) == nil)
+        #expect(shipped([CloudEndpoint.infoKey: address, CloudEndpoint.policyKey: "mdx-zero-retention-0"]) == nil)
+        #expect(shipped([CloudEndpoint.infoKey: address, CloudEndpoint.policyKey: CloudPolicy.currentVersion]) != nil)
+        #expect(shipped([CloudEndpoint.infoKey: "http://cloud.example.com", CloudEndpoint.policyKey: CloudPolicy.currentVersion]) == nil)
+        #expect(shipped([CloudEndpoint.infoKey: "", CloudEndpoint.policyKey: CloudPolicy.currentVersion]) == nil)
+        #expect(shipped([CloudEndpoint.policyKey: CloudPolicy.currentVersion]) == nil)
+    }
+
+    /// The app passes the policy through Info.plist from the build setting,
+    /// and the committed config names the policy the code shows.
+    @Test func theBuildNamesThePolicyTheCodeShows() throws {
+        let project = try String(contentsOf: Self.root.appendingPathComponent("project.yml"), encoding: .utf8)
+        #expect(project.contains("        PebbleCloudPolicy: $(PEBBLE_CLOUD_POLICY)\n"))
+        let plist = try String(contentsOf: Self.root.appendingPathComponent("App/Info.plist"), encoding: .utf8)
+        #expect(plist.contains("<key>PebbleCloudPolicy</key>\n\t<string>$(PEBBLE_CLOUD_POLICY)</string>"))
+        let config = try String(contentsOf: Self.root.appendingPathComponent("Config/Cloud.xcconfig"), encoding: .utf8)
+        #expect(config.contains("\nPEBBLE_CLOUD_POLICY = \(CloudPolicy.currentVersion)\n"))
+        #expect(config.contains("\nPEBBLE_CLOUD_ENDPOINT =\n"), "the committed address stays empty")
     }
 
     static let root = URL(fileURLWithPath: #filePath)

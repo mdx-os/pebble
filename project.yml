@@ -32,8 +32,11 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         PebbleBrandName: $(BRAND_NAME)
         # Empty unless set in Config/Cloud.local.xcconfig, which git ignores.
-        # Empty means no cloud model, and every build but Debug must keep it empty.
+        # Empty means no cloud model. A build that could ship may have one
+        # only with PEBBLE_CLOUD_POLICY equal to CloudPolicy.currentVersion.
         PebbleCloudEndpoint: $(PEBBLE_CLOUD_ENDPOINT)
+        # The policy the build was checked against, from Config/Cloud.xcconfig.
+        PebbleCloudPolicy: $(PEBBLE_CLOUD_POLICY)
         LSApplicationCategoryType: public.app-category.productivity
         UILaunchScreen: {}
         # Every orientation on iPad, which Split View, Slide Over and Stage Manager need.
@@ -49,9 +52,10 @@ targets:
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
     # Every build checks first, so any build with a cloud address fails
-    # unless it is Debug and not an archive, wherever the address came from.
+    # unless it is Debug and not an archive, or names the current cloud
+    # policy with a plain https address, wherever the address came from.
     preBuildScripts:
-      - name: No cloud address in Release
+      - name: Cloud address only with the cloud policy
         script: sh "$SRCROOT/scripts/release-endpoint-check.sh"
         basedOnDependencyAnalysis: false
         inputFiles:

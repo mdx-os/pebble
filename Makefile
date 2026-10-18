@@ -13,9 +13,9 @@ generate:
 test:
 	swift test --package-path Packages/PebbleKit --quiet
 
-## release-test: run the promise that a shipped build reads no cloud
-## address in a Release build of PebbleCore, so what it checks is the code
-## that ships, not a Debug stand-in
+## release-test: run the promise that a shipped build reads a cloud address
+## only with the current cloud policy, in a Release build of PebbleCore, so
+## what it checks is the code that ships, not a Debug stand-in
 release-test:
 	sh scripts/release-probe.sh
 
@@ -36,8 +36,9 @@ build: generate
 
 ## build-release: compile the app in Release for macOS and the iOS Simulator, so
 ## code kept to Debug (the showcase screens) can never break a shipped build.
-## Fails first if any configuration but Debug has a cloud address; every
-## build checks again, and fails an archive with one even in Debug.
+## Fails first if any configuration but Debug has a cloud address without the
+## current cloud policy and a plain https address; every build checks again,
+## an archive even in Debug.
 build-release: generate
 	sh scripts/release-endpoint-check.sh
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath $(DERIVED)

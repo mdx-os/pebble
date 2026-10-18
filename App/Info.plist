@@ -26,6 +26,8 @@
 	<string>$(BRAND_NAME)</string>
 	<key>PebbleCloudEndpoint</key>
 	<string>$(PEBBLE_CLOUD_ENDPOINT)</string>
+	<key>PebbleCloudPolicy</key>
+	<string>$(PEBBLE_CLOUD_POLICY)</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

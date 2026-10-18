@@ -706,6 +706,7 @@ public struct CloudHelpView: View {
                         .font(.system(.largeTitle, design: .rounded).weight(.bold))
                         .accessibilityAddTraits(.isHeader)
                     switchCard
+                    policyCard
                     privateWordsCard
                     if let status = help.status {
                         Text(status)
@@ -773,6 +774,35 @@ public struct CloudHelpView: View {
         .padding(16)
         .card(scheme)
     }
+
+    /// Who runs the server, what it keeps and what signing in sends, in the
+    /// words of `CloudPolicy`, the policy a build that ships was checked
+    /// against.
+    private var policyCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(CloudWords.policyTitle)
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+            ForEach(Array(Self.policyLines.enumerated()), id: \.offset) { index, line in
+                Label {
+                    Text(line)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: Self.policySymbols[index % Self.policySymbols.count])
+                        .foregroundStyle(Theme.accentSymbol)
+                }
+                .font(.subheadline)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card(scheme)
+        .accessibilityIdentifier("cloudPolicy")
+    }
+
+    /// The lines the policy card shows, from `CloudPolicy` alone.
+    static var policyLines: [String] { CloudWords.policyLines }
+    private static let policySymbols = ["building.2", "chart.bar", "person.badge.key", "arrow.uturn.backward"]
 
     private var privateWordsCard: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1023,7 +1053,8 @@ struct CloudTurnOnSheet: View {
     }
 
     private static let symbols = ["cloud", "eye", "eye.slash", "arrow.triangle.2.circlepath", "person.crop.circle",
-                                  "key", "lock.shield", "lock", "network", "heart", "arrow.uturn.backward"]
+                                  "key", "lock.shield", "lock", "network", "building.2", "chart.bar",
+                                  "person.badge.key", "heart", "arrow.uturn.backward"]
 }
 
 /// "Here is what leaves your device": the request, its address, headers and
@@ -1100,6 +1131,9 @@ struct CloudPreviewSheet: View {
         preview.signIn != nil || preview.request.headers.contains { isSignIn($0.key, $0.value) }
     }
 
+    /// Who runs the server and what it keeps, from `CloudPolicy` alone.
+    static var policyLine: String { CloudWords.previewPolicy }
+
     static func hiddenLine(_ preview: CloudPreview) -> String {
         let parts = Redaction.Kind.allCases.compactMap { kind in
             preview.hidden[kind].map { kind.counted($0) }
@@ -1160,6 +1194,9 @@ struct CloudPreviewSheet: View {
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     Label(CloudWords.previewDestination(preview.request.url.host ?? ""), systemImage: "arrow.up.forward.circle")
+                    Label(Self.policyLine, systemImage: "building.2")
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("cloudPreviewPolicy")
                     Label(Self.hiddenLine(preview), systemImage: "eye.slash")
                     if Self.coversAnything(preview) {
                         Label(CloudWords.previewSignInCovered, systemImage: "key")

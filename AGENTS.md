@@ -18,9 +18,9 @@ in lint, a skill, or CI.
 - `make verify`: everything CI runs (brand check, comment lint, tests, mutation check, builds, screenshots)
 - `make test`: package unit tests (Swift Testing)
 - `make mutation-check`: breaks the code each test in `scripts/mutation-manifest.txt` covers, on a copy in `build/mutation`, and requires the test to fail. Every new package behavior test gets a manifest entry; a test that passes with its code broken protects nothing. The check runs only `swift test`, so a UI test that guards a promise needs a package twin pinning the same thing, with entries, listed at the top of the manifest
-- `make release-test`: runs the "a shipped build reads no cloud address" promise in a Release build of PebbleCore (part of verify). Package tests run in Debug, so they can't see that code
+- `make release-test`: runs the "a shipped build reads a cloud address only with the current cloud policy" promise in a Release build of PebbleCore (part of verify). Package tests run in Debug, so they can't see that code
 - `make comment-lint`: no review history ("fix round", "item 11", "round 4") or personal names in code comments, project.yml, the Makefile or the mutation manifest. Say what the code or test protects. The names it blocks are never committed in plain text: `Config/comment-lint-names.sha256` holds a salt and the SHA-256 of each name, and CI needs no secret. The plain list lives only in the git-ignored `Config/comment-lint-names.local.txt`; after changing it, run `make hash-names` and commit the hash file. A match prints the file and line, never the name. Never print, copy or quote the local list
-- `make build-release`: Release builds for macOS and the iOS Simulator (part of verify). Anything behind `#if DEBUG`, like the showcase, must only be used behind it too. Every build with a cloud address fails unless it is Debug and not an archive, whatever the configuration is called
+- `make build-release`: Release builds for macOS and the iOS Simulator (part of verify). Anything behind `#if DEBUG`, like the showcase, must only be used behind it too. Every build with a cloud address fails unless it is Debug and not an archive, or `PEBBLE_CLOUD_POLICY` equals `CloudPolicy.currentVersion` and the address is plain https
 - `make pulse`: fetch the competitor watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
 - `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`
 - `make generate`: regenerate `Pebble.xcodeproj` after editing `project.yml`
@@ -54,6 +54,7 @@ in lint, a skill, or CI.
   on iPhone. Shared pieces live in `PebbleUI/Presence.swift`.
 - Private by default: personal content never leaves the device without consent.
 - Local open-weight models by default; cloud models only when the user chooses.
+- The cloud service and its promises are in `docs/CLOUD.md`, and the app's words for them in `CloudPolicy`. MDx runs the cloud service itself. It stores no message bodies, only counts of requests and errors, kept for 7 days. Sign-in sends only Apple's anonymous user ID and a key made on the device, never an email or a name. A change to any of it gets a new policy version.
 - Every action the agent can take is a capability with a permission and a log entry.
 
 ## Pull requests

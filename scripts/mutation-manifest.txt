@@ -12,7 +12,13 @@
 #     theSheetSaysValuesAreCoveredWheneverOneIs
 #   testThePreviewTextCantBeCopied: thePayloadCantBeSelectedOrCopied
 #   testThePrivateWordsSayWhatTheyCanMiss: anotherSpellingCanStillSlipBy
-#   testTurningOnAsksFirst: theQuestionPromisesSignInCarriesNothingPrivate
+#   testTurningOnAsksFirst: theQuestionPromisesSignInCarriesNothingPrivate,
+#     theCloudWordsReadThePolicy
+#   testThePreviewShowsTheRequestAndReadsWell (the Apple hop and the
+#     policy line): theSignInHopCarriesExactlyTheTwoValues,
+#     theSettingAndThePreviewShowThePolicy
+#   testTheSettingSaysWhoRunsItAndWhatItKeeps: theSettingAndThePreviewShowThePolicy,
+#     theLinesArePinnedToTheirVersion
 # A new UI test that guards a promise gets a twin here before it lands.
 
 # A yes holds only for its address.
@@ -430,14 +436,193 @@ test: anAddressWithHttpsOwnPortWrittenOutIsRefused
 file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
 perl: s~, url\.port != 443~~
 
-# Outside Debug no address is read, whatever the build settings hold.
-test: onlyADebugBuildReadsAnAddress
+# Outside Debug an address is read only with the current cloud policy.
+test: aShippedBuildReadsAnAddressOnlyWithTheCurrentPolicy theAppAddressIsReadFromInfoPlist
 file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
-perl: s~guard buildMayReachTheCloud, let raw else~guard let raw else~
+perl: s~guard buildMayReachTheCloud\(policy: policy, isDebugBuild: isDebugBuild\), let raw else~guard let raw else~
 
-test: onlyADebugBuildReadsAnAddress
+test: aShippedBuildReadsAnAddressOnlyWithTheCurrentPolicy theAppAddressIsReadFromInfoPlist
 file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
-perl: s~#else\n(\s*)static let buildMayReachTheCloud = false~#else\n$1static let buildMayReachTheCloud = true~
+perl: s~isDebugBuild \|\| policy == CloudPolicy\.currentVersion~isDebugBuild || policy != nil~
+
+test: aShippedBuildReadsAnAddressOnlyWithTheCurrentPolicy theAppAddressIsReadFromInfoPlist
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~isDebugBuild \|\| policy == CloudPolicy\.currentVersion~isDebugBuild || policy == nil || policy == CloudPolicy.currentVersion~
+
+test: aShippedBuildReadsAnAddressOnlyWithTheCurrentPolicy
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~#else\n(\s*)static let isDebugBuild = false~#else\n$1static let isDebugBuild = true~
+
+test: theAppAddressIsReadFromInfoPlist
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~policy: infoDictionary\?\[policyKey\] as\? String,~policy: CloudPolicy.currentVersion,~
+
+# The build passes the policy through, and the committed config names it.
+test: theBuildNamesThePolicyTheCodeShows
+file: project.yml
+perl: s~        PebbleCloudPolicy: \$\(PEBBLE_CLOUD_POLICY\)\n~~
+
+test: theBuildNamesThePolicyTheCodeShows
+file: Config/Cloud.xcconfig
+perl: s~PEBBLE_CLOUD_POLICY = mdx-zero-retention-1~PEBBLE_CLOUD_POLICY = mdx-zero-retention-0~
+
+test: theBuildNamesThePolicyTheCodeShows
+file: App/Info.plist
+perl: s~\t<key>PebbleCloudPolicy</key>\n\t<string>\$\(PEBBLE_CLOUD_POLICY\)</string>\n~~
+
+# The policy is the one decided, its words pinned to its version, and
+# every place that says it says the same.
+test: thePolicyIsTheOneDecided theLinesArePinnedToTheirVersion theDocsSayTheSameInTheSameWords
+file: Packages/PebbleKit/Sources/PebbleCore/CloudPolicy.swift
+perl: s~countsKeptForDays: 7,~countsKeptForDays: 30,~
+
+test: thePolicyIsTheOneDecided
+file: Packages/PebbleKit/Sources/PebbleCore/CloudPolicy.swift
+perl: s~signInFields: \["appleUser", "deviceKey"\]~signInFields: ["appleUser", "deviceKey", "email"]~
+
+test: thePolicyIsTheOneDecided
+file: Packages/PebbleKit/Sources/PebbleCore/CloudPolicy.swift
+perl: s~keepsWhatIsSent: false,\n(\s*)countsKeptForDays: 7~keepsWhatIsSent: true,\n$1countsKeptForDays: 7~
+
+test: theLinesArePinnedToTheirVersion theDocsSayTheSameInTheSameWords
+file: Packages/PebbleKit/Sources/PebbleCore/CloudPolicy.swift
+perl: s~Never your email or your name\.~Never your email.~
+
+test: theLinesSayWhatThePolicySays
+file: Packages/PebbleKit/Sources/PebbleCore/CloudPolicy.swift
+perl: s~for \\\(countsKeptForDays\) days\."\n~for 7 days."\n~
+
+test: theCloudWordsReadThePolicy
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~\n\s*CloudPolicy\.current\.keepsLine,\n~\n~
+
+test: theCloudWordsReadThePolicy
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~\] \+ askPoints \+ policyLines \+ Redaction~] + askPoints + Redaction~
+
+test: theDocsSayTheSameInTheSameWords
+file: docs/CLOUD.md
+perl: s~kept for 7 days\. Sign-in~kept for a week. Sign-in~
+
+test: theDocsSayTheSameInTheSameWords
+file: README.md
+perl: s~ Sign-in sends only Apple's anonymous user ID and a key made on the device, never an email or a name\.~~
+
+test: theDocsSayTheSameInTheSameWords
+file: AGENTS.md
+perl: s~It stores no message bodies~It keeps no message bodies~
+
+test: theDocsSayTheSameInTheSameWords
+file: docs/CLOUD.md
+perl: s~- "Turning this off or using Forget everything~- "Switching this off or using Forget everything~
+
+# The setting and the preview show the policy, from CloudPolicy alone.
+test: theSettingAndThePreviewShowThePolicy
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~switchCard\n(\s*)policyCard\n~switchCard\n~
+
+test: theSettingAndThePreviewShowThePolicy
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~static var policyLines: \[String\] \{ CloudWords\.policyLines \}~static var policyLines: [String] { [] }~
+
+test: theSettingAndThePreviewShowThePolicy
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~static var policyLine: String \{ CloudWords\.previewPolicy \}~static var policyLine: String { "" }~
+
+test: theSettingAndThePreviewShowThePolicy
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~\n\s*Label\(Self\.policyLine, systemImage: "building\.2"\)~~
+
+# Sign in with Apple sends exactly two values, asks for no scopes, and
+# keeps nothing once the cloud is off or Forget everything has run.
+test: theSignInHopCarriesExactlyTheTwoValues theHopPassesThePreviewChecks nothingIsSentWithoutTheYes
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~return \[names\[0\]: user, names\[1\]: key\]~return [names[0]: user, names[1]: key, "email": "sam\@example.com"]~
+
+test: theSignInHopCarriesExactlyTheTwoValues theHopPassesThePreviewChecks
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~return \[names\[0\]: user, names\[1\]: key\]~return [names[0]: user, names[1]: key, "name": "made"]~
+
+test: theSignInHopCarriesExactlyTheTwoValues
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~return \[names\[0\]: user, names\[1\]: key\]~return [names[0]: user]~
+
+test: theSignInHopCarriesExactlyTheTwoValues
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~if key == nil \|\| key\?\.isEmpty == true \{~if true {~
+
+test: theSignInHopCarriesExactlyTheTwoValues
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~let alphabet = Array\("abcdefghijklmnop"\)~let alphabet = Array("0123456789012345")~
+
+test: noAppleIDMeansNoHopAndNoKey
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~guard let user = try\? keychain\.read\(Self\.appleUserAccount\), !user\.isEmpty else \{ return nil \}~let user = (try? keychain.read(Self.appleUserAccount)) ?? ""~
+
+test: noAppleIDMeansNoHopAndNoKey
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~guard let made = makeKey\(\),~guard let made = makeKey() ?? Optional("weak"),~
+
+test: anOddAppleIDIsRefused
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~appleUser\.unicodeScalars\.allSatisfy\(\{ \(0x21\.\.\.0x7E\)\.contains\(\$0\.value\) \}\)~true~
+
+test: forgetRemovesTheDeviceKey turningTheCloudOffRemovesTheDeviceKey forgetEverythingRemovesTheDeviceKey
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~\n\s*try\? keychain\.remove\(Self\.deviceKeyAccount\)~~
+
+test: forgetRemovesTheDeviceKey turningTheCloudOffRemovesTheDeviceKey forgetEverythingRemovesTheDeviceKey
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~\n\s*try\? keychain\.remove\(Self\.appleUserAccount\)~~
+
+test: forgetRemovesTheDeviceKey
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~(public func forget\(\) \{\n\s*lock\.withLock \{\n\s*)session = nil~$1_ = 0~
+
+test: turningTheCloudOffRemovesTheDeviceKey
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~withdrawPreviews\(\)\n(\s*)auth\.forget\(\)\n(\s*)let first = update~withdrawPreviews()\n$2let first = update~
+
+test: forgetEverythingRemovesTheDeviceKey
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~endOpenCloudChats\(\)\n(\s*)auth\.forget\(\)\n(\s*)newPrivateWord = ""~endOpenCloudChats()\n$2newPrivateWord = ""~
+
+test: theSessionIsKeptOnlyWhenItIsLetters
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~token\.unicodeScalars\.allSatisfy\(\{ \("a"\.\.\."z"\)\.contains\(\$0\) \|\| \("A"\.\.\."Z"\)\.contains\(\$0\) \}\)~true~
+
+test: theSessionIsKeptOnlyWhenItIsLetters
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~guard lock\.withLock\(\{ session == nil \}\), let fields~guard let fields~
+
+test: theDeviceKeyIsRandom
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~var bytes = \[UInt8\]\(repeating: 0, count: 32\)~var bytes = [UInt8](repeating: 0, count: 16)~
+
+test: theDeviceKeyIsRandom
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~guard SecRandomCopyBytes\(kSecRandomDefault, bytes\.count, &bytes\) == errSecSuccess else \{ return nil \}~~
+
+test: theKeyIsKeptForThisDeviceOnly
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~kSecAttrAccessibleWhenUnlockedThisDeviceOnly,~kSecAttrAccessibleWhenUnlocked,~
+
+test: theKeyIsKeptForThisDeviceOnly
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~kSecAttrSynchronizable as String: false,~kSecAttrSynchronizable as String: true,~
+
+test: theAppleRequestAsksForNoScopes theCodeReadsOnlyTheAppleID
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~request\.requestedScopes = \[\]~request.requestedScopes = [.email, .fullName]~
+
+test: theCodeReadsOnlyTheAppleID
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~try accept\(appleUser: credential\.user\)~try accept(appleUser: credential.email ?? credential.user)~
+
+# An empty address, even with the policy named, can't be turned on.
+test: anEmptyAddressCantBeTurnedOn
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~public var isAvailable: Bool \{ endpoint != nil && storeOpened \}~public var isAvailable: Bool { storeOpened }~
 
 # Sign-in paths written with encoded dots are refused like the plain ones.
 test: aSignInHopStaysOnTheAddressShown
@@ -771,7 +956,57 @@ perl: s~ -c release --quiet probe~ --quiet probe~
 
 test: theReleaseProbeRunsTheShippedCode
 file: scripts/release-probe.sh
-perl: s~ \|\| CloudEndpoint\.url\(infoDictionary: \[CloudEndpoint\.infoKey: raw\]\) != nil~~
+perl: s~\n    \|\| reads\(\[CloudEndpoint\.infoKey: raw, CloudEndpoint\.policyKey: policy \+ "-other"\]\)~~
+
+test: theReleaseProbeRunsTheShippedCode
+file: scripts/release-probe.sh
+perl: s~\n    \|\| reads\(\[CloudEndpoint\.infoKey: "http://cloud\.example\.com", CloudEndpoint\.policyKey: policy\]\)~~
+
+test: theReleaseProbeRunsTheShippedCode
+file: scripts/release-probe.sh
+perl: s~if !reads\(\[CloudEndpoint\.infoKey: raw, CloudEndpoint\.policyKey: policy\]\) \{~if false {~
+
+# A build that could ship keeps an address only with the current policy
+# and a plain https address, and says what to fix otherwise.
+test: theReleaseCheckPassesAShippedBuildOnlyWithTheCurrentPolicy theReleaseCheckOnItsOwnPassesOnlyWithTheCurrentPolicy
+file: scripts/release-endpoint-check.sh
+perl: s~if \[ -z "\$policy" \]; then~if false; then~
+
+test: theReleaseCheckPassesAShippedBuildOnlyWithTheCurrentPolicy theReleaseCheckOnItsOwnPassesOnlyWithTheCurrentPolicy
+file: scripts/release-endpoint-check.sh
+perl: s~if \[ "\$policy" != "\$expected" \]; then~if [ -z "\$policy" ]; then~
+
+test: theReleaseCheckPassesAShippedBuildOnlyWithTheCurrentPolicy theReleaseCheckOnItsOwnPassesOnlyWithTheCurrentPolicy
+file: scripts/release-endpoint-check.sh
+perl: s~    https://\*\) ;;~    http*) ;;~
+
+test: theReleaseCheckPassesAShippedBuildOnlyWithTheCurrentPolicy
+file: scripts/release-endpoint-check.sh
+perl: s~\*\[\[:space:\]\?#\@\]\*\) refuse~*[[:space:]]*) refuse~
+
+test: theReleaseCheckPassesAShippedBuildOnlyWithTheCurrentPolicy
+file: scripts/release-endpoint-check.sh
+perl: s~if \[ -z "\$\{rest%%/\*\}" \]; then~if false; then~
+
+test: theReleaseCheckPassesAShippedBuildOnlyWithTheCurrentPolicy
+file: scripts/release-endpoint-check.sh
+perl: s~(check_shipping "\$CONFIGURATION \(\$action\)" "\$PEBBLE_CLOUD_ENDPOINT" "\$\{PEBBLE_CLOUD_POLICY:-\}"\n\s*)exit 0~$1exit 1~
+
+test: theReleaseCheckPassesAShippedBuildOnlyWithTheCurrentPolicy theReleaseCheckFailsWhenAReleaseBuildHasAnAddress
+file: scripts/release-endpoint-check.sh
+perl: s~\n  blank "\$\{PEBBLE_CLOUD_ENDPOINT:-\}" && exit 0~~
+
+test: theReleaseCheckPassesAShippedBuildOnlyWithTheCurrentPolicy theReleaseCheckOnItsOwnPassesOnlyWithTheCurrentPolicy
+file: scripts/release-endpoint-check.sh
+perl: s~public static let currentVersion = "\\\(~public static let version = "\\(~
+
+test: theReleaseCheckOnItsOwnPassesOnlyWithTheCurrentPolicy
+file: scripts/release-endpoint-check.sh
+perl: s~\n    check_shipping "\$configuration" "\$values" "\$policies"~~
+
+test: theReleaseCheckOnItsOwnPassesOnlyWithTheCurrentPolicy
+file: scripts/release-endpoint-check.sh
+perl: s~PEBBLE_CLOUD_POLICY = //p' \| sort -u\)"~PEBBLE_CLOUD_POLICY = //p' | sort -u | tail -n 1)"~
 
 test: theReleaseProbeRunsTheShippedCode
 file: scripts/release-probe.sh

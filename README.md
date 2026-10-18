@@ -71,11 +71,14 @@ chooses one.
 
 - Cloud: `CloudModel` sends to the address in `Config/Cloud.local.xcconfig`,
   which git ignores and which doesn't exist by default, so the setting can't
-  be turned on. It is for Debug builds only: every build with an address
-  fails unless it is Debug and not an archive, whatever the configuration
-  is called, until who runs the server, how long it keeps what it is sent,
-  and what sign-in sends are decided, and outside a Debug build the app
-  reads no address at all, even if those checks were skipped. Turning it on (What I
+  be turned on. The service and what it promises are in
+  [docs/CLOUD.md](docs/CLOUD.md). In short: MDx runs the cloud service itself. It stores no message bodies, only counts of requests and errors, kept for 7 days. Sign-in sends only Apple's anonymous user ID and a key made on the device, never an email or a name.
+  A build that could ship may have an address only when
+  `PEBBLE_CLOUD_POLICY` in `Config/Cloud.xcconfig` names the policy the app
+  shows (`CloudPolicy.currentVersion`) and the address is plain https; any
+  other build with an address fails unless it is Debug and not an archive,
+  and outside Debug the app reads no address without that policy, even if
+  those checks were skipped. Turning it on (What I
   remember, then Help from the cloud) asks first, holds only for that
   address, and counts from the next new chat. Every request is redacted on
   the device by `Redactor` and shown to the person in full, method, address,
@@ -87,8 +90,9 @@ chooses one.
   the device are never sent, and nothing is sent when the notes or private
   words can't be read. The setting and the private words are kept next to
   the notes, out of backups, and Forget everything ends every open cloud
-  chat first. Sign-in is a `CloudAuth` hook that adds nothing by default; a
-  sign-in the cloud needs is a hop shown in the same preview, its values
+  chat first. Sign-in is a `CloudAuth`: the app's is `AppleCloudAuth`,
+  Sign in with Apple with no scopes, whose hop carries exactly
+  `appleUser` and `deviceKey`. A sign-in is a hop shown in the same preview, its values
   covered on screen, and sent only by its yes, so no request of ours goes
   unshown. Its values are covered, though not their combined length,
   which the hop's Content-Length still shows. Since its values are
