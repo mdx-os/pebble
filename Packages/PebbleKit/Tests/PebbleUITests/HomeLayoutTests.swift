@@ -101,18 +101,71 @@ struct HomeLayoutTests {
         let root = SwiftSource.repositoryRoot(from: #filePath)
         let text = try String(contentsOf: root.appendingPathComponent("Packages/PebbleKit/Sources/PebbleUI/Theme.swift"),
                               encoding: .utf8)
-        let code = String(SwiftSource(text).code)
-        let start = try #require(code.range(of: "struct FillButtonStyle"))
-        let style = String(code[start.lowerBound...].prefix(1400))
-        #expect(style.contains(".pointerHover(in: Capsule())"))
-        #expect(style.range(of: #"struct FillButtonStyle[^{]*\{[^}]*isFocused"#, options: .regularExpression) == nil,
-                "the style never reads the focus itself")
-        let ring = try #require(code.range(of: "struct FocusRing"))
-        let ringBody = String(code[ring.lowerBound...].prefix(600))
-        #expect(ringBody.contains(#"@Environment(\.isFocused)"#))
-        #expect(ringBody.range(of: #"if\s+isFocused\s*\{\s*Capsule\(\)\.strokeBorder"#, options: .regularExpression) != nil)
-        #expect(style.contains("FocusRing {"), "the style's capsule sits inside FocusRing")
+        #expect(Self.focusProblems(in: text) == [])
+        let wrong = [
+            // The focus read on the style, before or after makeBody.
+            "struct FillButtonStyle: ButtonStyle {\n    @Environment(\\.isFocused) private var isFocused\n"
+                + "    func makeBody(configuration: Configuration) -> some View {\n        FocusRing { configuration.label }\n"
+                + "            .pointerHover(in: Capsule())\n    }\n}\n" + Self.rightRing,
+            "struct FillButtonStyle: ButtonStyle {\n    func makeBody(configuration: Configuration) -> some View {\n"
+                + "        FocusRing { configuration.label }\n            .pointerHover(in: Capsule())\n    }\n"
+                + "    @Environment(\\.isFocused) private var isFocused\n}\n" + Self.rightRing,
+            // No pointer highlight, or the capsule outside the ring.
+            "struct FillButtonStyle: ButtonStyle {\n    func makeBody(configuration: Configuration) -> some View {\n"
+                + "        FocusRing { configuration.label }\n    }\n}\n" + Self.rightRing,
+            "struct FillButtonStyle: ButtonStyle {\n    func makeBody(configuration: Configuration) -> some View {\n"
+                + "        configuration.label\n            .pointerHover(in: Capsule())\n    }\n}\n" + Self.rightRing,
+            // A ring that never reads the focus, or never draws.
+            Self.rightStyle + "struct FocusRing<Content: View>: View {\n    @ViewBuilder let content: Content\n"
+                + "    var body: some View { content }\n}\nstruct Other { @Environment(\\.isFocused) var isFocused }",
+            // Words after the style that mention pointerHover don't count for it.
+            "struct FillButtonStyle: ButtonStyle {\n    func makeBody(configuration: Configuration) -> some View {\n"
+                + "        FocusRing { configuration.label }\n    }\n}\nlet a = Text(\"\").pointerHover(in: Capsule())\n" + Self.rightRing,
+        ]
+        for text in wrong {
+            #expect(!Self.focusProblems(in: text).isEmpty, "missed: \(text)")
+        }
+        #expect(Self.focusProblems(in: Self.rightStyle + Self.rightRing) == [])
         try smokeRender(DoneButton {}.padding().frame(width: 200, height: 100))
+    }
+
+    private static let rightStyle = "struct FillButtonStyle: ButtonStyle {\n"
+        + "    func makeBody(configuration: Configuration) -> some View {\n        FocusRing { configuration.label }\n"
+        + "            .pointerHover(in: Capsule())\n    }\n}\n"
+    private static let rightRing = "struct FocusRing<Content: View>: View {\n"
+        + "    @Environment(\\.isFocused) private var isFocused\n    @ViewBuilder let content: Content\n"
+        + "    var body: some View {\n        content.overlay {\n            if isFocused {\n"
+        + "                Capsule().strokeBorder(Theme.tintFill, lineWidth: 2)\n            }\n        }\n    }\n}\n"
+
+    /// What keeps Done's focus ring and pointer highlight from showing, in
+    /// `text`. Each type is read through its own balanced braces, so what
+    /// comes after it, or a member after `makeBody`, is never missed.
+    static func focusProblems(in text: String) -> [String] {
+        let source = SwiftSource(text)
+        let code = String(source.code)
+        func body(of name: String) -> String? {
+            guard let found = code.range(of: #"\bstruct\s+\#(name)\b"#, options: .regularExpression) else { return nil }
+            return source.braces(after: code.distance(from: code.startIndex, to: found.lowerBound)).map(source.contents(of:))
+        }
+        var problems: [String] = []
+        if let style = body(of: "FillButtonStyle") {
+            if !style.contains(".pointerHover(in: Capsule())") { problems.append("the style takes no pointer highlight") }
+            if style.range(of: #"\bisFocused\b"#, options: .regularExpression) != nil {
+                problems.append("the style reads the focus itself, where it stays false")
+            }
+            if !style.contains("FocusRing {") { problems.append("the style's capsule is not inside FocusRing") }
+        } else {
+            problems.append("no FillButtonStyle")
+        }
+        if let ring = body(of: "FocusRing") {
+            if !ring.contains(#"@Environment(\.isFocused)"#) { problems.append("FocusRing never reads the focus") }
+            if ring.range(of: #"if\s+isFocused\s*\{\s*Capsule\(\)\.strokeBorder"#, options: .regularExpression) == nil {
+                problems.append("FocusRing draws no ring")
+            }
+        } else {
+            problems.append("no FocusRing")
+        }
+        return problems
     }
 
 

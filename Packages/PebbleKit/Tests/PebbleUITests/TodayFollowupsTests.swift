@@ -358,7 +358,9 @@ struct TodayFollowupsTests {
     @MainActor
     @Test func anotherModelMakesTheHomeScreenAgain() throws {
         let engine = CountingEngine()
-        let looks = try #require(UserDefaults(suiteName: "swap-\(UUID().uuidString)"))
+        let suite = "swap-\(UUID().uuidString)"
+        let looks = try #require(UserDefaults(suiteName: suite))
+        defer { looks.removePersistentDomain(forName: suite) }
         func home(_ model: any ModelClient) -> HomeView {
             HomeView(brand: brand, model: model, names: InMemoryAgentNameStore(stored: "Pip"),
                      onboarding: InMemoryOnboardingStore(finished: true), memory: nil, looks: looks,
@@ -391,7 +393,11 @@ struct TodayFollowupsTests {
     @Test func aNewModelStartsAFreshChat() throws {
         let log = HomeScreenLog()
         let store = ShowcaseScene.emptyMemory()
-        let looks = try #require(UserDefaults(suiteName: "fresh-\(UUID().uuidString)"))
+        // Nothing outlives the test: not its defaults on disk, and not a
+        // window left open when a #require throws partway through.
+        let suite = "fresh-\(UUID().uuidString)"
+        let looks = try #require(UserDefaults(suiteName: suite))
+        defer { looks.removePersistentDomain(forName: suite) }
         func home(_ model: any ModelClient) -> HomeView {
             HomeView(brand: brand, model: model, names: InMemoryAgentNameStore(stored: "Pip"),
                      onboarding: InMemoryOnboardingStore(finished: true), memory: store, looks: looks,
@@ -399,6 +405,9 @@ struct TodayFollowupsTests {
         }
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 800), styleMask: [.titled],
                               backing: .buffered, defer: false)
+        // Under ARC a window released on close is released twice.
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
         let host = NSHostingView(rootView: home(LocalStubModel()))
         window.contentView = host
         func settle() {
@@ -423,7 +432,6 @@ struct TodayFollowupsTests {
         #expect(newMemory !== oldMemory, "another model makes the memory model again")
         #expect(!newMemory.askForgetEverything, "no Forget everything is left waiting")
         #expect(newMemory.pendingForget == nil)
-        window.close()
     }
 
     /// The memory screen's model is made once, inside its StateObject,
@@ -451,6 +459,27 @@ struct TodayFollowupsTests {
         #expect(made == 1, "drawn again, never made again")
     }
     #endif
+
+    /// The log the tests read counts each chat the home screen showed once,
+    /// however often it appears, so a count of chats is a count of chats made.
+    @MainActor
+    @Test func aChatShownAgainIsLoggedOnce() throws {
+        let log = HomeScreenLog()
+        let first = ChatController(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore())
+        let second = ChatController(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore())
+        log.showed(first)
+        log.showed(first)
+        log.showed(second)
+        log.showed(first)
+        #expect(log.chats.count == 2)
+        #expect(log.chats.first === first && log.chats.last === second)
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        let text = try String(contentsOf: root.appendingPathComponent("Packages/PebbleKit/Sources/PebbleUI/HomeView.swift"),
+                              encoding: .utf8)
+        let code = String(SwiftSource(text).code)
+        #expect(code.contains(".onAppear { log?.showed(chat) }"))
+        #expect(!code.contains("log?.chats.append"), "the screen writes down a chat only through showed(_:)")
+    }
 
     // MARK: Closing a sheet, then moving on
 

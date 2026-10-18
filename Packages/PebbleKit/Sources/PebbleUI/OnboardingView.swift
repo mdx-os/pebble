@@ -11,7 +11,10 @@ public struct OnboardingView: View {
     @StateObject private var model: OnboardingModel
     @FocusState private var nameFocused: Bool
     @Environment(\.colorScheme) private var scheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.holdsStill) private var holdsStill
+    /// Reduce Motion, or a screenshot that needs the screen to settle.
+    private var reduceMotion: Bool { systemReduceMotion || holdsStill }
     /// True only when the model runs on this device, so the hello may
     /// promise that words stay here.
     private let place: PrivacyPlace
@@ -213,8 +216,11 @@ struct IdeaCardButton: View {
     let index: Int
     let action: () -> Void
     @Environment(\.colorScheme) private var scheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.holdsStill) private var holdsStill
     @State private var shown = false
+    /// Reduce Motion, or a screenshot that needs the screen to settle.
+    private var reduceMotion: Bool { systemReduceMotion || holdsStill }
 
     private var symbol: String {
         switch job.id {

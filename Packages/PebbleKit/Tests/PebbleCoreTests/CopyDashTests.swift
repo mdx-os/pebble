@@ -40,9 +40,10 @@ struct CopyDashTests {
         ConfirmationWords.expired, ConfirmationWords.closeTitle, ConfirmationWords.promise,
         ProposedAction.yesTitle, ProposedAction.noTitle, ProposedAction.declined,
         HomeWords.chatTitle, HomeWords.newChatTitle, HomeWords.goMenuTitle, HomeWords.shortcutsTitle,
-        HomeWords.waiting(3), CloudWords.offDetail(.onDevice), CloudWords.offDetail(.mayLeaveDevice),
+        HomeWords.waiting(3),
         CareCheck.reply, CareCheck.followUp,
-    ] + FirstConversation.jobs.flatMap { [$0.title, $0.prompt] }
+    ] + PrivacyPlaceTests.everyPlace.map(CloudWords.offDetail)
+      + FirstConversation.jobs.flatMap { [$0.title, $0.prompt] }
       + Proactivity.allCases.flatMap { [$0.title, $0.detail] }
       + AgentLook.allCases.map(\.title)
       + HomeWords.shortcuts.flatMap { [$0.keys, $0.action] }

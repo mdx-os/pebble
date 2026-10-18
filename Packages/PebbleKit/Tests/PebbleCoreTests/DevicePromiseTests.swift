@@ -232,9 +232,9 @@ enum DevicePromise {
                 literal: "Sorry, I couldn't save that, so help from the cloud is still off. Please try again in a moment.",
                 reason: cloudSettingName + " CloudWords.onNotSaved: the setting stayed off, which is what the person sees."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
-                literal: "Help from the cloud is off now, so I didn't send that.",
+                literal: "Help from the cloud is off now, so I didn't send that. What you wrote is still here.",
                 reason: cloudSettingName + " CloudWords.turnedOff: its only \"cloud\" is the setting's name, Help from "
-                    + "the cloud."),
+                    + "the cloud, and \"still here\" is the composer, where the words go back."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
                 literal: "Your tasks are forgotten, and so are any words you asked me to hide. To be sure of that I cleared the cloud setting too, so help from the cloud is off.",
                 reason: cloudSettingName + " CloudWords.tasksAndWordsAndCloudForgotten: the setting was erased, so it reads "
@@ -502,6 +502,52 @@ enum DevicePromise {
             let straight = #"^(?:\w+\s*\.\s*)*staysOnDevice$"#
             return value.range(of: straight, options: .regularExpression) != nil ? nil
                 : "onDevice gets \"\(value)\", not .staysOnDevice straight from a PrivacyPlace"
+        }
+        return problems
+    }
+
+    /// What `PrivacyPlace` is declared to conform to, in order, or nil when
+    /// its declaration isn't found.
+    static func placeConformances(in text: String) -> [String]? {
+        let code = String(SwiftSource(text).code)
+        guard let found = code.range(of: #"\benum\s+PrivacyPlace\b[^{]*"#, options: .regularExpression) else {
+            return nil
+        }
+        let header = code[found]
+        guard let colon = header.firstIndex(of: ":") else { return [] }
+        return header[header.index(after: colon)...].split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+
+    /// The only files that may make a type a `ModelClient`. Any model says
+    /// `runsOnDevice`, and the gate trusts the place made from it, so a
+    /// screen with a model of its own could claim the device with no real
+    /// model behind it. A new adapter is added here on purpose.
+    static let modelMakers: Set<String> = [
+        "PebbleModel/ModelClient.swift",
+        "PebbleModel/LocalStubModel.swift",
+        "PebbleModel/CloudModel.swift",
+    ]
+
+    /// Each type in `source` made a `ModelClient` outside `modelMakers`: a
+    /// struct, class, actor, enum or protocol that lists it, an extension
+    /// that adds it, or an extension of `ModelClient` itself, which could
+    /// say `runsOnDevice` for every model.
+    static func modelProblems(in source: SwiftSource, file: String) -> [String] {
+        guard !modelMakers.contains(file) else { return [] }
+        let code = String(source.code)
+        let ns = code as NSString
+        let patterns = [
+            #"\b(?:struct|class|actor|enum|protocol|extension)\s+[\w.]+(?:\s*<[^>{]*>)?\s*:[^{]*\bModelClient\b"#,
+            #"\bextension\s+(?:PebbleModel\s*\.\s*)?ModelClient\b"#,
+        ]
+        var problems: [String] = []
+        for pattern in patterns {
+            let regex = try! NSRegularExpression(pattern: pattern)
+            for match in regex.matches(in: code, range: NSRange(location: 0, length: ns.length)) {
+                problems.append("\(file):\(source.line(at: match.range.location)): only "
+                    + "\(modelMakers.sorted().joined(separator: ", ")) may make a ModelClient")
+            }
         }
         return problems
     }
@@ -781,6 +827,72 @@ struct DevicePromiseTests {
         let flag = "public var staysOnDevice: Bool { self == .onDevice }"
         #expect(DevicePromise.placeProblems(in: SwiftSource(flag), file: "PebbleCore/PrivacyPlace.swift").isEmpty)
         #expect(!DevicePromise.placeProblems(in: SwiftSource(flag), file: "PebbleCore/Other.swift").isEmpty)
+    }
+
+    /// PERMANENT GUARD. Only the files in `modelMakers` make a type a
+    /// `ModelClient`, so no screen has a model of its own that claims the
+    /// device.
+    @Test func onlyTheModelLayerMakesAModel() throws {
+        let files = try Self.sources()
+        for file in files {
+            for problem in DevicePromise.modelProblems(in: SwiftSource(file.text), file: file.name) {
+                Issue.record(Comment(rawValue: problem))
+            }
+        }
+        for maker in DevicePromise.modelMakers {
+            #expect(files.contains { $0.name == maker }, "no longer there: \(maker)")
+        }
+        let wrong = [
+            "struct Here: ModelClient { var runsOnDevice: Bool { true } }",
+            "final class Here: NSObject, ModelClient {\n    var runsOnDevice: Bool { true }\n}",
+            "extension Settings: ModelClient { var runsOnDevice: Bool { true } }",
+            "actor Here: Sendable,\n    PebbleModel.ModelClient {}",
+            "struct Box<T>: ModelClient {}",
+            "protocol Local: ModelClient {}",
+            "extension ModelClient { var runsOnDevice: Bool { true } }",
+        ]
+        for text in wrong {
+            #expect(!DevicePromise.modelProblems(in: SwiftSource(text), file: "PebbleUI/Wrong.swift").isEmpty,
+                    "missed: \(text)")
+        }
+        let right = [
+            "let model: any ModelClient",
+            "init(model: any ModelClient) {}",
+            "struct Screen: View {\n    let model: any ModelClient\n}",
+            "func reply<M: ModelClient>(from model: M) {}",
+            "// struct Here: ModelClient, in a comment",
+            "let note = \"extension Here: ModelClient\"",
+        ]
+        for text in right {
+            #expect(DevicePromise.modelProblems(in: SwiftSource(text), file: "PebbleUI/Right.swift").isEmpty,
+                    "flagged: \(text)")
+        }
+        let stub = "public struct LocalStubModel: ModelClient {}"
+        #expect(DevicePromise.modelProblems(in: SwiftSource(stub), file: "PebbleModel/LocalStubModel.swift").isEmpty)
+    }
+
+    /// A place can be had without writing `.onDevice` if `PrivacyPlace`
+    /// can be built from a raw value, listed, or decoded: through
+    /// `PrivacyPlace(rawValue:)`, `allCases.first`, or
+    /// `decode(PrivacyPlace.self, ...)`. It conforms to none of those, so
+    /// none of those forms compile. This fails the day one is added, here
+    /// or in an extension anywhere, and the guard above must then learn
+    /// those forms first.
+    @Test func aPlaceCanOnlyBeMadeByTheModel() throws {
+        let files = try Self.sources()
+        let file = try #require(files.first { $0.name == "PebbleCore/PrivacyPlace.swift" })
+        #expect(DevicePromise.placeConformances(in: file.text) == ["Sendable", "Hashable"])
+        for other in files {
+            let code = String(SwiftSource(other.text).code)
+            #expect(code.range(of: #"\bextension\s+(?:PebbleCore\s*\.\s*)?PrivacyPlace\s*:"#,
+                               options: .regularExpression) == nil,
+                    "\(other.name) adds a conformance to PrivacyPlace")
+        }
+        // The check reads what it is meant to.
+        for wrong in ["public enum PrivacyPlace: String, Sendable, Hashable {", "public enum PrivacyPlace: Sendable, Hashable, CaseIterable {",
+                      "public enum PrivacyPlace: Sendable, Hashable, Codable {", "public enum PrivacyPlace: Int {"] {
+            #expect(DevicePromise.placeConformances(in: wrong) != ["Sendable", "Hashable"], "missed: \(wrong)")
+        }
     }
 
     /// An allowed line passes only word for word. Anything added to it,

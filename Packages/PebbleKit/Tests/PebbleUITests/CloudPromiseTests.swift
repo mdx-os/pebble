@@ -444,21 +444,24 @@ struct CloudPromiseTests {
         #expect(next.contains(".accessibilityHidden(true)"))
     }
 
-    // MARK: Fix round 5
+    // MARK: Rebuilding the home screen
 
     /// The home screen as the app builds it again on a redraw, with the
-    /// same setting and notes.
-    func rebuildHome(_ cloud: CloudHelp) -> HomeView {
+    /// same setting, notes and looks.
+    func rebuildHome(_ cloud: CloudHelp, looks: UserDefaults) -> HomeView {
         HomeView(brand: brand, model: local, names: InMemoryAgentNameStore(stored: "Pip"),
                  onboarding: InMemoryOnboardingStore(finished: true), memory: cloud.memory,
-                 looks: UserDefaults(suiteName: "cloud-promise-\(UUID().uuidString)")!,
+                 looks: looks,
                  conversation: nil, section: .today, needsYou: NeedsYou(rule: .isolated()), cloud: cloud)
     }
 
     /// A cloud chat is open and the cloud is turned off. Rebuilding the
     /// home screen leaves the setting saying "Off for new chats", never
     /// the device promise, while that chat is open.
-    @Test func rebuildingTheHomeScreenKeepsAnOpenCloudChatsPlace() {
+    @Test func rebuildingTheHomeScreenKeepsAnOpenCloudChatsPlace() throws {
+        let suite = "cloud-promise-\(UUID().uuidString)"
+        let looks = try #require(UserDefaults(suiteName: suite))
+        defer { looks.removePersistentDomain(forName: suite) }
         let cloud = help(CloudHelpSettings(isOn: true))
         let chat = newChat(cloud)
         cloud.setOn(false)
@@ -466,8 +469,8 @@ struct CloudPromiseTests {
         #expect(CloudHelpView.detail(for: cloud, place: surface(cloud, chat: chat))
                 == CloudWords.offDetail(.mayLeaveDevice))
 
-        _ = rebuildHome(cloud)
-        _ = rebuildHome(cloud)
+        _ = rebuildHome(cloud, looks: looks)
+        _ = rebuildHome(cloud, looks: looks)
         let place = surface(cloud, chat: chat)
         #expect(place == .mayLeaveDevice)
         #expect(CloudHelpView.detail(for: cloud, place: place) == "Off for new chats.")
@@ -476,11 +479,14 @@ struct CloudPromiseTests {
 
     /// Building the home screen struct, as every redraw does, makes no
     /// chat: no model asked for, no preview gate, no transport.
-    @Test func buildingTheHomeScreenTwiceMakesNothingCloudSide() {
+    @Test func buildingTheHomeScreenTwiceMakesNothingCloudSide() throws {
+        let suite = "cloud-promise-\(UUID().uuidString)"
+        let looks = try #require(UserDefaults(suiteName: suite))
+        defer { looks.removePersistentDomain(forName: suite) }
         let maker = TransportMaker()
         let cloud = help(CloudHelpSettings(isOn: true), maker: maker)
-        _ = rebuildHome(cloud)
-        _ = rebuildHome(cloud)
+        _ = rebuildHome(cloud, looks: looks)
+        _ = rebuildHome(cloud, looks: looks)
         #expect(cloud.chatModelsAsked == 0)
         #expect(maker.made == 0)
         // A chat started for real still asks once and makes one transport.
@@ -496,21 +502,24 @@ struct CloudPromiseTests {
     /// and no chat model or transport is made again. The copy still moves,
     /// through `surfacePlace`.
     @MainActor
-    @Test func turningTheCloudOffAndOnKeepsTheOpenCloudChat() {
+    @Test func turningTheCloudOffAndOnKeepsTheOpenCloudChat() throws {
+        let suite = "cloud-promise-\(UUID().uuidString)"
+        let looks = try #require(UserDefaults(suiteName: suite))
+        defer { looks.removePersistentDomain(forName: suite) }
         let maker = TransportMaker()
         let cloud = help(CloudHelpSettings(isOn: true), maker: maker)
-        let host = NSHostingView(rootView: rebuildHome(cloud))
+        let host = NSHostingView(rootView: rebuildHome(cloud, looks: looks))
         host.frame = CGRect(x: 0, y: 0, width: 600, height: 800)
         host.layoutSubtreeIfNeeded()
         #expect(cloud.chatModelsAsked == 1)
         cloud.setOn(false)
-        host.rootView = rebuildHome(cloud)
+        host.rootView = rebuildHome(cloud, looks: looks)
         host.layoutSubtreeIfNeeded()
         // The cloud chat is still the one open, and no new chat was made.
         #expect(cloud.chatModelsAsked == 1)
         cloud.setOn(true)
         cloud.confirmTurnOn()
-        host.rootView = rebuildHome(cloud)
+        host.rootView = rebuildHome(cloud, looks: looks)
         host.layoutSubtreeIfNeeded()
         #expect(cloud.chatModelsAsked == 1, "the same screen keeps the same chat")
         #expect(maker.made == 1)
@@ -623,7 +632,7 @@ struct CloudPromiseTests {
         #expect(app.contains("file: { try CloudHelpFileStore.onDevice() }"))
     }
 
-    // MARK: Fix round 6
+    // MARK: A setting that couldn't be opened
 
     /// The notes opened but the setting's file didn't, so the normal memory
     /// screen shows. Forget everything still erases the words kept in that
@@ -737,7 +746,7 @@ struct CloudPromiseTests {
         #expect(detail.contains("memoryScreen"))
     }
 
-    // MARK: Fix round 8
+    // MARK: More than one window
 
     /// Two windows share one setting. Window B has a cloud chat open, the
     /// cloud goes off, and window A starts an on-device chat. A's setting

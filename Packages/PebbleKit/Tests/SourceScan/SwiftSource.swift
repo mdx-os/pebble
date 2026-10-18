@@ -47,6 +47,35 @@ public struct SwiftSource: Sendable {
         var open = call.end
         while open < code.count, code[open].isWhitespace { open += 1 }
         guard open < code.count, code[open] == "{" else { return nil }
+        return braces(openingAt: open)
+    }
+
+    /// The first `{` at or after `offset` and its matching `}`, as
+    /// `open..<close`, or nil when no `{` follows. So the body of a
+    /// `struct` or `func` found by name is its own, however many braces it
+    /// holds.
+    public func braces(after offset: Int) -> Range<Int>? {
+        guard let open = code[min(offset, code.count)...].firstIndex(of: "{") else { return nil }
+        return braces(openingAt: open)
+    }
+
+    /// The innermost `{` before `offset` that is still open there, and its
+    /// matching `}`, as `open..<close`, or nil at the top level.
+    public func enclosingBraces(of offset: Int) -> Range<Int>? {
+        var open: [Int] = []
+        for index in 0..<min(offset, code.count) {
+            if code[index] == "{" { open.append(index) }
+            if code[index] == "}" { _ = open.popLast() }
+        }
+        return open.last.map { braces(openingAt: $0) }
+    }
+
+    /// The code between the braces of `range`, as `braces` gives it.
+    public func contents(of range: Range<Int>) -> String {
+        String(code[(range.lowerBound + 1)..<min(range.upperBound, code.count)])
+    }
+
+    private func braces(openingAt open: Int) -> Range<Int> {
         var depth = 0
         var close = open
         while close < code.count {

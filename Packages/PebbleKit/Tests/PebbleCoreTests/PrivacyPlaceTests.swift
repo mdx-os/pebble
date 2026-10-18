@@ -4,6 +4,32 @@ import Testing
 /// Every line that could promise the device, pinned to the one flag.
 /// docs/VOICE.md: say it only when the flag says so.
 struct PrivacyPlaceTests {
+    /// Every place there is. `PrivacyPlace` is not `CaseIterable`, on
+    /// purpose, so the switch with no default is what keeps this whole: a
+    /// new place stops the tests building until it is listed here.
+    static let everyPlace: [PrivacyPlace] = {
+        let places: [PrivacyPlace] = [.onDevice, .mayLeaveDevice]
+        for place in places {
+            switch place {
+            case .onDevice, .mayLeaveDevice: break
+            }
+        }
+        return places
+    }()
+
+    /// The cloud setting's off line is linted for every place: no dash, and
+    /// a device promise only where the place keeps it.
+    @Test func theOffDetailIsLintedForEveryPlace() {
+        #expect(Set(Self.everyPlace).count == 2)
+        for place in Self.everyPlace {
+            let line = CloudWords.offDetail(place)
+            #expect(CopyDashTests.copy.contains(line), "not in the dash check: \(line)")
+            #expect(Self.deviceLines(place).contains(line), "not in the device lines: \(line)")
+            #expect(!line.contains(where: CopyDashTests.dashes.contains), "dash in: \(line)")
+            #expect(Self.promisesTheDevice(line) == place.staysOnDevice, "\(place): \(line)")
+        }
+    }
+
     /// Each device line, as the copy builds it for a place.
     static func deviceLines(_ place: PrivacyPlace) -> [String] {
         [

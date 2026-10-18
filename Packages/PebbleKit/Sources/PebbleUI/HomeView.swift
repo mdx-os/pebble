@@ -189,6 +189,12 @@ public struct HomeView: View {
 final class HomeScreenLog {
     var chats: [ChatController] = []
     var memories: [MemoryModel] = []
+
+    /// The home screen showed `chat`. A chat that appears again, as after a
+    /// sheet or a size change, is written down once.
+    func showed(_ chat: ChatController) {
+        if !chats.contains(where: { $0 === chat }) { chats.append(chat) }
+    }
 }
 
 /// The home screen itself, for one model. See `HomeView`.
@@ -320,7 +326,7 @@ struct HomeScreen: View {
                 // Today has moved to the chat.
                 .modifier(SendTap(chat: chat))
                 .transition(.opacity)
-                .onAppear { log?.chats.append(chat) }
+                .onAppear { log?.showed(chat) }
             } else {
                 // No chat yet, so the hello speaks for the one about to start.
                 OnboardingView(brand: brand, names: names, store: onboarding, looks: looks,

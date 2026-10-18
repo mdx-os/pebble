@@ -556,6 +556,27 @@ struct CloudHelpTests {
         #expect(maker.wire.sent.isEmpty)
     }
 
+    /// The turned-off line says what you wrote is still here. It is: the
+    /// words are back in the composer, which Today shares, ahead of
+    /// anything typed since. Once they are cleared it is no longer true,
+    /// so the line goes with them.
+    @Test func theTurnedOffLineIsTrueWhereItIsSaid() async throws {
+        #expect(CloudWords.turnedOff.hasSuffix("What you wrote is still here."))
+        let maker = TransportMaker()
+        let cloud = help(CloudHelpSettings(isOn: true), endpoint: endpoint, maker: maker)
+        let controller = chat(cloud)
+        cloud.setOn(false)
+        controller.submit("Plan my week")
+        controller.draft = "and the weekend"
+        await controller.settled()
+        #expect(controller.failure == CloudWords.turnedOff)
+        #expect(controller.draft == "Plan my week\nand the weekend", "still here, ahead of what was typed since")
+        #expect(personTurns(controller).isEmpty)
+        controller.draft = "   "
+        #expect(controller.failure == nil, "cleared, so the line goes")
+        #expect(maker.wire.sent.isEmpty)
+    }
+
     @Test func stoppingAReplyClosesThePreviewAndSendsNothing() async throws {
         let maker = TransportMaker()
         let cloud = help(CloudHelpSettings(isOn: true), endpoint: endpoint, maker: maker)

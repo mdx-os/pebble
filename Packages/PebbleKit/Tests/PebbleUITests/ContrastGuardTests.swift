@@ -118,10 +118,17 @@ struct ContrastGuardTests {
             "ToolbarItem(placement: .confirmationAction) {\n    Button(\"Done\") { dismiss() }\n}",
             // The next item's DoneButton doesn't count for this one.
             "ToolbarItem(placement: .confirmationAction) {\n    Button(\"Done\") { dismiss() }\n}\n"
-                + "ToolbarItem(placement: .cancellationAction) {\n    DoneButton { dismiss() }\n}",
-            // Done without hiding the toolbar's glass gets a ring around it.
+                + "ToolbarItem(placement: .cancellationAction) {\n    DoneButton { dismiss() }\n}\n.sharedBackgroundVisibility(.hidden)",
+            // Done without hiding the toolbar's glass gets a ring around it,
+            // whatever the placement, or with none.
             "ToolbarItem(placement: .confirmationAction) {\n    DoneButton { dismiss() }\n}",
             "ToolbarItem(placement: .confirmationAction) {\n    DoneButton { dismiss() }\n}\n.sharedBackgroundVisibility(.visible)",
+            "ToolbarItem(placement: .primaryAction) {\n    DoneButton { dismiss() }\n}",
+            "ToolbarItem(placement: .topBarTrailing) {\n    DoneButton { dismiss() }\n}",
+            "ToolbarItem(placement: .cancellationAction) {\n    DoneButton { dismiss() }\n}",
+            "ToolbarItem {\n    DoneButton { dismiss() }\n}",
+            // The hiding belongs to the item, not to something after it.
+            "ToolbarItem(placement: .primaryAction) {\n    DoneButton { dismiss() }\n}\nText(\"a\")\n.sharedBackgroundVisibility(.hidden)",
             // The fill tint, anywhere but a fill.
             #"Text("Open").tint(Theme.tintFill)"#,
             #"Text("Open").foregroundStyle(Theme.tintFill)"#,
@@ -180,6 +187,10 @@ struct ContrastGuardTests {
             "Text(\"\"\"\n    .foregroundStyle(.white)\n    \"\"\")",
             #"Text("\(name) .foregroundStyle(.secondary)")"#,
             "ToolbarItem(placement: .confirmationAction) {\n    DoneButton { dismiss() }\n}\n.sharedBackgroundVisibility(.hidden)",
+            "ToolbarItem(placement: .primaryAction) {\n    DoneButton { dismiss() }\n}\n.sharedBackgroundVisibility(.hidden)",
+            "ToolbarItem {\n    DoneButton { dismiss() }\n}\n.sharedBackgroundVisibility(.hidden)",
+            // An item with no Done keeps the toolbar's glass.
+            "ToolbarItem(placement: .cancellationAction) {\n    Button(\"Cancel\") { dismiss() }\n}",
             // Art, not words: the character's highlights.
             #".fill(.white.opacity(0.35))"#,
             // White on the fill: the chosen sidebar row, its badge, and Done.
@@ -194,6 +205,18 @@ struct ContrastGuardTests {
         for line in right {
             #expect(ContrastLint.problems(in: line).isEmpty, "flagged: \(line)")
         }
+    }
+
+    /// The scan wants `.sharedBackgroundVisibility(.hidden)` right after the
+    /// item, with no `if #available` around it. That API is iOS 26 and
+    /// macOS 26, so it holds only while both minimums are 26 or later.
+    @Test func theDoneRingNeedsNoAvailabilityCheck() throws {
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        let package = try String(contentsOf: root.appendingPathComponent("Packages/PebbleKit/Package.swift"), encoding: .utf8)
+        #expect(package.contains("platforms: [.iOS(.v26), .macOS(.v26)]"))
+        let project = try String(contentsOf: root.appendingPathComponent("project.yml"), encoding: .utf8)
+        #expect(project.range(of: #"deploymentTarget:\s*\n\s*iOS: "26\.0"\s*\n\s*macOS: "26\.0""#,
+                              options: .regularExpression) != nil)
     }
 
     /// The scan reports the line the call starts on, even when its
@@ -331,23 +354,25 @@ enum ContrastLint {
         // words on it, so it must be a DoneButton, which tints it to keep
         // those words readable.
         // Only its own closure counts, never the next item's.
-        for call in source.calls(named: ["ToolbarItem"]) where call.arguments.contains(".confirmationAction") {
-            let content = source.trailingClosure(of: call) ?? ""
-            if !content.contains("DoneButton")
+        for item in toolbarItems(in: source) {
+            let content = item.braces.map(source.contents(of:)) ?? ""
+            if item.arguments.contains(".confirmationAction"),
+               !content.contains("DoneButton")
                 || content.range(of: #"\bButton\s*[({]"#, options: .regularExpression) != nil {
-                found.append(Problem(line: call.line,
+                found.append(Problem(line: item.line,
                                      reason: "a confirmation button fills with the tint; use DoneButton so its words stay readable"))
             }
             // On iOS 26 the toolbar puts a glass ring around the fill
-            // unless the item hides its shared background.
-            if let braces = source.trailingClosureBraces(of: call), braces.upperBound < source.code.count {
-                let after = String(source.code[(braces.upperBound + 1)...])
-                if after.range(of: #"\A\s*\.\s*sharedBackgroundVisibility\(\s*\.hidden\s*\)"#,
-                               options: .regularExpression) == nil {
-                    found.append(Problem(line: call.line,
-                                         reason: "Done draws its own fill; add .sharedBackgroundVisibility(.hidden) "
-                                            + "so the toolbar draws no glass ring around it"))
-                }
+            // unless the item hides its shared background. That is so
+            // whatever the placement, so any item holding Done hides it.
+            guard content.range(of: #"\bDoneButton\b"#, options: .regularExpression) != nil,
+                  let braces = item.braces else { continue }
+            let after = braces.upperBound < source.code.count ? String(source.code[(braces.upperBound + 1)...]) : ""
+            if after.range(of: #"\A\s*\.\s*sharedBackgroundVisibility\(\s*\.hidden\s*\)"#,
+                           options: .regularExpression) == nil {
+                found.append(Problem(line: item.line,
+                                     reason: "Done draws its own fill; add .sharedBackgroundVisibility(.hidden) "
+                                        + "so the toolbar draws no glass ring around it"))
             }
         }
         for rule in codeRules {
@@ -402,6 +427,22 @@ enum ContrastLint {
         guard at >= 0, source.code[at] == "{" else { return false }
         let before = String(source.code[..<at])
         return before.range(of: #"\bif\s+chosen\s*\z"#, options: .regularExpression) != nil
+    }
+
+    /// Every `ToolbarItem`, with a placement or with none: its arguments,
+    /// the line it starts on, and its content's braces.
+    static func toolbarItems(in source: SwiftSource) -> [(arguments: String, line: Int, braces: Range<Int>?)] {
+        var items = source.calls(named: ["ToolbarItem"]).map {
+            (arguments: $0.arguments, line: $0.line, braces: source.trailingClosureBraces(of: $0))
+        }
+        let code = String(source.code)
+        var at = code.startIndex
+        while let match = code.range(of: #"\bToolbarItem\s*\{"#, options: .regularExpression, range: at..<code.endIndex) {
+            at = match.upperBound
+            let offset = code.distance(from: code.startIndex, to: match.lowerBound)
+            items.append((arguments: "", line: source.line(at: offset), braces: source.braces(after: offset)))
+        }
+        return items
     }
 
     /// True when `offset` is after `struct name` with no other type

@@ -5,8 +5,20 @@ import Testing
 /// The package's tests build for iOS too, so a test that reaches for AppKit
 /// must sit behind a Mac-only `#if`.
 enum PlatformGate {
-    /// AppKit names that don't exist on iOS.
-    static let appKitOnly = #"\bNS(?:Window|HostingView|HostingController|View|Image|App|Application|Screen|Color|Font|Event)\b"#
+    /// Foundation names that exist on iOS too. Every other `NS` name is
+    /// taken for AppKit, so a new AppKit type is caught without anyone
+    /// adding it to a list; a Foundation name the tests come to need is
+    /// added here.
+    static let safeOnIOS: Set<String> = [
+        "NSArray", "NSAttributedString", "NSCache", "NSCondition", "NSData", "NSDate", "NSDictionary",
+        "NSError", "NSLocale", "NSLock", "NSMakeRange", "NSMutableAttributedString", "NSMutableString",
+        "NSNotFound", "NSNull", "NSNumber", "NSObject", "NSPredicate", "NSRange", "NSRecursiveLock",
+        "NSRegularExpression", "NSSet", "NSString", "NSTemporaryDirectory", "NSTextCheckingResult",
+        "NSURL", "NSUUID",
+    ]
+
+    /// Any `NS` name, such as `NSWindow` or `NSViewController`.
+    static let nsName = #"\bNS[A-Z]\w*"#
 
     /// True when the `#if` condition holds only on the Mac: every `||` arm
     /// is `os(macOS)` or `canImport(AppKit)`, and nothing is turned with
@@ -37,7 +49,7 @@ enum PlatformGate {
     static func ungated(in text: String, file: String) -> [String] {
         let source = SwiftSource(text)
         let lines = String(source.code).components(separatedBy: "\n")
-        let regex = try! NSRegularExpression(pattern: appKitOnly)
+        let regex = try! NSRegularExpression(pattern: nsName)
         // One entry per open `#if`: whether the branch we are in is Mac-only.
         var branches: [Bool] = []
         var problems: [String] = []
@@ -59,10 +71,13 @@ enum PlatformGate {
                 _ = branches.popLast()
                 continue
             }
+            guard !branches.contains(true) else { continue }
             let range = NSRange(line.startIndex..., in: line)
-            if !branches.contains(true), let match = regex.firstMatch(in: line, range: range) {
+            for match in regex.matches(in: line, range: range) {
                 let name = (line as NSString).substring(with: match.range)
-                problems.append("\(file):\(index + 1): \(name) is AppKit only; put it behind #if os(macOS)")
+                if safeOnIOS.contains(name) { continue }
+                problems.append("\(file):\(index + 1): \(name) is AppKit only; put it behind #if os(macOS), "
+                    + "or add it to PlatformGate.safeOnIOS if it is Foundation and exists on iOS")
             }
         }
         return problems
@@ -95,6 +110,10 @@ struct PlatformGateTests {
             "#if os(macOS) || os(iOS)\nlet window = NSWindow()\n#endif",
             "#if canImport(AppKit) || canImport(UIKit)\nlet image = NSImage()\n#endif",
             "#if os(iOS)\nlet a = 1\n#elseif !canImport(AppKit)\nlet image = NSImage()\n#endif",
+            // Any AppKit name, not only the ones someone thought to list.
+            "let controller = NSViewController()",
+            "NSPasteboard.general.clearContents()",
+            "let range = NSRange(location: 0, length: 1); let board = NSPasteboard.general",
         ]
         for text in wrong {
             #expect(!PlatformGate.ungated(in: text, file: "Wrong.swift").isEmpty, "missed: \(text)")
@@ -110,6 +129,7 @@ struct PlatformGateTests {
             "let note = \"NSHostingView, in words\"",
             "let range = NSRange(location: 0, length: 1)",
             "let regex = try NSRegularExpression(pattern: \"a\")",
+            "let lock = NSLock(); let text = NSString(string: \"a\")",
         ]
         for text in right {
             #expect(PlatformGate.ungated(in: text, file: "Right.swift").isEmpty, "flagged: \(text)")

@@ -798,6 +798,60 @@ struct WarmthTests {
                            options: .regularExpression) != nil, "comes back before it speaks")
     }
 
+    /// Left the chat, the reply landed, then back to the same chat: the
+    /// reply is in the chat but is not read aloud. This is the chosen
+    /// behaviour, not an accident, so it is pinned here on its own.
+    @Test("Leave, land, return: kept in the chat, not read")
+    func leaveLandReturnIsNotRead() async {
+        let gate = Gate()
+        let controller = ChatController(brand: brand, model: GatedModel(gate: gate),
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
+        controller.submit("Plan my day")
+        ChatView.left(controller)
+        await gate.release()
+        await settle(controller)
+        ChatView.cameBack(controller)
+        #expect(controller.conversation.turns.last?.text == "Here's a plan", "kept in the chat")
+        #expect(ChatView.arrival(for: controller, covered: false) == .nothing, "not read on return")
+        #expect(ChatView.replyLanded(in: controller, covered: false) == nil)
+    }
+
+    /// Left the chat while the reply was coming, back before it landed: it
+    /// lands in front of them, so it is read as it lands, once.
+    @Test("Leave, return, land: read as it lands")
+    func leaveReturnLandIsRead() async {
+        let gate = Gate()
+        let controller = ChatController(brand: brand, model: GatedModel(gate: gate),
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
+        controller.submit("Plan my day")
+        ChatView.left(controller)
+        ChatView.cameBack(controller)
+        #expect(ChatView.arrival(for: controller, covered: false) == .thinking)
+        await gate.release()
+        await settle(controller)
+        #expect(ChatView.replyLanded(in: controller, covered: false) == "Here's a plan", "read as it lands")
+        #expect(ChatView.replyLanded(in: controller, covered: false) == nil, "and only once")
+    }
+
+    /// Left the chat for Today, then a line sent from Today: a new send, so
+    /// its reply is heard when the chat opens, even if it landed first.
+    @Test("Leave, then send from Today: the new reply is read when the chat opens")
+    func sendFromTodayAfterLeavingIsRead() async {
+        let gate = Gate()
+        let controller = ChatController(brand: brand, model: GatedModel(gate: gate),
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
+        controller.submit("Plan my day")
+        ChatView.left(controller)
+        await gate.release()
+        await settle(controller)
+        #expect(HomeView.sendsFromToday("And tomorrow", chat: controller))
+        await gate.release()
+        await settle(controller)
+        ChatView.cameBack(controller)
+        #expect(ChatView.arrival(for: controller, covered: false) == .reply("Here's a plan"))
+        #expect(ChatView.arrival(for: controller, covered: false) == .nothing, "once")
+    }
+
     /// A reply a chat on screen saw land is never read again on arrival.
     @Test func aReplySeenLandingIsNotReadAgain() async {
         let controller = ChatController(brand: brand, model: LocalStubModel(),

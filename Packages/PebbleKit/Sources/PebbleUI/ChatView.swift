@@ -306,17 +306,21 @@ public struct ChatView: View {
         return .nothing
     }
 
-    /// The person left the chat, back to Today or another place. A reply
-    /// they walked away from stays in the chat but is never read aloud
-    /// later, when they come back for something else: the one unheard now
-    /// is dropped, and so is the one still on its way.
+    /// The person left the chat: back to Today, to another place, or to
+    /// memory over it on the iPad. A reply that lands while they are away
+    /// stays in the chat but isn't read aloud later, even when they come
+    /// back to this same chat. One still on its way when they come back is
+    /// read as it lands. A new send, from the chat or from Today, is heard
+    /// as usual. This is decided, and the tests that start with "Leave"
+    /// pin it.
     static func left(_ controller: ChatController) {
         controller.leftChat()
     }
 
-    /// The person came back to the chat. A reply still on its way when they
-    /// left will land in front of them, so VoiceOver reads it as it lands,
-    /// as a sighted person sees it.
+    /// The person came back to the chat. A reply still on its way will land
+    /// in front of them, so VoiceOver reads it as it lands, as a sighted
+    /// person sees it. One that already landed while they were away is not
+    /// read.
     static func cameBack(_ controller: ChatController) {
         controller.cameBack()
     }
@@ -639,7 +643,8 @@ final class ChatController: ObservableObject {
     /// True for a line that says the words are back in the composer, so it
     /// goes once the person clears them.
     nonisolated static func pointsAtTheDraft(_ failure: String) -> Bool {
-        [FirstConversation.couldNotAnswer, CloudWords.notSent, CloudWords.notesUnreadable].contains(failure)
+        [FirstConversation.couldNotAnswer, CloudWords.notSent, CloudWords.turnedOff, CloudWords.notesUnreadable]
+            .contains(failure)
     }
 
     /// The words that weren't sent, back in the composer. Anything typed
@@ -696,8 +701,10 @@ final class ChatController: ObservableObject {
     }
 
     /// The chat went off screen. The reply nobody heard is dropped, and one
-    /// still coming lands quietly. A new send is heard as usual. Failures
-    /// stay, since Today reads them above its own composer.
+    /// still coming lands quietly unless they come back first. A reply that
+    /// lands while they are away stays in the chat but isn't read aloud
+    /// later. A new send is heard as usual. Failures stay, since Today reads
+    /// them above its own composer.
     func leftChat() {
         unheardReply = nil
         if isReplying { leftGeneration = replyGeneration }

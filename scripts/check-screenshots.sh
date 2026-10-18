@@ -7,6 +7,13 @@
 # as well). Each scene asked for must exist, each file must exist, and
 # scripts/fill-check.swift must find the fill in it, so a gray selection, a
 # count in the system's gray, or a Done drawn as orange words on glass fails.
+#
+# 1x rendering is covered only through a downscale. SnapshotMode draws
+# every Mac shot at 2x, whatever the display, so no shot here is ever drawn
+# at 1x. The self-test below halves the 2x Mac sheets with sips and checks
+# that fill-check, which counts shares of the region, still passes; that
+# proves the check doesn't depend on scale, not that the app draws right
+# at 1x.
 # Usage: scripts/check-screenshots.sh [dir]   (default: build/screenshots)
 set -eu
 
@@ -22,7 +29,8 @@ if [ ! -f "$shots_script" ]; then
 fi
 known="$(sed -n 's/^    case \([a-zA-Z][a-zA-Z, ]*\)$/\1/p' Packages/PebbleKit/Sources/PebbleUI/ShowcaseScene.swift | tr ',' ' ')"
 if [ -z "$known" ]; then
-  echo "check-screenshots: found no scenes in ShowcaseScene.swift" >&2
+  echo "check-screenshots: found no scenes in ShowcaseScene.swift; only bare 4-space \"case a, b\" lines are read," \
+    "with no raw value or trailing comment" >&2
   exit 1
 fi
 asked="$( (grep -oE 'shots="[^"]*"' "$shots_script" | sed 's/^shots="//; s/"$//' | tr ' ' '\n' | sed 's/:.*//'
@@ -86,20 +94,28 @@ trap 'rm -rf "$work"' EXIT
 # Self-test: the fill check must not depend on the scale a shot was taken
 # at. A Mac at 1x once drew this sheet at half the pixels and failed a
 # check that counted pixels. A 1x copy of each passing Mac sheet must pass
-# as well, and a 1x shot of the same size with no Done in it must fail.
+# as well, and the same 1x copy with its colors turned gray, as a Done
+# drawn gray would be, must fail on the same region.
+gray_profile="/System/Library/ColorSync/Profiles/Generic Gray Gamma 2.2 Profile.icc"
+if [ ! -f "$gray_profile" ]; then
+  echo "check-screenshots: $gray_profile is missing, so the gray Done can't be made" >&2
+  exit 1
+fi
 for name in mac-sheet-dark mac-sheet; do
   w="$(sips -g pixelWidth "$dir/$name.png" | awk '/pixelWidth/ { print $2 }')"
   h="$(sips -g pixelHeight "$dir/$name.png" | awk '/pixelHeight/ { print $2 }')"
   sips -z "$((h / 2))" "$((w / 2))" "$dir/$name.png" --out "$work/$name.png" >/dev/null
   swift scripts/fill-check.swift "$work/$name.png" 0.6 0.8 1 1
-  # The sheet's top left, where Done never is, stretched to the whole shot.
-  sips -c "$((h / 4))" "$((w / 4))" --cropOffset 0 0 "$work/$name.png" --out "$work/$name-empty.png" >/dev/null
-  sips -z "$((h / 2))" "$((w / 2))" "$work/$name-empty.png" >/dev/null
-  if swift scripts/fill-check.swift "$work/$name-empty.png" 0.6 0.8 1 1 2>/dev/null; then
-    echo "check-screenshots: fill-check passed a 1x $name with no Done in it" >&2
+  sips --matchTo "$gray_profile" "$work/$name.png" --out "$work/$name-gray.png" >/dev/null
+  if swift scripts/fill-check.swift "$work/$name-gray.png" 0.6 0.8 1 1 2>/dev/null; then
+    echo "check-screenshots: fill-check passed a 1x $name with its Done turned gray" >&2
     exit 1
   fi
 done
+
+# The fill check's own cases: white words only inside a patch of fill,
+# never the background between two, and a bad region fails with a reason.
+swift scripts/fill-check.swift --self-test
 
 sh scripts/shot-lib-test.sh
 echo "check-screenshots: the fill shows, with white words on it"
