@@ -183,6 +183,11 @@ stays on Today to say it may be done, naming nothing the task held. A
 scripted task's card says "Example", like every other example. A real
 task that was going when the app closed comes back stopped and says so
 ("I stopped when the app closed, so I didn't finish this."), never done.
+A digest whose notes change before it is kept stops and says so ("One of
+the notes I was tidying changed, so I stopped. Nothing was kept."), since a
+yes would be for other words. Forgetting a note never says "Gone" while a
+digest the person changed may still hold its words: the line says they are
+still there.
 
 ### Confirmations
 

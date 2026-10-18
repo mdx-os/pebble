@@ -376,6 +376,16 @@ public final class AskFirst: @unchecked Sendable {
         return yesAt - open.askedAt <= window && since >= .zero && since <= Self.yesGrace
     }
 
+    #if DEBUG
+    /// Everything the rule stores, for tests to look inside: proof that it
+    /// keeps only ids and times. Never used outside tests.
+    package var storedForTests: [Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        return [pending, withdrawn, window]
+    }
+    #endif
+
     /// The one test for whether a question is still open.
     private func isOpen(_ open: Open) -> Bool {
         let age = now() - open.askedAt

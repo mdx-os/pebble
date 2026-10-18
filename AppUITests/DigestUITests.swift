@@ -63,6 +63,103 @@ final class DigestUITests: XCTestCase {
         closeMemory(app)
     }
 
+    private func launch() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["-pebble.onboarding.finished", "YES", "-pebble.agent.displayName", "Pip"]
+        app.launch()
+        return app
+    }
+
+    /// Forgets the note with exactly these words on the memory screen,
+    /// through its own Forget button and the question that follows.
+    private func forget(_ text: String, _ app: XCUIApplication) {
+        let words = app.staticTexts[text].firstMatch
+        XCTAssertTrue(words.waitForExistence(timeout: 5))
+        let named = NSPredicate(format: "label == %@", "Forget this")
+        let rows = app.buttons.matching(named).allElementsBoundByIndex
+        // The row's own button: the one nearest its words.
+        let button = rows.min { abs($0.frame.midY - words.frame.midY) < abs($1.frame.midY - words.frame.midY) }
+        XCTAssertNotNil(button)
+        button?.tap()
+        XCTAssertTrue(app.staticTexts["Forget this note?"].firstMatch.waitForExistence(timeout: 5))
+        // The question's own button: the one with this name not on a row.
+        // On iPhone it is an action sheet, on iPad a popover.
+        let frames = rows.map(\.frame)
+        var confirm: XCUIElement?
+        for _ in 0..<20 where confirm == nil {
+            confirm = (app.sheets.buttons.matching(named).allElementsBoundByIndex
+                       + app.popovers.buttons.matching(named).allElementsBoundByIndex
+                       + app.buttons.matching(named).allElementsBoundByIndex.filter { !frames.contains($0.frame) })
+                .first { $0.isHittable }
+            if confirm == nil { RunLoop.current.run(until: Date() + 0.25) }
+        }
+        if confirm == nil { add(XCTAttachment(string: app.debugDescription)) }
+        XCTAssertNotNil(confirm)
+        confirm?.tap()
+    }
+
+    /// The digest note on the memory screen.
+    private func digests(_ app: XCUIApplication) -> XCUIElementQuery {
+        app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "This week in your notes"))
+    }
+
+    /// Runs the digest to its question on Today.
+    private func startDigest(_ app: XCUIApplication) -> XCUIElement {
+        let offer = app.buttons["Tidy my notes into a short weekly digest"].firstMatch
+        XCTAssertTrue(offer.waitForExistence(timeout: 10))
+        offer.tap()
+        let approve = app.buttons["Check and approve"].firstMatch
+        XCTAssertTrue(approve.waitForExistence(timeout: 15))
+        return approve
+    }
+
+    /// A kept digest, then a note it quoted forgotten on the memory screen:
+    /// its line goes from the digest note, the rest stays, and only then
+    /// does the screen say it is gone.
+    func testForgettingAQuotedNoteTakesItsLineOutOfTheKeptDigest() throws {
+        let app = launch()
+        freshNotes(app)
+        startDigest(app).tap()
+        let yes = app.buttons["Yes, go ahead"].firstMatch
+        XCTAssertTrue(yes.waitForExistence(timeout: 5))
+        yes.tap()
+        XCTAssertTrue(app.staticTexts["Your weekly digest is in your notes."].firstMatch.waitForExistence(timeout: 5))
+
+        openMemory(app)
+        XCTAssertTrue(digests(app).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(digests(app).firstMatch.label.contains("Dentist on Thursday at 3"))
+        forget("Dentist on Thursday at 3", app)
+        XCTAssertTrue(app.staticTexts["Gone. I no longer have it."].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(digests(app).count, 1)
+        let digest = digests(app).firstMatch.label
+        XCTAssertFalse(digest.contains("Dentist"), "the digest still holds: \(digest)")
+        XCTAssertTrue(digest.contains("Sam's birthday is May 14. Loves lemon cake."))
+        keep("forgot-quoted-note", app)
+        closeMemory(app)
+    }
+
+    /// A note forgotten while its digest waits for a yes: the question
+    /// goes, the card says why it stopped, and nothing is kept.
+    func testForgettingANoteWhileTheQuestionWaitsKeepsNothing() throws {
+        let app = launch()
+        freshNotes(app)
+        let approve = startDigest(app)
+        openMemory(app)
+        forget("Dentist on Thursday at 3", app)
+        XCTAssertTrue(app.staticTexts["Gone. I no longer have it."].firstMatch.waitForExistence(timeout: 5))
+        closeMemory(app)
+
+        let stopped = app.staticTexts["One of the notes I was tidying changed, so I stopped. Nothing was kept."].firstMatch
+        XCTAssertTrue(stopped.waitForExistence(timeout: 5))
+        XCTAssertFalse(approve.exists)
+        XCTAssertFalse(app.staticTexts["Keep this in What I remember?"].exists)
+        keep("stopped-on-change", app)
+        openMemory(app)
+        XCTAssertTrue(app.staticTexts["Sam's birthday is May 14. Loves lemon cake."].waitForExistence(timeout: 5))
+        XCTAssertEqual(digests(app).count, 0, "nothing is kept")
+        closeMemory(app)
+    }
+
     /// The digest runs on Today, asks before it keeps anything, and Not now
     /// keeps nothing. A second run with a yes keeps exactly the digest.
     func testTheDigestAsksFirstAndKeepsNothingWithoutAYes() throws {

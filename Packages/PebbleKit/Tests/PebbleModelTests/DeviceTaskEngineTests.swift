@@ -1,6 +1,7 @@
 import Foundation
 import PebbleCore
 import PebbleModel
+import SourceScan
 import Testing
 
 /// A wall clock and a monotonic clock that tests move by hand.
@@ -85,18 +86,33 @@ struct DeviceTaskEngineTests {
     /// there is: its place is the model's, every time.
     @Test func theFactoryTakesThePlaceFromTheModel() throws {
         let first = try engine()
-        let second = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes))
+        let second = try #require(OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, rule: rule, pace: nil))
         #expect(first.place == LocalStubModel().privacyPlace)
         #expect(second.place == LocalStubModel().privacyPlace)
         #expect(first.place.staysOnDevice)
     }
 
-    @Test func theEngineNeverReachesTheNetwork() throws {
-        let file = URL(fileURLWithPath: #filePath)
+    /// A spot check only: the engine's own files, and the task they run,
+    /// name no way to reach the network. Its module also holds the cloud
+    /// model, so this can't prove more than these files.
+    @Test func theEngineFilesNameNoNetworking() throws {
+        let sources = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Sources/PebbleModel/DeviceTaskEngine.swift")
-        let engine = try String(contentsOf: file, encoding: .utf8)
-        for word in ["URLSession", "URLRequest", "http"] { #expect(!engine.contains(word), "\(word) in the engine") }
+            .appendingPathComponent("Sources")
+        // "Module.Type" gives each file's folder and name, so no path is
+        // spelled out here.
+        let files = [String(reflecting: DeviceTaskEngine.self), String(reflecting: OnDeviceTasks.self),
+                     String(reflecting: DigestTask.self)].map { name in
+            let parts = name.split(separator: ".")
+            return sources.appendingPathComponent(String(parts[0])).appendingPathComponent(parts[1] + ".swift")
+        }
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for word in ["URLSession", "URLRequest", "http", "import Network", "FoundationNetworking", "NWConnection",
+                         "CFStream", "Socket"] {
+                #expect(!text.contains(word), "\(word) in \(file.lastPathComponent)")
+            }
+        }
     }
 
     // MARK: Asking first
@@ -217,11 +233,15 @@ struct DeviceTaskEngineTests {
     /// shows, and a digest only once it has been kept.
     @Test func theFileHoldsNoDraft() throws {
         let engine = try engine()
-        _ = try runToQuestion(engine)
+        let (_, question) = try runToQuestion(engine)
+        #expect(question.action.details.contains("(You told me)"))
         let text = try String(contentsOf: tasksFile, encoding: .utf8)
-        #expect(!text.contains("Dentist"))
-        #expect(!text.contains("lemon cake"))
+        for words in Self.draftWords { #expect(!text.contains(words), "\(words) in the file") }
     }
+
+    /// Words of the notes and of a digest written from them.
+    static let draftWords = ["Dentist", "Thursday", "lemon cake", "Sam's birthday", "May 14", DigestWords.heading,
+                             MemorySource.toldMe.label, MemorySource.fromApp("Calendar").label, "• "]
 
     /// Keeps a digest and returns it with the engine, the task's id and
     /// the note it became.
@@ -260,32 +280,77 @@ struct DeviceTaskEngineTests {
         let back = try #require(again.tasks.first { $0.id == id })
         #expect(back.result == nil)
         #expect(back.step == DigestWords.removed)
-        for text in [try String(contentsOf: tasksFile, encoding: .utf8), "\(back)"] {
-            #expect(!text.contains("Dentist"))
-            #expect(!text.contains("lemon cake"))
-            #expect(!text.contains(DigestWords.heading))
+        // The file, the card, and everything either engine holds in memory.
+        let after = try String(contentsOf: tasksFile, encoding: .utf8)
+        for (place, held) in [("file", StoredWords(in: after)), ("card", StoredWords(in: back)),
+                              ("engine", StoredWords(in: engine)), ("engine after relaunch", StoredWords(in: again))] {
+            #expect(!held.texts.isEmpty || place == "file", "\(place): nothing read")
+            for words in ["Dentist", "Thursday", "lemon cake", "Sam's birthday", DigestWords.heading] {
+                #expect(!held.contains(words), "\(words) in the \(place)")
+            }
         }
+        // The probe does reach what the engine holds.
+        #expect(StoredWords(in: engine).contains(DigestTask.title))
     }
 
-    /// A note the digest quoted, forgotten by a writer that leaves the
-    /// digest note alone, takes the digest's words off the card, and the
-    /// card says why.
-    @Test func forgettingOneQuotedNoteTakesTheWordsOffTheCard() throws {
+    /// The last thing observers were told about a task.
+    func lastHeard(_ heard: Heard, _ id: String) -> AgentTask? {
+        heard.all.last?.tasks.first { $0.id == id }
+    }
+
+    /// A note the digest quoted, forgotten by any writer, through the store
+    /// alone, leaves no word of it in any note: its line goes from the
+    /// kept digest, the card shows the rest, and observers hear it. It
+    /// stays gone after a relaunch.
+    @Test func forgettingAQuotedNoteAnywhereTakesItsLineOut() throws {
         let (engine, id, kept) = try keepDigest()
         let heard = Heard()
         let watch = engine.observe { heard.add($0) }
         let cake = try #require(notes.notes().first { $0.text.contains("lemon cake") && $0.id != kept.id })
         #expect(try notes.forget(cake.id))
-        engine.refresh()
-        let card = try #require(engine.tasks.first { $0.id == id })
-        #expect(card.result == nil)
-        #expect(card.step == DigestWords.hiddenQuote)
-        // Observers hear it, so an open card follows.
-        #expect(heard.all.count == 2)
-        #expect(heard.all.last?.tasks.first { $0.id == id }?.result == nil)
+        let rest = DigestWords.heading + ".\n• Dentist on Thursday at 3 (From Calendar)"
+        #expect(!notes.notes().contains { $0.text.contains("lemon cake") })
+        #expect(notes.notes().first { $0.id == kept.id }?.text == rest)
+        #expect(engine.tasks.first { $0.id == id }?.result == rest)
+        #expect(lastHeard(heard, id)?.result == rest)
         watch.cancel()
         let again = try self.engine()
-        #expect(again.tasks.first { $0.id == id }?.result == nil)
+        #expect(!notes.notes().contains { $0.text.contains("lemon cake") })
+        #expect(again.tasks.first { $0.id == id }?.result == rest)
+    }
+
+    /// The app closing between forgetting a note and taking its line out,
+    /// with no engine to hear it, leaves the line only until the next
+    /// launch, which takes it out.
+    @Test func aLineLeftWhenTheAppClosedGoesAtLaunch() throws {
+        let id: String, kept: MemoryNote
+        do {
+            let (engine, keptID, note) = try keepDigest()
+            id = keptID
+            kept = note
+            #expect(engine.tasks.first?.result == kept.text)
+        }
+        // The engine is gone, so nothing hears this.
+        let cake = try #require(notes.notes().first { $0.text.contains("lemon cake") && $0.id != kept.id })
+        #expect(try notes.forget(cake.id))
+        #expect(notes.notes().contains { $0.text.contains("lemon cake") })
+        let again = try self.engine()
+        #expect(!notes.notes().contains { $0.text.contains("lemon cake") })
+        #expect(again.tasks.first { $0.id == id }?.result == DigestWords.heading + ".\n• Dentist on Thursday at 3 (From Calendar)")
+    }
+
+    /// Changing a quoted note takes its earlier words out of the digest
+    /// too, whoever changes it, as the notes promise the old words don't
+    /// stay. The new words are never added: the yes wasn't for them.
+    @Test func changingAQuotedNoteTakesItsEarlierWordsOut() throws {
+        let (engine, id, kept) = try keepDigest()
+        let sam = try #require(notes.notes().first { $0.text.hasPrefix("Sam's") })
+        _ = try notes.edit(sam.id, to: "Sam's birthday is May 15")
+        let rest = DigestWords.heading + ".\n• Dentist on Thursday at 3 (From Calendar)"
+        #expect(notes.notes().first { $0.id == kept.id }?.text == rest)
+        #expect(!notes.notes().contains { $0.text.contains("lemon cake") })
+        #expect(engine.forgetQuotes(of: sam) == .forgotten)
+        #expect(engine.tasks.first { $0.id == id }?.result == rest)
     }
 
     // MARK: Forgetting a note the digest quoted
@@ -295,17 +360,21 @@ struct DeviceTaskEngineTests {
     /// shows again, and once its last line goes the digest goes too, even
     /// after a relaunch.
     @Test func forgettingAQuotedNoteTakesItsLineOutOfTheDigestNote() throws {
-        let (engine, id, kept) = try keepDigest()
-        let cake = try #require(notes.notes().first { $0.text.contains("lemon cake") && $0.id != kept.id })
-        #expect(try notes.forget(cake.id))
-        #expect(engine.forgetQuotes(of: cake) == .forgotten)
-        #expect(!notes.notes().contains { $0.text.contains("lemon cake") })
-        let digest = try #require(notes.notes().first { $0.id == kept.id })
-        #expect(digest.text == DigestWords.heading + ".\n• Dentist on Thursday at 3 (From Calendar)")
-        #expect(engine.tasks.first { $0.id == id }?.result == digest.text)
-        #expect(engine.tasks.first { $0.id == id }?.step == DigestWords.done)
+        let id: String = try {
+            let (engine, id, kept) = try keepDigest()
+            let cake = try #require(notes.notes().first { $0.text.contains("lemon cake") && $0.id != kept.id })
+            #expect(try notes.forget(cake.id))
+            #expect(engine.forgetQuotes(of: cake) == .forgotten)
+            #expect(!notes.notes().contains { $0.text.contains("lemon cake") })
+            let digest = try #require(notes.notes().first { $0.id == kept.id })
+            #expect(digest.text == DigestWords.heading + ".\n• Dentist on Thursday at 3 (From Calendar)")
+            #expect(engine.tasks.first { $0.id == id }?.result == digest.text)
+            #expect(engine.tasks.first { $0.id == id }?.step == DigestWords.done)
+            return id
+        }()
 
-        // Which line is whose comes back after a relaunch too.
+        // Which line is whose comes back after a relaunch too, with only
+        // the new engine to take it out.
         let again = try self.engine()
         let dentist = try #require(notes.notes().first { $0.text.hasPrefix("Dentist") })
         #expect(try notes.forget(dentist.id))
@@ -337,6 +406,177 @@ struct DeviceTaskEngineTests {
         #expect(notes.notes().first { $0.id == kept.id }?.text == mine)
         #expect(engine.tasks.first { $0.id == id }?.result == nil)
         #expect(engine.tasks.first { $0.id == id }?.step == DigestWords.hiddenQuote)
+    }
+
+    /// A digest the person changed that keeps only part of a note, in its
+    /// own words or in the digest's shape, is never guessed at: it is left
+    /// as they made it and said to still hold the note, then and after a
+    /// relaunch.
+    @Test(arguments: [
+        DigestWords.heading + ".\n• Sam's birthday is May 14 (You told me)\n• Dentist on Thursday at 3 (From Calendar)",
+        "My week: Sam's birthday is May 14. Also the dentist.",
+    ])
+    func aDigestKeepingPartOfANoteStillHoldsIt(_ mine: String) throws {
+        let (engine, id, kept) = try keepDigest()
+        _ = try notes.edit(kept.id, to: mine)
+        let sam = try #require(notes.notes().first { $0.text.hasPrefix("Sam's") })
+        #expect(try notes.forget(sam.id))
+        #expect(engine.forgetQuotes(of: sam) == .stayed)
+        #expect(notes.notes().first { $0.id == kept.id }?.text == mine)
+        #expect(engine.tasks.first { $0.id == id }?.step == DigestWords.hiddenQuote)
+        // Another note out of the same digest: still theirs, still said so.
+        let again = try self.engine()
+        let dentist = try #require(notes.notes().first { $0.text.hasPrefix("Dentist") })
+        #expect(try notes.forget(dentist.id))
+        #expect(again.forgetQuotes(of: dentist) == .stayed)
+        #expect(notes.notes().first { $0.id == kept.id }?.text == mine)
+    }
+
+    // MARK: A digest not yet kept
+
+    /// A note forgotten or changed while the digest drawn from it waits for
+    /// a yes: the question is withdrawn, the task stops and says why, and
+    /// a yes given for the earlier words keeps nothing.
+    @Test(arguments: [false, true])
+    func aNoteChangingUnderAQuestionStopsIt(changed: Bool) throws {
+        let engine = try engine()
+        let (task, question) = try runToQuestion(engine)
+        let dentist = try #require(notes.notes().first { $0.text.hasPrefix("Dentist") })
+        if changed { _ = try notes.edit(dentist.id, to: "Dentist on Friday at 4") } else { _ = try notes.forget(dentist.id) }
+        let before = notes.notes()
+        let stopped = try #require(engine.tasks.first { $0.id == task.id })
+        #expect(stopped.state == .stopped)
+        #expect(stopped.step == DigestWords.noteChanged)
+        #expect(stopped.question == nil)
+        #expect(stopped.wrapUp?.notDone == [DigestTask.saveTodo])
+        #expect(rule.isClosed(question))
+        #expect(rule.wasWithdrawn(question))
+        // The yes for the earlier words does nothing.
+        #expect(rule.sayYes(to: question) == .timedOut)
+        #expect(engine.resume(task.id, with: question.approve()) == .refused)
+        #expect(notes.notes() == before)
+        #expect(!notes.notes().contains { DigestTask.isDigest($0) })
+    }
+
+    /// The same while the notes are being read and the digest written.
+    @Test(arguments: [1, 2])
+    func aNoteGoingWhileTheDigestIsWrittenStopsIt(steps: Int) throws {
+        let engine = try engine()
+        let id = engine.start(DigestTask.request)
+        for _ in 0..<steps { engine.runPending() }
+        let sam = try #require(notes.notes().first { $0.text.hasPrefix("Sam's") })
+        _ = try notes.forget(sam.id)
+        for _ in 0..<3 { engine.runPending() }
+        let stopped = try #require(engine.tasks.first { $0.id == id })
+        #expect(stopped.state == .stopped)
+        #expect(stopped.step == DigestWords.noteChanged)
+        #expect(stopped.question == nil)
+        #expect(!notes.notes().contains { DigestTask.isDigest($0) })
+    }
+
+    /// A note nobody's digest drew from changes nothing under a question.
+    @Test func anOldNoteChangingLeavesTheQuestionOpen() throws {
+        let engine = try engine()
+        let (task, question) = try runToQuestion(engine)
+        let old = try #require(notes.notes().first { $0.text.hasPrefix("Old note") })
+        _ = try notes.forget(old.id)
+        #expect(engine.tasks.first { $0.id == task.id }?.state == .waitingOnYou)
+        #expect(!rule.isClosed(question))
+    }
+
+    // MARK: A digest no task points to
+
+    /// How a kept digest's task leaves the engine.
+    enum LetGo {
+        case dismiss, ageOut
+        /// A new engine, after `prepare` does something to the task file.
+        case relaunch(() throws -> Void)
+    }
+
+    /// Keeps a digest, lets its task go, and forgets a note it quoted on
+    /// the memory screen's path. With the task gone, which line is whose
+    /// isn't known, so the words are only looked for, and found, and never
+    /// called gone.
+    func forgetAfterLettingGo(_ how: LetGo) throws {
+        var engine: DeviceTaskEngine?
+        let (id, kept): (String, MemoryNote) = try {
+            let (made, id, kept) = try keepDigest()
+            engine = made
+            return (id, kept)
+        }()
+        switch how {
+        case .dismiss:
+            #expect(engine?.dismiss(id) == true)
+        case .ageOut:
+            for _ in 0..<DeviceTaskEngine.endedLimit { engine?.start(TaskRequest(title: "Book a table")) }
+        case .relaunch(let prepare):
+            // The engine that kept it is gone, so it can't clean up.
+            engine = nil
+            try prepare()
+            engine = try self.engine()
+        }
+        let left = try #require(engine)
+        #expect(!left.tasks.contains { $0.id == id })
+        let sam = try #require(notes.notes().first { $0.text.hasPrefix("Sam's") })
+        #expect(try notes.forget(sam.id))
+        #expect(left.forgetQuotes(of: sam) == .stayed)
+        #expect(notes.notes().first { $0.id == kept.id } == kept)
+    }
+
+    @Test func aDigestWhoseCardWasPutAwayIsNeverCalledClean() throws {
+        try forgetAfterLettingGo(.dismiss)
+    }
+
+    @Test func aDigestWhoseCardAgedOutIsNeverCalledClean() throws {
+        try forgetAfterLettingGo(.ageOut)
+    }
+
+    @Test(.enabled(if: getuid() != 0, "root can read a locked file"))
+    func aDigestFromATaskFileLeftUnreadIsNeverCalledClean() throws {
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: tasksFile.path) }
+        try forgetAfterLettingGo(.relaunch {
+            try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: tasksFile.path)
+        })
+    }
+
+    @Test func aDigestFromATaskFileThatCantBeReadIsNeverCalledClean() throws {
+        try forgetAfterLettingGo(.relaunch { try Data("not tasks".utf8).write(to: tasksFile) })
+    }
+
+    /// A digest a task file that couldn't be read may have known of, and
+    /// that the person changed past finding, is still not called clean.
+    @Test func aChangedDigestFromALostTaskFileIsNeverCalledClean() throws {
+        let (_, _, kept) = try keepDigest()
+        _ = try notes.edit(kept.id, to: "My week was busy.")
+        try Data("not tasks".utf8).write(to: tasksFile)
+        let engine = try engine()
+        let sam = try #require(notes.notes().first { $0.text.hasPrefix("Sam's") })
+        #expect(try notes.forget(sam.id))
+        #expect(engine.forgetQuotes(of: sam) == .stayed)
+        // Once everything is forgotten, nothing is left to fear.
+        engine.clear()
+        let dentist = try #require(notes.notes().first { $0.text.hasPrefix("Dentist") })
+        #expect(try notes.forget(dentist.id))
+        #expect(engine.forgetQuotes(of: dentist) == .notQuoted)
+    }
+
+    /// Notes that can't be read when a note's earlier words are named: it
+    /// says they stay, and takes them out at the next look that can read.
+    @Test(.enabled(if: getuid() != 0, "root can read a locked file"))
+    func earlierWordsNamedWhileTheNotesAreLockedGoOnceTheyOpen() throws {
+        let kept = try keepDigest().2
+        // Changed by a writer no engine hears, and the notes locked before
+        // the engine first looks, so it never saw the earlier words.
+        let sam = try #require(notes.notes().first { $0.text.hasPrefix("Sam's") })
+        _ = try MemoryStore(fileURL: notes.fileURL).edit(sam.id, to: "Sam's birthday is in May")
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: notes.fileURL.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: notes.fileURL.path) }
+        let engine = try engine()
+        #expect(engine.forgetQuotes(of: sam) == .stayed)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: notes.fileURL.path)
+        engine.refresh()
+        #expect(notes.notes().first { $0.id == kept.id }?.text == DigestWords.heading + ".\n• Dentist on Thursday at 3 (From Calendar)")
+        #expect(!notes.notes().contains { $0.text.contains("lemon cake") })
     }
 
     /// Notes changed by any writer, not just the memory screen, reach the
@@ -396,10 +636,22 @@ struct DeviceTaskEngineTests {
 
     /// Taking a note out keeps the digest within a note's length and its
     /// count of the rest right, and a digest with no line left goes.
+    /// Takes `gone` out of `written`, each line known from `week`.
+    func drop(_ gone: [MemoryNote], from written: DigestTask.Written, week: [MemoryNote]) -> DigestTask.Dropped {
+        DigestTask.dropping(Set(gone.map(\.id)), from: written.text, as: written,
+                            lines: Dictionary(uniqueKeysWithValues: week.map { ($0.id, DigestTask.line(for: $0)) }))
+    }
+
+    /// A full week: more notes than fit, so some are only counted.
+    var fullWeek: [MemoryNote] {
+        let now = clock.now()
+        return (0..<40).map { MemoryNote(text: "Note number \($0) " + String(repeating: "word ", count: 30),
+                                         savedAt: now - Double($0) * 3_600, source: .toldMe) }
+    }
+
     @Test func droppingANoteKeepsTheCountRight() throws {
         let now = clock.now()
-        let week = (0..<40).map { MemoryNote(text: "Note number \($0) " + String(repeating: "word ", count: 30),
-                                             savedAt: now - Double($0) * 3_600, source: .toldMe) }
+        let week = fullWeek
         let written = DigestTask.write(week, now: now)
         #expect(written.text == DigestTask.digest(of: week, now: now))
         #expect(written.quoted.count + written.more.count == 40)
@@ -407,19 +659,22 @@ struct DeviceTaskEngineTests {
 
         // One counted in the last line: the count goes down by one.
         let counted = try #require(week.first { $0.id == written.more.first })
-        guard case .edited(let fewer) = DigestTask.dropping(counted, from: written.text, as: written) else {
+        guard case .edited(let fewer) = drop([counted], from: written, week: week) else {
             Issue.record("not edited"); return
         }
         #expect(fewer.text.hasSuffix(DigestWords.andMore(written.more.count - 1)))
         #expect(fewer.text.count <= written.text.count)
         #expect(fewer.quoted == written.quoted)
 
-        // One with a line: the line goes and the count stays.
-        let shown = try #require(week.first { $0.id == written.quoted.first })
-        guard case .edited(let shorter) = DigestTask.dropping(shown, from: fewer.text, as: fewer) else {
+        // One with a line, from the middle: that line goes and the count stays.
+        let shown = try #require(week.first { $0.id == written.quoted[1] })
+        #expect(fewer.text.contains(DigestTask.line(for: shown)))
+        guard case .edited(let shorter) = drop([shown], from: fewer, week: week) else {
             Issue.record("not edited"); return
         }
-        #expect(!shorter.text.contains("Note number 0 "))
+        #expect(!shorter.text.contains(DigestTask.line(for: shown)))
+        #expect(!shorter.text.contains(String(shown.text.prefix(20))))
+        #expect(shorter.text.components(separatedBy: "\n").count == fewer.text.components(separatedBy: "\n").count - 1)
         #expect(shorter.text.hasSuffix(DigestWords.andMore(fewer.more.count)))
         #expect(shorter.text.count <= MemoryStore.maxLength)
 
@@ -427,13 +682,77 @@ struct DeviceTaskEngineTests {
         var left = shorter
         for id in shorter.quoted.dropLast() {
             let note = try #require(week.first { $0.id == id })
-            guard case .edited(let next) = DigestTask.dropping(note, from: left.text, as: left) else {
+            guard case .edited(let next) = drop([note], from: left, week: week) else {
                 Issue.record("not edited"); return
             }
             left = next
         }
         let last = try #require(week.first { $0.id == left.quoted.first })
-        #expect(DigestTask.dropping(last, from: left.text, as: left) == .emptied)
+        #expect(drop([last], from: left, week: week) == .emptied)
+    }
+
+    /// The last counted note going takes the count's line with it, never
+    /// leaving "And 0 more notes."
+    @Test func theLastCountedNoteTakesItsLineWithIt() throws {
+        let week = fullWeek
+        let written = DigestTask.write(week, now: clock.now())
+        let counted = written.more.compactMap { id in week.first { $0.id == id } }
+        guard case .edited(let one) = drop(Array(counted.dropFirst()), from: written, week: week) else {
+            Issue.record("not edited"); return
+        }
+        #expect(one.more.count == 1)
+        #expect(one.text.hasSuffix(DigestWords.andMore(1)))
+        guard case .edited(let none) = drop([counted[0]], from: one, week: week) else {
+            Issue.record("not edited"); return
+        }
+        #expect(none.more.isEmpty)
+        #expect(!none.text.contains("And 0"))
+        #expect(!none.text.contains("more note"))
+        #expect(none.text.components(separatedBy: "\n").last?.hasPrefix("• ") == true)
+    }
+
+    /// A line is taken out only once it is checked to be its note's, and
+    /// every other line too. Words moved between lines, a line changed
+    /// inside, or a line not known for a note that stays, leave the
+    /// digest alone.
+    @Test func aLineGoesOnlyOnceItIsCheckedToBeItsNotes() throws {
+        let now = clock.now()
+        let week = DigestTask.thisWeek(notes.notes(), now: now)
+        let written = DigestTask.write(week, now: now)
+        let (sam, dentist) = (week[0], week[1])
+        var lines = written.text.components(separatedBy: "\n")
+        #expect(lines[1] == DigestTask.line(for: sam))
+
+        // Moved: the dentist's words in Sam's line and Sam's in the dentist's.
+        lines.swapAt(1, 2)
+        let moved = DigestTask.Written(text: lines.joined(separator: "\n"), quoted: written.quoted, more: written.more)
+        #expect(drop([sam], from: moved, week: week) == .cantTell)
+        // Changed inside the line of the note that stays.
+        let changed = DigestTask.Written(text: written.text.replacingOccurrences(of: "Thursday", with: "Friday"),
+                                         quoted: written.quoted, more: written.more)
+        #expect(drop([sam], from: changed, week: week) == .cantTell)
+        // A note gone before its words were read: known by where it sits,
+        // once the rest check out.
+        #expect(DigestTask.dropping([sam.id], from: written.text, as: written,
+                                    lines: [dentist.id: DigestTask.line(for: dentist)])
+                == .edited(DigestTask.Written(text: DigestWords.heading + ".\n" + DigestTask.line(for: dentist),
+                                              quoted: [dentist.id], more: [])))
+        // But never for a note that stays.
+        #expect(DigestTask.dropping([sam.id], from: written.text, as: written,
+                                    lines: [sam.id: DigestTask.line(for: sam)]) == .cantTell)
+    }
+
+    /// Looking for a note in a digest whose lines aren't known leans to
+    /// finding it: case, spacing and a small change don't hide it.
+    @Test func aNoteIsFoundInADigestChangedALittle() throws {
+        let sam = MemoryNote(text: "Sam's birthday is May 14. Loves lemon cake.", source: .toldMe)
+        for text in [DigestWords.heading + ".\n• SAM'S BIRTHDAY  is May 14. Loves lemon cake. (You told me)",
+                     DigestWords.heading + ".\n• Sam's birthday is May 14. Loves lemon cak (You told me)",
+                     "My week. sam's birthday is may 14, loves cake",
+                     "• Sam's birthday is May 14 and more"] {
+            #expect(DigestTask.mayQuote(sam, in: text), "not found in: \(text)")
+        }
+        #expect(!DigestTask.mayQuote(sam, in: DigestWords.heading + ".\n• Dentist on Thursday at 3 (You told me)"))
     }
 
     /// A file left unreadable at launch, as on a locked device, is read on
@@ -460,8 +779,15 @@ struct DeviceTaskEngineTests {
 
     @Test func aTaskGoingWhenTheAppClosedComesBackStoppedNeverDone() throws {
         let engine = try engine()
-        let (task, _) = try runToQuestion(engine)
+        let (task, question) = try runToQuestion(engine)
+        #expect(!rule.isClosed(question))
         let again = try self.engine()
+        // The question the engine before asked can't be said yes to now,
+        // through either engine.
+        #expect(rule.isClosed(question))
+        #expect(rule.wasWithdrawn(question))
+        #expect(rule.sayYes(to: question) == .timedOut)
+        #expect(engine.resume(task.id, with: question.approve()) == .refused)
         let back = try #require(again.tasks.first)
         #expect(back.id == task.id)
         #expect(back.state == .stopped)

@@ -174,8 +174,84 @@ struct DigestTodayTests {
     /// The memory screen as the app wires it to Today.
     func memoryScreen() -> MemoryModel {
         HomeView.memoryModel(store: notes, place: .onDevice, onForgetEverything: { feed.forgetTasks() },
-                             othersStored: { feed.tasksStored }, onNotesChanged: { feed.refresh() },
+                             othersStored: { feed.tasksStored }, onNotesChanged: { feed.notesChanged() },
                              forgetQuotes: { feed.forgetQuotes(of: $0) })
+    }
+
+    /// The digest note on the memory screen.
+    func digestNote(_ memory: MemoryModel) -> MemoryNote? {
+        memory.notes.first { $0.text.hasPrefix(DigestWords.heading) }
+    }
+
+    /// A digest the person changed keeping only part of a note: the screen
+    /// never guesses the rest went, and says the words are still there.
+    @Test func aDigestKeepingPartOfANoteIsSaidToStillHoldIt() throws {
+        try notes.remember("Sam's birthday is May 14. Loves lemon cake.", at: Date() - 7_200, source: .toldMe)
+        _ = try keepDigest()
+        let memory = memoryScreen()
+        let digest = try #require(digestNote(memory))
+        memory.beginEdit(digest)
+        memory.editDraft = DigestWords.heading + ".\n• Sam's birthday is May 14 (You told me)\n• Dentist on Thursday at 3 (You told me)"
+        memory.saveEdit()
+        let sam = try #require(memory.notes.first { $0.text.hasPrefix("Sam's") })
+        memory.forget(sam)
+        #expect(memory.status == DigestWords.stillInDigest)
+        #expect(digestNote(memory)?.text.contains("Sam's birthday is May 14") == true)
+    }
+
+    /// Changing a note the digest quoted takes its earlier words out of the
+    /// digest, and the screen says only that it saved.
+    @Test func changingAQuotedNoteTakesItsEarlierWordsOutOfTheDigest() throws {
+        try notes.remember("Sam's birthday is May 14", at: Date() - 7_200, source: .toldMe)
+        let done = try keepDigest()
+        let memory = memoryScreen()
+        let sam = try #require(memory.notes.first { $0.text.hasPrefix("Sam's") })
+        memory.beginEdit(sam)
+        memory.editDraft = "Sam's birthday is May 15"
+        memory.saveEdit()
+        #expect(memory.status == MemoryWords.saved(.onDevice))
+        #expect(!notes.notes().contains { $0.text.contains("May 14") })
+        #expect(todayCards.first { $0.id == done.id }?.result == DigestWords.heading + ".\n• Dentist on Thursday at 3 (You told me)")
+    }
+
+    /// When a digest the person changed keeps a changed note's earlier
+    /// words, the screen says so plainly.
+    @Test func earlierWordsLeftInAChangedDigestAreSaidSo() throws {
+        _ = try keepDigest()
+        let memory = memoryScreen()
+        let digest = try #require(digestNote(memory))
+        memory.beginEdit(digest)
+        memory.editDraft = "Busy week. Dentist on Thursday at 3, then rest."
+        memory.saveEdit()
+        let dentist = try #require(memory.notes.first { $0.text.hasPrefix("Dentist") })
+        memory.beginEdit(dentist)
+        memory.editDraft = "Dentist on Friday at 4"
+        memory.saveEdit()
+        #expect(memory.status == DigestWords.earlierWordsInDigest)
+        #expect(notes.notes().contains { $0.text.contains("Thursday at 3") })
+    }
+
+    /// A note forgotten while its digest's question is open in the sheet:
+    /// the sheet goes, the task says why it stopped, and a yes from the
+    /// sheet left behind keeps nothing.
+    @Test func forgettingANoteUnderAnOpenQuestionClosesIt() throws {
+        let task = try startAndAsk()
+        feed.review(task)
+        let request = try #require(feed.reviewing)
+        let sheet = ConfirmationState(request: request, rule: rule, onApprove: { feed.approved($0) },
+                                      onDecline: { feed.closedQuestion(request) })
+        let memory = memoryScreen()
+        let dentist = try #require(memory.notes.first { $0.text.hasPrefix("Dentist") })
+        memory.forget(dentist)
+        #expect(memory.status == MemoryWords.forgotten)
+        #expect(feed.reviewing == nil)
+        let card = try #require(todayCards.first { $0.id == task.id })
+        #expect(card.step == DigestWords.noteChanged)
+        #expect(card.question == nil)
+        #expect(!feed.canApprove(card))
+        sheet.tapPrimary()
+        #expect(notes.notes().isEmpty)
+        #expect(feed.offers == [DigestTask.request])
     }
 
     var todayCards: [AgentTask] { feed.feed.groups.flatMap(\.items).compactMap(\.task) }
@@ -261,6 +337,24 @@ struct DigestTodayTests {
         memory.editDraft = "Dentist on Friday at 3"
         memory.saveEdit()
         #expect(told == 1)
+    }
+
+    /// An edit the store couldn't write tells Today nothing, and says so
+    /// plainly, without calling the notes unreadable.
+    @Test(.enabled(if: getuid() != 0, "root can write to a locked folder"))
+    func anEditThatCantBeWrittenTellsTodayNothing() throws {
+        var told = 0
+        let memory = MemoryModel(store: notes, place: .onDevice, onNotesChanged: { told += 1 })
+        let note = try #require(memory.notes.first)
+        memory.beginEdit(note)
+        memory.editDraft = "Dentist on Friday at 3"
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+        memory.saveEdit()
+        #expect(told == 0)
+        #expect(memory.status == MemoryWords.couldNotSave)
+        #expect(memory.savedCount == 0)
+        #expect(notes.notes().first?.text == note.text)
     }
 
     /// Tasks whose file couldn't be erased are never said to be gone.

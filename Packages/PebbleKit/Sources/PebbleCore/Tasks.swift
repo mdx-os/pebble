@@ -328,8 +328,9 @@ public protocol TaskEngine: AnyObject, Sendable {
     /// everything is offered while there is anything to erase.
     var hasStoredFile: Bool { get }
 
-    /// Called once `note` is forgotten, so nothing the engine kept still
-    /// quotes it. Says whether every copy of its words is gone.
+    /// Called once `note` is forgotten, or changed with `note` holding its
+    /// earlier words, so nothing the engine kept still quotes them. Says
+    /// whether every copy of those words is gone.
     func forgetQuotes(of note: MemoryNote) -> QuotesForgotten
 }
 

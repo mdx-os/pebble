@@ -555,7 +555,7 @@ struct HomeScreen: View {
                                                    onForgetEverything: { feed.forgetTasks() },
                                                    othersStored: { feed.tasksStored },
                                                    othersChanged: feed.$tasksSeen.map { _ in () }.eraseToAnyPublisher(),
-                                                   onNotesChanged: { feed.refresh() },
+                                                   onNotesChanged: { feed.notesChanged() },
                                                    forgetQuotes: { feed.forgetQuotes(of: $0) }),
                        place: surfacePlace, cloud: cloud)
         } else {

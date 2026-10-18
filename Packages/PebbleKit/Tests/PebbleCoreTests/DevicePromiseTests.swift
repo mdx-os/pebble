@@ -307,9 +307,9 @@ struct DevicePromiseTests {
 
     /// Every line the copy lists hold: the gated lines on the device, the
     /// allowed ones, and nothing else, may promise the device.
-    @Test func everyCopyListLineIsGatedOrAllowed() {
+    @Test func everyCopyListLineIsGatedOrAllowed() throws {
         let gated = Set(PrivacyPlaceTests.deviceLines(.onDevice))
-        let lines = CopyDashTests.copy + FeedWords.all + PrivacyPlaceTests.deviceLines(.onDevice)
+        let lines = CopyDashTests.copy + (try DigestWords.all()) + FeedWords.all + PrivacyPlaceTests.deviceLines(.onDevice)
             + PrivacyPlaceTests.deviceLines(.mayLeaveDevice) + Self.sampleFeedWords
         #expect(lines.count > 100)
         for line in lines where !DevicePromise.found(in: line).isEmpty {

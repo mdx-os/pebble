@@ -219,11 +219,19 @@ final class FeedModel: ObservableObject {
         }
     }
 
-    /// Takes a forgotten note out of what the tasks kept, then looks again.
+    /// Asks the tasks whether a forgotten or changed note's words stayed in
+    /// anything they kept. The engine follows the notes itself, and the
+    /// memory screen calls `notesChanged()` next, so nothing is read again
+    /// here.
     func forgetQuotes(of note: MemoryNote) -> QuotesForgotten {
-        let outcome = tasks?.forgetQuotes(of: note) ?? .notQuoted
-        refresh()
-        return outcome
+        tasks?.forgetQuotes(of: note) ?? .notQuoted
+    }
+
+    /// After the memory screen changes a note. The engine has already
+    /// looked at the notes on the store's own word, so the feed is only
+    /// built again.
+    func notesChanged() {
+        rebuild()
     }
 
     /// True while the engine keeps a file of its tasks, so Forget
@@ -289,6 +297,12 @@ final class FeedModel: ObservableObject {
         // So does one whose words are gone, as when the note it showed is
         // forgotten.
         if let reading, let task = list.first(where: { $0.id == reading.id }), task.result == nil { self.reading = nil }
+        // A question its task let go of, as when a note it drew from
+        // changed, closes its sheet too.
+        if let reviewing, let id = taskAsked[reviewing.id],
+           list.first(where: { $0.id == id })?.question?.id != reviewing.id {
+            self.reviewing = nil
+        }
         taskIDs = ids
         if !ids.isEmpty && tasksForgotten { tasksForgotten = false }
         let next = list.map(\.card)

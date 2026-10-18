@@ -147,6 +147,8 @@ public enum MemoryWords {
     public static let forgetOneQuestion = "Forget this note?"
     public static let editPlaceholder = "What should I remember instead?"
     public static let couldNotForget = "Sorry, I couldn't erase that just now. Please try again in a moment."
+    /// A note read fine but couldn't be written just now. Nothing changed.
+    public static let couldNotSave = "Sorry, I couldn't save that just now. Please try again in a moment."
     /// Forget everything when the tasks went but the notes couldn't be erased.
     public static let couldNotForgetNotes = "I forgot your tasks, but I couldn't erase your notes just now. Please try again in a moment."
 }

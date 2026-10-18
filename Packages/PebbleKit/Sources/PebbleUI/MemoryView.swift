@@ -514,8 +514,9 @@ final class MemoryModel: ObservableObject {
     /// Runs after a note is changed or forgotten, so anything showing its
     /// words, such as a kept digest on Today, looks again.
     private let onNotesChanged: @MainActor () -> Void
-    /// Runs after a note is forgotten, so whatever else holds its words,
-    /// such as a kept digest, lets them go too.
+    /// Runs after a note is forgotten, or changed with its earlier words,
+    /// and says whether anything else, such as a kept digest, still holds
+    /// them.
     private let forgetQuotes: @MainActor (MemoryNote) -> QuotesForgotten
     private var watchingOthers: AnyCancellable?
 
@@ -566,7 +567,7 @@ final class MemoryModel: ObservableObject {
             status = isUnavailable ? MemoryWords.unavailable : MemoryWords.unreadable
             return
         }
-        report(try store.remember(newNote, source: .toldMe)) { self.newNote = "" }
+        report(try store.remember(newNote, source: .toldMe)) { _ in self.newNote = "" }
     }
 
     func beginEdit(_ note: MemoryNote) {
@@ -581,8 +582,14 @@ final class MemoryModel: ObservableObject {
 
     func saveEdit() {
         guard let id = editingID else { return }
-        report(try store.edit(id, to: editDraft)) {
+        let earlier = notes.first { $0.id == id }
+        report(try store.edit(id, to: editDraft)) { note in
             self.cancelEdit()
+            // The earlier words go from anything that quoted them, such as
+            // a kept digest, or the line says plainly where they stayed.
+            if let earlier, earlier.text != note.text, self.forgetQuotes(earlier) == .stayed {
+                self.status = DigestWords.earlierWordsInDigest
+            }
             self.onNotesChanged()
         }
     }
@@ -655,18 +662,21 @@ final class MemoryModel: ObservableObject {
         }
     }
 
-    private func report(_ decision: @autoclosure () throws -> MemoryStore.Decision, onSaved: () -> Void) {
+    private func report(_ decision: @autoclosure () throws -> MemoryStore.Decision, onSaved: (MemoryNote) -> Void) {
         do {
             switch try decision() {
-            case .saved: status = MemoryWords.saved(place); savedCount += 1; onSaved()
+            case .saved(let note): status = MemoryWords.saved(place); savedCount += 1; onSaved(note)
             case .needsWords: status = MemoryWords.needsWords
             case .tooLong: status = MemoryWords.tooLong
             case .notFound: status = nil; cancelEdit()
             }
         } catch is MemoryStore.Unavailable {
             status = MemoryWords.unavailable
-        } catch {
+        } catch is MemoryStore.Unreadable {
             status = MemoryWords.unreadable
+        } catch {
+            // Read fine, but the write didn't go through: nothing changed.
+            status = MemoryWords.couldNotSave
         }
         refresh()
     }

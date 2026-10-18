@@ -1,5 +1,6 @@
 import Foundation
 @testable import PebbleCore
+import SourceScan
 import Testing
 
 struct AskFirstTests {
@@ -17,33 +18,58 @@ struct AskFirstTests {
         #expect(rule.decide(action, approval: nil) == .stop)
     }
 
-    /// Once a question closes, however it closes, the rule keeps nothing of
-    /// what it asked about, so Forget everything leaves no note's words in
-    /// it. Only ids and times, read from everything the rule holds.
-    @Test func aClosedQuestionLeavesNoWordsInTheRule() {
-        let rule = AskFirst.isolated()
-        let words = ["Sam's birthday is May 14", "Door code 4417", "Dentist on Thursday at 3"]
-        let asked = words.map { rule.ask(DigestTask.keep(DigestWords.heading + ".\n• " + $0))! }
-        // Withdrawn, spent by a yes, and left open: each read back.
-        rule.withdraw(asked[0])
-        guard case .approved(let yes) = rule.sayYes(to: asked[1]) else { Issue.record("no approval"); return }
-        #expect(rule.decide(asked[1].action, approval: yes) == .proceed)
-        rule.withdraw(asked[2])
-        #expect(asked.allSatisfy(rule.isClosed))
-        #expect(rule.wasWithdrawn(asked[0]))
-        // The probe does find words where they are.
-        #expect(Self.strings(in: asked[0]).contains { $0.contains(words[0]) })
-        let held = Self.strings(in: rule)
-        for word in words + [DigestWords.heading] {
-            #expect(!held.contains { $0.contains(word) }, "\(word) is still in the rule")
+    /// The rule keeps only ids and times, never what it asked about: while
+    /// a question is open, once it times out, and once it is closed by a
+    /// no or a yes. So Forget everything leaves no note's words in it.
+    /// Read through the rule's own stored fields, which the probe is shown
+    /// to reach: it finds the very ids the rule holds.
+    @Test func theRuleKeepsOnlyIdsAndTimes() throws {
+        final class Clock: @unchecked Sendable {
+            var now = ContinuousClock.now
         }
-    }
+        let clock = Clock()
+        let rule = AskFirst.isolated(now: { clock.now })
+        let words = ["Sam's birthday is May 14", "Door code 4417", "Dentist on Thursday at 3", "Lemon cake on Friday"]
+        func ask(_ text: String) throws -> ConfirmationRequest {
+            try #require(rule.ask(DigestTask.keep(DigestWords.heading + ".\n• " + text)))
+        }
+        // The probe does find words where they are, of each kind it reads.
+        let open = try ask(words[0])
+        #expect(StoredWords(in: open).contains(words[0]))
+        #expect(StoredWords(in: Substring(words[0])).contains(words[0]))
+        #expect(StoredWords(in: Data(words[0].utf8)).contains(words[0]))
+        #expect(StoredWords(in: words[0] as NSString).contains(words[0]))
+        #expect(StoredWords(in: Array(words[0])).contains(words[0]))
 
-    /// Every string reachable from `value`'s stored properties.
-    static func strings(in value: Any, depth: Int = 0) -> [String] {
-        if let text = value as? String { return [text] }
-        guard depth < 10 else { return [] }
-        return Mirror(reflecting: value).children.flatMap { strings(in: $0.value, depth: depth + 1) }
+        func expectNoWords(_ when: String, holding ids: [UUID]) {
+            let stored = rule.storedForTests
+            let found = StoredWords(in: stored)
+            #expect(!stored.isEmpty, "\(when): nothing to look at")
+            for id in ids { #expect(found.ids.contains(id), "\(when): the probe didn't reach \(id)") }
+            for word in words + [DigestWords.heading, DigestTask.notes.displayName, MemoryWords.title] {
+                #expect(!found.contains(word), "\(when): \(word) is in the rule")
+            }
+        }
+
+        // Open.
+        expectNoWords("open", holding: [open.id])
+
+        // Timed out, before anything looks at it again.
+        clock.now += .seconds(AskFirst.defaultWindow + 1)
+        expectNoWords("timed out", holding: [open.id])
+        #expect(rule.isClosed(open))
+
+        // Closed by a no, and by a yes spent.
+        let declined = try ask(words[1])
+        rule.withdraw(declined)
+        #expect(rule.wasWithdrawn(declined))
+        let approved = try ask(words[2])
+        guard case .approved(let yes) = rule.sayYes(to: approved) else { Issue.record("no approval"); return }
+        expectNoWords("yes given", holding: [approved.id])
+        #expect(rule.decide(approved.action, approval: yes) == .proceed)
+        let stillOpen = try ask(words[3])
+        expectNoWords("closed", holding: [declined.id, stillOpen.id])
+        #expect([declined, approved].allSatisfy(rule.isClosed))
     }
 
     @Test func aYesForTheAskedActionLetsItHappenOnce() {
