@@ -103,7 +103,7 @@ final class FeedModel: ObservableObject {
             flow.store.restore(into: keeper, now: now())
         }
         feed = Feed.build(from: self.sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
-        flow?.pinned(Self.pinnedTasks(in: feed))
+        flow?.pinned(Self.pinnedTasks(in: feed), rule: needsYou.rule)
         let list = tasks?.tasks ?? []
         track(list)
         sections = Self.sections(of: feed)
@@ -220,7 +220,7 @@ final class FeedModel: ObservableObject {
         let next = Feed.build(from: sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
         if next != feed { feed = next }
         followCards()
-        flow?.pinned(Self.pinnedTasks(in: feed))
+        flow?.pinned(Self.pinnedTasks(in: feed), rule: rule)
     }
 
     /// Each task card's section: Needs you, Working on it, or a time group.
@@ -445,7 +445,12 @@ final class FeedModel: ObservableObject {
             // stands and went through; this one does nothing and says nothing.
         } else if let id = askedBy.removeValue(forKey: approval.id) {
             switch tasks?.resume(id, with: approval) ?? .refused {
-            case .proceeding: usedYes.insert(approval.id)
+            case .proceeding:
+                usedYes.insert(approval.id)
+                // Kept now, not at the next change: if the app closes in
+                // between, the step is known to be under way and is never
+                // asked about or run again.
+                if let flow, let keeper = tasks as? any KeepsTasks { flow.store.keep(keeper) }
             case .refused: refusedBy = id
             case .timedOut: break
             }

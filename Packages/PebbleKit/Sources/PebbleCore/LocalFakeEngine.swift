@@ -395,6 +395,9 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
             let phase: SavedTask.Phase
             switch run.phase {
             case .askingYes: phase = .waiting
+            // Being asked again after the app closed: still the question it
+            // was, so it keeps the time it was first asked.
+            case .toAsk where run.askedAt != nil, .asking where run.askedAt != nil: phase = .waiting
             case .stuck: phase = .stuck
             default: phase = run.approved ? .approved : .working
             }
@@ -440,6 +443,7 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
                     if case .ask = step.kind, age >= 0, age <= window {
                         run.askedAgo = age
                         begin(&run)
+                        run.askedAt = entry.askedAt
                     } else {
                         skip(&run, line: TaskWords.timedOut(step.todo))
                     }

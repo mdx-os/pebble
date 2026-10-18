@@ -131,6 +131,7 @@ public struct ConfirmationSheet: View {
     let isExample: Bool
     @StateObject private var state: ConfirmationState
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.dynamicTypeSize) private var typeSize
     @AccessibilityFocusState private var footnoteFocused: Bool
     /// Room for the longest label, "What happens", growing with the text.
     @ScaledMetric(relativeTo: .subheadline) private var labelWidth: CGFloat = 96
@@ -281,16 +282,20 @@ public struct ConfirmationSheet: View {
         .frame(maxWidth: .infinity)
     }
 
+    /// At accessibility text sizes a label column would squeeze the value,
+    /// the part being said yes to, so the label sits over it instead.
+    static func stacksLabels(at size: DynamicTypeSize) -> Bool {
+        size.isAccessibilitySize
+    }
+
     private func row(_ label: String, _ value: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
+        LabeledRow(stacked: Self.stacksLabels(at: typeSize), labelWidth: labelWidth, spacing: 12) {
             Text(label)
                 .font(.subheadline)
                 .foregroundStyle(Theme.secondaryText)
-                .frame(width: labelWidth, alignment: .leading)
+        } value: {
             Text(value)
                 .font(.body.weight(.medium))
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)

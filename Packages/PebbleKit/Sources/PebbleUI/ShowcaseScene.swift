@@ -62,6 +62,9 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
             case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive,
                  .askWaiting, .askSheet, .askAnswered, .askClosed, .askLive:
                 taskHome(brand: brand, looks: looks)
+                    .overlay(alignment: .topLeading) {
+                        if self == .askLive { NudgePermissionProbe() }
+                    }
             case .shortcuts:
                 KeyboardShortcutsView()
             case .hello, .name, .look, .ideas:
@@ -248,9 +251,32 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     final class StillNotifier: QuestionNotifying, @unchecked Sendable {
         func permission() async -> NudgePermission { .notDetermined }
         func requestPermission() async -> Bool { false }
-        func post(_ nudge: QuestionNudge) {}
+        func post(_ nudge: QuestionNudge, after delay: TimeInterval) {}
         func remove(_ ids: [String]) {}
+        func removeAll() {}
         func onOpen(_ handler: @escaping @MainActor @Sendable (String) -> Void) {}
+    }
+
+    /// For the UI tests, in `askLive` only: what the system says about
+    /// nudges as the scene opens, so a test meets a simulator that was
+    /// asked before with a clear failure, not a confusing one later. Too
+    /// small and clear to be seen.
+    struct NudgePermissionProbe: View {
+        @State private var permission = "checking"
+
+        var body: some View {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityElement()
+                .accessibilityLabel(permission)
+                .accessibilityIdentifier("nudgePermission")
+                .task {
+                    #if canImport(UserNotifications)
+                    guard LocalQuestionNotifier.shared.installed else { return }
+                    permission = String(describing: await LocalQuestionNotifier.shared.permission())
+                    #endif
+                }
+        }
     }
 
     /// How an ask scene nudges: the real notifications for `askLive`, so

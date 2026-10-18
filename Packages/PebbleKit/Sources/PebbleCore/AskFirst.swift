@@ -336,6 +336,16 @@ public final class AskFirst: @unchecked Sendable {
         return false
     }
 
+    /// Seconds before an open question times out, or nil once it is closed
+    /// or already answered. Only reads: it never opens or closes anything.
+    public func timeLeft(_ request: ConfirmationRequest) -> TimeInterval? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let open = pending[request.id], open.yesAt == nil, isOpen(open) else { return nil }
+        let left = window - (now() - open.askedAt)
+        return Double(left.components.seconds) + Double(left.components.attoseconds) / 1e18
+    }
+
     /// What the sheet gets when the person taps yes.
     package enum Yes: Equatable {
         case approved(Approval)

@@ -117,6 +117,14 @@ final class NeedsYouFlowUITests: XCTestCase {
     /// straight to the pinned card.
     func testANudgeIsAskedForInContextAndOpensThePinnedCard() throws {
         let app = launch()
+        // The system asks only once per install, so this test needs one
+        // where it hasn't yet.
+        let permission = element("nudgePermission", in: app)
+        XCTAssertTrue(permission.waitForExistence(timeout: 15))
+        let checked = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label != %@", "checking"), object: permission)
+        XCTAssertEqual(XCTWaiter.wait(for: [checked], timeout: 10), .completed)
+        XCTAssertEqual(permission.label, "notDetermined",
+                       "Notifications were already allowed or refused on this simulator. Remove the app, or erase the simulator, and run again.")
         XCTAssertTrue(approve(in: app).waitForExistence(timeout: 15))
         XCTAssertFalse(springboard.alerts.firstMatch.exists, "never asked at launch")
         let allow = app.buttons["Yes, nudge me"]
@@ -126,15 +134,19 @@ final class NeedsYouFlowUITests: XCTestCase {
             app.scrollViews.firstMatch.swipeUp()
         }
         allow.tap()
-        // The system's own question, the first time on this simulator.
+        // The system's own question, only now.
         let systemAllow = springboard.alerts.buttons["Allow"]
-        if systemAllow.waitForExistence(timeout: 5) { systemAllow.tap() }
+        XCTAssertTrue(systemAllow.waitForExistence(timeout: 5))
+        systemAllow.tap()
         XCTAssertTrue(element("nudgeOffer", in: app).waitForNonExistence(timeout: 5))
 
+        // The nudge waits a little after the app goes away, so a quick
+        // switch to another app sends nothing.
         XCUIDevice.shared.press(.home)
         let banner = springboard.descendants(matching: .any)
             .matching(NSPredicate(format: "label CONTAINS %@", "Pip has a question for you")).firstMatch
-        XCTAssertTrue(banner.waitForExistence(timeout: 15))
+        XCTAssertFalse(banner.waitForExistence(timeout: 10), "not at once")
+        XCTAssertTrue(banner.waitForExistence(timeout: 60))
         for held in ["Maple", "mapledental", "Saturday", "phone", "dentist"] {
             XCTAssertFalse(banner.label.localizedCaseInsensitiveContains(held), "the nudge shows \(held)")
         }

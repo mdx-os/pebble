@@ -153,8 +153,13 @@ public protocol QuestionNotifying: AnyObject, Sendable {
     /// Asks the system, which shows its own question the first time. True
     /// when nudges are allowed.
     func requestPermission() async -> Bool
-    func post(_ nudge: QuestionNudge)
+    /// Shows `nudge` once `delay` seconds have passed, unless it is taken
+    /// away first.
+    func post(_ nudge: QuestionNudge, after delay: TimeInterval)
     func remove(_ ids: [String])
+    /// Takes away every nudge about a question, shown or still to come,
+    /// this launch's and any left from before.
+    func removeAll()
     /// Called with a task's id when the person opens its nudge. A nudge
     /// opened before anything listens is handed over once something does.
     func onOpen(_ handler: @escaping @MainActor @Sendable (String) -> Void)
@@ -190,6 +195,13 @@ public final class TaskStore: @unchecked Sendable {
     /// False while a file is there but can't be read, so nothing is written
     /// over it. Each change tries again.
     private var loaded: Bool
+    /// What changed in memory while the file couldn't be read. A late read
+    /// never takes these back.
+    private var changedTasks = false
+    private var changedNudges = false
+    /// Forget everything ran while a file that couldn't be read also
+    /// couldn't be removed. Whatever it held is dropped once it is read.
+    private var forgotUnread = false
     private var observers: [UUID: @Sendable () -> Void] = [:]
 
     package init(fileURL: URL?) {
@@ -245,9 +257,7 @@ public final class TaskStore: @unchecked Sendable {
             for receipt in made where !state.receipts.contains(where: { $0.id == receipt.id }) {
                 state.receipts.append(receipt)
             }
-            if state.receipts.count > Self.receiptLimit {
-                state.receipts = Array(state.receipts.sorted { $0.endedAt < $1.endedAt }.suffix(Self.receiptLimit))
-            }
+            state.receipts = Self.newest(state.receipts)
         }
     }
 
@@ -277,7 +287,19 @@ public final class TaskStore: @unchecked Sendable {
 
     /// Forget everything: every saved task and every receipt. Only the nudge
     /// choice stays, since it holds nothing the person said or did.
+    ///
+    /// The file goes too, read or not: one that couldn't be read, or not
+    /// yet, is never left behind to bring anything back later.
     public func forget() {
+        lock.lock()
+        if !loaded, let fileURL, let stagingURL {
+            try? FileManager.default.removeItem(at: fileURL)
+            try? FileManager.default.removeItem(at: stagingURL)
+            // Gone, so there is nothing left to read, and what is in memory
+            // is written from here on.
+            if !FileManager.default.fileExists(atPath: fileURL.path) { loaded = true } else { forgotUnread = true }
+        }
+        lock.unlock()
         change { state in
             state.tasks = []
             state.receipts = []
@@ -326,6 +348,10 @@ public final class TaskStore: @unchecked Sendable {
         body(&next)
         let changed = next != state
         if changed {
+            if !loaded {
+                if next.tasks != state.tasks { changedTasks = true }
+                if next.nudges != state.nudges { changedNudges = true }
+            }
             state = next
             if loaded { save(next) }
         }
@@ -335,6 +361,11 @@ public final class TaskStore: @unchecked Sendable {
     }
 
     /// Reads the file once it can. A file that can't be read is left alone.
+    ///
+    /// A file read late, as when it was locked until the device was first
+    /// unlocked, never takes back what changed in memory since launch: the
+    /// tasks and the nudge choice made here stand, and the receipts from
+    /// both are kept. Then the whole is written back.
     private func loadIfNeeded() {
         guard !loaded, let fileURL else { return }
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
@@ -343,8 +374,29 @@ public final class TaskStore: @unchecked Sendable {
         }
         guard let data = try? Data(contentsOf: fileURL),
               let saved = try? JSONDecoder().decode(State.self, from: data) else { return }
-        state = saved
         loaded = true
+        var merged = saved
+        if forgotUnread {
+            merged.tasks = []
+            merged.receipts = []
+        }
+        if changedTasks { merged.tasks = state.tasks }
+        if changedNudges { merged.nudges = state.nudges }
+        for receipt in state.receipts where !merged.receipts.contains(where: { $0.id == receipt.id }) {
+            merged.receipts.append(receipt)
+        }
+        merged.receipts = Self.newest(merged.receipts)
+        state = merged
+        changedTasks = false
+        changedNudges = false
+        forgotUnread = false
+        if merged != saved { save(merged) }
+    }
+
+    /// At most `receiptLimit`, the oldest going first.
+    private static func newest(_ receipts: [Receipt]) -> [Receipt] {
+        guard receipts.count > receiptLimit else { return receipts }
+        return Array(receipts.sorted { $0.endedAt < $1.endedAt }.suffix(receiptLimit))
     }
 
     private var stagingURL: URL? {
@@ -357,6 +409,7 @@ public final class TaskStore: @unchecked Sendable {
         // Nothing left to keep, so no file at all.
         if next == State() {
             try? manager.removeItem(at: fileURL)
+            try? manager.removeItem(at: stagingURL)
             return
         }
         let encoder = JSONEncoder()

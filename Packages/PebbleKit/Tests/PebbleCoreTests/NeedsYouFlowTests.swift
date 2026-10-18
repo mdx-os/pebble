@@ -289,6 +289,97 @@ struct NeedsYouFlowTests {
         #expect(try Data(contentsOf: url) == Data("not json".utf8))
     }
 
+    /// A store file in a folder of its own, holding one receipt and a
+    /// declined nudge, as an earlier launch left it.
+    private static func earlierFile() throws -> (folder: URL, url: URL, receipt: Receipt) {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("tasks-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appendingPathComponent("tasks.json")
+        let rule = AskFirst.isolated()
+        let (engine, task) = atQuestion(rule: rule)
+        _ = engine.resume(task.id, with: try yes(try #require(task.question), rule: rule))
+        engine.advance(by: 4)
+        let earlier = TaskStore(fileURL: url)
+        earlier.keep(engine)
+        earlier.setNudges(.declined)
+        return (folder, url, try #require(earlier.receipts.first))
+    }
+
+    private static func setReadable(_ url: URL, _ readable: Bool) throws {
+        try FileManager.default.setAttributes([.posixPermissions: readable ? 0o644 : 0o000], ofItemAtPath: url.path)
+    }
+
+    /// PERMANENT GUARD. Forget everything removes the file even when it
+    /// couldn't be read, as before the device is first unlocked, and
+    /// nothing it held comes back once it could have been.
+    @Test func forgetRemovesAFileThatCouldNotBeRead() throws {
+        let (folder, url, _) = try Self.earlierFile()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try Self.setReadable(url, false)
+        let store = TaskStore(fileURL: url)
+        #expect(store.receipts.isEmpty, "not read yet")
+        store.forget()
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty, "no staging file either")
+        #expect(store.receipts.isEmpty)
+        #expect(store.tasks.isEmpty)
+        #expect(TaskStore(fileURL: url).receipts.isEmpty, "nothing comes back on the next launch")
+    }
+
+    @Test func forgetRemovesAFileThatCouldNotBeDecoded() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("tasks-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("tasks.json")
+        // As a later version might write it: a receipt this one can't read.
+        try Data(#"{"tasks":[],"receipts":[{"kind":"teleport"}],"nudges":"allowed"}"#.utf8).write(to: url)
+        try Data("half a write".utf8).write(to: folder.appendingPathComponent(".tasks.json.next"))
+        let store = TaskStore(fileURL: url)
+        store.forget()
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
+        #expect(TaskStore(fileURL: url).receipts.isEmpty)
+    }
+
+    /// When the file can't even be removed, it is still forgotten: once it
+    /// can be read, nothing it held comes back.
+    @Test func aFileForgottenWhileItCouldNotBeRemovedNeverComesBack() throws {
+        let (folder, url, _) = try Self.earlierFile()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        try Self.setReadable(url, false)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        let store = TaskStore(fileURL: url)
+        store.forget()
+        #expect(FileManager.default.fileExists(atPath: url.path), "the folder won't let it go")
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+        try Self.setReadable(url, true)
+        #expect(store.receipts.isEmpty)
+        #expect(store.tasks.isEmpty)
+        #expect(store.nudges == .declined, "the nudge choice is all it keeps")
+        #expect(TaskStore(fileURL: url).receipts.isEmpty, "and the file says so now")
+    }
+
+    /// A file read late never takes back what changed since launch.
+    @Test func aLateReadKeepsWhatChangedSinceLaunch() throws {
+        let (folder, url, earlier) = try Self.earlierFile()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try Self.setReadable(url, false)
+        let store = TaskStore(fileURL: url)
+        let (engine, task) = Self.atQuestion(rule: .isolated(), origin: Self.base + 1000)
+        store.keep(engine)
+        store.setNudges(.allowed)
+        try Self.setReadable(url, true)
+        #expect(store.tasks.map(\.id) == [task.id], "the task kept now, not the file's")
+        #expect(store.nudges == .allowed)
+        #expect(store.receipts.map(\.id) == [earlier.id], "the earlier receipt is still kept")
+        let next = TaskStore(fileURL: url)
+        #expect(next.tasks.map(\.id) == [task.id])
+        #expect(next.nudges == .allowed)
+        #expect(next.receipts.map(\.id) == [earlier.id])
+    }
+
     @Test func aReceiptClearsAndTheOldestGoPastTheLimit() throws {
         let store = TaskStore.inMemory()
         for _ in 0..<(TaskStore.receiptLimit + 2) {
