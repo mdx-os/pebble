@@ -100,8 +100,10 @@ enum DevicePromise {
                 literal: "I try to take out names from your notes, emails, phone numbers, addresses, card numbers and your private words first. Check what I show you, since I can miss things.",
                 reason: privateWordsName),
         Allowed(file: "PebbleCore/CloudHelp.swift",
-                literal: "If that computer needs me to sign in, I do it right after your yes. Signing in never carries your chats, notes or private words.",
-                reason: privateWordsName + " That sign in carries none of them is CloudAuth.signIn's contract."),
+                literal: "Signing in never carries your chats, notes or private words.",
+                reason: "True whatever the model is: CloudAuth's contract allows only credentials or a device token, and "
+                    + "CloudModel.preview refuses any sign-in value Redactor would change, and any sign-in body that "
+                    + "isn't a flat object of short values, before anything is shown or sent. " + privateWordsName),
         Allowed(file: "PebbleCore/CloudHelp.swift",
                 literal: "Your notes themselves never leave this device.",
                 reason: "True even with the cloud on: the notes file is only read on the device, by Redactor, to find what "
@@ -111,9 +113,11 @@ enum DevicePromise {
                 reason: "A disclosure before turning the cloud on: it says what the cloud does see. \"This device\" names "
                     + "whose address it is, and promises nothing stays."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
-                literal: "Anything here is taken out before anything is sent. These words are kept only on this device, and Forget everything erases them too.",
-                reason: "CloudWords.privateDetail is about where the private words are kept, CloudHelpFileStore beside the "
-                    + "notes, and Redactor takes them out of every request, so they never leave even with the cloud on."),
+                literal: "I take these out of anything I send, but I can miss another spelling, so check what I show you. These words are kept only on this device, and Forget everything erases them too.",
+                reason: "CloudWords.privateDetail is about where the list itself is kept, CloudHelpFileStore beside the "
+                    + "notes, true whatever the model is. It promises no word stays out of a request: matching is whole "
+                    + "word, so it says another spelling can slip by and points at the preview. Forget everything "
+                    + "erases the file and ends every open cloud chat, so no copy is left in one."),
         Allowed(file: "PebbleCore/CloudHelp.swift", literal: "A word or name to keep private",
                 reason: "The private words field's placeholder. Redactor takes every one out of every cloud request before "
                     + "it is sent, and with the cloud off nothing is sent, so it is kept out either way."),
@@ -126,11 +130,18 @@ enum DevicePromise {
         Allowed(file: "PebbleCore/CloudHelp.swift",
                 literal: "Sorry, I couldn't save that. Help from the cloud is off, and to make sure it stays off I cleared the cloud setting, along with your private words. You can add them again anytime.",
                 reason: privateWordsName + " \"Stays off\" is the setting."),
-        Allowed(file: "PebbleCore/CloudHelp.swift", literal: "Here is exactly what leaves your device",
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "I can't reach your private words while this device is locked, so I've left them as they are. Unlock it and try again.",
+                reason: privateWordsName + " \"This device\" is the one that is locked, not where a chat goes."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Help from the cloud is off. I'll finish saving that once this device is unlocked.",
+                reason: "CloudWords.offUntilUnlocked. \"This device\" is the one that is locked; the line says the setting "
+                    + "is off and promises nothing about where a chat went."),
+        Allowed(file: "PebbleCore/CloudHelp.swift", literal: "Here is what leaves your device",
                 reason: "The cloud preview's title, shown only over a cloud request about to go. It says words leave, the "
                     + "opposite of a device promise."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
-                literal: "This is the whole request for this message: where it goes, the labels sent with it, and the words. I took out the personal details I found. Earlier messages in this chat go again with each new one. Like any website, the computer it goes to also sees this device's internet address.",
+                literal: "This shows where your message goes, the labels sent with it, and the words. I took out the personal details I found. Earlier messages in this chat go again with each new one. Like any website, the computer it goes to also sees this device's internet address.",
                 reason: "The cloud preview's detail, shown only over a cloud request. \"This device\" names whose address "
                     + "the cloud sees, a disclosure, not a promise."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
@@ -199,8 +210,10 @@ enum DevicePromise {
         CloudWords.privateDetail,
         CloudWords.privatePlaceholder,
         CloudWords.privateUnreadable,
+        CloudWords.privateLocked,
         CloudWords.privateNotSaved,
         CloudWords.offButCleared,
+        CloudWords.offUntilUnlocked,
         CloudWords.previewTitle,
         CloudWords.previewDetail,
         CloudWords.staysHere,

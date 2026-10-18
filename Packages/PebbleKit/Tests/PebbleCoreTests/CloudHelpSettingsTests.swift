@@ -56,6 +56,40 @@ struct CloudHelpSettingsTests {
         #expect(UserDefaults.standard.object(forKey: "pebble.cloudHelp") == nil)
     }
 
+    // MARK: A yes is for one address
+
+    @Test func aYesCountsOnlyForTheAddressItWasGivenFor() throws {
+        let here = try #require(URL(string: "https://cloud.example.com"))
+        let elsewhere = try #require(URL(string: "https://other.example.com"))
+        var settings = CloudHelpSettings()
+        settings.turnOn(for: here)
+        #expect(settings.isOn(for: here))
+        #expect(!settings.isOn(for: elsewhere))
+        #expect(!settings.isOn(for: try #require(URL(string: "https://cloud.example.com/v2"))))
+        #expect(!settings.isOn(for: nil))
+        // On with no address kept, as a file saved before addresses were.
+        #expect(!CloudHelpSettings(isOn: true).isOn(for: here))
+        settings.turnOff()
+        #expect(settings == CloudHelpSettings())
+        #expect(settings.consentedEndpoint == nil)
+    }
+
+    /// The address is kept in the file, and a file written before it was
+    /// kept reads as on for no address at all, so it needs a fresh yes.
+    @Test func theAddressIsKeptAndAnOlderFileReadsAsOff() throws {
+        let (store, folder) = try scratchStore()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let here = try #require(URL(string: "https://cloud.example.com"))
+        try store.save(CloudHelpSettings(isOn: true, for: here, privateWords: ["lemon cake"]))
+        #expect(try store.load().isOn(for: here))
+        #expect(try store.load().consentedEndpoint == "https://cloud.example.com")
+        try Data(#"{"isOn":true,"privateWords":["lemon cake"]}"#.utf8).write(to: store.fileURL)
+        let older = try store.load()
+        #expect(older.isOn && older.consentedEndpoint == nil)
+        #expect(!older.isOn(for: here))
+        #expect(older.privateWords == ["lemon cake"])
+    }
+
     /// Run against a scratch Application Support, so the test never makes
     /// the real folder on a developer's Mac or in CI.
     @Test func theAppKeepsThemInTheNotesFolderLeftOutOfBackups() throws {
@@ -69,6 +103,51 @@ struct CloudHelpSettingsTests {
         let values = try folder.resourceValues(forKeys: [.isExcludedFromBackupKey])
         #expect(values.isExcludedFromBackup == true)
         #endif
+    }
+
+    /// The off mark makes a saved on read as off, survives a new store on
+    /// the same file, as after a relaunch, and holds no words. The next
+    /// save, a fresh yes included, clears it, and so does erase.
+    @Test func theOffMarkReadsAsOffUntilTheNextSave() throws {
+        let (store, folder) = try scratchStore()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let here = try #require(URL(string: "https://cloud.example.com"))
+        try store.save(CloudHelpSettings(isOn: true, for: here, privateWords: ["lemon cake"]))
+        try store.markOff()
+        let relaunched = CloudHelpFileStore(fileURL: store.fileURL)
+        #expect(try relaunched.load() == CloudHelpSettings(privateWords: ["lemon cake"]))
+        #expect(try Data(contentsOf: store.offMarkURL).isEmpty, "the mark holds nothing")
+        try relaunched.save(CloudHelpSettings(isOn: true, for: here, privateWords: ["lemon cake"]))
+        #expect(try relaunched.load().isOn(for: here))
+        #expect(!FileManager.default.fileExists(atPath: store.offMarkURL.path))
+        try store.markOff()
+        try store.erase()
+        #expect(!FileManager.default.fileExists(atPath: store.offMarkURL.path))
+        // The in-memory store keeps the same rule.
+        let memory = InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: here))
+        memory.makeUnreadable()
+        try memory.markOff()
+        memory.makeUnreadable(false)
+        #expect(try !memory.load().isOn(for: here))
+        try memory.save(CloudHelpSettings(isOn: true, for: here))
+        #expect(try memory.load().isOn(for: here))
+    }
+
+    /// The real off mark is written so it can be made while the device is
+    /// locked: no protection, or protection only until the first unlock
+    /// after a restart. Complete protection would make the write fail
+    /// exactly when a locked switch off needs it.
+    @Test func theOffMarkCanBeWrittenWhileTheDeviceIsLocked() throws {
+        let (store, folder) = try scratchStore()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try store.markOff()
+        #if canImport(Darwin)
+        let attributes = try FileManager.default.attributesOfItem(atPath: store.offMarkURL.path)
+        let protection = try #require(attributes[.protectionKey] as? FileProtectionType)
+        #expect([FileProtectionType.none, .completeUntilFirstUserAuthentication].contains(protection),
+                "\(protection.rawValue)")
+        #endif
+        #expect(try Data(contentsOf: store.offMarkURL).isEmpty)
     }
 
     @Test func eraseRemovesEvenAnUnreadableFile() throws {
@@ -95,6 +174,24 @@ struct CloudHelpSettingsTests {
         #expect(settings.privateWords == ["lemon cake", "Sam's place"])
         settings.removePrivateWord("lemon cake")
         #expect(settings.privateWords == ["Sam's place"])
+    }
+
+    /// A word of only hyphens or other punctuation hides nothing, since
+    /// `Redactor` matches whole words, so it is refused rather than kept
+    /// in a list where it would look hidden.
+    @Test func aWordOfOnlyPunctuationIsRefused() {
+        var settings = CloudHelpSettings()
+        for word in ["-", "--", " - - ", "...", "!?", "\u{2014}", "'"] {
+            #expect(settings.refusal(for: word) == .onlyPunctuation, "\(word)")
+            let added = settings.addPrivateWord(word)
+            #expect(!added, "\(word)")
+        }
+        #expect(settings.privateWords.isEmpty)
+        for word in ["a-b", "42", "Zoë", "x!"] {
+            #expect(settings.refusal(for: word) == nil, "\(word)")
+        }
+        // And a word it takes is one the redactor hides.
+        #expect(Redactor(privateWords: ["a-b"]).redact("see a-b now").text == "see [private] now")
     }
 
     /// A word the redactor would already hide is never added twice: the
@@ -137,9 +234,48 @@ struct CloudHelpSettingsTests {
         #expect(CloudEndpoint.url(from: raw) == nil)
     }
 
+    /// A host in another script goes out encoded, so it would read one way
+    /// in the preview and another on the wire. It is refused.
+    @Test(arguments: ["https://bücher.example", "https://cloud.example.com/café"])
+    func anAddressThatIsNotPlainASCIIIsRefused(raw: String) {
+        #expect(CloudEndpoint.url(from: raw) == nil)
+    }
+
     @Test func aSecureAddressIsUsed() {
         #expect(CloudEndpoint.url(from: " https://cloud.example.com ")?.host == "cloud.example.com")
         #expect(CloudEndpoint.url(from: "https://cloud.example.com:8443/base")?.path == "/base")
+        // A host already in its plain ASCII form is taken.
+        #expect(CloudEndpoint.url(from: "https://xn--bcher-kva.example") != nil)
+    }
+
+    /// https's own port, written out, is left out of the Host line the
+    /// system sends, so the preview's Host line could read differently from
+    /// the address. Refused, rather than shown one way and sent another.
+    @Test(arguments: ["https://cloud.example.com:443", "https://cloud.example.com:443/v1", "https://[::1]:443"])
+    func anAddressWithHttpsOwnPortWrittenOutIsRefused(raw: String) {
+        #expect(CloudEndpoint.url(from: raw) == nil)
+        #expect(CloudEndpoint.url(from: raw.replacingOccurrences(of: ":443", with: ":8443")) != nil)
+    }
+
+    /// A build that isn't Debug never reaches a cloud model, whatever its
+    /// settings hold: the address reads as none. Tests run in Debug, so
+    /// the Release reading is driven through its flag, and the flag itself
+    /// is pinned for each kind of build.
+    @Test func onlyADebugBuildReadsAnAddress() throws {
+        let raw = "https://cloud.example.com"
+        #expect(CloudEndpoint.url(from: raw, buildMayReachTheCloud: false) == nil)
+        #expect(CloudEndpoint.url(from: raw, buildMayReachTheCloud: true) != nil)
+        #expect(CloudEndpoint.url(from: raw) != nil, "tests run in Debug")
+        let source = try String(contentsOf: Self.root.appendingPathComponent(
+            "Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift"), encoding: .utf8)
+        #expect(source.contains("""
+                #if DEBUG
+                    static let buildMayReachTheCloud = true
+                    #else
+                    static let buildMayReachTheCloud = false
+                    #endif
+                """))
+        #expect(source.contains("url(from: raw, buildMayReachTheCloud: buildMayReachTheCloud)"))
     }
 
     @Test func theAppAddressIsReadFromInfoPlist() {

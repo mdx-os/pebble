@@ -1,0 +1,659 @@
+# What `make mutation-check` breaks, and the tests that must then fail.
+# Every new behavior test gets an entry here (see AGENTS.md). Format: see
+# scripts/mutation-check.sh. Substitutions use ~ as the delimiter, or #
+# where the code itself holds a ~. An entry that needs several changes
+# gives each its own perl: line, and each must apply.
+
+# A yes holds only for its address.
+test: aYesCountsOnlyForTheAddressItWasGivenFor
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~return consentedEndpoint == endpoint\.absoluteString~return true~
+
+test: theAddressIsKeptAndAnOlderFileReadsAsOff aYesCountsOnlyForTheAddressItWasGivenFor aSavedYesHoldsOnlyForTheAddressItWasGivenFor
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~guard isOn, let endpoint, let consentedEndpoint else \{ return false \}\n(\s*)return consentedEndpoint == endpoint\.absoluteString~guard isOn, let endpoint else { return false }\n$1return consentedEndpoint.map { \$0 == endpoint.absoluteString } ?? true~
+
+test: aSavedYesHoldsOnlyForTheAddressItWasGivenFor
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~stale\.isOn, !stale\.isOn\(for: endpoint\)~stale.isOn, endpoint == nil~
+
+test: aChatSendsNothingOnceTheYesIsForAnotherAddress
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~store\.load\(\)\.isOn\(for: url\)~store.load().isOn~
+
+# A stale yes that can't be saved off at launch keeps the words and says so.
+test: aStaleYesThatCantBeSavedOffKeepsTheWordsAndSaysSo
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~(\n\s*)holdsOff = true\n~$1if (try? store.erase()) != nil { read = .off }$1holdsOff = true\n~
+
+test: aStaleYesThatCantBeSavedOffKeepsTheWordsAndSaysSo
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~state = launchStatus~state = nil~
+
+test: aStaleYesThatCantBeSavedOffKeepsTheWordsAndSaysSo
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~launchStatus = \(try\? store\.markOff\(\)\) != nil \? \.offSavedLater : \.offAtLaunchNotSaved~launchStatus = .offAtLaunchNotSaved~
+
+test: aStaleYesThatCantBeSavedOffKeepsTheWordsAndSaysSo aSwitchOffWhileTheDeviceIsLockedKeepsThePrivateWords aSwitchOffThatCantBeSavedOrErasedStaysOffForTheSession
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~if \(try\? store\.save\(fresh\)\) != nil, waiting \{ state = nil \}~_ = try? store.save(fresh)~
+
+# Whether a line waits for a save is decided where it is set, not by its words.
+test: aStaleYesThatCantBeSavedOffKeepsTheWordsAndSaysSo aSwitchOffThatCantBeSavedOrErasedStaysOffForTheSession aSwitchOffWhileLockedThatCantBeMarkedSaysItMayReadAsOn
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~if case \.said = self \{ false \} else \{ true \}~if case .said = self { false } else { false }~
+
+# The launch line reaches the home screen, and says plainly what it couldn't save.
+test: aStaleYesThatCantBeSavedOffKeepsTheWordsAndSaysSo theLaunchLineShowsOnTheHomeScreenOnlyWhileItHolds
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~fromLaunch && state == \.offAtLaunchNotSaved \? state\?\.line : nil~nil~
+
+test: aStaleYesThatCantBeSavedOffKeepsTheWordsAndSaysSo theLaunchLineShowsOnTheHomeScreenOnlyWhileItHolds
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~fromLaunch = launchStatus != nil~fromLaunch = false~
+
+test: aStaleYesThatCantBeSavedOffKeepsTheWordsAndSaysSo
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~state = launchStatus\n~state = launchStatus\n        if launchStatus != nil { statusCount += 1 }\n~
+
+test: aStaleYesThatCantBeSavedOffKeepsTheWordsAndSaysSo
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~I couldn't save that it's off, so I'll try again when you open this setting\.~I couldn't save that just now, so it may read as on the next time you open the app.~
+
+test: theLaunchLineShowsOnTheHomeScreenOnlyWhileItHolds
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~if let line = help\.launchNotice \{~if let line = help.launchNotice, false {~
+
+test: aStaleYesThatCantBeSavedOffHoldsEverySendOff
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~if holdsOff \{ switchedOff\.value = true \}~if holdsOff { }~
+
+# The app's state keeps its notes store, with or without an address.
+test: theAppKeepsItsNotesWithNoCloudAddress
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~return CloudHelp\(store: store, endpoint: endpoint, memory: memory\)~return CloudHelp(store: store, endpoint: endpoint, memory: nil)~
+
+test: theAppKeepsItsNotesWithNoCloudAddress
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~return couldNotOpen\(endpoint: endpoint, memory: memory, file: openStore\)~return couldNotOpen(endpoint: endpoint, memory: nil, file: openStore)~
+
+test: theAppLetsAnUnopenedSettingEraseItsFile
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~memory: memory, file: openStore\)~memory: memory, file: nil)~
+
+# A switch off holds after a relaunch, even when it couldn't be saved.
+test: aSwitchOffWhileLockedStaysOffAfterARelaunch
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~state = \(try\? store\.markOff\(\)\) != nil \? \.offUntilUnlocked : \.offForNow~state = .offForNow~
+
+# Locked and not even marked off: the line never says the switch off will hold.
+test: aSwitchOffWhileLockedThatCantBeMarkedSaysItMayReadAsOn
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~state = \(try\? store\.markOff\(\)\) != nil \? \.offUntilUnlocked : \.offForNow~state = (try? store.markOff()) != nil ? .offUntilUnlocked : .offUntilUnlocked~
+
+test: aSwitchOffThatCantBeSavedIsMarkedOffAndReadsOffAfterARelaunch
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~state = \(try\? store\.markOff\(\)\) != nil \? \.offSavedLater : \.offForNow~state = .offForNow~
+
+# The real off mark can be made while the device is locked.
+test: theOffMarkCanBeWrittenWhileTheDeviceIsLocked
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~static let offMarkWriting: Data\.WritingOptions = \[\.noFileProtection\]~static let offMarkWriting: Data.WritingOptions = [.completeFileProtection]~
+
+test: theOffMarkReadsAsOffUntilTheNextSave
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~if FileManager\.default\.fileExists\(atPath: offMarkURL\.path\) \{ settings\.turnOff\(\) \}~~
+
+test: theOffMarkReadsAsOffUntilTheNextSave
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~\n\s*try\? removeOffMark\(\)\n~\n~
+
+test: theOffMarkReadsAsOffUntilTheNextSave
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~\n\s*try removeOffMark\(\)\n    \}~\n    }~
+
+test: theOffMarkReadsAsOffUntilTheNextSave
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~if markedOff \{ read\.turnOff\(\) \}~~
+
+test: unlockingTheDeviceSavesTheSwitchOff
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~MainActor\.assumeIsolated \{ self\?\.refresh\(\) \}~_ = self~
+
+# A locked device gets its own calm line, and sign-in forgets with the cloud.
+test: aPrivateWordWhileLockedSaysTheDeviceIsLocked unreadablePrivateWordsSendNothing
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~case \.locked: state = \.said\(CloudWords\.privateLocked\)~case .locked: state = .said(CloudWords.privateUnreadable)~g
+
+test: turningOffAndForgettingTellSignInToForget
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~withdrawPreviews\(\)\n\s*auth\.forget\(\)\n~withdrawPreviews()\n~
+
+# Turning off ends every cloud chat's session, before sign-in forgets, saying the cloud is off.
+test: turningOffEndsEveryCloudChatBeforeSignInForgets
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~\n\s*for session in sessions\.allObjects \{ session\.end\(because: \.off\) \}~~
+
+test: turningOffEndsEveryCloudChatBeforeSignInForgets
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~for session in sessions\.allObjects \{ session\.end\(because: \.off\) \}\n(\s*)withdrawPreviews\(\)\n(\s*)auth\.forget\(\)\n~auth.forget()\n$1withdrawPreviews()\n$2for session in sessions.allObjects { session.end(because: .off) }\n~
+
+test: turningOffEndsEveryCloudChatBeforeSignInForgets
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~session\.end\(because: \.off\)~session.end()~
+
+test: turningOffAndForgettingTellSignInToForget
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~endOpenCloudChats\(\)\n\s*auth\.forget\(\)\n~endOpenCloudChats()\n~
+
+# Forget everything ends every open cloud chat first, and says what it can't erase.
+test: forgetEverythingFirstEndsEveryOpenCloudChat forgetEverythingWithNothingSentEndsTheChatAndSaysGone forgetEverythingEndsEveryOpenCloudChatNotOnlyTheHeldOne
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~for chat in openChats\.allObjects where chat\.holdsAnything \{ chat\.end\(\) \}~~
+
+# Every open cloud chat, not only the one the home screen holds.
+test: forgetEverythingEndsEveryOpenCloudChatNotOnlyTheHeldOne
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~for chat in openChats\.allObjects where chat\.holdsAnything \{ chat\.end\(\) \}~for chat in openChats.allObjects where chat.holdsAnything \&\& chat.onEnded != nil { chat.end() }~
+perl: s~for session in sessions\.allObjects where session\.holdsAnything \{ session\.end\(\) \}~~
+
+test: forgetEverythingFirstEndsEveryOpenCloudChat afterSendingNoForgetLineSaysGone
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~guard sent else \{ return line \}~guard false else { return line }~
+
+test: forgetEverythingWithNothingSentEndsTheChatAndSaysGone
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~let sent = endsCloudChats\?\(\) \?\? false~let sent = true~
+
+test: forgettingEndsAnOpenCloudChat
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~\n\s*// First, whatever happens to the file: no open chat keeps a copy,\n\s*// and sign-in keeps nothing it learned\.\n\s*endOpenCloudChats\(\)~~
+
+test: onlyTheHeldChatIsReplacedWhenItEnds
+file: Packages/PebbleKit/Sources/PebbleUI/HomeView.swift
+perl: s~guard let self, let held, self\.chat === held else~guard let self, held != nil else~
+
+test: endingAChatDropsWhatItHidAndCancelsTheSendOnTheWire
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~for send in sends \{ send\.cancel\(\) \}~~
+
+test: endingAChatDropsWhatItHidAndCancelsTheSendOnTheWire forgetEverythingFirstEndsEveryOpenCloudChat
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~(endedBy = reason \}\n)\s*hidden = Redactor\(\)\n~$1~
+
+test: handingARequestOverIsToldFirst forgetEverythingFirstEndsEveryOpenCloudChat
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~\n\s*handingOver\(\)\n~\n~
+
+# The redaction copy matches what it does: plurals and hyphens folded, other spellings missed.
+test: aPluralOrAHyphenatedSpellingIsHiddenToo
+file: Packages/PebbleKit/Sources/PebbleCore/Redactor.swift
+perl: s~"s\?\(\?!~"(?!~
+
+test: aPluralOrAHyphenatedSpellingIsHiddenToo
+file: Packages/PebbleKit/Sources/PebbleCore/Redactor.swift
+perl: s~\.joined\(separator: #"\[\\s\\-\]\+"#\)~.joined(separator: #"\\s+"#)~
+
+test: aWordOfOnlyHyphensHidesNothing
+file: Packages/PebbleKit/Sources/PebbleCore/Redactor.swift
+perl: s~guard !parts\.isEmpty else \{ return nil \}~~
+
+test: anotherSpellingCanStillSlipBy
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~"I take these out of anything I send, but I can miss another spelling, so check what I show you\.~"Anything here is taken out before anything is sent.~
+
+test: eachWordIsCompiledOncePerRedactor
+file: Packages/PebbleKit/Sources/PebbleCore/Redactor.swift
+perl: s~Self\.wholeWords\(patterns\.privateWords, in: folded\)~Self.wholeWords(WordPatterns(names: [], privateWords: privateWords).privateWords, in: folded)~
+
+# The preview is the whole request: Host and Content-Length, reserved names refused.
+test: theShownRequestHasTheMethodFullAddressEveryHeaderAndTheBody theShownRequestIsTheURLRequestTheTransportReceives theSheetShowsExactlyTheRequestThatIsSent voiceOverNeverReadsASignInValue
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~\n\s*all\["Host"\] = [^\n]*~~
+
+test: theShownRequestHasTheMethodFullAddressEveryHeaderAndTheBody theShownRequestIsTheURLRequestTheTransportReceives theSheetShowsExactlyTheRequestThatIsSent
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~\n\s*all\["Content-Length"\] = [^\n]*~~
+
+test: theHeaderBuilderRefusesAReservedName aReplyWithAReservedSignInHeaderShowsAndSendsNothing
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~if let name = auth\.keys[^\n]*\n[^\n]*\n\s*\}~~
+
+test: theTransportRefusesARequestWithAReservedName
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~if let name = request\.headers\.keys[^\n]*\n[^\n]*\n\s*\}~~
+
+test: thePayloadHasAFixedShape theSheetShowsExactlyTheRequestThatIsSent voiceOverNeverReadsASignInValue
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~"User-Agent": "agent"~"User-Agent": "pebble"~
+
+test: voiceOverNeverReadsASignInValue
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~sign-in value, hidden"~sign-in value, 7 characters"~
+
+test: voiceOverNeverReadsASignInValue
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~\(isSignIn\(\$0\.name, \$0\.value\) \? signInMask : \$0\.value\)~\$0.value~
+
+# Sign-in is a hop in the same preview, sent only by its yes.
+test: signInNeverGoesWithoutAYesToThePreviewThatShowsIt turningOnSendsNothingAndSignInWaitsForThePreviewsYes
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~(\n\s*guard await reviewer\.review\(preview\) == \.send)~\n        if let early = preview.signIn { auth.signedIn(try await session.send(early, through: transport)) }$1~
+
+test: theYesSendsTheSignInHopThenTheMessageExactlyAsShown turningOnSendsNothingAndSignInWaitsForThePreviewsYes
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~if let signIn = preview\.signIn \{~if let signIn = preview.signIn, false {~
+
+test: aSignInIsShownAsAHopInTheSamePreview turningOnSendsNothingAndSignInWaitsForThePreviewsYes
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~signIn: signInRequest,~signIn: nil,~
+
+test: aSignInHopStaysOnTheAddressShown aReplyWithARefusedSignInPathShowsAndSendsNothing
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~guard let url = \$0\.url\(under: endpoint\) else \{ throw CloudTransportError\.signInPathRefused\(\$0\.path\) \}~let url = URL(string: \$0.path, relativeTo: endpoint)?.absoluteURL ?? endpoint~
+
+test: aSignInHopStaysOnTheAddressShown
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~!segment\.isEmpty && segment != "\." && segment != "\.\." && ~~
+
+test: aSignInAnswerThatLandsAfterTheChatEndedIsNotKept
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~(func handOver[^\n]*\n\s*try lock\.withLock \{\n)\s*if let endedBy \{ throw endedBy \}\n~$1~
+
+test: aSignInAnswerThatLandsAfterTheChatEndedIsNotKept
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~try session\.handOver \{\n\s*try checkOn\(\)\n~try session.handOver {\n~
+
+# The check and the hand over share the chat's lock, so a forget can't land between them.
+test: aSignInAnswerNeverOutlivesTheForgetThatEndsTheChat
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~try session\.handOver \{\n\s*try checkOn\(\)\n\s*auth\.signedIn\(answer\)\n\s*\}~try session.checkOpen()\n            try checkOn()\n            auth.signedIn(answer)~
+
+# A sign-in hop that was handed over counts as sent, whatever the message does.
+test: aSignInHopHandedOverCountsAsSentWhateverHappensToTheMessage aSignInHopThatWentCountsAsSentWhateverHappensToTheMessage
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~let answer = try await session\.send\(signIn, through: transport\)~let answer = try await transport.send(signIn)~
+
+# Sign-in may carry a credential or a device token, and nothing of the person's.
+test: aSignInValueWithAPersonalDetailIsRefusedAndNothingIsSent aSignInCarryingAPrivateWordOrANoteNameSendsNothing
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~if signInValues\.contains\(where: \{ !redactor\.redact\(\$0\)\.isUnchanged \}\) \{\n\s*throw CloudTransportError\.signInCarriesPersonalDetails\n\s*\}~~
+
+test: aSignInValueWithAPersonalDetailIsRefusedAndNothingIsSent aSignInCarryingAPrivateWordOrANoteNameSendsNothing
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~var signInValues = Array\(headers\.values\)~var signInValues: [String] = []~
+
+test: aSignInValueWithAPersonalDetailIsRefusedAndNothingIsSent
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~signInValues \+= values \+ \$0\.headers\.values~signInValues += values~
+
+test: aSignInBodyThatIsNotAFlatObjectOfShortValuesIsRefused
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~guard let values = \$0\.plainValues else \{ throw CloudTransportError\.signInBodyRefused \}~let values = \$0.plainValues ?? []~
+
+test: aSignInBodyThatIsNotAFlatObjectOfShortValuesIsRefused
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~return values\.allSatisfy\(\{ \$0\.count <= Self\.maxValueLength \}\) \? values : nil~return values~
+
+test: aSignInBodyThatIsNotAFlatObjectOfShortValuesIsRefused
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~text = String\(try value\.decode\(Double\.self\)\)~if let flag = try? value.decode(Bool.self) { text = String(flag) } else { text = String(try value.decode(Double.self)) }~
+
+test: eachFailureHasItsOwnLine aSignInCarryingAPrivateWordOrANoteNameSendsNothing
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~return CloudWords\.signInRefused~return FirstConversation.couldNotAnswer~
+
+test: theQuestionPromisesSignInCarriesNothingPrivate
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~\n\s*"Signing in never carries your chats, notes or private words\.",~~
+
+# No cookie of any kind: refused as a header, kept by no session, set on no request.
+test: theHeaderBuilderRefusesAReservedName theTransportRefusesARequestWithAReservedName
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~"transfer-encoding", "cookie",~"transfer-encoding",~
+
+test: theSessionKeepsNothingAndAddsNothing
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~\n\s*configuration\.httpCookieStorage = nil~~
+
+test: theSessionKeepsNothingAndAddsNothing
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~configuration\.httpShouldSetCookies = false~configuration.httpShouldSetCookies = true~
+
+test: theSessionKeepsNothingAndAddsNothing
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~\n\s*configuration\.urlCache = nil~~
+
+test: theSessionKeepsNothingAndAddsNothing
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~\n\s*configuration\.urlCredentialStorage = nil~~
+
+test: aCookieFromTheSignInAnswerNeverRidesOnTheMessage
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~configuration\.httpCookieStorage = nil\n(\s*)configuration\.httpShouldSetCookies = false~configuration.httpCookieStorage = .shared\n$1configuration.httpShouldSetCookies = true~
+perl: s~request\.httpShouldHandleCookies = false~request.httpShouldHandleCookies = true~
+
+test: theYesToTurningOnReachesNoNetwork
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~(state = \.said\(CloudWords\.onNotSaved\)\n\s*return\n\s*\}\n\s*state = nil\n)~$1        _ = makeTransport()\n~
+
+test: theQuestionSaysSignInIsInThePreview
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~the sign-in is in the same preview, so you see where it goes and which labels it carries before anything leaves\.~the sign-in is in the same preview, so you see where it goes and what it carries before anything leaves.~
+
+# The Host line is the wire's, and handing over is told before the send.
+test: theHostLineIsWrittenAsTheWireWritesIt
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~guard let port = url\.port, port != ownPort else~guard let port = url.port else~
+
+test: theHostLineIsWrittenAsTheWireWritesIt
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~let shown = host\.contains\(":"\) && !host\.hasPrefix\("\["\) \? "\[\\\(host\)\]" : host~let shown = host~
+
+test: anAddressThatIsNotPlainASCIIIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~\n\s*text\.allSatisfy\(\{ \$0\.isASCII \}\),~~
+
+test: anAddressWithHttpsOwnPortWrittenOutIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~, url\.port != 443~~
+
+# Outside Debug no address is read, whatever the build settings hold.
+test: onlyADebugBuildReadsAnAddress
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~guard buildMayReachTheCloud, let raw else~guard let raw else~
+
+test: onlyADebugBuildReadsAnAddress
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~#else\n(\s*)static let buildMayReachTheCloud = false~#else\n$1static let buildMayReachTheCloud = true~
+
+# Sign-in paths written with encoded dots are refused like the plain ones.
+test: aSignInHopStaysOnTheAddressShown
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s#0123456789-\._~"\)#0123456789-._~%")#
+
+# A private word of only punctuation is refused, with a line saying why.
+test: aWordOfOnlyPunctuationIsRefused aPrivateWordOfOnlyPunctuationSaysWhy
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~\n\s*if word\.allSatisfy\(\{ \$0\.isPunctuation \|\| \$0\.isWhitespace \}\) \{ return \.onlyPunctuation \}~~
+
+test: aPrivateWordOfOnlyPunctuationSaysWhy eachRefusalHasItsOwnLine
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~case \.onlyPunctuation: privateOnlyPunctuation~case .onlyPunctuation: nil~
+
+# The preview claims nothing its covered values can't show, and says what is covered.
+test: theSheetSaysValuesAreCoveredWheneverOneIs
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~"Here is what leaves your device"~"Here is exactly what leaves your device"~
+
+test: theSheetSaysValuesAreCoveredWheneverOneIs thePreviewSaysWhatItIsWithoutOverclaiming
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~"This shows where your message goes, the labels sent with it, and the words\.~"This is the whole request for this message: where it goes, the labels sent with it, and the words.~
+
+test: theSheetSaysValuesAreCoveredWheneverOneIs
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~preview\.signIn != nil \|\| preview\.request\.headers\.contains \{ isSignIn\(\$0\.key, \$0\.value\) \}~preview.signIn != nil~
+
+test: everyCloudLineIsInTheCopyLists
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~chatEnded, signInRefused, ~chatEnded, ~
+
+test: handingARequestOverIsToldFirst
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~handingOver\(\)\n(\s*)let task = Task \{ try await transport\.send\(request\) \}~let task = Task { let data = try await transport.send(request); handingOver(); return data }~
+
+test: eachTransportRefusalCountsAsNothingSent
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~case \.headersNotShown, \.reservedHeader, \.signInPathRefused, ~case .headersNotShown, .reservedHeader: true\n            case .signInPathRefused: false\n            case ~
+
+test: eachTransportRefusalCountsAsNothingSent aSignInCarryingAPrivateWordOrANoteNameSendsNothing
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~\.signInBodyRefused,\n(\s*)\.signInCarriesPersonalDetails: true~.signInBodyRefused: true\n$1case .signInCarriesPersonalDetails: false~
+
+# What the preview covers, the same on the card and aloud.
+test: voiceOverHearsTheSignInHopsBody whatThePreviewCoversIsPinnedOnTheCardAndAloud
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~if !request\.body\.isEmpty \{ lines\.append\(CloudWords\.spokenSignInBody\(signInBodyNames\(request\.body\) \?\? \[\]\)\) \}~~
+
+test: voiceOverHearsTheSignInHopsBody
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~\[CloudWords\.previewSignInFirst, CloudWords\.previewSignInCovered\]~[CloudWords.previewSignInFirst]~
+
+test: whatThePreviewCoversIsPinnedOnTheCardAndAloud
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~\(isSignInHop \? maskedSignInBody\(request\.body\) : request\.text\)~request.text~
+
+test: whatThePreviewCoversIsPinnedOnTheCardAndAloud
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~guard let names = signInBodyNames\(body\) else \{ return signInMask \}~guard let names = signInBodyNames(body) else { return String(decoding: body, as: UTF8.self) }~
+
+# Ending a chat leaves nothing behind in it.
+test: endingAChatClearsTheDraftAndTheCutReplyPutsNothingBack
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~draft = ""\n(\s*)lastLineUnanswered = false\n(\s*)failure = nil~lastLineUnanswered = false\n$2failure = nil~
+
+test: endingAChatClearsTheDraftAndTheCutReplyPutsNothingBack
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~guard !Task\.isCancelled, !hasEnded, generation == replyGeneration else \{ return \}~~
+
+test: afterSendingNoForgetLineSaysGone
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~case \(true, nil\), \(true, \.privateWords\?\): CloudWords\.forgotAfterSending~case (true, nil): CloudWords.forgotAfterSending~
+
+# Plurals fold a trailing s only, and blank words hide nothing.
+test: aPluralOtherThanATrailingSSlipsBy
+file: Packages/PebbleKit/Sources/PebbleCore/Redactor.swift
+perl: s~"s\?\(\?!~"(?:e?s)?(?!~
+
+test: aWordOfOnlyWhitespaceHidesNothing
+file: Packages/PebbleKit/Sources/PebbleCore/Redactor.swift
+perl: s~guard !parts\.isEmpty else \{ return nil \}~~
+
+# Hosted views: each test drives the live screen, so it can fail.
+test: rebuildingTheHomeScreenKeepsAnOpenCloudChatsPlace
+file: Packages/PebbleKit/Sources/PebbleUI/HomeView.swift
+perl: s~HomeView\.surfacePlace\(chat: chat\?\.privacyPlace, newChat: newChatPlace\)~HomeView.surfacePlace(chat: nil, newChat: newChatPlace)~
+
+test: theTurnOnQuestionIsForOneWindow
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~act \{ asksToTurnOn = \$0\.setOn\(on\) \}~act { _ = \$0.setOn(on) }~
+
+test: theTurnOnQuestionIsForOneWindow
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~if on \{ return isAvailable && !usesCloudForNewChats \}~if on { confirmTurnOn(); return false }~
+
+# The screen under a preview, a locked device, a status spoken where it belongs.
+test: theScreenUnderThePreviewKeepsItsStateWhenTheChatChanges
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~    func cloudPreview\(~    \@ViewBuilder func cloudPreview(~
+perl: s~-> ModifiedContent<Self, CloudPreviewPresenter> \{\n[^\n]*\n~-> some View {\n        if let review { modifier(CloudPreviewPresenter(review: review, blocked: blocked, waiting: waiting)) } else { self }\n~
+
+test: aSwitchOffWhileTheDeviceIsLockedKeepsThePrivateWords
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~\} else if first == \.locked \{~} else if false {~
+
+test: aSwitchOffWhileTheSettingsAreDamagedErasesThem
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~\} catch \{\n(\s*)return \.unreadable\n~} catch {\n$1return .locked\n~
+
+test: aStatusLineIsSpokenOnlyInTheWindowThatActed
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~-> Bool \{ origin == nil \|\| origin == window \}~-> Bool { true }~
+
+test: aStatusLineNoWindowAskedForIsSpokenInEveryWindow
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~-> Bool \{ origin == nil \|\| origin == window \}~-> Bool { origin == window }~
+
+test: aStatusLineNoWindowAskedForIsSpokenInEveryWindow
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~\n\s*defer \{ speaker = nil \}~~
+
+# The guards themselves.
+test: theLocalConfigCheckFailsWhenItCantLook
+file: scripts/local-config-check.sh
+perl: s~so I can't check it\."\n  exit 1~so I can't check it."\n  exit 0~
+
+test: theLocalConfigCheckFailsWhenATrackedConfigSetsAnAddress
+file: scripts/local-config-check.sh
+perl: s~goes only in \$local_only\."\n    exit 1~goes only in \$local_only."\n    exit 0~
+
+test: theLocalConfigCheckFailsWhenATrackedConfigSetsAnAddress
+file: scripts/local-config-check.sh
+perl: s~PEBBLE_CLOUD_ENDPOINT\(\\\[\[\^\]\]\*\\\]\)\*~PEBBLE_CLOUD_ENDPOINT~
+
+test: theLocalConfigCheckFailsWhenProjectYmlSetsAnAddress
+file: scripts/local-config-check.sh
+perl: s~if \[ -n "\$values" \] \|\| \[ -n "\$passed" \]; then~if [ -n "\$passed" ]; then~
+
+test: theLocalConfigCheckFailsWhenProjectYmlSetsAnAddress
+file: scripts/local-config-check.sh
+perl: s~if \[ -n "\$values" \] \|\| \[ -n "\$passed" \]; then~if [ -n "\$values" ]; then~
+
+test: theLocalConfigCheckFailsWhenProjectYmlSetsAnAddress
+file: scripts/local-config-check.sh
+perl: s~PEBBLE_CLOUD_ENDPOINT\(\\\[\[\^\]\]\*\\\]\)\*"\?~PEBBLE_CLOUD_ENDPOINT"?~
+
+test: theLocalConfigCheckFailsWhenATrackedConfigCantBeRead
+file: scripts/local-config-check.sh
+perl: s~can't read the tracked \$config, so I can't check it\."\n    exit 1~can't read the tracked \$config, so I can't check it."\n    continue~g
+
+test: theReleaseCheckFailsWhenAReleaseBuildHasAnAddress
+file: scripts/release-endpoint-check.sh
+perl: s~or build Debug \(not an archive\) to try it\."\n  exit 1~or build Debug (not an archive) to try it."\n  exit 0~
+
+test: theReleaseCheckFailsWhenAReleaseBuildHasAnAddress
+file: scripts/release-endpoint-check.sh
+perl: s~if \[ "\$CONFIGURATION" = Debug \]~if [ "\$CONFIGURATION" != Release ]~
+
+test: theReleaseCheckFailsWhenAReleaseBuildHasAnAddress
+file: scripts/release-endpoint-check.sh
+perl: s~\[ "\$action" != install \] && \[ "\$action" != archive \]~true~
+
+test: aStrayConfigurationInTheShellDoesNotSkipTheCheck
+file: scripts/release-endpoint-check.sh
+perl: s~ && \[ -n "\$\{TARGET_BUILD_DIR:-\}" \] && \[ -n "\$\{SCRIPT_INPUT_FILE_COUNT:-\}" \]~~
+
+test: theReleaseCheckNeverPrintsTheAddress
+file: scripts/release-endpoint-check.sh
+perl: s~is set for a \$1 build\. The address is not shown here\.~is set for a \$1 build (\$PEBBLE_CLOUD_ENDPOINT).~
+
+test: theReleaseCheckOnItsOwnChecksEveryConfigurationButDebug
+file: scripts/release-endpoint-check.sh
+perl: s~\[ "\$configuration" = Debug \] && continue~[ "\$configuration" = Release ] || continue~
+
+test: theReleaseCheckOnItsOwnChecksEveryConfigurationButDebug
+file: scripts/release-endpoint-check.sh
+perl: s~ -target "\$target"~~
+
+test: theReleaseCheckFailsWhenTheSettingsDisagree
+file: scripts/release-endpoint-check.sh
+perl: s~PEBBLE_CLOUD_ENDPOINT = //p'\)"~PEBBLE_CLOUD_ENDPOINT = //p' | head -n 1)"~
+
+test: theReleaseCheckFailsWhenItCantReadTheSettings
+file: scripts/release-endpoint-check.sh
+perl: s~so it can't check them\."\n  exit 1~so it can't check them."\n  exit 0~
+
+test: theReleaseCheckFailsWhenItCantReadTheSettings
+file: scripts/release-endpoint-check.sh
+perl: s~so it can't check them\."\n    exit 1~so it can't check them."\n    exit 0~
+
+test: everyReleaseBuildRunsTheCheck
+file: project.yml
+perl: s~script: sh "\$SRCROOT/scripts/release-endpoint-check\.sh"~script: "true"~
+
+test: everyReleaseBuildRunsTheCheck
+file: project.yml
+perl: s~script: sh "\$SRCROOT/scripts/release-endpoint-check\.sh"~script: sh "\$SRCROOT/scripts/release-endpoint-check.sh" || true~
+
+test: everyReleaseBuildRunsTheCheck
+file: project.yml
+perl: s~basedOnDependencyAnalysis: false~basedOnDependencyAnalysis: true~
+
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s~push \@people, \$quoted;~~
+
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s~q\{fix\(\?:ed\)\?\\s\+round\|~q{~
+
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s~else \{ \$comment \.= " \$rest"; \$rest = "" \}~else { \$rest = "" }~
+
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s#\n\s*\$rest =~ s/\$quoted/""/g;##
+
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s~join\("\\\\s\+", map \{ quotemeta \} split\(/\\s\+/, \$name\)\)~quotemeta(\$name)~
+
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s~map \{ quotemeta \}~map { \$_ }~
+
+test: theCommentLintCoversTheProjectFiles
+file: scripts/comment-lint.sh
+perl: s~ scripts project\.yml Makefile~ scripts~
+
+# The real names stay out of the repository, and a list it can't read is an error.
+test: theNamesTheLintBlocksAreNeverCommitted
+file: scripts/comment-lint.sh
+perl: s~elif \[ -r "\$local_names" \]; then~elif false; then~
+
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s~(can't read the list of names in \$names"\n)\s*exit 1\n~$1    names=/dev/null\n~
+
+test: theNamesTheLintBlocksAreNeverCommitted
+file: .gitignore
+perl: s~\nConfig/comment-lint-names\.local\.txt\n~\n~
+
+test: theMutationCheckFailsWhenATestSurvives
+file: scripts/mutation-check.sh
+perl: s~(SURVIVED  \$test still passes with \$file broken by: \$perl"\n)\s*problems=\$\(\(problems \+ 1\)\)\n~$1~
+
+test: theMutationCheckFailsForAMissingTestOrFile
+file: scripts/mutation-check.sh
+perl: s~(say "PROBLEM: no file \$file"\n)\s*problems=\$\(\(problems \+ 1\)\)\n~$1~
+
+test: theMutationCheckFailsForAMissingTestOrFile
+file: scripts/mutation-check.sh
+perl: s~(say "mutation-check: no test named \$test"\n)\s*exit 1\n~$1~
+
+test: theMutationCheckReportsATimeoutApartFromAKill
+file: scripts/mutation-check.sh
+perl: s~elif \[ "\$status" -eq "\$alarmed" \]; then\n(\s*)echo timedout~elif false; then\n$1echo timedout~
+
+test: theMutationCheckReportsATimeoutApartFromAKill
+file: scripts/mutation-check.sh
+perl: s~if \[ "\$timedout" -ne 0 \] && \[ "\$allow_timeouts" != 1 \]; then~if false; then~
+
+test: aTimedOutTestLeavesNothingRunning
+file: scripts/mutation-check.sh
+perl: s~kill "TERM", -\$pid; sleep 1; kill "KILL", -\$pid;~kill "TERM", \$pid; sleep 1; kill "KILL", \$pid;~
+
+test: everyChangeInAnEntryMustApply
+file: scripts/mutation-check.sh
+perl: s~if cmp -s "\$work/before\.tmp" "\$work/\$file"; then stale="\$change"; break; fi~:~
+
+test: theMutationCheckStopsAHangBeforeAnythingIsBroken
+file: scripts/mutation-check.sh
+perl: s~if \[ "\$status" -eq "\$alarmed" \]; then\n(\s*)say "mutation-check: the listed tests~if false; then\n$1say "mutation-check: the listed tests~
+
+test: theMutationCheckStopsAHangBeforeAnythingIsBroken
+file: scripts/mutation-check.sh
+perl: s~out="\$\(bounded "\$baseline_timeout" \\\n\s*~out="\$(~
+
+test: verifyRunsTheCommentLintAndTheMutationCheck
+file: Makefile
+perl: s~ mutation-check build build-release~ build build-release~
+
+test: verifyRunsTheCommentLintAndTheMutationCheck
+file: Makefile
+perl: s~ comment-lint test mutation-check~ test mutation-check~
+
+test: verifyRunsTheCommentLintAndTheMutationCheck
+file: Makefile
+perl: s~(\nverify:[^\n]*) build build-release screenshots~$1 build screenshots~

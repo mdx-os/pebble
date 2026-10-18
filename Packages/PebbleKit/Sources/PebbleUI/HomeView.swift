@@ -60,11 +60,15 @@ public struct HomeView: View {
         tasks: (any TaskEngine)? = nil,
         drivesTasks: Bool = false,
         now: @escaping () -> Date = { Date() },
-        cloud: CloudHelp? = nil
+        cloud: CloudHelp? = nil,
+        // Told each place the live screen works out, for tests that drive
+        // a hosted screen.
+        reportsPlace: (@MainActor (PrivacyPlace) -> Void)? = nil
     ) {
         screen = HomeScreen(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                             looks: looks, conversation: conversation, section: section, feed: feed,
-                            needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, now: now, cloud: cloud)
+                            needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, now: now, cloud: cloud,
+                            reportsPlace: reportsPlace)
     }
 
     /// Which model the screen was made for: its kind and where its words
@@ -112,11 +116,12 @@ public struct HomeView: View {
     }
 
     /// The same, from a place already worked out. With `cloud`, Forget
-    /// everything erases the words always hidden too.
+    /// everything ends every open cloud chat first and erases the words
+    /// always hidden too.
     static func memoryModel(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp? = nil,
                             onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) -> MemoryModel {
-        MemoryModel(store: store, place: place, alsoForget: MemoryView.alsoForget(cloud),
-                    onForgetEverything: onForgetEverything)
+        MemoryModel(store: store, place: place, endsCloudChats: MemoryView.endsCloudChats(cloud),
+                    alsoForget: MemoryView.alsoForget(cloud), onForgetEverything: onForgetEverything)
     }
 
     /// The send itself, apart from moving, so tests can drive it.
@@ -133,8 +138,20 @@ public struct HomeView: View {
                         conversation: Conversation?) -> ChatController {
         let review = CloudReview()
         let chatModel = cloud?.chatModel(local: model, review: review) ?? model
-        return ChatController.make(brand: brand, model: chatModel, names: names, conversation: conversation,
-                                   review: chatModel.privacyPlace.staysOnDevice ? nil : review)
+        let chat = ChatController.make(brand: brand, model: chatModel, names: names, conversation: conversation,
+                                       review: chatModel.privacyPlace.staysOnDevice ? nil : review)
+        // Forget everything ends every cloud chat, so the setting knows each.
+        if chat.review != nil { cloud?.opened(chat) }
+        return chat
+    }
+
+    /// The home screen's chat slot, holding `first` and starting a fresh
+    /// chat whenever the one it holds is ended by Forget everything.
+    static func chatSlot(_ first: ChatController?, brand: Brand, model: any ModelClient,
+                         names: any AgentNameStoring, cloud: CloudHelp?) -> ChatSlot {
+        ChatSlot(first) {
+            newChat(brand: brand, model: model, names: names, cloud: cloud, conversation: nil)
+        }
     }
 
     /// The flag every device line outside a chat reads: memory, Today's
@@ -165,6 +182,7 @@ struct HomeScreen: View {
     let looks: UserDefaults
     /// The cloud setting. Nil, or off, means every chat stays on this device.
     let cloud: CloudHelp?
+    let reportsPlace: (@MainActor (PrivacyPlace) -> Void)?
 
     @State private var finished: Bool
     @State private var firstMessage: String?
@@ -211,7 +229,8 @@ struct HomeScreen: View {
         tasks: (any TaskEngine)?,
         drivesTasks: Bool,
         now: @escaping () -> Date,
-        cloud: CloudHelp?
+        cloud: CloudHelp?,
+        reportsPlace: (@MainActor (PrivacyPlace) -> Void)?
     ) {
         self.brand = brand
         self.model = model
@@ -220,6 +239,7 @@ struct HomeScreen: View {
         self.memory = memory
         self.looks = looks
         self.cloud = cloud
+        self.reportsPlace = reportsPlace
         // One store for the notes: the redactor must read the same notes
         // the memory screen writes.
         assert(cloud.map { $0.memory === memory } ?? true, "Pass the same MemoryStore to CloudHelp and HomeView")
@@ -230,8 +250,10 @@ struct HomeScreen: View {
         // The chat starts after the first run so it opens with the chosen name.
         // `StateObject` makes it only once, so a rebuild of this struct makes
         // no chat, no preview gate and no cloud transport.
-        _chats = StateObject(wrappedValue: ChatSlot(needed ? nil
-            : HomeView.newChat(brand: brand, model: model, names: names, cloud: cloud, conversation: conversation)))
+        _chats = StateObject(wrappedValue: HomeView.chatSlot(
+            needed ? nil : HomeView.newChat(brand: brand, model: model, names: names, cloud: cloud,
+                                            conversation: conversation),
+            brand: brand, model: model, names: names, cloud: cloud))
         let newChatPlace = cloud?.privacyPlace(local: model) ?? model.privacyPlace
         _newChatPlace = State(initialValue: newChatPlace)
         // A chat made now gets the model the setting picks now, so this is
@@ -329,6 +351,7 @@ struct HomeScreen: View {
         }
         .onChange(of: surfacePlace, initial: true) { _, place in
             feed.place = place
+            reportsPlace?(place)
         }
         // What a cloud chat would send, over whichever screen is in front,
         // so a line sent from Today's composer is previewed too. It waits,
@@ -511,6 +534,9 @@ struct HomeScreen: View {
     /// Today, with the chat's composer right on it: type and go.
     private func todayScreen(_ chat: ChatController) -> some View {
         FeedView(model: feed, look: AgentLook.load(from: looks), onTalk: { talk(about: $0) })
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if let cloud { CloudLaunchNotice(help: cloud) }
+            }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 // Command Return belongs to whichever composer is in front.
                 TodayComposer(chat: chat, inFront: cover.todayInFront) {
@@ -570,12 +596,30 @@ struct HomeScreen: View {
 }
 
 /// The home screen's open chat. Starting a new one replaces it, which
-/// redraws the home screen.
+/// redraws the home screen. A chat Forget everything ends is replaced by a
+/// fresh one from `restart`, so the screen never shows a chat that holds
+/// erased words.
 @MainActor
 final class ChatSlot: ObservableObject {
-    @Published var chat: ChatController?
+    @Published var chat: ChatController? {
+        didSet { watch() }
+    }
+    private let restart: @MainActor () -> ChatController
 
-    init(_ chat: ChatController?) { self.chat = chat }
+    init(_ chat: ChatController?, restart: @escaping @MainActor () -> ChatController) {
+        self.chat = chat
+        self.restart = restart
+        watch()
+    }
+
+    /// Only the chat still held here is replaced, never one already gone.
+    private func watch() {
+        guard let held = chat else { return }
+        held.onEnded = { [weak self, weak held] in
+            guard let self, let held, self.chat === held else { return }
+            self.chat = self.restart()
+        }
+    }
 }
 
 /// The chat's composer, at the foot of Today. It shares the chat's draft,

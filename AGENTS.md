@@ -15,9 +15,11 @@ in lint, a skill, or CI.
 
 ## Commands
 
-- `make verify`: everything CI runs (brand check, tests, builds, screenshots)
+- `make verify`: everything CI runs (brand check, comment lint, tests, mutation check, builds, screenshots)
 - `make test`: package unit tests (Swift Testing)
-- `make build-release`: Release builds for macOS and the iOS Simulator (part of verify). Anything behind `#if DEBUG`, like the showcase, must only be used behind it too
+- `make mutation-check`: breaks the code each test in `scripts/mutation-manifest.txt` covers, on a copy in `build/mutation`, and requires the test to fail. Every new behavior test gets a manifest entry; a test that passes with its code broken protects nothing
+- `make comment-lint`: no review history ("fix round", "item 11", "round 4") or personal names in code comments, project.yml, the Makefile or the mutation manifest. Say what the code or test protects. The names it blocks are never committed: they live in the git-ignored `Config/comment-lint-names.local.txt`, or in the file `COMMENT_LINT_NAMES` names in CI
+- `make build-release`: Release builds for macOS and the iOS Simulator (part of verify). Anything behind `#if DEBUG`, like the showcase, must only be used behind it too. Every build with a cloud address fails unless it is Debug and not an archive, whatever the configuration is called
 - `make pulse`: fetch the competitor watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
 - `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`
 - `make generate`: regenerate `Pebble.xcodeproj` after editing `project.yml`

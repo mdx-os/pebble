@@ -41,7 +41,9 @@ echo "screenshots: building for iOS Simulator"
 xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble \
   -destination 'generic/platform=iOS Simulator' -derivedDataPath "$derived" \
   CODE_SIGNING_ALLOWED=NO
-ios_app="$(built_app Debug-iphonesimulator)"
+# `exit` inside built_app only leaves the $(...) subshell, so stop here too.
+ios_app="$(built_app Debug-iphonesimulator)" || exit 1
+[ -n "$ios_app" ] || { echo "screenshots: found no iOS Simulator app to install."; exit 1; }
 
 for kind in iPhone iPad; do
   if [ "$kind" = iPhone ]; then wanted="${PEBBLE_IPHONE:-}"; else wanted="${PEBBLE_IPAD:-}"; fi
@@ -62,7 +64,8 @@ done
 echo "screenshots: building for macOS"
 xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble \
   -destination 'platform=macOS,arch=arm64' -derivedDataPath "$derived"
-mac_app="$(built_app Debug)"
+mac_app="$(built_app Debug)" || exit 1
+[ -n "$mac_app" ] || { echo "screenshots: found no Mac app to open."; exit 1; }
 exe="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$mac_app/Contents/Info.plist")"
 "$mac_app/Contents/MacOS/$exe" -snapshotPath "$PWD/$out/mac.png"
 echo "screenshots: $out/mac.png"

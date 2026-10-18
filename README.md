@@ -71,17 +71,38 @@ chooses one.
 
 - Cloud: `CloudModel` sends to the address in `Config/Cloud.local.xcconfig`,
   which git ignores and which doesn't exist by default, so the setting can't
-  be turned on. Turning it on (What I remember, then Help from the cloud)
-  asks first and counts from the next new chat. Every request is redacted on
+  be turned on. It is for Debug builds only: every build with an address
+  fails unless it is Debug and not an archive, whatever the configuration
+  is called, until who runs the server, how long it keeps what it is sent,
+  and what sign-in sends are decided, and outside a Debug build the app
+  reads no address at all, even if those checks were skipped. Turning it on (What I
+  remember, then Help from the cloud) asks first, holds only for that
+  address, and counts from the next new chat. Every request is redacted on
   the device by `Redactor` and shown to the person in full, method, address,
-  headers and body, before it is sent. Redirects are refused. Words of crisis
-  and chats that promised to stay on the device are never sent, and nothing
-  is sent when the notes or private words can't be read. The setting and the
-  private words are kept next to the notes, out of backups. Sign-in is a
-  `CloudAuth` hook that adds nothing by default and may only use the network
-  after the person says yes; no keys live in the repo. `CloudModel` reports
-  `PrivacyPlace.mayLeaveDevice`, so a chat started with the cloud on makes
-  no device promise anywhere.
+  every header including the Host and Content-Length the system adds, and
+  body, before it is sent. Redirects and the header names URLSession
+  reserves are refused. Words of crisis and chats that promised to stay on
+  the device are never sent, and nothing is sent when the notes or private
+  words can't be read. The setting and the private words are kept next to
+  the notes, out of backups, and Forget everything ends every open cloud
+  chat first. Sign-in is a `CloudAuth` hook that adds nothing by default; a
+  sign-in the cloud needs is a hop shown in the same preview, its values
+  covered on screen, and sent only by its yes, so no request of ours goes
+  unshown. Since its values are covered, sign-in may carry only a
+  credential or a device token: a value with a name, a private word or
+  another personal detail in it, or a body that isn't a few short values,
+  is refused before anything is shown or sent. The transport keeps and
+  sets no cookie, cache or saved password. Turning the cloud off and
+  Forget everything stop every open cloud chat from sending, then tell
+  sign-in to forget what it kept. No keys live in the
+  repo. `CloudModel` reports `PrivacyPlace.mayLeaveDevice`, so a chat
+  started with the cloud on makes no device promise anywhere.
+- What the cloud setting leaves on the device: the setting and the private
+  words, kept beside the notes with the same protection. When a switch
+  off can't be saved, as on a locked device, an empty file is left to mark
+  it off. It is left unprotected so it can be written while locked, and it
+  holds nothing personal; its only tell, to someone already reading the
+  app's folder, is that the cloud was switched off.
 
 ## The agent's name
 

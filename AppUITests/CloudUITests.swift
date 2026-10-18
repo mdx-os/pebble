@@ -17,23 +17,55 @@ final class CloudUITests: XCTestCase {
         return app
     }
 
-    /// The preview shows the whole request, VoiceOver reads it message by
-    /// message with masks in words, and Don't send closes it.
-    func testThePreviewShowsTheWholeRequestAndReadsWell() throws {
+    /// The preview shows the request, the sign-in hop first and the Host
+    /// and length the system adds, with sign-in values covered and said to
+    /// be, VoiceOver reads it message by message with masks in words, and
+    /// Don't send closes it.
+    func testThePreviewShowsTheRequestAndReadsWell() throws {
         let app = launch("cloudPreview")
-        XCTAssertTrue(app.staticTexts["Here is exactly what leaves your device"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Here is what leaves your device"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["First, to sign in:"].exists)
+        XCTAssertTrue(app.staticTexts["Going to https://cloud.example.com/v1/sign-in."].exists)
+        XCTAssertTrue(app.staticTexts["Then, your message:"].exists)
         XCTAssertTrue(app.staticTexts["Going to https://cloud.example.com/v1/reply."].exists)
-        let labels = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Sent with these labels:")).firstMatch
-        XCTAssertTrue(labels.exists)
-        XCTAssertTrue(labels.label.contains("User-Agent, pebble"))
-        // The sign-in label is named, but its value is never spoken.
-        XCTAssertTrue(labels.label.contains("X-Sample-Sign-In, sign-in value, 14 characters"))
-        XCTAssertFalse(labels.label.contains("made-up-sample"))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Sign-in values are covered"))
+            .firstMatch.exists)
+        // Two rows of labels, the sign-in hop's first, then the message's.
+        let rows = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Sent with these labels:"))
+            .allElementsBoundByIndex
+        XCTAssertEqual(rows.count, 2)
+        let hop = rows[0], labels = rows[1]
+        XCTAssertLessThan(app.staticTexts["First, to sign in:"].frame.minY, hop.frame.minY)
+        XCTAssertLessThan(hop.frame.minY, app.staticTexts["Then, your message:"].frame.minY)
+        XCTAssertLessThan(app.staticTexts["Then, your message:"].frame.minY, labels.frame.minY)
+        // The hop's own Host and length, the length a real number: the
+        // showcase's sign-in body is 34 bytes.
+        XCTAssertTrue(hop.label.contains("Host, cloud.example.com"))
+        XCTAssertEqual(Self.contentLength(in: hop.label), 34)
+        XCTAssertFalse(hop.label.contains("X-Sample-Sign-In"))
+        // Its body is read with every value hidden.
+        XCTAssertTrue(app.staticTexts["Sent with the sign-in: device, hidden."].exists)
+        // The message's labels are the ones that carry the sign-in value.
+        XCTAssertTrue(labels.label.contains("X-Sample-Sign-In"))
+        // A plain word, never the product's name.
+        XCTAssertTrue(labels.label.contains("User-Agent, agent"))
+        XCTAssertTrue(labels.label.contains("Host, cloud.example.com"))
+        XCTAssertGreaterThan(try XCTUnwrap(Self.contentLength(in: labels.label)), 100)
+        // The sign-in label is named, but its value, and even its length, is never spoken.
+        XCTAssertTrue(labels.label.contains("X-Sample-Sign-In, sign-in value, hidden"))
+        XCTAssertFalse(labels.label.contains("characters"))
+        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "made-up-sample")).count, 0)
         let said = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "You said: Help me write a note to hidden name")).firstMatch
         XCTAssertTrue(said.exists)
         XCTAssertFalse(said.label.contains("["))
         app.buttons["Don't send"].tap()
-        XCTAssertTrue(app.staticTexts["Here is exactly what leaves your device"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Here is what leaves your device"].waitForNonExistence(timeout: 5))
+    }
+
+    /// The number after "Content-Length, " in a row of labels read aloud.
+    static func contentLength(in labels: String) -> Int? {
+        guard let start = labels.range(of: "Content-Length, ")?.upperBound else { return nil }
+        return Int(labels[start...].prefix { $0.isNumber })
     }
 
     /// A long press on the request offers no Copy, so a sign-in value never
@@ -45,7 +77,7 @@ final class CloudUITests: XCTestCase {
         said.press(forDuration: 1.2)
         XCTAssertFalse(app.menuItems["Copy"].waitForExistence(timeout: 2))
         XCTAssertFalse(app.buttons["Copy"].exists)
-        XCTAssertTrue(app.staticTexts["Here is exactly what leaves your device"].exists)
+        XCTAssertTrue(app.staticTexts["Here is what leaves your device"].exists)
     }
 
     /// The private word field never learns words, its add button is big
@@ -67,6 +99,12 @@ final class CloudUITests: XCTestCase {
     /// The back button of the stack `element` is in: of the bars above it,
     /// the lowest one, which is the sheet's on iPhone and the detail's on
     /// iPad, and its leftmost button.
+    ///
+    /// That leftmost button is back only while the iPad sidebar is shown
+    /// beside the detail, as it is in a full-screen portrait or landscape
+    /// window. With the sidebar hidden, the detail bar can lead with Show
+    /// Sidebar instead, and this would tap that. Look here first if the
+    /// test starts landing on the wrong screen.
     private func backButton(over element: XCUIElement, in app: XCUIApplication) throws -> XCUIElement {
         let midX = element.frame.midX
         let bars = app.navigationBars.allElementsBoundByIndex.filter {
@@ -106,6 +144,10 @@ final class CloudUITests: XCTestCase {
         // every iOS version or in a stack shown in a sheet. The order of the
         // bars isn't either: on iPhone the home screen's bar is still there
         // under the sheet, and on iPad the sidebar has one of its own.
+        if isPad {
+            // `backButton` needs the sidebar shown; say so plainly if it isn't.
+            XCTAssertTrue(memory.isHittable, "the iPad sidebar is hidden, so the leftmost bar button may be Show Sidebar")
+        }
         try backButton(over: toggle, in: app).tap()
         XCTAssertTrue(row.waitForExistence(timeout: 5))
         XCTAssertFalse(toggle.exists)
@@ -116,7 +158,18 @@ final class CloudUITests: XCTestCase {
         let app = launch("cloudAsk")
         XCTAssertTrue(app.staticTexts["Turn on help from the cloud?"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "I try to take out")).firstMatch.exists)
+        let signIn = app.staticTexts["Signing in never carries your chats, notes or private words."]
+        for _ in 0..<4 where !signIn.exists { app.swipeUp() }
+        XCTAssertTrue(signIn.exists)
         app.buttons["Not now"].tap()
         XCTAssertTrue(app.staticTexts["Off. Everything I do stays on this device."].waitForExistence(timeout: 5))
+    }
+
+    /// The private words card says plainly that a spelling can slip by.
+    func testThePrivateWordsSayWhatTheyCanMiss() throws {
+        let app = launch("cloudOff")
+        let detail = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "I take these out of anything I send")).firstMatch
+        XCTAssertTrue(detail.waitForExistence(timeout: 10))
+        XCTAssertTrue(detail.label.contains("I can miss another spelling, so check what I show you."))
     }
 }

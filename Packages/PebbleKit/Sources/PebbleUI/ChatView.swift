@@ -575,9 +575,11 @@ final class ChatController: ObservableObject {
             }
             let waited = ContinuousClock.now - started
             if !caring, waited < beat { try? await Task.sleep(for: beat - waited) }
-            // A reply that was stopped, or overtaken by a newer one, takes
-            // nothing and changes nothing; only the newest reply settles.
-            guard !Task.isCancelled, generation == replyGeneration else { return }
+            // A reply that was stopped, overtaken by a newer one, or left in
+            // a chat that ended takes nothing and changes nothing: no words
+            // go back to the draft and no failure is set. Only the newest
+            // reply in an open chat settles.
+            guard !Task.isCancelled, !hasEnded, generation == replyGeneration else { return }
             // No reply means the person's line still waits for one.
             lastLineUnanswered = next == nil
             if let next {
@@ -606,17 +608,27 @@ final class ChatController: ObservableObject {
 
     /// What to say when no reply came. Choosing not to send is not a failure.
     nonisolated static func failureLine(for error: Error?) -> String {
-        switch error as? CloudModelError {
+        if let refused = error as? CloudTransportError, refused == .signInBodyRefused
+            || refused == .signInCarriesPersonalDetails {
+            return CloudWords.signInRefused
+        }
+        return switch error as? CloudModelError {
         case .notSent: CloudWords.notSent
         case .off: CloudWords.turnedOff
         case .staysHere: CloudWords.staysHere
         case .notesUnreadable: CloudWords.notesUnreadable
+        case .ended: CloudWords.chatEnded
         default: FirstConversation.couldNotAnswer
         }
     }
 
     /// True for a line that says the words are back in the composer, so it
     /// goes once the person clears them.
+    ///
+    /// `staysHere`, `turnedOff` and `chatEnded` give the words back too, but
+    /// they are about the chat, not the draft: clearing the words doesn't
+    /// make "part of this chat has to stay here" or "the cloud is off" any
+    /// less true, so those lines stay until the next send or a new chat.
     nonisolated static func pointsAtTheDraft(_ failure: String) -> Bool {
         [FirstConversation.couldNotAnswer, CloudWords.notSent, CloudWords.notesUnreadable].contains(failure)
     }
@@ -639,9 +651,18 @@ final class ChatController: ObservableObject {
     /// after the bytes went, so the turn stays.
     nonisolated static func nothingWasSent(_ error: Error) -> Bool {
         if error is CancellationError { return true }
-        if error as? CloudTransportError == .headersNotShown { return true }
+        // Refused before sending: labels that weren't shown, a reserved
+        // one, or a sign-in path, body or value that may carry more than a
+        // credential. Each case is named, so a new one, which may come
+        // after the bytes left, must be decided here.
+        if let refused = error as? CloudTransportError {
+            return switch refused {
+            case .headersNotShown, .reservedHeader, .signInPathRefused, .signInBodyRefused,
+                 .signInCarriesPersonalDetails: true
+            }
+        }
         return switch error as? CloudModelError {
-        case .notSent, .off, .staysHere, .notesUnreadable: true
+        case .notSent, .off, .staysHere, .notesUnreadable, .ended: true
         case .unreadableReply, nil: false
         }
     }
@@ -665,6 +686,40 @@ final class ChatController: ObservableObject {
         replyTask = nil
         replyGeneration += 1
         isReplying = false
+    }
+
+    /// True once Forget everything has ended this chat.
+    private(set) var hasEnded = false
+
+    /// The cloud chat's session, for a chat on the cloud model.
+    var cloudSession: CloudChatSession? { (model as? CloudModel)?.session }
+
+    /// True when ending the chat would let go of something: words the
+    /// person said, a reply or preview under way, or anything it hid.
+    var holdsAnything: Bool {
+        conversation.turns.contains { $0.speaker == .person } || isReplying || review?.pending != nil
+            || cloudSession?.holdsAnything == true
+    }
+    /// Told when the chat ends, so the screen holding it can start a fresh one.
+    var onEnded: (@MainActor () -> Void)?
+
+    /// Ends the chat, as Forget everything does with every open cloud chat:
+    /// the reply under way stops, a waiting preview closes unsent, any send
+    /// on the wire is cancelled, and the chat lets go of its turns, its
+    /// draft (shared with Today's composer, and maybe holding a word being
+    /// erased) and everything it hid so far. Nothing more is sent from it.
+    func end() {
+        guard !hasEnded else { return }
+        hasEnded = true
+        stopReplying()
+        review?.cancelPending()
+        cloudSession?.end()
+        conversation = .firstRun(named: displayName.text, onDevice: model.privacyPlace.staysOnDevice)
+        draft = ""
+        lastLineUnanswered = false
+        failure = nil
+        unheardReply = nil
+        onEnded?()
     }
 
     /// The reply nobody has heard yet, handed over once. Whoever takes it

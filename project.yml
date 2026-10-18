@@ -31,7 +31,8 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         PebbleBrandName: $(BRAND_NAME)
-        # Empty unless set in Config/Cloud.xcconfig. Empty means no cloud model.
+        # Empty unless set in Config/Cloud.local.xcconfig, which git ignores.
+        # Empty means no cloud model, and every build but Debug must keep it empty.
         PebbleCloudEndpoint: $(PEBBLE_CLOUD_ENDPOINT)
         LSApplicationCategoryType: public.app-category.productivity
         UILaunchScreen: {}
@@ -47,6 +48,14 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
+    # Every build checks first, so any build with a cloud address fails
+    # unless it is Debug and not an archive, wherever the address came from.
+    preBuildScripts:
+      - name: No cloud address in Release
+        script: sh "$SRCROOT/scripts/release-endpoint-check.sh"
+        basedOnDependencyAnalysis: false
+        inputFiles:
+          - $(SRCROOT)/scripts/release-endpoint-check.sh
     scheme:
       testTargets: [PebbleAppUITests]
     settings:

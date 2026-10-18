@@ -1,9 +1,9 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test repeat-test build build-release screenshots ui-screenshots device-screenshots ui-test brand-check local-config-check secrets-check pulse clean
+.PHONY: verify generate test repeat-test build build-release screenshots ui-screenshots device-screenshots ui-test brand-check local-config-check comment-lint mutation-check secrets-check pulse clean
 
 ## verify: everything CI runs. Run this before every PR.
-verify: brand-check local-config-check test build build-release screenshots
+verify: brand-check local-config-check comment-lint test mutation-check build build-release screenshots
 
 ## generate: create Pebble.xcodeproj from project.yml (the project file is not committed)
 generate:
@@ -29,8 +29,11 @@ build: generate
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -destination 'generic/platform=iOS Simulator' -derivedDataPath $(DERIVED) CODE_SIGNING_ALLOWED=NO
 
 ## build-release: compile the app in Release for macOS and the iOS Simulator, so
-## code kept to Debug (the showcase screens) can never break a shipped build
+## code kept to Debug (the showcase screens) can never break a shipped build.
+## Fails first if any configuration but Debug has a cloud address; every
+## build checks again, and fails an archive with one even in Debug.
 build-release: generate
+	sh scripts/release-endpoint-check.sh
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath $(DERIVED)
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath $(DERIVED) CODE_SIGNING_ALLOWED=NO
 
@@ -64,9 +67,21 @@ ui-test: generate
 brand-check:
 	sh scripts/brand-check.sh
 
-## local-config-check: fail if Config/Cloud.local.xcconfig is tracked by git
+## local-config-check: fail if Config/Cloud.local.xcconfig is tracked by git,
+## or any tracked config sets a cloud address
 local-config-check:
 	sh scripts/local-config-check.sh
+
+## comment-lint: no review history or personal names in code comments
+comment-lint:
+	sh scripts/comment-lint.sh --self-test
+	sh scripts/comment-lint.sh
+
+## mutation-check: break the code each behavior test in
+## scripts/mutation-manifest.txt covers, on a copy in build/mutation, and
+## require that test to fail. ONLY= runs the entries whose tests match.
+mutation-check:
+	sh scripts/mutation-check.sh
 
 ## secrets-check: scan git history for leaked secrets, and fail if the
 ## one-machine Config/Cloud.local.xcconfig is ever tracked
