@@ -100,7 +100,7 @@ public struct MemoryView: View {
                     }
                     forgetEverythingSection
                     if let cloud {
-                        CloudHelpRow(help: cloud)
+                        CloudHelpRow(help: cloud, place: model.place)
                             .padding(.top, 8)
                     }
                     if let status = model.status {

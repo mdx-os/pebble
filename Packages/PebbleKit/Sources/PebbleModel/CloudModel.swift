@@ -347,6 +347,12 @@ public struct CloudModel: ModelClient {
 /// The union is held in memory only, for as long as the chat is open. It is
 /// never written anywhere and never sent; it is only used to hide words.
 /// Closing the chat, or starting a new one, lets it go.
+///
+/// So after Forget everything, an open cloud chat still holds the erased
+/// private words here, to keep them hidden. That is what
+/// `CloudWords.privateDetail` means by "erases them too": they are gone
+/// from every file, and this copy, only ever used to hide, goes with the
+/// chat.
 final class HiddenSoFar: @unchecked Sendable {
     private let lock = NSLock()
     private var redactor = Redactor()

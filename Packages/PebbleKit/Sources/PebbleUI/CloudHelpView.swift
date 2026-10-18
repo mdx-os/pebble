@@ -12,8 +12,6 @@ import SwiftUI
 @MainActor
 public final class CloudHelp: ObservableObject {
     @Published public private(set) var settings: CloudHelpSettings
-    /// The turn on question is showing.
-    @Published var asksToTurnOn = false
     @Published var newPrivateWord = ""
     /// What to say about the last change that couldn't be made. Every new
     /// line, even one the same as before, bumps statusCount so it is spoken
@@ -26,11 +24,9 @@ public final class CloudHelp: ObservableObject {
     /// the file couldn't be read, or couldn't be opened at launch but can
     /// still be erased. Forget everything names them then too.
     @Published private(set) var mayKeepUnseenWords: Bool
-    /// The flag the setting's own words read, the same one every line
-    /// outside a chat reads. `HomeView` works it out from the open chat's
-    /// model and the next one's (see `PrivacyPlace`) and keeps this up to
-    /// date. Until then it makes no promise.
-    @Published var place: PrivacyPlace = .mayLeaveDevice
+    // No window's place lives here: one setting serves every window, each
+    // with its own open chat. Each `CloudHelpView` is given its window's
+    // flag instead, so one window never speaks for another.
 
     public let endpoint: URL?
     /// False when the file that keeps the setting and the private words
@@ -86,7 +82,14 @@ public final class CloudHelp: ObservableObject {
         self.auth = auth
         self.makeTransport = transport
         self.unopenedFile = unopenedFile
-        let read = storeOpened ? try? store.load() : nil
+        var read = storeOpened ? try? store.load() : nil
+        // Saved on, but this build has no address: it is off, and saved
+        // off, so a later build with an address never turns it back on
+        // without a fresh yes.
+        if endpoint == nil, read?.isOn == true {
+            read?.isOn = false
+            if let off = read { try? store.save(off) }
+        }
         settings = read ?? .off
         mayKeepUnseenWords = storeOpened ? read == nil : unopenedFile != nil
     }
@@ -203,19 +206,19 @@ public final class CloudHelp: ObservableObject {
         mayKeepUnseenWords = false
     }
 
-    /// The toggle. Turning on asks first; turning off never does.
-    func setOn(_ on: Bool) {
-        if on {
-            if isAvailable, !settings.isOn { asksToTurnOn = true }
-        } else {
-            turnOff()
-        }
+    /// The toggle. Turning on asks first; turning off never does. True
+    /// when the question should show, in the window whose toggle it was
+    /// only, so it never opens in every window with the setting open.
+    @discardableResult
+    func setOn(_ on: Bool) -> Bool {
+        if on { return isAvailable && !settings.isOn }
+        turnOff()
+        return false
     }
 
     /// The yes to the turn on question. Sign-in, if there is any, starts
     /// only now, after the yes.
     func confirmTurnOn() {
-        asksToTurnOn = false
         guard isAvailable else { return }
         let wasSwitchedOff = switchedOff.value
         switchedOff.value = false
@@ -230,10 +233,6 @@ public final class CloudHelp: ObservableObject {
         let auth = auth
         signingIn?.cancel()
         signingIn = Task { await auth.signIn() }
-    }
-
-    func declineTurnOn() {
-        asksToTurnOn = false
     }
 
     /// Off at once for every chat, before anything is saved. Then it is
@@ -270,7 +269,10 @@ public final class CloudHelp: ObservableObject {
         for review in reviews.allObjects { review.cancelPending() }
     }
 
+    /// Refused when the setting couldn't be opened: its store is only in
+    /// memory, and would forget the word.
     func addPrivateWord() {
+        guard storeOpened else { return }
         let word = newPrivateWord
         var refusal: CloudHelpSettings.Refusal?
         let outcome = update { refusal = $0.refusal(for: word); _ = $0.addPrivateWord(word) }
@@ -358,6 +360,10 @@ public final class CloudHelp: ObservableObject {
         let file = try unopenedFile()
         let mightHaveBeenOn = (try? file.load())?.isOn ?? true
         try file.erase()
+        // Nothing should be held here, but if anything was, it goes too,
+        // so the list on screen is as empty as the file.
+        try? store.erase()
+        settings = .off
         mayKeepUnseenWords = false
         return mightHaveBeenOn ? .privateWordsAndCloud : .privateWords
     }
@@ -465,10 +471,22 @@ public final class CloudReview: ObservableObject, CloudReviewing {
 /// The cloud setting: off by default, with the words always hidden.
 public struct CloudHelpView: View {
     @ObservedObject var help: CloudHelp
+    /// This window's flag, from its own open chat and next one (see
+    /// `HomeView.surfacePlace`). Without one it makes no promise.
+    let place: PrivacyPlace
+    /// The turn on question, for this window only.
+    @State private var asksToTurnOn: Bool
     @Environment(\.colorScheme) private var scheme
 
-    public init(help: CloudHelp) {
+    public init(help: CloudHelp, place: PrivacyPlace = .mayLeaveDevice) {
+        self.init(help: help, place: place, asking: false)
+    }
+
+    /// `asking` opens on the turn on question, for screenshots.
+    init(help: CloudHelp, place: PrivacyPlace, asking: Bool) {
         self.help = help
+        self.place = place
+        _asksToTurnOn = State(initialValue: asking)
     }
 
     /// The add button, at least the size a finger needs.
@@ -502,28 +520,32 @@ public struct CloudHelpView: View {
         .onChange(of: help.statusCount) {
             if let status = help.status { AccessibilityNotification.Announcement(status).post() }
         }
-        .sheet(isPresented: $help.asksToTurnOn) {
-            CloudTurnOnSheet(onYes: { help.confirmTurnOn() }, onNo: { help.declineTurnOn() })
+        .sheet(isPresented: $asksToTurnOn) {
+            CloudTurnOnSheet(onYes: { asksToTurnOn = false; help.confirmTurnOn() },
+                             onNo: { asksToTurnOn = false })
         }
     }
 
-    /// What the setting says under its switch.
-    static func detail(for help: CloudHelp) -> String {
+    /// What the setting says under its switch, in the window whose flag
+    /// is `place`.
+    static func detail(for help: CloudHelp, place: PrivacyPlace) -> String {
         if !help.storeOpened { return CloudWords.couldNotOpen }
         if !help.isAvailable { return CloudWords.unavailable }
-        return help.usesCloudForNewChats ? CloudWords.onDetail : CloudWords.offDetail(help.place)
+        return help.usesCloudForNewChats ? CloudWords.onDetail : CloudWords.offDetail(place)
     }
 
     private var switchCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Toggle(isOn: Binding(get: { help.settings.isOn }, set: { help.setOn($0) })) {
-                Label(CloudWords.toggleTitle, systemImage: help.settings.isOn ? "cloud.fill" : "lock.fill")
+            // What new chats get, so a saved on with nowhere to go never
+            // reads as on.
+            Toggle(isOn: Binding(get: { help.usesCloudForNewChats }, set: { asksToTurnOn = help.setOn($0) })) {
+                Label(CloudWords.toggleTitle, systemImage: help.usesCloudForNewChats ? "cloud.fill" : "lock.fill")
                     .font(.body.weight(.semibold))
             }
             .tint(Theme.accentText)
             .disabled(!help.isAvailable)
             .accessibilityIdentifier("cloudToggle")
-            Text(Self.detail(for: help))
+            Text(Self.detail(for: help, place: place))
                 .font(.subheadline)
                 .foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -548,6 +570,8 @@ public struct CloudHelpView: View {
                 AddPrivateWordButton(size: Self.addButtonSize) { help.addPrivateWord() }
                     .disabled(!Self.canAdd(help.newPrivateWord))
             }
+            // Nothing typed here could be kept when the file didn't open.
+            .disabled(!help.storeOpened)
             .padding(.leading, 14)
             .padding(.trailing, 4)
             .padding(.vertical, 4)
@@ -665,14 +689,17 @@ struct PrivateWordList: View {
 /// way in; see `HomeView.memoryScreen` for when memory can't open.
 struct CloudHelpRow: View {
     @ObservedObject var help: CloudHelp
+    /// This window's flag, passed on to the setting.
+    let place: PrivacyPlace
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         NavigationLink {
-            CloudHelpView(help: help)
+            CloudHelpView(help: help, place: place)
         } label: {
             HStack(spacing: 12) {
-                Image(systemName: help.settings.isOn ? "cloud.fill" : "lock.fill")
+                // What new chats get, as the toggle reads.
+                Image(systemName: help.usesCloudForNewChats ? "cloud.fill" : "lock.fill")
                     .foregroundStyle(Theme.accentSymbol)
                     .frame(width: 24)
                     // Decoration: "On" or "Off" beside it says the same.
@@ -681,7 +708,7 @@ struct CloudHelpRow: View {
                     .font(.body.weight(.medium))
                     .foregroundStyle(.primary)
                 Spacer(minLength: 8)
-                Text(help.settings.isOn ? CloudWords.rowOn : CloudWords.rowOff)
+                Text(help.usesCloudForNewChats ? CloudWords.rowOn : CloudWords.rowOff)
                     .foregroundStyle(Theme.secondaryText)
                 Image(systemName: "chevron.right")
                     .font(.footnote.weight(.semibold))

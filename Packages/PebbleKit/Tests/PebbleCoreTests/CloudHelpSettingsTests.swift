@@ -97,6 +97,26 @@ struct CloudHelpSettingsTests {
         #expect(settings.privateWords == ["Sam's place"])
     }
 
+    /// A word the redactor would already hide is never added twice: the
+    /// same folding as `Redactor`, for every apostrophe, case and accent.
+    @Test func aWordTheRedactorAlreadyHidesIsNotAddedAgain() {
+        var settings = CloudHelpSettings()
+        let added = [settings.addPrivateWord("Zoë")]
+        #expect(settings.refusal(for: "Zoe") == .alreadyThere)
+        #expect(settings.refusal(for: "ZOE") == .alreadyThere)
+        let again = [settings.addPrivateWord("zoe"), settings.addPrivateWord("Sam's place")]
+        #expect(added == [true])
+        #expect(again == [false, true])
+        for apostrophe in ["\u{2019}", "\u{2018}", "\u{02BC}"] {
+            #expect(settings.refusal(for: "sam\(apostrophe)s place") == .alreadyThere)
+        }
+        #expect(settings.privateWords == ["Zoë", "Sam's place"])
+        // And the redactor hides "Zoe" with "Zoë" on the list, so the
+        // refusal is true.
+        let redacted = Redactor(memory: [], privateWords: settings.privateWords).redact("Zoe called")
+        #expect(!redacted.text.contains("Zoe"))
+    }
+
     // MARK: The address
 
     @Test(arguments: [nil, "", "   ", "$(PEBBLE_CLOUD_ENDPOINT)", "http://cloud.example.com", "cloud.example.com", "https://"])

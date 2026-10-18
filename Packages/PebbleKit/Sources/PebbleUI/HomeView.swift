@@ -235,9 +235,9 @@ struct HomeScreen: View {
         let newChatPlace = cloud?.privacyPlace(local: model) ?? model.privacyPlace
         _newChatPlace = State(initialValue: newChatPlace)
         // A chat made now gets the model the setting picks now, so this is
-        // its place too. Nothing here writes `cloud.place`: a rebuild must
-        // never work it out from a chat that isn't the one open. The
-        // `onChange` of `surfacePlace` in `body` keeps it true.
+        // its place too. A rebuild must never work it out from a chat that
+        // isn't the one open. The `onChange` of `surfacePlace` in `body`
+        // keeps it true, and the memory screen hands it to the setting.
         _feed = StateObject(wrappedValue: HomeView.feedModel(sources: feed, needsYou: needsYou, tasks: tasks,
                                                              drivesTasks: drivesTasks, place: newChatPlace, now: now))
         _section = State(initialValue: section)
@@ -329,7 +329,6 @@ struct HomeScreen: View {
         }
         .onChange(of: surfacePlace, initial: true) { _, place in
             feed.place = place
-            cloud?.place = place
         }
         // What a cloud chat would send, over whichever screen is in front,
         // so a line sent from Today's composer is previewed too. It waits,

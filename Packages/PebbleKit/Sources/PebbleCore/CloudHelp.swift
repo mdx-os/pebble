@@ -51,9 +51,14 @@ public struct CloudHelpSettings: Sendable, Equatable, Codable {
         privateWords.removeAll { $0 == word }
     }
 
-    /// "Sam's" and "sam’s" are the same word.
+    /// "Sam's" and "sam’s" are the same word, and so are "Zoë" and "Zoe":
+    /// folded as `Redactor` matches them, so a word it would already hide
+    /// is never added twice.
     private static func same(_ a: String, _ b: String) -> Bool {
-        func folded(_ s: String) -> String { s.replacingOccurrences(of: "\u{2019}", with: "'").lowercased() }
+        func folded(_ s: String) -> String {
+            ["\u{2019}", "\u{2018}", "\u{02BC}"].reduce(s) { $0.replacingOccurrences(of: $1, with: "'") }
+                .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+        }
         return folded(a) == folded(b)
     }
 }

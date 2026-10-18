@@ -165,8 +165,7 @@ struct CloudHelpTests {
         #expect(!cloud.isAvailable)
         #expect(!cloud.usesCloudForNewChats)
         #expect(cloud.chatModel(local: LocalStubModel(), review: CloudReview()).runsOnDevice)
-        cloud.setOn(true)
-        #expect(!cloud.asksToTurnOn)
+        #expect(!cloud.setOn(true))
         cloud.confirmTurnOn()
         #expect(cloud.chatModel(local: LocalStubModel(), review: CloudReview()).runsOnDevice)
         #expect(maker.made == 0)
@@ -177,10 +176,8 @@ struct CloudHelpTests {
     @Test func turningOnAsksFirstAndOnlyYesTurnsItOn() {
         let maker = TransportMaker()
         let cloud = help(endpoint: endpoint, maker: maker)
-        cloud.setOn(true)
-        #expect(cloud.asksToTurnOn)
-        #expect(!cloud.settings.isOn)
-        cloud.declineTurnOn()
+        // Asking is all it does; "Not now" then changes nothing.
+        #expect(cloud.setOn(true))
         #expect(!cloud.settings.isOn)
         #expect(cloud.chatModel(local: LocalStubModel(), review: CloudReview()).runsOnDevice)
         cloud.setOn(true)
@@ -188,9 +185,8 @@ struct CloudHelpTests {
         #expect(cloud.settings.isOn)
         #expect(cloud.usesCloudForNewChats)
         #expect(!cloud.chatModel(local: LocalStubModel(), review: CloudReview()).runsOnDevice)
-        cloud.setOn(false)
+        #expect(!cloud.setOn(false))
         #expect(!cloud.settings.isOn)
-        #expect(!cloud.asksToTurnOn)
     }
 
     /// Sign-in may use the network, so it waits for the person's yes.
@@ -198,7 +194,6 @@ struct CloudHelpTests {
         let auth = CountingAuth()
         let cloud = help(endpoint: endpoint, maker: TransportMaker(), auth: auth)
         cloud.setOn(true)
-        cloud.declineTurnOn()
         cloud.setOn(true)
         #expect(cloud.signingIn == nil)
         #expect(auth.signIns == 0)
@@ -432,8 +427,7 @@ struct CloudHelpTests {
         let auth = CountingAuth()
         let help = CloudHelp(store: InMemoryCloudHelpStore(), endpoint: endpoint, memory: scratchMemory(), auth: auth,
                              transport: { TransportMaker().make() })
-        help.setOn(true)
-        #expect(help.asksToTurnOn)
+        #expect(help.setOn(true))
         #expect(help.signingIn == nil)
         help.confirmTurnOn()
         await help.signingIn?.value

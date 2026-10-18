@@ -93,7 +93,12 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                            place: LocalStubModel().privacyPlace)
             case .cloudOff, .cloudAsk:
                 NavigationStack {
-                    CloudHelpView(help: Self.sampleCloud(asking: self == .cloudAsk))
+                    // With the cloud off and no cloud chat open, the flag
+                    // is the on-device model's, as `HomeView` would give it.
+                    CloudHelpView(help: Self.sampleCloud(),
+                                  place: HomeView.surfacePlace(chat: LocalStubModel().privacyPlace,
+                                                               newChat: LocalStubModel().privacyPlace),
+                                  asking: self == .cloudAsk)
                 }
             case .cloudPreview:
                 Self.cloudPreviewChat(brand: brand, looks: looks)
@@ -288,19 +293,13 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// from the showcase: its transport refuses every request.
     static let sampleEndpoint = URL(string: "https://cloud.example.com")!
 
-    /// The cloud setting, off, with one private word. `asking` opens on the
-    /// question before turning it on. With the cloud off and no cloud chat
-    /// open, the flag is the on-device model's, as `HomeView` would set it.
+    /// The cloud setting, off, with one private word.
     @MainActor
-    static func sampleCloud(asking: Bool = false) -> CloudHelp {
-        let help = CloudHelp(
+    static func sampleCloud() -> CloudHelp {
+        CloudHelp(
             store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: false, privateWords: ["lemon cake"])),
             endpoint: sampleEndpoint, memory: sampleMemory(), transport: { NoSendTransport() }
         )
-        help.place = HomeView.surfacePlace(chat: LocalStubModel().privacyPlace,
-                                           newChat: help.privacyPlace(local: LocalStubModel()))
-        if asking { help.setOn(true) }
-        return help
     }
 
     /// A chat on the cloud model with its preview showing, presented the

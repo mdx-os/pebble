@@ -188,14 +188,14 @@ struct CloudPromiseTests {
         #expect(Self.promises(CloudWords.offDetail(surface(cloud, chat: fresh))))
     }
 
-    /// The setting's own words read the flag the home screen gives it.
+    /// The setting's own words read the flag its window gives it.
     @Test func theSettingScreenReadsTheSameFlag() {
         let cloud = help()
-        cloud.place = .onDevice
-        #expect(CloudHelpView.detail(for: cloud) == CloudWords.offDetail(.onDevice))
-        cloud.place = .mayLeaveDevice
-        #expect(CloudHelpView.detail(for: cloud) == CloudWords.offDetail(.mayLeaveDevice))
-        #expect(!Self.promises(CloudHelpView.detail(for: cloud)))
+        #expect(CloudHelpView.detail(for: cloud, place: .onDevice) == CloudWords.offDetail(.onDevice))
+        #expect(CloudHelpView.detail(for: cloud, place: .mayLeaveDevice) == CloudWords.offDetail(.mayLeaveDevice))
+        #expect(!Self.promises(CloudHelpView.detail(for: cloud, place: .mayLeaveDevice)))
+        // With no flag given, no promise.
+        #expect(CloudHelpView(help: cloud).place == .mayLeaveDevice)
     }
 
     /// The memory screen's copy of the flag follows it while it is open,
@@ -345,10 +345,9 @@ struct CloudPromiseTests {
         #expect(!cloud.storeOpened)
         #expect(!cloud.isAvailable)
         #expect(!cloud.settings.isOn)
-        #expect(CloudHelpView.detail(for: cloud) == CloudWords.couldNotOpen)
+        #expect(CloudHelpView.detail(for: cloud, place: .onDevice) == CloudWords.couldNotOpen)
         #expect(CloudWords.couldNotOpen.contains("stays off"))
-        cloud.setOn(true)
-        #expect(!cloud.asksToTurnOn)
+        #expect(!cloud.setOn(true))
         cloud.confirmTurnOn()
         #expect(!cloud.usesCloudForNewChats)
         #expect(cloud.privacyPlace(local: local) == .onDevice)
@@ -427,7 +426,7 @@ struct CloudPromiseTests {
         let row = try #require(source.range(of: "struct CloudHelpRow"))
         let end = try #require(source.range(of: "struct CloudTurnOnSheet"))
         let body = source[row.upperBound..<end.lowerBound]
-        let icon = try #require(body.range(of: "Image(systemName: help.settings.isOn"))
+        let icon = try #require(body.range(of: "Image(systemName: help.usesCloudForNewChats"))
         let next = body[icon.upperBound...].prefix(300)
         #expect(next.contains(".accessibilityHidden(true)"))
     }
@@ -449,18 +448,17 @@ struct CloudPromiseTests {
     @Test func rebuildingTheHomeScreenKeepsAnOpenCloudChatsPlace() {
         let cloud = help(CloudHelpSettings(isOn: true))
         let chat = newChat(cloud)
-        // What the home screen's `onChange` of its surface flag does.
-        cloud.place = surface(cloud, chat: chat)
         cloud.setOn(false)
-        cloud.place = surface(cloud, chat: chat)
-        #expect(CloudHelpView.detail(for: cloud) == CloudWords.offDetail(.mayLeaveDevice))
+        // What the home screen hands its setting, through the memory screen.
+        #expect(CloudHelpView.detail(for: cloud, place: surface(cloud, chat: chat))
+                == CloudWords.offDetail(.mayLeaveDevice))
 
         _ = rebuildHome(cloud)
         _ = rebuildHome(cloud)
-        #expect(cloud.place == .mayLeaveDevice)
-        #expect(CloudHelpView.detail(for: cloud) == CloudWords.offDetail(.mayLeaveDevice))
-        #expect(CloudHelpView.detail(for: cloud) == "Off for new chats.")
-        #expect(!Self.promises(CloudHelpView.detail(for: cloud)))
+        let place = surface(cloud, chat: chat)
+        #expect(place == .mayLeaveDevice)
+        #expect(CloudHelpView.detail(for: cloud, place: place) == "Off for new chats.")
+        #expect(!Self.promises(CloudHelpView.detail(for: cloud, place: place)))
     }
 
     /// Building the home screen struct, as every redraw does, makes no
@@ -492,12 +490,11 @@ struct CloudPromiseTests {
         host.frame = CGRect(x: 0, y: 0, width: 600, height: 800)
         host.layoutSubtreeIfNeeded()
         #expect(cloud.chatModelsAsked == 1)
-        #expect(cloud.place == .mayLeaveDevice)
         cloud.setOn(false)
         host.rootView = rebuildHome(cloud)
         host.layoutSubtreeIfNeeded()
-        // The cloud chat is still the one open, so nothing promises the device.
-        #expect(cloud.place == .mayLeaveDevice)
+        // The cloud chat is still the one open, and no new chat was made.
+        #expect(cloud.chatModelsAsked == 1)
         cloud.setOn(true)
         cloud.confirmTurnOn()
         host.rootView = rebuildHome(cloud)
@@ -516,7 +513,7 @@ struct CloudPromiseTests {
         // Through `HomeScreen`'s init too, which ends where its own
         // `newChat()` begins.
         let end = try #require(home.range(of: "private func newChat() -> ChatController {"))
-        #expect(!home[start.upperBound..<end.lowerBound].contains("cloud?.place ="))
+        #expect(!home.contains("cloud?.place ="))
         #expect(home[start.upperBound..<end.lowerBound].contains("struct HomeScreen"))
         let app = try String(contentsOf: Self.repo.appendingPathComponent("App/Sources/PebbleApp.swift"), encoding: .utf8)
         #expect(app.contains("@State private var cloud: CloudHelp"))
@@ -725,6 +722,137 @@ struct CloudPromiseTests {
         let detail = home[split.upperBound...].prefix(600)
         #expect(detail.contains("NavigationStack {"))
         #expect(detail.contains("memoryScreen"))
+    }
+
+    // MARK: Fix round 8
+
+    /// Two windows share one setting. Window B has a cloud chat open, the
+    /// cloud goes off, and window A starts an on-device chat. A's setting
+    /// may promise the device; B's still can't, whatever A did last.
+    @Test func eachWindowsSettingReadsItsOwnPlace() throws {
+        let cloud = help(CloudHelpSettings(isOn: true))
+        let chatB = newChat(cloud)
+        cloud.setOn(false)
+        let chatA = newChat(cloud)
+        #expect(chatA.privacyPlace == .onDevice)
+        // Each window's memory screen follows its own flag, and hands it to
+        // its row and setting.
+        let memoryA = MemoryModel(store: scratchMemory(), place: surface(cloud, chat: chatA))
+        let memoryB = MemoryModel(store: scratchMemory(), place: surface(cloud, chat: chatB))
+        let rowA = CloudHelpRow(help: cloud, place: memoryA.place)
+        let rowB = CloudHelpRow(help: cloud, place: memoryB.place)
+        #expect(CloudHelpView.detail(for: cloud, place: rowA.place) == CloudWords.offDetail(.onDevice))
+        let shownInB = CloudHelpView.detail(for: cloud, place: rowB.place)
+        #expect(shownInB == "Off for new chats.")
+        #expect(shownInB != "Off. Everything I do stays on this device.")
+        #expect(!Self.promises(shownInB))
+
+        // Nothing shared holds a window's place or its turn on question.
+        let source = try String(contentsOf: Self.sources.appendingPathComponent("PebbleUI/CloudHelpView.swift"),
+                                encoding: .utf8)
+        let start = try #require(source.range(of: "public final class CloudHelp: ObservableObject {"))
+        let end = try #require(source.range(of: "/// The session's switch off"))
+        let shared = source[start.upperBound..<end.lowerBound]
+        #expect(!shared.contains("var place"))
+        #expect(!shared.contains("asksToTurnOn"))
+        #expect(source.contains("@State private var asksToTurnOn: Bool"))
+        let memory = try String(contentsOf: Self.sources.appendingPathComponent("PebbleUI/MemoryView.swift"),
+                                encoding: .utf8)
+        #expect(memory.contains("CloudHelpRow(help: cloud, place: model.place)"))
+    }
+
+    /// The turn on question shows only in the window whose toggle asked.
+    @Test func theTurnOnQuestionIsForOneWindow() {
+        let cloud = help()
+        // The answer goes to the asking window's own state, and the shared
+        // setting holds nothing another window could show.
+        #expect(cloud.setOn(true), "this window asks")
+        #expect(!cloud.settings.isOn)
+        cloud.confirmTurnOn()
+        #expect(cloud.settings.isOn)
+        #expect(!cloud.setOn(true), "already on, nothing to ask")
+    }
+
+    /// A setting that couldn't be opened refuses private words, and its
+    /// field and button are off, so nothing is typed into what would
+    /// forget it.
+    @Test func anUnopenedSettingRefusesPrivateWords() throws {
+        let cloud = CloudHelp.couldNotOpen(endpoint: endpoint, memory: scratchMemory())
+        cloud.newPrivateWord = "lemon cake"
+        cloud.addPrivateWord()
+        #expect(cloud.settings.privateWords.isEmpty)
+        #expect(!cloud.mayHavePrivateWords)
+        let source = try String(contentsOf: Self.sources.appendingPathComponent("PebbleUI/CloudHelpView.swift"),
+                                encoding: .utf8)
+        let card = try #require(source.range(of: "private var privateWordsCard: some View {"))
+        let body = source[card.upperBound...].prefix(1_200)
+        #expect(body.contains(".disabled(!help.storeOpened)"))
+        let add = try #require(source.range(of: "func addPrivateWord() {"))
+        #expect(source[add.upperBound...].prefix(80).contains("guard storeOpened else { return }"))
+    }
+
+    /// Forget everything on a setting that couldn't be opened clears what
+    /// it shows too, so the list is empty and the status is true.
+    @Test func forgettingAnUnopenedSettingClearsWhatItShows() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("cloud-unopened-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = CloudHelpFileStore(fileURL: folder.appendingPathComponent("cloud-help.json"))
+        try file.save(CloudHelpSettings(isOn: false, privateWords: ["lemon cake"]))
+        let memory = scratchMemory("Sam's birthday is May 14.")
+        let cloud = CloudHelp.couldNotOpen(endpoint: endpoint, memory: memory, file: { file })
+        cloud.newPrivateWord = "Riverside"
+        cloud.addPrivateWord()
+        let model = MemoryModel(store: memory, place: .onDevice, alsoForget: { try cloud.forgetPrivateWords() })
+        model.forgetEverything()
+        #expect(model.status == MemoryWords.forgotten)
+        #expect(cloud.settings == .off)
+        #expect(cloud.settings.privateWords.isEmpty)
+        #expect(cloud.newPrivateWord.isEmpty)
+        #expect(!cloud.mayHavePrivateWords)
+        #expect(!FileManager.default.fileExists(atPath: file.fileURL.path))
+        let source = try String(contentsOf: Self.sources.appendingPathComponent("PebbleUI/CloudHelpView.swift"),
+                                encoding: .utf8)
+        let erase = try #require(source.range(of: "private func eraseUnopenedFile() throws -> Forgot {"))
+        let body = source[erase.upperBound...].prefix(800)
+        #expect(body.contains("try? store.erase()"))
+        #expect(body.contains("settings = .off"))
+    }
+
+    /// Saved on, but this build has no address. It reads as off on the
+    /// row, its symbol and the toggle, and it is saved off, so a later
+    /// build with an address needs a fresh yes. The private words stay.
+    @Test func aSavedOnWithNoAddressIsClearedAtLaunch() throws {
+        let store = InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"]))
+        let noAddress = CloudHelp(store: store, endpoint: nil, memory: scratchMemory())
+        #expect(!noAddress.settings.isOn)
+        #expect(!noAddress.usesCloudForNewChats)
+        #expect(try store.load() == CloudHelpSettings(isOn: false, privateWords: ["lemon cake"]))
+        #expect(CloudHelpView.detail(for: noAddress, place: .onDevice) == CloudWords.unavailable)
+
+        // The next build has an address: still off, and turning on asks.
+        let later = CloudHelp(store: store, endpoint: endpoint, memory: scratchMemory())
+        #expect(!later.settings.isOn)
+        #expect(!later.usesCloudForNewChats)
+        #expect(newChat(later).privacyPlace == .onDevice)
+        #expect(later.setOn(true))
+
+        // The row, its symbol and the toggle read what new chats get.
+        let source = try String(contentsOf: Self.sources.appendingPathComponent("PebbleUI/CloudHelpView.swift"),
+                                encoding: .utf8)
+        #expect(source.contains("Binding(get: { help.usesCloudForNewChats }"))
+        #expect(source.contains("systemImage: help.usesCloudForNewChats ?"))
+        #expect(source.contains("Text(help.usesCloudForNewChats ? CloudWords.rowOn : CloudWords.rowOff)"))
+        #expect(!source.contains("help.settings.isOn ?"))
+    }
+
+    /// The doc on `HiddenSoFar` ties erased words kept for an open chat to
+    /// what the setting says about Forget everything.
+    @Test func hiddenSoFarSaysWhyErasedWordsStayForAnOpenChat() throws {
+        let source = try String(contentsOf: Self.sources.appendingPathComponent("PebbleModel/CloudModel.swift"),
+                                encoding: .utf8)
+        #expect(source.contains("So after Forget everything, an open cloud chat still holds the erased"))
+        #expect(source.contains("`CloudWords.privateDetail`"))
     }
 
     // MARK: Helpers
