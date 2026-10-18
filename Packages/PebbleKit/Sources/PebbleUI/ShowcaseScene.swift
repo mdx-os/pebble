@@ -224,7 +224,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
             feed: [SampleFeedSource()], needsYou: needsYou(at: morning, rule: rule) ?? NeedsYou(rule: rule),
             tasks: tasks(rule: rule),
             drivesTasks: live,
-            now: live ? { Date() } : { morning }
+            now: { @Sendable in live ? Date() : morning }
         )
     }
 

@@ -13,7 +13,7 @@ struct CloudReconTests {
     let sources = [
         ReconSource(id: "a", title: "Pool reopens", publisher: "Riverside Gazette",
                     url: URL(string: "https://gazette.example.org/pool")!, published: Date(timeIntervalSinceReferenceDate: 812_000_000),
-                    text: "The pool reopens on November 3. Coach Priya runs the lessons, call 416 555 0199 to book."),
+                    text: "The pool reopens on November 3. Coach Priya runs the lessons, call 416 555 0199 to book. The snack bar sells lemon cake."),
         ReconSource(id: "b", title: "Fall schedule", publisher: "City of Riverside Parks",
                     url: URL(string: "https://parks.example.org/pool")!, published: Date(timeIntervalSinceReferenceDate: 812_500_000),
                     text: "The pool reopens on November 10. Family swim is on Saturdays."),
@@ -46,6 +46,12 @@ struct CloudReconTests {
         #expect(!body.contains("416 555 0199"))
         #expect(body.contains("[name]"))
         #expect(body.contains("[phone number]"))
+        // A private word inside a fetched page is masked too, in the preview
+        // and in the bytes that went.
+        #expect(!body.localizedCaseInsensitiveContains("lemon cake"))
+        #expect(body.contains("[private]"))
+        #expect(transport.sent.allSatisfy { !$0.text.localizedCaseInsensitiveContains("lemon cake") })
+        #expect(transport.sent.allSatisfy { $0.text.contains("[private]") })
         #expect(body.contains("The pool reopens on November 10."))
         #expect(!summary.madeOnDevice)
         // The model's SUMMARY line has no source numbers on the card, so the

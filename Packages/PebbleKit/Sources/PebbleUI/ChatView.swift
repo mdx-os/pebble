@@ -2,6 +2,9 @@ import PebbleCore
 import PebbleModel
 #if canImport(SwiftUI)
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 /// The first screen: the agent has a face, a name, and a conversation.
 public struct ChatView: View {
@@ -94,8 +97,9 @@ public struct ChatView: View {
                             .padding(.bottom, 8)
                     }
                     transcript
-                    if controller.reconOffer != nil {
-                        ReconOfferButtons(onYes: { controller.acceptReconOffer() },
+                    if let offer = controller.reconOffer {
+                        ReconOfferButtons(question: controller.conversation.turns.first { $0.id == offer.turnID }?.text,
+                                          onYes: { controller.acceptReconOffer() },
                                           onNo: { controller.declineReconOffer() })
                             .id(Self.offerID)
                             .transition(Motion.arrival(reduceMotion: reduceMotion))
@@ -460,6 +464,9 @@ final class ChatController: ObservableObject {
     /// one, so it never offers. The second value is true when this chat
     /// promised to stay on this device, so the recon keeps that promise.
     var lookInto: ((_ topic: String, _ onDevice: Bool) -> Bool)?
+    /// True when a recon on this topic is already going or ready on Today,
+    /// so a tap on Look into it starts nothing more and says so.
+    var isLookingInto: ((_ topic: String) -> Bool)?
     /// True while the only pages there are to read are examples, so the
     /// offer says so rather than promise real sources.
     var reconReadsExamples = false
@@ -645,10 +652,15 @@ final class ChatController: ObservableObject {
     }
 
     /// The person tapped Look into it. Starts it once, and says so. A chat
-    /// that said it stays on this device keeps the recon here too.
+    /// that said it stays on this device keeps the recon here too. One
+    /// already on that topic, from Today or another chat, isn't run twice.
     func acceptReconOffer() {
         guard let offer = reconOffer else { return }
         reconOffer = nil
+        if isLookingInto?(offer.topic) == true {
+            say(ReconWords.alreadyOn)
+            return
+        }
         let started = lookInto?(offer.topic, model.runsOnDevice) ?? false
         say(started ? ReconWords.started : ReconWords.couldNotStart)
     }
@@ -671,7 +683,9 @@ final class ChatController: ObservableObject {
     /// What to say when no reply came. Choosing not to send is not a failure.
     nonisolated static func failureLine(for error: Error?) -> String {
         switch error as? CloudModelError {
-        case .notSent, .withdrawn: CloudWords.notSent
+        case .notSent: CloudWords.notSent
+        // Taken away unanswered, so it never says the person chose.
+        case .withdrawn: CloudWords.withdrawn
         case .off: CloudWords.turnedOff
         case .staysHere: CloudWords.staysHere
         case .notesUnreadable: CloudWords.notesUnreadable
@@ -682,7 +696,8 @@ final class ChatController: ObservableObject {
     /// True for a line that says the words are back in the composer, so it
     /// goes once the person clears them.
     nonisolated static func pointsAtTheDraft(_ failure: String) -> Bool {
-        [FirstConversation.couldNotAnswer, CloudWords.notSent, CloudWords.notesUnreadable].contains(failure)
+        [FirstConversation.couldNotAnswer, CloudWords.notSent, CloudWords.withdrawn,
+         CloudWords.notesUnreadable].contains(failure)
     }
 
     /// The words that weren't sent, back in the composer. Anything typed
@@ -755,14 +770,25 @@ struct ReconOffer: Equatable {
 /// The two choices under an offer to look into something. Nothing starts
 /// until Look into it is tapped.
 struct ReconOfferButtons: View {
+    /// The offer as it was said, so focus waits until VoiceOver has read it.
+    var question: String? = nil
     let onYes: () -> Void
     let onNo: () -> Void
 
     enum Choice: Hashable { case yes, no }
 
-    /// Where VoiceOver goes once the buttons are on screen, so a person who
-    /// just heard the question lands on its answers rather than hunting.
+    /// Where VoiceOver goes once the question has been read, so a person who
+    /// just heard it lands on its answers rather than hunting.
     static let arrivalFocus: Choice = .yes
+
+    /// Where focus goes when VoiceOver finishes saying `finished`. Only
+    /// once the question itself is done: moving focus sooner would cut it
+    /// off, and the person would hear "Look into it" without the offer.
+    /// Nil for any other line, so focus stays where the person left it.
+    static func focusOnceRead(afterFinishing finished: String?, question: String?) -> Choice? {
+        guard let finished, let question, finished == question else { return nil }
+        return arrivalFocus
+    }
 
     /// What VoiceOver says each choice does.
     static func hint(_ choice: Choice) -> String {
@@ -781,10 +807,15 @@ struct ReconOfferButtons: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("reconOffer")
-        .onAppear {
-            // A turn later, so the question is said first.
-            DispatchQueue.main.async { focus = Self.arrivalFocus }
+        #if os(iOS)
+        // Only after VoiceOver has finished reading the question. On the Mac
+        // there is no such signal, so focus is left alone and the buttons
+        // come next when the person moves on.
+        .onReceive(NotificationCenter.default.publisher(for: UIAccessibility.announcementDidFinishNotification)) { note in
+            let finished = note.userInfo?[UIAccessibility.announcementStringValueUserInfoKey] as? String
+            if let choice = Self.focusOnceRead(afterFinishing: finished, question: question) { focus = choice }
         }
+        #endif
     }
 
     @ViewBuilder

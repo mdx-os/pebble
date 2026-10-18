@@ -46,7 +46,8 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
     private let snapshotLock = NSLock()
     private var sequence = 0
     /// Every summary's work until it returns, cancelled or not. Only for
-    /// `settleEverything`; nothing a recon read is held here.
+    /// `settleEverything`. Each work holds the sources it was given until it
+    /// returns, so what a recon read lives here no longer than its work does.
     private var underway: [UUID: Task<Void, Never>] = [:]
     /// Work that returned before `summarize` could note it.
     private var endedEarly: Set<UUID> = []
@@ -82,7 +83,10 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
     }
 
     /// `now` is when sources count as read. By default, the engine's own
-    /// clock for a `LocalFakeEngine`, and the wall clock otherwise.
+    /// clock for a `LocalFakeEngine`, and the wall clock otherwise. The
+    /// engine's clock fits only one played to a set moment, as the
+    /// showcase's is: one moved only while a card is live falls behind, so
+    /// give it the wall clock, as `HomeView.reconFeedModel` does.
     public init(engine: any TaskEngine, provider: any SourceProvider, now: (@Sendable () -> Date)? = nil) {
         self.engine = engine
         self.provider = provider

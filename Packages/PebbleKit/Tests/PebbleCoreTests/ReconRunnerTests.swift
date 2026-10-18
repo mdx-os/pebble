@@ -5,7 +5,9 @@ import Testing
 
 /// The runner's promises about when a summary is begun, kept, let go and
 /// begun again, on the scripted engine and on one that shows no steps. An
-/// engine that picks its own steps never gets a recon at all.
+/// engine that picks its own steps never gets a recon at all. The whole
+/// suite has a time limit, so an await that never ends fails, not hangs.
+@Suite(.timeLimit(.minutes(1)))
 struct ReconRunnerTests {
     static let readOn = ReconTests.readOn
     static let sources = ReconTests.sources

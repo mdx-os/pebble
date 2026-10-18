@@ -69,6 +69,9 @@ public final class ReplayEngine: ScriptedTaskEngine, @unchecked Sendable {
     public func redirect(_ id: String, with instructions: String) -> Bool { false }
 
     public func stop(_ id: String) -> Bool {
+        // Two takes of the lock, so another thread could change the task
+        // between them. Fine for a test driving one thread; a real engine
+        // checks and sets under one lock, as `LocalFakeEngine.stop` does.
         let active = tasks.first(where: { $0.id == id })?.isActive == true
         if active { set(id, .stopped) }
         duringStop?(id)

@@ -33,6 +33,11 @@ make screenshots  # writes build/screenshots/{iphone,ipad,mac}.png
 `make generate` creates `Pebble.xcodeproj` from `project.yml`. The project file
 is generated, not committed.
 
+The package tests run in Debug only, as `make test` and CI run them. The UI
+tests use the showcase (`ShowcaseScene.morning`, `ShowcaseScene.emptyMemory()`),
+which is Debug only, so `swift test -c release` does not build them. Release
+is checked by `make build-release` instead.
+
 When `make pulse` finds a real change, it also writes `build/pulse/notify.md`
 and `build/pulse/summary.json`. A quiet run removes them.
 

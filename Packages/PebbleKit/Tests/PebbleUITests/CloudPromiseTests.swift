@@ -388,7 +388,7 @@ struct CloudPromiseTests {
         cloud.addPrivateWord()
         #expect(review.pending == nil)
         await chat.settled()
-        #expect(chat.failure == CloudWords.notSent)
+        #expect(chat.failure == CloudWords.withdrawn)
         #expect(chat.draft == "Ask about the Riverside Clinic")
 
         chat.submit(chat.draft)

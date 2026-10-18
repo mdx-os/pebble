@@ -12,7 +12,10 @@ import Testing
 /// The recon's promises on Today and in the chat: examples said per card,
 /// an on-device chat's promise kept, updates landing on the main thread,
 /// a clock that moves only while something is live, and the card's words.
+/// A limit for the whole suite, so an await that never ends fails rather
+/// than hanging CI.
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct ReconFeedTests {
     let brand = Brand(name: "Nova")
     let endpoint = URL(string: "https://cloud.example.com")!
@@ -134,6 +137,90 @@ struct ReconFeedTests {
         runner.advance(by: 30)
         #expect(maker.wire.sent.isEmpty)
         #expect(runner.summary(for: id)?.note == ReconWords.cloudWithdrawn)
+    }
+
+    /// Today as the home screen makes it, with no engine given, sits quiet
+    /// for a while, so its scripted clock isn't moved. A recon started then
+    /// says it was gathered at the wall time, today, and its card's time is
+    /// the wall time too, not when the screen was made.
+    @Test func aReconAfterAQuietSpellSaysWhenItWasReallyGathered() throws {
+        let wall = HandClock(morning)
+        let model = HomeView.reconFeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: nil,
+                                            drivesTasks: false, reading: ReconTestData.sources, place: .onDevice,
+                                            memory: nil, model: LocalStubModel(), cloud: nil, now: { wall.now })
+        let runner = try #require(model.recon)
+        // Ninety minutes with nothing live, so nothing ticks.
+        #expect(!model.ticks)
+        wall.now = morning + 90 * 60
+        let started = wall.now
+        #expect(model.lookInto(SampleSources.poolTopic))
+        let id = try #require(runner.tasks.first?.id)
+        #expect(runner.tasks.first?.startedAt == started)
+        // Played to its end the way the screen plays it, a second at a time.
+        for _ in 0..<30 {
+            wall.now += 1
+            model.tick(1)
+        }
+        let summary = try #require(runner.summary(for: id))
+        #expect(summary.gatheredAt == started)
+        let line = ReconWords.gathered(summary.gatheredAt, now: wall.now)
+        #expect(line == "Gathered today at \(started.formatted(date: .omitted, time: .shortened))")
+        let card = try #require(runner.tasks.first { $0.id == id })
+        #expect(card.updatedAt >= started)
+        #expect(card.updatedAt <= wall.now)
+    }
+
+    /// The chat's Look into it checks Today first. A topic already going
+    /// there, in any case of letters, starts nothing more and says so.
+    @Test func theChatNeverStartsATopicTodayIsAlreadyOn() throws {
+        let model = HomeView.reconFeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()),
+                                            tasks: nil, drivesTasks: false, reading: ReconTestData.sources,
+                                            place: .onDevice, memory: nil, model: LocalStubModel(), cloud: nil,
+                                            now: { [morning] in morning })
+        let runner = try #require(model.recon)
+        // From the card, in lower case.
+        let card = try #require(model.feed.groups.flatMap(\.items).first { $0.id == "sample:pool" })
+        model.perform(card) { _ in }
+        #expect(runner.tasks.count == 1)
+        let chat = HomeView.wired(ChatController.make(brand: brand, model: LocalStubModel(),
+                                                      names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil,
+                                                      replyBeat: .zero), to: model)
+        chat.submit("Look into The Riverside Pool Reopening")
+        #expect(chat.reconOffer != nil)
+        chat.acceptReconOffer()
+        #expect(runner.tasks.count == 1)
+        #expect(chat.conversation.turns.last?.text == ReconWords.alreadyOn)
+        #expect(ChatView.replyLanded(in: chat, covered: false) == ReconWords.alreadyOn)
+        // A new topic still starts.
+        chat.submit("look into the library's new Sunday hours")
+        chat.acceptReconOffer()
+        #expect(runner.tasks.count == 2)
+        #expect(chat.conversation.turns.last?.text == ReconWords.started)
+    }
+
+    /// A kept point too long for the notes gets a line of its own, never
+    /// the composer's ask to shorten words the person didn't write.
+    @Test func aPointTooLongForTheNotesSaysWhereItIsInFull() async throws {
+        let memory = ShowcaseScene.emptyMemory()
+        defer { discard(memory) }
+        let played = realRecon(at: morning)
+        let runner = played.runner
+        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: runner, place: .onDevice,
+                              memory: memory, now: { [morning] in morning })
+        let long = String(repeating: "The pool reopens in November after the roof work. ", count: 14)
+        model.summarizer = { CloudWorded(reply: "POINT: \(long)[2]") }
+        #expect(model.lookInto(SampleSources.poolTopic))
+        played.advance(30)
+        let id = try #require(runner.tasks.first?.id)
+        await runner.settle(id)
+        let summary = try #require(runner.summary(for: id))
+        let point = try #require(summary.points.first)
+        #expect(summary.note(for: point).count > MemoryStore.maxLength)
+        #expect(!model.remember(point, in: summary))
+        #expect(model.rememberStatus == ReconWords.pointTooLong)
+        #expect(model.rememberStatus != MemoryWords.tooLong)
+        #expect(memory.notes().isEmpty)
+        #expect(ReconWords.all.contains(ReconWords.pointTooLong))
     }
 
     /// Two previews waiting at once: the first to come shows, the other
@@ -507,6 +594,14 @@ struct ReconFeedTests {
                 == "Gathered today at 9:40 AM")
     }
 
+    /// A source's link says what it opens, in a sentence, not a bare host.
+    @Test func aSourceLinkSaysWhatItOpens() {
+        #expect(ReconWords.pageLinkHint("gazette.example.org") == "Opens gazette.example.org in your browser.")
+        #expect(ReconWords.pageLinkHint(nil) == "Opens the page in your browser.")
+        #expect(ReconWords.pageLinkHint("") == "Opens the page in your browser.")
+        #expect(ReconWords.all.contains(ReconWords.pageLinkHint("gazette.example.org")))
+    }
+
     /// The sources sheet sets the points beside each page's own text, so
     /// the note that they were worded in the cloud shows under them there.
     @Test func theSourcesSheetSaysThePointsWereWordedInTheCloud() throws {
@@ -660,10 +755,17 @@ struct ReconFeedTests {
         #expect(ChatView.arrival(for: refused, covered: false) == .reply(ReconWords.couldNotStart))
     }
 
-    /// VoiceOver lands on the offer's answers once they arrive, and each
-    /// says what it does: Not now says nothing starts.
+    /// VoiceOver lands on the offer's answers only once it has finished
+    /// reading the offer, so the question is never cut off. Another line
+    /// finishing moves nothing. Each answer says what it does.
     @Test func theOffersButtonsAreFoundAndSayWhatTheyDo() {
         #expect(ReconOfferButtons.arrivalFocus == .yes)
+        let offer = ReconWords.offer("the pool")
+        #expect(ReconOfferButtons.focusOnceRead(afterFinishing: offer, question: offer) == .yes)
+        #expect(ReconOfferButtons.focusOnceRead(afterFinishing: FirstConversation.thinking, question: offer) == nil)
+        #expect(ReconOfferButtons.focusOnceRead(afterFinishing: nil, question: offer) == nil)
+        #expect(ReconOfferButtons.focusOnceRead(afterFinishing: offer, question: nil) == nil)
+        #expect(ImageRenderer(content: ReconOfferButtons(question: offer, onYes: {}, onNo: {}).frame(width: 393)).cgImage != nil)
         #expect(ReconOfferButtons.hint(.no) == "Nothing starts.")
         #expect(ReconOfferButtons.hint(.yes) == ReconWords.offerYesHint)
         #expect(ReconWords.offerYesHint.contains("Today"))
@@ -689,9 +791,13 @@ struct ReconFeedTests {
     /// A chat preview taken away, by the cloud going off, a private word
     /// changing or the screen going, is handled as nothing sent: the turn
     /// comes back to the composer, and the line says so and points at it.
+    /// No one chose, so its line never says the person did.
     @Test func aChatTreatsAWithdrawnPreviewAsNothingSent() {
         #expect(ChatController.nothingWasSent(CloudModelError.withdrawn))
-        #expect(ChatController.failureLine(for: CloudModelError.withdrawn) == CloudWords.notSent)
+        #expect(ChatController.failureLine(for: CloudModelError.withdrawn) == CloudWords.withdrawn)
+        #expect(CloudWords.withdrawn != CloudWords.notSent)
+        #expect(!CloudWords.withdrawn.hasPrefix("Okay"))
+        #expect(!CloudWords.withdrawn.contains("chose"))
         #expect(ChatController.pointsAtTheDraft(ChatController.failureLine(for: CloudModelError.withdrawn)))
         #expect(ChatController.nothingWasSent(CloudModelError.withdrawn) == ChatController.nothingWasSent(CloudModelError.notSent))
     }

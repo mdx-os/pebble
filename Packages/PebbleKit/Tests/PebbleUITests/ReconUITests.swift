@@ -22,7 +22,10 @@ final class Starts {
     }
 }
 
+/// A limit for the whole suite, so an await whose preview or summary never
+/// comes fails here rather than hanging CI.
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct ReconUITests {
     let brand = Brand(name: "Nova")
     let endpoint = URL(string: "https://cloud.example.com")!
@@ -238,6 +241,11 @@ struct ReconUITests {
         runner.advance(by: 12)
         await eventually { review.pending != nil }
         #expect(review.pending != nil)
+        // Plain, not tied to the main actor, so a change off it is noted
+        // rather than stopping the run.
+        let log = ThreadLog()
+        let watch = review.objectWillChange.sink { @Sendable _ in log.note() }
+        defer { watch.cancel() }
         let sent = Flag()
         // A subject may be sent to from any thread; that is the point here.
         nonisolated(unsafe) let offThread = settings
@@ -250,6 +258,73 @@ struct ReconUITests {
         #expect(review.pending == nil)
         await runner.settle(id)
         #expect(maker.wire.sent.isEmpty)
+        // The withdraw was published, and only ever on the main thread.
+        #expect(!log.onMain.isEmpty)
+        #expect(log.onMain.allSatisfy { $0 })
+    }
+
+    /// On the main thread the change withdraws Today's preview in the same
+    /// turn, so a Send tapped straight after, with nothing awaited between,
+    /// sends nothing. A hop to a later turn would let that Send go.
+    @Test func aCloudSettingOnTheMainThreadWithdrawsBeforeALateSend() async throws {
+        let maker = TransportMaker()
+        let notes = scratchMemory()
+        defer { discard(notes) }
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+                              memory: notes, transport: { maker.make() })
+        let (model, _, runner) = feed(memory: nil)
+        let review = model.cloudReview
+        model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel(), review: review)) }
+        let settings = PassthroughSubject<CloudHelpSettings, Never>()
+        model.follow(cloudSettings: settings.eraseToAnyPublisher())
+        settings.send(CloudHelpSettings(isOn: true))
+        #expect(model.lookInto(SampleSources.poolTopic))
+        let id = try #require(runner.tasks.first?.id)
+        runner.advance(by: 12)
+        await eventually { review.pending != nil }
+        let preview = try #require(review.pending)
+        // All three in one turn.
+        settings.send(CloudHelpSettings(isOn: false))
+        #expect(review.pending == nil)
+        review.answer(.send, for: preview.id)
+        await runner.settleEverything()
+        runner.advance(by: 30)
+        #expect(maker.wire.sent.isEmpty)
+        #expect(runner.summary(for: id)?.note == ReconWords.cloudWithdrawn)
+    }
+
+    /// The path a person takes: Today's cloud preview is up, and Forget
+    /// everything is tapped on the memory screen the home screen made. With
+    /// the real cloud summarizer and Today's own gate, the preview goes at
+    /// once, and a Send tapped late on it sends nothing.
+    @Test func forgetEverythingFromTheMemoryScreenWithdrawsTodaysPreview() async throws {
+        let maker = TransportMaker()
+        let notes = scratchMemory()
+        defer { discard(notes) }
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+                              memory: notes, transport: { maker.make() })
+        let (model, engine, runner) = feed(memory: notes)
+        let review = model.cloudReview
+        model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel(), review: review)) }
+        #expect(model.lookInto(SampleSources.poolTopic))
+        let id = try #require(runner.tasks.first?.id)
+        engine.advance(by: 12)
+        await eventually { review.pending != nil }
+        let preview = try #require(review.pending)
+
+        let screen = HomeView.memoryModel(store: notes, place: .mayLeaveDevice, cloud: cloud, feed: model)
+        screen.forgetEverything()
+        // Gone with its sheet, not on a later turn.
+        #expect(review.pending == nil)
+        review.answer(.send, for: preview.id)
+        await runner.settleEverything()
+        engine.advance(by: 60)
+        model.refresh()
+        #expect(maker.wire.sent.isEmpty)
+        #expect(review.pending == nil)
+        #expect(runner.tasks.isEmpty)
+        #expect(runner.summary(for: id) == nil)
+        #expect(runner.summariesMayLeaveDevice == 0)
     }
 
     @Test func aFollowUpOpensTheChatWithAQuestionReady() throws {
@@ -631,6 +706,8 @@ struct ReconUITests {
 /// The sample pages, with one more that names someone from the person's notes.
 struct PagesNamingSomeone: SourceProvider {
     var runsOnDevice: Bool { true }
+    /// Said outright, so a change to the protocol's default can't make it one.
+    var isSample: Bool { false }
     func sources(for task: ReconTask) throws -> [ReconSource] {
         try ReconTestData.sources.sources(for: task) + [
             ReconSource(id: "test:club", title: "Swim club news", publisher: "Riverside Swim Club",
@@ -653,7 +730,8 @@ final class HeldWire: @unchecked Sendable {
     init(reply: String) { self.reply = reply }
 
     var sentCount: Int { lock.withLock { sent } }
-    /// The answer has gone back to whoever sent the request.
+    /// The wire has answered. Set as the reply leaves `load`, so the caller
+    /// may not have it in hand yet; wait on the work itself for that.
     var answered: Bool { lock.withLock { done } }
 
     @Sendable func load(_ request: URLRequest) async throws -> (Data, URLResponse) {

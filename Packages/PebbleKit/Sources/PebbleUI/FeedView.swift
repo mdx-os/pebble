@@ -409,10 +409,14 @@ final class FeedModel: ObservableObject {
     }
 
     /// True when a recon for `topic` is going or done on Today. One that
-    /// stopped or failed can be started again.
+    /// stopped or failed can be started again. Case doesn't count, so "the
+    /// pool" from a card and "The pool" from the chat are one topic.
     func isLookingInto(_ topic: String) -> Bool {
         guard let recon, let title = ReconTask(topic: topic)?.title else { return false }
-        return recon.tasks.contains { $0.title == title && ($0.isActive || $0.state == .done) && recon.isRecon($0.id) }
+        return recon.tasks.contains {
+            $0.title.caseInsensitiveCompare(title) == .orderedSame && ($0.isActive || $0.state == .done)
+                && recon.isRecon($0.id)
+        }
     }
 
     /// The summary a finished recon card shows. Asked of the runner once
@@ -469,7 +473,8 @@ final class FeedModel: ObservableObject {
                 rememberStatus = MemoryWords.saved(place)
                 return true
             case .tooLong:
-                rememberStatus = MemoryWords.tooLong
+                // Not the composer's "shorten it": the person didn't write this.
+                rememberStatus = ReconWords.pointTooLong
             case .needsWords, .notFound:
                 rememberStatus = MemoryWords.needsWords
             }

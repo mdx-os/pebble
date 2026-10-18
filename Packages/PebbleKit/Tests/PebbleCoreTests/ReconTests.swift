@@ -3,6 +3,8 @@ import Foundation
 import ReconTestSupport
 import Testing
 
+/// The whole suite has a time limit, so an await that never ends fails, not hangs.
+@Suite(.timeLimit(.minutes(1)))
 struct ReconTests {
     static let readOn = SampleSources.day(2026, 10, 17)
     /// The sample pages, read on `readOn`.

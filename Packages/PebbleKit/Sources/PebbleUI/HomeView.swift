@@ -62,7 +62,7 @@ public struct HomeView: View {
         tasks: (any TaskEngine)? = nil,
         drivesTasks: Bool = false,
         sources: any SourceProvider = SampleSources(),
-        now: @escaping () -> Date = { Date() },
+        now: @escaping @Sendable () -> Date = { Date() },
         cloud: CloudHelp? = nil
     ) {
         screen = HomeScreen(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
@@ -77,7 +77,7 @@ public struct HomeView: View {
     /// line the person didn't type, and only in a debug build.
     init(brand: Brand, model: any ModelClient, names: any AgentNameStoring, onboarding: any OnboardingStoring,
          memory: MemoryStore?, looks: UserDefaults, conversation: Conversation?, section: HomeSection,
-         feed: [any FeedSource], needsYou: NeedsYou, now: @escaping () -> Date, chatLine: String) {
+         feed: [any FeedSource], needsYou: NeedsYou, now: @escaping @Sendable () -> Date, chatLine: String) {
         screen = HomeScreen(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                             looks: looks, conversation: conversation, section: section, feed: feed,
                             needsYou: needsYou, tasks: nil, drivesTasks: false, sources: SampleSources(),
@@ -147,12 +147,22 @@ public struct HomeView: View {
     /// Today's model as the home screen makes it, with looking into things
     /// in it. Every task, a recon's included, runs through one runner. With
     /// no engine given, the scripted one plays in real time over `reading`.
+    ///
+    /// That engine is moved only while a card is live, so its own clock
+    /// falls behind whenever Today is quiet. Its card times and the time a
+    /// recon was gathered are read from `now` instead, the screen's clock,
+    /// so "Gathered today at 9:12" is when it was read. An engine passed in,
+    /// as the showcase's, keeps its own clock.
     static func reconFeedModel(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)?,
                                drivesTasks: Bool, reading: any SourceProvider, place: PrivacyPlace,
                                memory: MemoryStore?, model: any ModelClient, cloud: CloudHelp?,
-                               now: @escaping () -> Date) -> FeedModel {
-        let engine = tasks ?? LocalFakeEngine(rule: needsYou.rule)
-        let runner = (engine as? ReconRunner) ?? ReconRunner(engine: engine, provider: reading)
+                               now: @escaping @Sendable () -> Date) -> FeedModel {
+        let runner: ReconRunner
+        if let tasks {
+            runner = (tasks as? ReconRunner) ?? ReconRunner(engine: tasks, provider: reading)
+        } else {
+            runner = ReconRunner(engine: LocalFakeEngine(rule: needsYou.rule, wallClock: now), provider: reading, now: now)
+        }
         let feed = feedModel(sources: sources, needsYou: needsYou, tasks: runner,
                              drivesTasks: drivesTasks || tasks == nil, place: place, memory: memory, now: now)
         // Asked at each start, so turning the cloud on or off counts from
@@ -173,6 +183,7 @@ public struct HomeView: View {
         chat.lookInto = feed.canLookInto
             ? { [weak feed] topic, onDevice in feed?.lookInto(topic, onDevice: onDevice) ?? false }
             : nil
+        chat.isLookingInto = { [weak feed] topic in feed?.isLookingInto(topic) ?? false }
         chat.reconReadsExamples = feed.readsExamples
         return chat
     }
@@ -281,7 +292,7 @@ struct HomeScreen: View {
         tasks: (any TaskEngine)?,
         drivesTasks: Bool,
         sources: any SourceProvider,
-        now: @escaping () -> Date,
+        now: @escaping @Sendable () -> Date,
         cloud: CloudHelp?,
         chatLine: String?
     ) {

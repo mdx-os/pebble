@@ -555,9 +555,18 @@ public enum ReconWords {
     /// own still says which point it keeps.
     public static func rememberThisLabel(_ point: String) -> String { "Remember this: \(point)" }
     public static func rememberedLabel(_ point: String) -> String { "Remembered: \(point)" }
-    /// A second tap on Look into it, while that one is going or ready.
-    public static let alreadyOn = "I'm already on that one. Its card is here in Today."
+    /// A second tap on Look into it, while that one is going or ready, on
+    /// Today or in the chat, so it never says "here".
+    public static let alreadyOn = "I'm already on that one. Its card is in Today."
+    /// A kept point too long for the notes. The person didn't write it, so
+    /// it never asks them to shorten it.
+    public static let pointTooLong = "That point is too long for your notes. Open sources has it in full."
     public static let pageLinkTitle = "Open the page"
+    /// What VoiceOver says a source's link does, such as "Opens gazette.example.org in your browser."
+    public static func pageLinkHint(_ host: String?) -> String {
+        guard let host, !host.isEmpty else { return "Opens the page in your browser." }
+        return "Opens \(host) in your browser."
+    }
     /// The point, who says it, and any disagreement after it. When it was
     /// `wordedInCloud`, the brackets say so, so the words are never kept as
     /// the publisher's own.
@@ -600,7 +609,7 @@ public enum ReconWords {
          memoryNote("The pool opens.", from: ["A", "B"], wordedInCloud: true),
          memoryNote("The pool opens.", from: [], wordedInCloud: true),
          disputedBy(["A", "B"]), disputedBy(["A"]), rememberThisLabel("The pool opens."), rememberedLabel("The pool opens."),
-         alreadyOn,
+         alreadyOn, pointTooLong, pageLinkHint("gazette.example.org"), pageLinkHint(nil),
          planTodo, readTodo, datesTodo, summaryTodo, keptQuestions, keptSources(1), keptSources(4), keptSummary,
          overview(topic: "the pool", sources: 4, backedTwice: 2, disagreements: 1, old: 1),
          overview(topic: "the pool", sources: 1, backedTwice: 1, disagreements: 2, old: 2),

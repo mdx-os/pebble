@@ -133,6 +133,8 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
     /// Scripted, so always an example.
     public var isSample: Bool { true }
     private let origin: Date
+    /// Where card times come from, when given. See `init(rule:policy:scripts:wallClock:)`.
+    private let wallClock: (@Sendable () -> Date)?
     private let scripts: [TaskScript]
     private let lock = NSLock()
     private var elapsed: TimeInterval = 0
@@ -166,6 +168,22 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
         self.policy = policy
         self.scripts = scripts
         self.origin = origin
+        self.wallClock = nil
+    }
+
+    /// The same, with the times on cards read from `wallClock` rather than
+    /// counted from an origin. For an engine that plays in real time but is
+    /// only moved while a card is live: its own clock stands still while
+    /// nothing is going, so a card started after a quiet spell would show a
+    /// time long past. The steps still play on the engine's own clock.
+    /// `wallClock` is read under the engine's lock, so it must not call the engine.
+    public init(rule: AskFirst = .shared, policy: RetryPolicy = .standard,
+                scripts: [TaskScript] = SampleTasks.all, wallClock: @escaping @Sendable () -> Date) {
+        self.rule = rule
+        self.policy = policy
+        self.scripts = scripts
+        self.origin = wallClock()
+        self.wallClock = wallClock
     }
 
     /// Seconds since the engine began.
@@ -201,7 +219,7 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
         let id = mutate { () -> String in
             made += 1
             let id = "task:\(made)"
-            let date = origin + elapsed
+            let date = self.date
             var run = Run(
                 task: AgentTask(id: id, title: script.title, step: script.steps.first?.text ?? script.doneLine,
                                 progress: script.determinate ? .fraction(0) : .indeterminate, startedAt: date),
@@ -380,7 +398,7 @@ public final class LocalFakeEngine: TaskEngine, @unchecked Sendable {
     // MARK: The state machine. Everything below runs inside the lock, except
     // `withRule`, `closedQuestions` and the rule calls in `mutate`.
 
-    private var date: Date { origin + elapsed }
+    private var date: Date { wallClock?() ?? origin + elapsed }
 
     /// Takes the lock. In DEBUG it also marks this thread as its holder, so
     /// `withRule` can tell this thread holding it from another one.

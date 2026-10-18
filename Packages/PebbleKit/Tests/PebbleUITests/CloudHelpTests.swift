@@ -542,7 +542,8 @@ struct CloudHelpTests {
         _ = await review.shown()
         cloud.setOn(false)
         await controller.settled()
-        #expect(controller.failure == CloudWords.notSent)
+        // Taken away unanswered, so the line never says the person chose.
+        #expect(controller.failure == CloudWords.withdrawn)
         #expect(personTurns(controller).isEmpty)
         #expect(maker.wire.sent.isEmpty)
         // A later line in the same chat is not sent either, and is taken back too.
@@ -612,7 +613,7 @@ struct CloudHelpTests {
         await controller.settled()
         #expect(!controller.isReplying)
         #expect(review.pending == nil)
-        #expect(controller.failure == CloudWords.notSent)
+        #expect(controller.failure == CloudWords.withdrawn)
         #expect(controller.draft == "Plan my week")
         #expect(personTurns(controller).isEmpty)
         #expect(maker.wire.sent.isEmpty)
@@ -636,7 +637,7 @@ struct CloudHelpTests {
         await one.settled()
         await two.settled()
         #expect(oneReview.pending == nil && twoReview.pending == nil)
-        #expect(one.failure == CloudWords.notSent && two.failure == CloudWords.notSent)
+        #expect(one.failure == CloudWords.withdrawn && two.failure == CloudWords.withdrawn)
         #expect(maker.wire.sent.isEmpty)
     }
 
@@ -904,7 +905,7 @@ struct CloudHelpTests {
         #expect(try help.forgetPrivateWords() == .privateWordsAndCloud)
         await controller.settled()
         #expect(review.pending == nil)
-        #expect(controller.failure == CloudWords.notSent)
+        #expect(controller.failure == CloudWords.withdrawn)
         #expect(maker.wire.sent.isEmpty)
     }
 

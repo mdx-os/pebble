@@ -375,7 +375,7 @@ struct ReconSourcesSheet: View {
                                 }
                                 .tint(Theme.accentText)
                                 .frame(minHeight: 44)
-                                .accessibilityHint(link.host ?? "")
+                                .accessibilityHint(ReconWords.pageLinkHint(link.host))
                             }
                         }
                         .padding(16)
