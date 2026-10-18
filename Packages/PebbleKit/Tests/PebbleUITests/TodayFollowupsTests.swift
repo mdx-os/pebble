@@ -410,19 +410,24 @@ struct TodayFollowupsTests {
         defer { window.close() }
         let host = NSHostingView(rootView: home(LocalStubModel()))
         window.contentView = host
-        func settle() {
+        // Runs the window until `done`, or gives up after a few seconds,
+        // so a slow machine waits longer and a fast one doesn't wait at all.
+        func settle(until done: () -> Bool) {
+            let deadline = Date().addingTimeInterval(5)
             host.layoutSubtreeIfNeeded()
-            RunLoop.main.run(until: Date().addingTimeInterval(0.3))
-            host.layoutSubtreeIfNeeded()
+            while !done(), Date() < deadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+                host.layoutSubtreeIfNeeded()
+            }
         }
-        settle()
+        settle { log.chats.last != nil && log.memories.last != nil }
         let oldChat = try #require(log.chats.last)
         let oldMemory = try #require(log.memories.last, "the memory screen is shown, so its model is made")
         oldChat.conversation = try oldChat.conversation.appendingPerson("A secret for the model on this device")
         oldMemory.askForgetEverything = true
 
         host.rootView = home(RemoteModel())
-        settle()
+        settle { log.chats.last !== oldChat && log.memories.last !== oldMemory }
         let newChat = try #require(log.chats.last)
         #expect(newChat !== oldChat, "another model makes the chat again")
         #expect(newChat.conversation.turns.map(\.text) == [FirstConversation.opening(named: "Pip", place: .mayLeaveDevice)],

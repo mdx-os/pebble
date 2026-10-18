@@ -1,6 +1,8 @@
 // Checks that a screenshot shows the orange fill with white words on it.
-// Usage: swift scripts/fill-check.swift <png> <left> <top> <right> <bottom> [--badge]
+// Usage: swift scripts/fill-check.swift <png> <left> <top> <right> <bottom> [--badge | --white]
 //        swift scripts/fill-check.swift --self-test
+// --white prints only the number of white pixels on the fill in the region,
+// pass or fail, so a shot with a count can be compared with one without.
 // The region is in fractions of the image, 0 to 1, left before right and
 // top before bottom. Run by scripts/check-screenshots.sh after `make
 // screenshots`. With --badge the region is the end of a row, where only a
@@ -69,9 +71,41 @@ struct Pixels {
     }
 }
 
-/// Why `pixels` fails in the region `box` (left, top, right, bottom as
-/// fractions), or a line saying what passed.
+/// What the region `box` (left, top, right, bottom as fractions) of
+/// `pixels` holds: its fill pixels, and the white and dark pixels on that
+/// fill. Fails only for a bad region.
+struct Measure {
+    let area: Double
+    let fill: Int
+    let white: Int
+    let dark: Int
+}
+
+/// Why `pixels` fails in the region `box`, or a line saying what passed.
 func check(_ pixels: Pixels, _ box: [Double], badge: Bool) -> Result<String, CheckFailure> {
+    let measured: Measure
+    switch measure(pixels, box) {
+    case .success(let found): measured = found
+    case .failure(let failure): return .failure(failure)
+    }
+    let area = measured.area, count = measured.fill, white = measured.white, dark = measured.dark
+    // A share of the region, whatever the scale: a sidebar row or a Done
+    // button covers 6 to 14 percent of its region, the end of a row with its
+    // count about as much of its narrower one.
+    guard Double(count) >= area * (badge ? 0.015 : 0.03) else {
+        return .failure(CheckFailure("no orange fill in the region (\(count) pixels)"))
+    }
+    // The words cover 0.2 to 0.6 percent of the region, a count about 0.05.
+    guard Double(white) >= area * (badge ? 0.0002 : 0.001) else {
+        return .failure(CheckFailure("the words on the fill aren't white (\(white) white pixels)"))
+    }
+    guard dark * 4 < white else {
+        return .failure(CheckFailure("dark words on the fill (\(dark) dark, \(white) white pixels)"))
+    }
+    return .success("\(count) fill pixels, \(white) white on it")
+}
+
+func measure(_ pixels: Pixels, _ box: [Double]) -> Result<Measure, CheckFailure> {
     guard box.count == 4, box.allSatisfy({ (0...1).contains($0) }) else {
         return .failure(CheckFailure("the region \(box) must be four fractions from 0 to 1"))
     }
@@ -99,13 +133,7 @@ func check(_ pixels: Pixels, _ box: [Double], badge: Bool) -> Result<String, Che
             }
         }
     }
-    // A share of the region, whatever the scale: a sidebar row or a Done
-    // button covers 6 to 14 percent of its region, the end of a row with its
-    // count about as much of its narrower one.
     let area = Double(regionWidth * regionHeight)
-    guard Double(count) >= area * (badge ? 0.015 : 0.03) else {
-        return .failure(CheckFailure("no orange fill in the region (\(count) pixels)"))
-    }
 
     // Each connected patch of fill, and in each of its rows the span from
     // its first fill pixel to its last. The words are looked for only
@@ -142,14 +170,7 @@ func check(_ pixels: Pixels, _ box: [Double], badge: Bool) -> Result<String, Che
         if r >= 225, g >= 225, b >= 225 { white += 1 }
         if r <= 90, g <= 90, b <= 90 { dark += 1 }
     }
-    // The words cover 0.2 to 0.6 percent of the region, a count about 0.05.
-    guard Double(white) >= area * (badge ? 0.0002 : 0.001) else {
-        return .failure(CheckFailure("the words on the fill aren't white (\(white) white pixels)"))
-    }
-    guard dark * 4 < white else {
-        return .failure(CheckFailure("dark words on the fill (\(dark) dark, \(white) white pixels)"))
-    }
-    return .success("\(count) fill pixels, \(white) white on it")
+    return .success(Measure(area: area, fill: count, white: white, dark: dark))
 }
 
 struct CheckFailure: Error {
@@ -163,11 +184,17 @@ func selfTest() -> Never {
     let white: (UInt8, UInt8, UInt8) = (255, 255, 255)
     let gray: (UInt8, UInt8, UInt8) = (110, 110, 110)
     var problems: [String] = []
-    func expect(_ name: String, _ pixels: Pixels, _ box: [Double] = [0, 0, 1, 1], passes: Bool) {
+    func expect(_ name: String, _ pixels: Pixels, _ box: [Double] = [0, 0, 1, 1], passes: Bool, because: String? = nil) {
         let result = check(pixels, box, badge: false)
-        let passed = if case .success = result { true } else { false }
-        if passed != passes {
-            problems.append("\(name): \(passes ? "failed" : "passed"), expected the other")
+        switch result {
+        case .success where !passes:
+            problems.append("\(name): passed, expected it to fail")
+        case .failure(let failure) where passes:
+            problems.append("\(name): failed (\(failure.reason)), expected it to pass")
+        case .failure(let failure) where because.map { !failure.reason.contains($0) } ?? false:
+            problems.append("\(name): failed for \"\(failure.reason)\", not for \"\(because ?? "")\"")
+        default:
+            break
         }
     }
     // Done: a patch of fill with white words inside it.
@@ -179,7 +206,23 @@ func selfTest() -> Never {
     // The same with gray words.
     var grayWords = done
     for letter in 0..<4 { grayWords.paint(60 + letter * 22, 42, 72 + letter * 22, 58, gray) }
-    expect("gray words on the fill", grayWords, passes: false)
+    expect("gray words on the fill", grayWords, passes: false, because: "aren't white")
+    // Black words, with a glint of white on the fill: enough white to pass
+    // the white count, so only the dark guard stops it.
+    let black: (UInt8, UInt8, UInt8) = (20, 20, 20)
+    var blackWords = done
+    for letter in 0..<4 { blackWords.paint(60 + letter * 22, 42, 72 + letter * 22, 58, black) }
+    blackWords.paint(45, 33, 50, 38, white)
+    expect("black words on the fill", blackWords, passes: false, because: "dark words")
+    // Half the words white and half black: still dark words.
+    var halfBlack = done
+    for letter in 2..<4 { halfBlack.paint(60 + letter * 22, 42, 72 + letter * 22, 58, black) }
+    expect("half the words black", halfBlack, passes: false, because: "dark words")
+    // White words with a little black in them, as a shadow or an edge:
+    // mostly white, so they pass.
+    var someBlack = done
+    for letter in 0..<4 { someBlack.paint(60 + letter * 22, 57, 72 + letter * 22, 58, black) }
+    expect("white words with some black", someBlack, passes: true)
     // A light sheet: two orange things on one row with only the white
     // sheet between them, and no words on either.
     var light = Pixels(width: 200, height: 100)
@@ -200,8 +243,11 @@ func selfTest() -> Never {
 let args = CommandLine.arguments
 if args.count == 2 && args[1] == "--self-test" { selfTest() }
 let badge = args.count == 7 && args[6] == "--badge"
-guard args.count == 6 || badge else {
-    fail("usage: fill-check.swift <png> <left> <top> <right> <bottom> [--badge]")
+// Only the number of white pixels on the fill, pass or fail, so two shots
+// can be compared.
+let whiteOnly = args.count == 7 && args[6] == "--white"
+guard args.count == 6 || badge || whiteOnly else {
+    fail("usage: fill-check.swift <png> <left> <top> <right> <bottom> [--badge | --white]")
 }
 let box = args[2...5].compactMap(Double.init)
 guard box.count == 4 else { fail("the region must be four numbers: \(args[2...5].joined(separator: " "))") }
@@ -210,6 +256,13 @@ guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFUR
       let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
       let pixels = Pixels(image: image) else {
     fail("\(path): not an image")
+}
+if whiteOnly {
+    switch measure(pixels, box) {
+    case .success(let measured): print(measured.white)
+    case .failure(let failure): fail("\(path): \(failure.reason)")
+    }
+    exit(0)
 }
 switch check(pixels, box, badge: badge) {
 case .success(let line): print("fill-check: \(path): \(line)")

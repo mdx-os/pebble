@@ -55,7 +55,7 @@ struct PebbleApp: App {
                     home
                 }
             }
-            .environment(\.holdsStill, UserDefaults.standard.bool(forKey: "pebbleStill"))
+            .environment(\.holdsStill, UserDefaults.standard.bool(forKey: ShowcaseScene.stillKey))
             #else
             home
             #endif

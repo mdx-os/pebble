@@ -27,8 +27,8 @@ enum SnapshotMode {
         #if DEBUG
         let scene = UserDefaults.standard.string(forKey: ShowcaseScene.launchKey).flatMap(ShowcaseScene.init(rawValue:)) ?? .hello
         let screen = AnyView(scene.view(brand: brand))
-        if UserDefaults.standard.bool(forKey: "snapshotSheet") {
-            writeSheet(of: screen, to: path, dark: UserDefaults.standard.bool(forKey: "snapshotDark"))
+        if UserDefaults.standard.bool(forKey: ShowcaseScene.sheetKey) {
+            writeSheet(of: screen, to: path, dark: UserDefaults.standard.bool(forKey: ShowcaseScene.darkKey))
         }
         #else
         let screen = AnyView(OnboardingView(brand: brand, names: InMemoryAgentNameStore(), store: InMemoryOnboardingStore()) { _ in })
@@ -55,7 +55,10 @@ enum SnapshotMode {
         app.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -20_000, y: -20_000), size: size),
                               styleMask: [.titled], backing: .buffered, defer: false)
-        window.contentView = NSHostingView(rootView: screen.frame(width: size.width, height: size.height))
+        // Held still, as on the simulators, so nothing breathes while the
+        // sheet settles and the picture is taken.
+        window.contentView = NSHostingView(rootView: screen.frame(width: size.width, height: size.height)
+            .environment(\.holdsStill, true))
         // A sheet needs a titled window, and AppKit may pull a titled window
         // back on screen as it is ordered in, so it is moved off again after.
         window.orderFront(nil)
@@ -66,8 +69,11 @@ enum SnapshotMode {
         while Date() < deadline {
             RunLoop.main.run(until: Date().addingTimeInterval(0.1))
             if window.attachedSheet != nil {
-                settledAt = settledAt ?? Date()
-                if Date().timeIntervalSince(settledAt!) > 1.5 { break }
+                if let settledAt {
+                    if Date().timeIntervalSince(settledAt) > 1.5 { break }
+                } else {
+                    settledAt = Date()
+                }
             }
         }
         guard let sheet = window.attachedSheet, let frame = sheet.contentView?.superview ?? sheet.contentView else {

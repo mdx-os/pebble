@@ -129,6 +129,12 @@ struct ContrastGuardTests {
             "ToolbarItem {\n    DoneButton { dismiss() }\n}",
             // The hiding belongs to the item, not to something after it.
             "ToolbarItem(placement: .primaryAction) {\n    DoneButton { dismiss() }\n}\nText(\"a\")\n.sharedBackgroundVisibility(.hidden)",
+            // Done outside a ToolbarItem escapes both rules above.
+            "ToolbarItemGroup(placement: .confirmationAction) {\n    DoneButton { dismiss() }\n}\n.sharedBackgroundVisibility(.hidden)",
+            "ToolbarItemGroup {\n    DoneButton { dismiss() }\n}",
+            ".toolbar {\n    DoneButton { dismiss() }\n}",
+            "VStack {\n    DoneButton(title: \"Done\") { dismiss() }\n}",
+            "ToolbarItem {\n    Text(\"a\")\n}\n.sharedBackgroundVisibility(.hidden)\nDoneButton { dismiss() }",
             // The fill tint, anywhere but a fill.
             #"Text("Open").tint(Theme.tintFill)"#,
             #"Text("Open").foregroundStyle(Theme.tintFill)"#,
@@ -167,6 +173,21 @@ struct ContrastGuardTests {
             "struct FillButtonStyle: ButtonStyle {}\nstruct Other: View {\n"
                 + "    var body: some View { Text(\"a\").foregroundStyle(Theme.onTintFill) }\n}",
             "let ink = Theme.onTintFill",
+            // A `chosen` that isn't the row's own.
+            "struct HomeSplit: View {\n    var body: some View {\n"
+                + "        let chosen = !Self.isChosen(place, section: section, regular: true)\n"
+                + "        if chosen {\n            row().foregroundStyle(Theme.onTintFill)\n        }\n    }\n}",
+            "struct HomeSplit: View {\n    var body: some View {\n        let chosen = true\n"
+                + "        if chosen {\n            row().foregroundStyle(Theme.onTintFill)\n        }\n    }\n}",
+            "struct HomeSplit: View {\n    static func ink(chosen: Bool, row: () -> some View) -> some View {\n"
+                + "        let chosen = !chosen\n        if chosen {\n            row().foregroundStyle(Theme.onTintFill)\n"
+                + "        }\n    }\n}",
+            "struct HomeSplit: View {\n    var body: some View {\n        if chosen {\n"
+                + "            row().foregroundStyle(Theme.onTintFill)\n        }\n    }\n}",
+            "struct HomeSplit: View {\n    var body: some View {\n        Self.ink(chosen: !chosen) { Text(\"a\") }\n    }\n}",
+            "struct HomeSplit: View {\n    var body: some View {\n        let chosen = !Self.isChosen(place, section: section, regular: true)\n"
+                + "        Self.ink(chosen: chosen) { Text(\"a\") }\n    }\n}",
+            "struct HomeSplit: View {\n    var body: some View {\n        Self.ink(chosen: flag) { Text(\"a\") }\n    }\n}",
         ]
         for line in wrong {
             #expect(!ContrastLint.problems(in: line).isEmpty, "missed: \(line)")
@@ -189,6 +210,9 @@ struct ContrastGuardTests {
             "ToolbarItem(placement: .confirmationAction) {\n    DoneButton { dismiss() }\n}\n.sharedBackgroundVisibility(.hidden)",
             "ToolbarItem(placement: .primaryAction) {\n    DoneButton { dismiss() }\n}\n.sharedBackgroundVisibility(.hidden)",
             "ToolbarItem {\n    DoneButton { dismiss() }\n}\n.sharedBackgroundVisibility(.hidden)",
+            ".toolbar {\n    ToolbarItem(placement: .confirmationAction) {\n        DoneButton(title: \"Done\") { dismiss() }\n"
+                + "    }\n    .sharedBackgroundVisibility(.hidden)\n}",
+            "struct DoneButton: View {\n    var body: some View { Button(\"Done\") {} }\n}",
             // An item with no Done keeps the toolbar's glass.
             "ToolbarItem(placement: .cancellationAction) {\n    Button(\"Cancel\") { dismiss() }\n}",
             // Art, not words: the character's highlights.
@@ -201,6 +225,14 @@ struct ContrastGuardTests {
                 + "        configuration.label.foregroundStyle(Theme.onTintFill)\n    }\n}",
             "static let onTintFill = RGB.white.color",
             "// Theme.onTintFill only on the fill",
+            // The row's own chosen, from Self.isChosen.
+            "struct HomeSplit: View {\n    var body: some View {\n"
+                + "        let chosen = Self.isChosen(place, section: section, regular: isRegular) && Self.drawsOwnFill\n"
+                + "        Self.ink(chosen: chosen) { Text(\"a\") }\n"
+                + "        Self.ink(chosen: Self.isChosen(place, section: section, regular: true)) { Text(\"b\") }\n    }\n"
+                + "    static func ink(chosen: Bool, row: () -> some View) -> some View {\n"
+                + "        if chosen {\n            row().foregroundStyle(Theme.onTintFill)\n        } else {\n            row()\n"
+                + "        }\n    }\n}",
         ]
         for line in right {
             #expect(ContrastLint.problems(in: line).isEmpty, "flagged: \(line)")
@@ -354,7 +386,22 @@ enum ContrastLint {
         // words on it, so it must be a DoneButton, which tints it to keep
         // those words readable.
         // Only its own closure counts, never the next item's.
-        for item in toolbarItems(in: source) {
+        let items = toolbarItems(in: source)
+        // Done is checked only inside a ToolbarItem. In a ToolbarItemGroup,
+        // straight in `.toolbar { }`, which the system wraps for itself, or
+        // anywhere else, neither rule would see it.
+        var searchedDone = code.startIndex
+        while let match = code.range(of: #"\bDoneButton\b"#, options: .regularExpression,
+                                     range: searchedDone..<code.endIndex) {
+            searchedDone = match.upperBound
+            let offset = code.distance(from: code.startIndex, to: match.lowerBound)
+            if code[..<match.lowerBound].range(of: #"\bstruct\s+\z"#, options: .regularExpression) != nil { continue }
+            if !items.contains(where: { $0.braces?.contains(offset) == true }) {
+                found.append(Problem(line: source.line(at: offset),
+                                     reason: "DoneButton goes in its own ToolbarItem, so the Done rules can check it"))
+            }
+        }
+        for item in items {
             let content = item.braces.map(source.contents(of:)) ?? ""
             if item.arguments.contains(".confirmationAction"),
                !content.contains("DoneButton")
@@ -375,6 +422,7 @@ enum ContrastLint {
                                         + "so the toolbar draws no glass ring around it"))
             }
         }
+        found += inkProblems(in: source)
         for rule in codeRules {
             var searched = code.startIndex
             while let match = code.range(of: rule.pattern, options: .regularExpression, range: searched..<code.endIndex) {
@@ -427,6 +475,51 @@ enum ContrastLint {
         guard at >= 0, source.code[at] == "{" else { return false }
         let before = String(source.code[..<at])
         return before.range(of: #"\bif\s+chosen\s*\z"#, options: .regularExpression) != nil
+            && chosenIsTied(at: at, in: source)
+    }
+
+    /// True when the `chosen` in scope at `offset` is the row's: the
+    /// nearest one declared before it is a `chosen: Bool` parameter of the
+    /// function it sits in, or a `let chosen = Self.isChosen(...)`, with
+    /// at most `&& Self.drawsOwnFill` after it. Any other `chosen`, such as
+    /// `let chosen = !Self.isChosen(...)`, could put white on a row with no
+    /// fill under it.
+    static func chosenIsTied(at offset: Int, in source: SwiftSource) -> Bool {
+        let before = String(source.code[..<offset])
+        // The last declaration before `offset`, found going forward.
+        var last: Range<String.Index>?
+        var from = before.startIndex
+        while let next = before.range(of: #"\b(?:let|var)\s+chosen\b|\bchosen\s*:\s*Bool\b"#,
+                                      options: .regularExpression, range: from..<before.endIndex) {
+            last = next
+            from = next.upperBound
+        }
+        guard let declared = last else { return false }
+        if before[declared].hasPrefix("chosen") {
+            // A parameter: still inside the parentheses of a `func`.
+            let lead = String(before[..<declared.lowerBound])
+            return lead.range(of: #"\bfunc\s+\w+\s*(?:<[^>]*>)?\s*\((?:[^()]|\([^()]*\))*\z"#,
+                              options: .regularExpression) != nil
+        }
+        let line = before[declared.upperBound...].prefix { $0 != "\n" }
+        return line.range(of: #"\A\s*=\s*Self\.isChosen\([^()]*\)\s*(?:&&\s*Self\.drawsOwnFill\s*)?\z"#,
+                          options: .regularExpression) != nil
+    }
+
+    /// Every call that hands a row its `chosen` in HomeSplit,
+    /// `ink(chosen:)`, passes the row's own: `Self.isChosen(...)` or a
+    /// `chosen` tied to it.
+    static func inkProblems(in source: SwiftSource) -> [Problem] {
+        source.calls(named: ["ink"]).filter { call in
+            inside("HomeSplit", call.offset, source)
+                && String(source.code[..<call.offset]).range(of: #"\bfunc\s+\z"#, options: .regularExpression) == nil
+        }.compactMap { call in
+            if call.arguments.range(of: #"\Achosen:\s*Self\.isChosen\([^()]*\)\z"#, options: .regularExpression) != nil {
+                return nil
+            }
+            if call.arguments == "chosen: chosen", chosenIsTied(at: call.offset, in: source) { return nil }
+            return Problem(line: call.line, reason: "ink(chosen:) takes the row's own chosen, from Self.isChosen")
+        }
     }
 
     /// Every `ToolbarItem`, with a placement or with none: its arguments,

@@ -691,7 +691,8 @@ struct WarmthTests {
     }
 
     /// "What you wrote is still here" goes once the person clears the words
-    /// by hand, on Today and in the chat alike. Editing them keeps it.
+    /// by hand, or changes the words given back, on Today and in the chat
+    /// alike. Adding to them after keeps it.
     @Test func theFailureLineGoesWhenTheRestoredWordsAreCleared() async {
         let gate = Gate()
         let controller = ChatController(brand: brand, model: GatedModel(gate: gate, fails: true),
@@ -702,8 +703,8 @@ struct WarmthTests {
         await gate.release()
         await settle(controller)
         #expect(today.failure == FirstConversation.couldNotAnswer)
-        controller.draft = "Plan my week"
-        #expect(today.failure == FirstConversation.couldNotAnswer)
+        controller.draft = "Plan my day, and lunch"
+        #expect(today.failure == FirstConversation.couldNotAnswer, "added to, still there")
         controller.draft = "  "
         #expect(today.failure == nil)
         #expect(controller.failure == nil)
@@ -771,7 +772,8 @@ struct WarmthTests {
         #expect(controller.unheardReply == nil)
         #expect(ChatView.arrival(for: controller, covered: false) == .nothing, "reopened: silence")
         #expect(ChatView.replyLanded(in: controller, covered: false) == nil)
-        // A reply that had landed unheard, under a sheet, goes the same way.
+        // A reply that landed but that no screen has read yet goes the same
+        // way when the chat leaves.
         controller.submit("And tomorrow")
         await gate.release()
         await settle(controller)
@@ -831,6 +833,52 @@ struct WarmthTests {
         await settle(controller)
         #expect(ChatView.replyLanded(in: controller, covered: false) == "Here's a plan", "read as it lands")
         #expect(ChatView.replyLanded(in: controller, covered: false) == nil, "and only once")
+    }
+
+    /// On screen, gone, on screen again, all on one controller, then the
+    /// reply lands: the chat is in front, so it is heard.
+    @Test("Leave between two returns, then land: read as it lands")
+    func backLeaveBackThenLandIsRead() async {
+        let gate = Gate()
+        let controller = ChatController(brand: brand, model: GatedModel(gate: gate),
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
+        controller.submit("Plan my day")
+        ChatView.cameBack(controller)
+        ChatView.left(controller)
+        ChatView.cameBack(controller)
+        await gate.release()
+        await settle(controller)
+        #expect(ChatView.replyLanded(in: controller, covered: false) == "Here's a plan", "read as it lands")
+        #expect(ChatView.replyLanded(in: controller, covered: false) == nil, "and only once")
+    }
+
+    /// Two chat screens show one controller, as when a size change swaps
+    /// the layout: the new one appears before the old one goes. The chat
+    /// never left the person, so a reply that lands then is heard. Only
+    /// when the last screen goes has the person left.
+    @Test("Leave, with a new chat screen up before the old one goes: still heard")
+    func appearBeforeDisappearIsStillHeard() async {
+        let gate = Gate()
+        let controller = ChatController(brand: brand, model: GatedModel(gate: gate),
+                                        names: InMemoryAgentNameStore(), replyBeat: .zero)
+        ChatView.cameBack(controller)
+        controller.submit("Plan my day")
+        ChatView.cameBack(controller)
+        ChatView.left(controller)
+        #expect(controller.visibleChats == 1)
+        await gate.release()
+        await settle(controller)
+        #expect(ChatView.replyLanded(in: controller, covered: false) == "Here's a plan", "one screen still shows it")
+        // Now the last screen goes while the next reply is coming: quiet.
+        controller.submit("And tomorrow")
+        ChatView.left(controller)
+        #expect(controller.visibleChats == 0)
+        ChatView.left(controller)
+        #expect(controller.visibleChats == 0, "never below none")
+        await gate.release()
+        await settle(controller)
+        #expect(controller.conversation.turns.last?.text == "Here's a plan", "kept in the chat")
+        #expect(ChatView.replyLanded(in: controller, covered: false) == nil, "landed while away: not read")
     }
 
     /// Left the chat for Today, then a line sent from Today: a new send, so

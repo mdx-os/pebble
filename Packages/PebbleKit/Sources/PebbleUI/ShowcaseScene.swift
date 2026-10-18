@@ -26,6 +26,14 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     case taskRunning, taskRetrying, taskWaiting, taskDone, tasksLive
 
     public static let launchKey = "pebbleScreen"
+    /// `-pebbleStill YES` holds every gentle motion still, so the screen
+    /// settles and two screenshots of it match.
+    public static let stillKey = "pebbleStill"
+    /// `-snapshotSheet YES` has the Mac's snapshot draw the sheet the scene
+    /// presents, in a real window.
+    public static let sheetKey = "snapshotSheet"
+    /// `-snapshotDark YES` has the Mac's snapshot draw in dark mode.
+    public static let darkKey = "snapshotDark"
 
     @MainActor
     public func view(brand: Brand) -> some View {

@@ -39,14 +39,12 @@ struct CopyDashTests {
         ConfirmationWords.whatLabel, ConfirmationWords.whereLabel, ConfirmationWords.priceLabel,
         ConfirmationWords.expired, ConfirmationWords.closeTitle, ConfirmationWords.promise,
         ProposedAction.yesTitle, ProposedAction.noTitle, ProposedAction.declined,
-        HomeWords.chatTitle, HomeWords.newChatTitle, HomeWords.goMenuTitle, HomeWords.shortcutsTitle,
-        HomeWords.waiting(3),
         CareCheck.reply, CareCheck.followUp,
     ] + PrivacyPlaceTests.everyPlace.map(CloudWords.offDetail)
       + FirstConversation.jobs.flatMap { [$0.title, $0.prompt] }
       + Proactivity.allCases.flatMap { [$0.title, $0.detail] }
       + AgentLook.allCases.map(\.title)
-      + HomeWords.shortcuts.flatMap { [$0.keys, $0.action] }
+      + HomeWords.all
       + FeedWords.all
       + CloudWords.all
       + Redaction.Kind.allCases.flatMap { [$0.mask, $0.counted(1), $0.counted(2)] }
@@ -70,6 +68,15 @@ struct CopyDashTests {
             #expect(all.contains(line), "unchecked: \(line)")
         }
         #expect(Set(TaskState.allCases.map(\.label)).isSubset(of: Set(all)))
+    }
+
+    /// Every home screen line is checked, the count heard beside Today in
+    /// its one and its many forms too.
+    @Test func everyHomeLineIsChecked() {
+        for line in [HomeWords.waiting(1), HomeWords.waiting(3), HomeWords.newChatDetail, HomeWords.closeShortcut] {
+            #expect(HomeWords.all.contains(line), "unchecked: \(line)")
+            #expect(Self.copy.contains(line), "not in the dash check: \(line)")
+        }
     }
 
     /// Catches new words too: no source file and not the voice guide.
@@ -121,6 +128,17 @@ struct CopyDashTests {
         #expect(text.contains("(\"\(ProposedAction.yesTitle)\" and \"\(ProposedAction.noTitle)\""))
         // The name limit is referred to, not copied, so it can't drift.
         #expect(!text.contains("\(AgentName.maxLength) letters"))
+    }
+}
+
+extension HomeWords {
+    /// Every home screen line a person can see or hear, with sample counts
+    /// where a line takes one.
+    static var all: [String] {
+        [chatTitle, newChatTitle, goMenuTitle, shortcutsTitle, sendShortcut, newLineShortcut,
+         sendFromAnywhereShortcut, closeShortcut, newChatQuestion, newChatDetail, newChatConfirm, cancelTitle,
+         waiting(1), waiting(3)]
+        + shortcuts.flatMap { [$0.keys, $0.action] }
     }
 }
 

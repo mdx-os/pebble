@@ -17,6 +17,83 @@ struct HomeLayoutTests {
                             conversation: ShowcaseScene.sampleFirstChat())
     }
 
+    /// The lines of `text` outside a Debug-only branch that are more than
+    /// imports, blank lines and directives. A branch is Debug-only when
+    /// `DEBUG` is one of the `&&` terms of its `#if`, with no `||` and no
+    /// `!`. Its `#else` and `#elseif` are not.
+    static func codeOutsideDebug(in text: String) -> [String] {
+        let lines = String(SwiftSource(text).code).split(separator: "\n", omittingEmptySubsequences: false)
+        var branches: [Bool] = []
+        var outside: [String] = []
+        for raw in lines {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            func condition(after directive: String) -> Bool {
+                let rest = line.dropFirst(directive.count).trimmingCharacters(in: .whitespaces)
+                guard !rest.contains("||"), !rest.contains("!") else { return false }
+                return rest.components(separatedBy: "&&").contains {
+                    $0.trimmingCharacters(in: .whitespaces.union(CharacterSet(charactersIn: "()"))) == "DEBUG"
+                }
+            }
+            if line.hasPrefix("#if") {
+                branches.append(condition(after: "#if"))
+            } else if line.hasPrefix("#elseif") || line.hasPrefix("#else") {
+                if !branches.isEmpty { branches[branches.count - 1] = false }
+            } else if line.hasPrefix("#endif") {
+                _ = branches.popLast()
+            } else if !line.isEmpty, !line.hasPrefix("import "), !branches.contains(true) {
+                outside.append(line)
+            }
+        }
+        return outside
+    }
+
+    /// PERMANENT GUARD. The showcase is Debug only: its sample data, its
+    /// example cloud address and its stand-in model never ship. So all of
+    /// ShowcaseScene.swift but its imports sits inside `#if DEBUG`.
+    @Test func theShowcaseIsDebugOnly() throws {
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        let text = try String(contentsOf: root.appendingPathComponent("Packages/PebbleKit/Sources/PebbleUI/ShowcaseScene.swift"),
+                              encoding: .utf8)
+        #expect(text.contains("public enum ShowcaseScene"))
+        #expect(Self.codeOutsideDebug(in: text) == [], "shipped in Release")
+        let wrong = [
+            "#if DEBUG\nenum A {}\n#endif\nstruct B {}",
+            "#if !DEBUG\nstruct B {}\n#endif",
+            "#if DEBUG || os(iOS)\nstruct B {}\n#endif",
+            "#if DEBUG\nenum A {}\n#else\nstruct B {}\n#endif",
+            "#if DEBUG\nenum A {}\n#elseif os(iOS)\nstruct B {}\n#endif",
+            "struct B {}\n#if DEBUG\nenum A {}\n#endif",
+        ]
+        for code in wrong {
+            #expect(!Self.codeOutsideDebug(in: code).isEmpty, "missed: \(code)")
+        }
+        let right = [
+            "import Foundation\n#if canImport(SwiftUI) && DEBUG\nimport SwiftUI\nenum A {}\n#endif\n\n#if DEBUG\nstruct B {}\n#endif",
+            "#if DEBUG\n#if os(iOS)\nstruct B {}\n#else\nstruct C {}\n#endif\n#endif",
+            "// A comment out here.\n#if (DEBUG)\nstruct B {}\n#endif",
+        ]
+        for code in right {
+            #expect(Self.codeOutsideDebug(in: code).isEmpty, "flagged: \(code)")
+        }
+    }
+
+    /// The launch arguments the screenshot scripts pass are the keys the
+    /// app reads, kept beside `launchKey`, so the two can never drift.
+    @Test func theScreenshotScriptsPassTheKeysTheAppReads() throws {
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        let script = try String(contentsOf: root.appendingPathComponent("scripts/screenshots.sh"), encoding: .utf8)
+        for key in [ShowcaseScene.launchKey, ShowcaseScene.stillKey, ShowcaseScene.sheetKey, ShowcaseScene.darkKey] {
+            #expect(script.contains("-\(key) "), "screenshots.sh never passes -\(key)")
+        }
+        for name in ["PebbleApp.swift", "SnapshotMode.swift"] {
+            let app = try String(contentsOf: root.appendingPathComponent("App/Sources/\(name)"), encoding: .utf8)
+            let literals = SwiftSource(app).literals.map(\.text)
+            for key in [ShowcaseScene.launchKey, ShowcaseScene.stillKey, ShowcaseScene.sheetKey, ShowcaseScene.darkKey] {
+                #expect(!literals.contains(key), "\(name) spells \"\(key)\"; read ShowcaseScene's constant")
+            }
+        }
+    }
+
     @Test("Smoke: the sidebar layout draws at each size", arguments: [
         CGSize(width: 1032, height: 1376), // iPad Pro 13-inch, portrait
         CGSize(width: 1376, height: 1032), // iPad Pro 13-inch, landscape

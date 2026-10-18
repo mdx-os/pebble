@@ -64,6 +64,17 @@ swift scripts/fill-check.swift "$dir/ipad-sidebar-dark.png" 0 0 0.34 0.2
 # end, so the right half of the row must still have white on the fill.
 swift scripts/fill-check.swift "$dir/ipad-sidebar-badge-dark.png" 0 0 0.34 0.2
 swift scripts/fill-check.swift "$dir/ipad-sidebar-badge-dark.png" 0.17 0 0.34 0.2 --badge
+# Any white there would pass that, a long or wrapped label too. The same
+# row with no count must show less white at its end, so the white that
+# passed is the count's.
+badge_white="$(swift scripts/fill-check.swift "$dir/ipad-sidebar-badge-dark.png" 0.17 0 0.34 0.2 --white)"
+plain_white="$(swift scripts/fill-check.swift "$dir/ipad-sidebar-dark.png" 0.17 0 0.34 0.2 --white)"
+if [ "$plain_white" -ge "$badge_white" ]; then
+  echo "check-screenshots: the row's end has as much white with no count ($plain_white) as with one" \
+    "($badge_white), so the white isn't the count" >&2
+  exit 1
+fi
+echo "check-screenshots: the count adds white at the row's end ($plain_white with none, $badge_white with one)"
 # Done: the top right of the sheet.
 swift scripts/fill-check.swift "$dir/iphone-sheet-dark.png" 0.5 0 1 0.2
 # Done on the Mac: the bottom right of the sheet. The Mac sheet is drawn by

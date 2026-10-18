@@ -457,8 +457,10 @@ enum DevicePromise {
         // `let place: PrivacyPlace = .onDevice` or `isRemote ? .onDevice :
         // .mayLeaveDevice`. A parameter may default to `.mayLeaveDevice`,
         // which promises nothing.
+        // Whatever comes before the dot: a type alias of the place, its
+        // metatype or `type(of:)` reach the same case.
         if !["PebbleCore/PrivacyPlace.swift", "PebbleModel/ModelClient.swift"].contains(file) {
-            each(#"(?:\b(?:PrivacyPlace|Self)\s*|(?<![\w)\]]))\.\s*(onDevice|mayLeaveDevice)\b(?!\s*\()"#) { match, ns in
+            each(#"\.\s*(onDevice|mayLeaveDevice)\b(?!\s*\()"#) { match, ns in
                 let start = match.range.location
                 let lead = ns.substring(to: start)
                 if group(match, 1, ns) == "mayLeaveDevice",
@@ -471,6 +473,12 @@ enum DevicePromise {
                     return nil
                 }
                 return "\(ns.substring(with: match.range)) is decided only by the model, as model.privacyPlace"
+            }
+            // Another name for the place hides it from the reads above.
+            for alias in typealiases(in: code)
+            where alias.target.range(of: #"\bPrivacyPlace\b"#, options: .regularExpression) != nil {
+                problems.append("\(file):\(source.line(at: alias.offset)): typealias = \(alias.target) "
+                    + "is another name for PrivacyPlace, so its cases could be written unseen")
             }
         }
         // `all()` of no places at all would be `.onDevice` with no model
@@ -549,7 +557,97 @@ enum DevicePromise {
                     + "\(modelMakers.sorted().joined(separator: ", ")) may make a ModelClient")
             }
         }
+        for alias in typealiases(in: code) where alias.target.range(of: #"\bModelClient\b"#, options: .regularExpression) != nil {
+            problems.append("\(file):\(source.line(at: alias.offset)): typealias = \(alias.target) names ModelClient, "
+                + "so a type could conform to it without saying so")
+        }
         return problems
+    }
+
+    /// Every `typealias` in `code`, with what it stands for. The right side
+    /// runs on while a line ends with `&` or the next one starts with it,
+    /// or a bracket is still open, so `Sendable &\n    ModelClient` and
+    /// `(Int,\n    PrivacyPlace)` are read whole.
+    static func typealiases(in code: String) -> [(offset: Int, target: String)] {
+        let ns = code as NSString
+        let regex = try! NSRegularExpression(pattern: #"\btypealias\s+\w+(?:\s*<[^>=]*>)?\s*="#)
+        var found: [(Int, String)] = []
+        for match in regex.matches(in: code, range: NSRange(location: 0, length: ns.length)) {
+            let rest = ns.substring(from: match.range.location + match.range.length)
+            var lines = rest.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+            var target = lines.isEmpty ? "" : lines.removeFirst()
+            func open(_ opener: Character, _ closer: Character) -> Bool {
+                target.filter { $0 == opener }.count > target.filter { $0 == closer }.count
+            }
+            while let next = lines.first,
+                  target.trimmingCharacters(in: .whitespaces).hasSuffix("&")
+                    || next.trimmingCharacters(in: .whitespaces).hasPrefix("&")
+                    || open("(", ")") || open("[", "]") || open("<", ">") {
+                target += " " + lines.removeFirst()
+            }
+            found.append((match.range.location, target.trimmingCharacters(in: .whitespaces)))
+        }
+        return found
+    }
+
+    /// Each type in a model maker's `source` that is a `ModelClient`, with
+    /// what kind of type it is. A class open to subclassing would hand its
+    /// conformance, and its `runsOnDevice`, to any subclass anywhere, and a
+    /// protocol that refines `ModelClient` would let any type conform
+    /// without naming it, so each must be a struct, enum, actor or final
+    /// class, written in its own declaration.
+    static func makerKindProblems(in source: SwiftSource, file: String) -> [String] {
+        let code = String(source.code)
+        let ns = code as NSString
+        let modifier = #"(?:@[\w.]+(?:\([^)]*\))?\s+|\b(?:public|internal|package|private|fileprivate|open|final)\s+)*"#
+        let regex = try! NSRegularExpression(pattern: "(" + modifier + #")\b(struct|class|actor|enum|protocol|extension)\s+([\w.]+)"#
+            + #"(?:\s*<[^>{]*>)?\s*:[^{]*\bModelClient\b"#)
+        var problems: [String] = []
+        for match in regex.matches(in: code, range: NSRange(location: 0, length: ns.length)) {
+            let modifiers = ns.substring(with: match.range(at: 1))
+            let kind = ns.substring(with: match.range(at: 2))
+            let name = ns.substring(with: match.range(at: 3))
+            let line = "\(file):\(source.line(at: match.range.location)): \(name)"
+            switch kind {
+            case "class" where modifiers.range(of: #"\bfinal\b"#, options: .regularExpression) == nil
+                || modifiers.range(of: #"\bopen\b"#, options: .regularExpression) != nil:
+                problems.append("\(line) is a class open to subclassing, so a subclass anywhere is a ModelClient too")
+            case "protocol":
+                problems.append("\(line) refines ModelClient, so a type could conform to it without saying so")
+            case "extension":
+                problems.append("\(line) gets ModelClient in an extension; say it where the type is declared")
+            default:
+                break
+            }
+        }
+        return problems
+    }
+
+    /// The names of the `ModelClient` types `source` declares.
+    static func modelTypes(in source: SwiftSource) -> [String] {
+        let code = String(source.code)
+        let ns = code as NSString
+        let regex = try! NSRegularExpression(pattern: #"\b(?:struct|class|actor|enum)\s+(\w+)(?:\s*<[^>{]*>)?\s*:[^{]*\bModelClient\b"#)
+        return regex.matches(in: code, range: NSRange(location: 0, length: ns.length))
+            .map { ns.substring(with: $0.range(at: 1)) }
+    }
+
+    /// Each `extension PrivacyPlace` in `source`, with or without a colon.
+    /// Outside `PrivacyPlace.swift`, even a plain extension could make a
+    /// place with no model behind it, as in `static var here: PrivacyPlace
+    /// { onDevice }`, where the case needs no dot. A conformance added
+    /// anywhere, its own file too, could build one from a raw value, a list
+    /// or a decoder.
+    static func placeExtensionProblems(in source: SwiftSource, file: String) -> [String] {
+        let code = String(source.code)
+        let ns = code as NSString
+        let regex = try! NSRegularExpression(pattern: #"\bextension\s+(?:PebbleCore\s*\.\s*)?PrivacyPlace\b(\s*:)?"#)
+        return regex.matches(in: code, range: NSRange(location: 0, length: ns.length)).compactMap { match in
+            let conforms = match.range(at: 1).location != NSNotFound
+            if file == "PebbleCore/PrivacyPlace.swift", !conforms { return nil }
+            return "\(file):\(source.line(at: match.range.location)): "
+                + (conforms ? "adds a conformance to PrivacyPlace" : "extends PrivacyPlace outside PrivacyPlace.swift")
+        }
     }
 }
 
@@ -776,6 +874,13 @@ struct DevicePromiseTests {
             "f(place: .onDevice)",
             "f(place: isRemote ? .mayLeaveDevice : model.privacyPlace)",
             "switch place { case .onDevice: return true default: return false }",
+            // The place under another name, or reached through its type.
+            "typealias Place = PrivacyPlace\nlet place = Place.onDevice",
+            "typealias Place = PebbleCore.PrivacyPlace",
+            "typealias Places = [PrivacyPlace]",
+            "typealias Pair = (Int,\n    PrivacyPlace)",
+            "let place = type(of: model.privacyPlace).onDevice",
+            "let kind = PrivacyPlace.self\nlet place = kind.onDevice",
             // A place made of no places, which would read as on the device.
             "let place = PrivacyPlace.all()",
             "let place = PrivacyPlace\n    .all( )",
@@ -805,6 +910,9 @@ struct DevicePromiseTests {
             "let place = PrivacyPlace.all(chat.privacyPlace, model.privacyPlace)",
             "let lines = CloudWords.all()",
             "let reply = (try? LocalStubModel.answer(to: turns)) ?? LocalStubModel.fallback",
+            "typealias RGB = Contrast.RGB",
+            "typealias Load = @Sendable (URLRequest) async throws -> (Data, URLResponse)",
+            "let store = try CloudHelpFileStore.onDevice()",
             "#Preview {\n    ChatView(brand: brand, model: LocalStubModel())\n}",
             "#Preview { Text(\"a\") }\n#Preview(\"Chat\") {\n    VStack {\n        ChatView(brand: brand, model: LocalStubModel())\n    }\n}",
         ]
@@ -850,6 +958,12 @@ struct DevicePromiseTests {
             "struct Box<T>: ModelClient {}",
             "protocol Local: ModelClient {}",
             "extension ModelClient { var runsOnDevice: Bool { true } }",
+            // The model under another name, alone or in a composition.
+            "typealias Local = Sendable & ModelClient\nstruct Here: Local { var runsOnDevice: Bool { true } }",
+            "typealias Local = ModelClient",
+            "typealias Local = PebbleModel.ModelClient",
+            "typealias Local = Sendable &\n    ModelClient",
+            "typealias Local = Sendable\n    & ModelClient",
         ]
         for text in wrong {
             #expect(!DevicePromise.modelProblems(in: SwiftSource(text), file: "PebbleUI/Wrong.swift").isEmpty,
@@ -862,6 +976,8 @@ struct DevicePromiseTests {
             "func reply<M: ModelClient>(from model: M) {}",
             "// struct Here: ModelClient, in a comment",
             "let note = \"extension Here: ModelClient\"",
+            "typealias Load = @Sendable (URLRequest) async throws -> (Data, URLResponse)",
+            "typealias Local = Sendable\nlet model: any ModelClient",
         ]
         for text in right {
             #expect(DevicePromise.modelProblems(in: SwiftSource(text), file: "PebbleUI/Right.swift").isEmpty,
@@ -869,6 +985,52 @@ struct DevicePromiseTests {
         }
         let stub = "public struct LocalStubModel: ModelClient {}"
         #expect(DevicePromise.modelProblems(in: SwiftSource(stub), file: "PebbleModel/LocalStubModel.swift").isEmpty)
+        let alias = "public typealias Local = Sendable & ModelClient"
+        #expect(DevicePromise.modelProblems(in: SwiftSource(alias), file: "PebbleModel/ModelClient.swift").isEmpty)
+    }
+
+    /// PERMANENT GUARD. Every model a maker file makes is a struct, enum,
+    /// actor or final class, so no subclass elsewhere inherits its
+    /// `runsOnDevice`, and no protocol there refines `ModelClient`.
+    @Test func everyModelIsClosedToSubclasses() throws {
+        let files = try Self.sources()
+        var made: [String] = []
+        for file in files where DevicePromise.modelMakers.contains(file.name) {
+            let source = SwiftSource(file.text)
+            made += DevicePromise.modelTypes(in: source)
+            for problem in DevicePromise.makerKindProblems(in: source, file: file.name) {
+                Issue.record(Comment(rawValue: problem))
+            }
+        }
+        #expect(made.contains("LocalStubModel"))
+        #expect(made.contains("CloudModel"))
+        let wrong = [
+            "public class LocalStubModel: ModelClient {}",
+            "class CloudModel: @unchecked Sendable, ModelClient {}",
+            "open class Base: ModelClient {}",
+            "public open class Base: ModelClient {}",
+            "@MainActor public class Base: ModelClient {}",
+            "public protocol LocalModel: ModelClient {}",
+            "extension NSObject: ModelClient {}",
+        ]
+        for text in wrong {
+            #expect(!DevicePromise.makerKindProblems(in: SwiftSource(text), file: "PebbleModel/LocalStubModel.swift").isEmpty,
+                    "missed: \(text)")
+        }
+        let right = [
+            "public struct LocalStubModel: ModelClient {}",
+            "public final class Stub: ModelClient {}",
+            "@MainActor public final class Stub: Sendable, ModelClient {}",
+            "final public class Stub: ModelClient {}",
+            "public actor Stub: ModelClient {}",
+            "enum Stub: ModelClient {}",
+            "public protocol ModelClient: Sendable {}",
+            "extension ModelClient { var privacyPlace: PrivacyPlace { .mayLeaveDevice } }",
+        ]
+        for text in right {
+            #expect(DevicePromise.makerKindProblems(in: SwiftSource(text), file: "PebbleModel/LocalStubModel.swift").isEmpty,
+                    "flagged: \(text)")
+        }
     }
 
     /// A place can be had without writing `.onDevice` if `PrivacyPlace`
@@ -883,10 +1045,28 @@ struct DevicePromiseTests {
         let file = try #require(files.first { $0.name == "PebbleCore/PrivacyPlace.swift" })
         #expect(DevicePromise.placeConformances(in: file.text) == ["Sendable", "Hashable"])
         for other in files {
-            let code = String(SwiftSource(other.text).code)
-            #expect(code.range(of: #"\bextension\s+(?:PebbleCore\s*\.\s*)?PrivacyPlace\s*:"#,
-                               options: .regularExpression) == nil,
-                    "\(other.name) adds a conformance to PrivacyPlace")
+            for problem in DevicePromise.placeExtensionProblems(in: SwiftSource(other.text), file: other.name) {
+                Issue.record(Comment(rawValue: problem))
+            }
+        }
+        let extensions = [
+            "extension PrivacyPlace { static var here: PrivacyPlace { onDevice } }",
+            "extension PebbleCore.PrivacyPlace {}",
+            "extension PrivacyPlace: CaseIterable {}",
+            "extension PrivacyPlace\n    : Codable {}",
+            "public extension PrivacyPlace where Self == PrivacyPlace {}",
+        ]
+        for text in extensions {
+            #expect(!DevicePromise.placeExtensionProblems(in: SwiftSource(text), file: "PebbleUI/Wrong.swift").isEmpty,
+                    "missed: \(text)")
+        }
+        #expect(DevicePromise.placeExtensionProblems(in: SwiftSource(extensions[0]), file: "PebbleCore/PrivacyPlace.swift").isEmpty,
+                "its own file may extend it")
+        #expect(!DevicePromise.placeExtensionProblems(in: SwiftSource(extensions[2]), file: "PebbleCore/PrivacyPlace.swift").isEmpty,
+                "but adds no conformance even there")
+        for text in ["extension PrivacyPlaceTests {}", "// extension PrivacyPlace {}", "let place: PrivacyPlace"] {
+            #expect(DevicePromise.placeExtensionProblems(in: SwiftSource(text), file: "PebbleUI/Right.swift").isEmpty,
+                    "flagged: \(text)")
         }
         // The check reads what it is meant to.
         for wrong in ["public enum PrivacyPlace: String, Sendable, Hashable {", "public enum PrivacyPlace: Sendable, Hashable, CaseIterable {",

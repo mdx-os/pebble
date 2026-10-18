@@ -425,13 +425,16 @@ final class ChatController: ObservableObject {
     @Published var draft = "" {
         didSet {
             // "What you wrote is still here" stops being true once the
-            // person clears the words, so the line goes with them.
+            // person clears the words, or changes the ones given back, so
+            // the line goes with them.
             if let failure, Self.pointsAtTheDraft(failure),
-               draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+               !Self.stillHolds(returnedWords, draft: draft) {
                 self.failure = nil
             }
         }
     }
+    /// The words the last failed send put back in the composer.
+    private var returnedWords: String?
     @Published var isReplying = false
     /// The reply on its way. Tests await it so ordering never rests on timing.
     private(set) var replyTask: Task<Void, Never>?
@@ -456,6 +459,8 @@ final class ChatController: ObservableObject {
     /// The reply the person left the chat while waiting for. It is kept in
     /// the chat when it lands, but never waits to be heard.
     private var leftGeneration: Int?
+    /// How many chat screens show this controller right now.
+    private(set) var visibleChats = 0
 
     /// Goes up by one each time the person sends something by hand, from
     /// the chat or from Today. `SendTap` plays the light tap for it.
@@ -615,10 +620,12 @@ final class ChatController: ObservableObject {
                 conversation = conversation.removingTurn(personID)
                 // Gone from the chat, so sending them again adds them again.
                 lastLineUnanswered = false
+                returnedWords = trimmed
                 draft = Self.draft(givingBack: trimmed, to: draft)
                 failure = Self.failureLine(for: error)
             } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 // The failure line promises the words are back, ready to send.
+                returnedWords = trimmed
                 draft = trimmed
                 failure = Self.failureLine(for: error)
             } else {
@@ -645,6 +652,14 @@ final class ChatController: ObservableObject {
     nonisolated static func pointsAtTheDraft(_ failure: String) -> Bool {
         [FirstConversation.couldNotAnswer, CloudWords.notSent, CloudWords.turnedOff, CloudWords.notesUnreadable]
             .contains(failure)
+    }
+
+    /// True while the draft still starts with the words given back, so a
+    /// line that says they are still here is true.
+    nonisolated static func stillHolds(_ words: String?, draft: String) -> Bool {
+        guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        guard let words else { return true }
+        return draft.hasPrefix(words)
     }
 
     /// The words that weren't sent, back in the composer. Anything typed
@@ -700,19 +715,25 @@ final class ChatController: ObservableObject {
         return unheardReply
     }
 
-    /// The chat went off screen. The reply nobody heard is dropped, and one
+    /// A chat screen went off screen. Two can show this one controller at
+    /// once, as when a size change swaps the layout and the new screen
+    /// appears before the old one goes, so the person has left only when
+    /// the last one goes. Then the reply nobody heard is dropped, and one
     /// still coming lands quietly unless they come back first. A reply that
     /// lands while they are away stays in the chat but isn't read aloud
     /// later. A new send is heard as usual. Failures stay, since Today reads
     /// them above its own composer.
     func leftChat() {
+        visibleChats = max(0, visibleChats - 1)
+        guard visibleChats == 0 else { return }
         unheardReply = nil
         if isReplying { leftGeneration = replyGeneration }
     }
 
-    /// The chat is on screen again. A reply still coming is theirs to hear
-    /// once more: it lands in front of them, so it is read like any other.
+    /// A chat screen is on screen again. A reply still coming is theirs to
+    /// hear once more: it lands in front of them, so it is read like any other.
     func cameBack() {
+        visibleChats += 1
         leftGeneration = nil
     }
 

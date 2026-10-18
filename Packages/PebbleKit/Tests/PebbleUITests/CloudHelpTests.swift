@@ -577,6 +577,26 @@ struct CloudHelpTests {
         #expect(maker.wire.sent.isEmpty)
     }
 
+    /// "Still here" is true only while the draft still starts with the
+    /// words given back. Typing more after them keeps it; taking them out,
+    /// even with other words left, ends it.
+    @Test func theStillHereLineGoesWhenTheWordsGivenBackChange() async throws {
+        let cloud = help(CloudHelpSettings(isOn: true), endpoint: endpoint, maker: TransportMaker())
+        let controller = chat(cloud)
+        cloud.setOn(false)
+        controller.submit("Plan my week")
+        controller.draft = "and the weekend"
+        await controller.settled()
+        #expect(controller.failure == CloudWords.turnedOff)
+        controller.draft = "Plan my week\nand the weekend, please"
+        #expect(controller.failure == CloudWords.turnedOff, "more typed after the words keeps it true")
+        controller.draft = "and the weekend, please"
+        #expect(controller.failure == nil, "the words given back are gone, so the line goes")
+        #expect(!ChatController.stillHolds("Plan my week", draft: "Plan my"))
+        #expect(ChatController.stillHolds("Plan my week", draft: "Plan my week!"))
+        #expect(!ChatController.stillHolds(nil, draft: " \n"))
+    }
+
     @Test func stoppingAReplyClosesThePreviewAndSendsNothing() async throws {
         let maker = TransportMaker()
         let cloud = help(CloudHelpSettings(isOn: true), endpoint: endpoint, maker: maker)

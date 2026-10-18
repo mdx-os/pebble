@@ -922,10 +922,12 @@ struct HomeSplit<TodayScreen: View, ChatScreen: View, MemoryScreen: View>: View 
         }
     }
 
-    /// What VoiceOver adds to a row: chosen exactly when this code draws it
-    /// so. Where the system draws the selection (`ownFill` false, as on the
-    /// Mac) it gives the trait itself, for the row it really selected, so
-    /// nothing is added.
+    /// What VoiceOver adds to a row: the selected trait on the row this code
+    /// draws chosen, and on no other. With a selection, iOS gives that same
+    /// row the trait itself as well, which is heard once; with none yet,
+    /// Today is drawn chosen and only this gives it. Where the system draws
+    /// the selection (`ownFill` false, as on the Mac) it gives the trait
+    /// itself, for the row it really selected, so nothing is added.
     static func traits(_ place: HomeSection, section: HomeSection?, regular: Bool, ownFill: Bool) -> AccessibilityTraits {
         ownFill && isChosen(place, section: section, regular: regular) ? .isSelected : []
     }
