@@ -71,6 +71,11 @@ enum Theme {
     static let onAccent = onAccentRGB.color
     static let onAccentRGB = RGB(red: 0.20, green: 0.10, blue: 0.04)
 
+    /// Words on `tintFill`, as on the sidebar's chosen row: white, which
+    /// reads at over 4.5 to 1 there in both schemes. Only ever on that fill:
+    /// `ContrastLint` keeps it to `FillButtonStyle` and HomeSplit's chosen row.
+    static let onTintFill = RGB.white.color
+
     /// How strongly the accent tints a soft button, a chip or a pill.
     static let accentWash = 0.14
     /// How strongly the accent tints the person's own chat bubbles.
@@ -310,19 +315,73 @@ struct QuietButtonStyle: ButtonStyle {
     }
 }
 
-/// Done, for a sheet's toolbar. A confirmation button is drawn filled with
-/// the tint and white words on it, on iOS 26 and on the Mac alike, so it
-/// takes `Theme.tintFill`, where white reads at over 4.5 to 1. Its words
-/// are never drawn in the tint itself. `ContrastGuardTests` makes every
-/// confirmation button one of these.
+/// Done, for a sheet's toolbar, filled with `Theme.tintFill` and written in
+/// white, where white reads at over 4.5 to 1. Its words are never drawn in
+/// the tint itself.
+///
+/// It draws its own fill. Left to the system, iOS 26 draws a plain glass
+/// capsule with the word in the tint, about 2 to 1 on a dark sheet; the
+/// prominent glass style fills it but picks black words, about 3 to 1, and
+/// ignores a foreground style; and the Mac draws it gray. `make
+/// screenshots` takes the dark sheet and `scripts/check-screenshots.sh`
+/// looks for the fill with white words on it.
+/// Its toolbar item hides the shared background with
+/// `.sharedBackgroundVisibility(.hidden)`, or iOS 26 draws a glass ring
+/// around the fill.
+/// `ContrastGuardTests` makes every confirmation button one of these.
 struct DoneButton: View {
     var title = MemoryWords.doneTitle
     let action: () -> Void
 
     var body: some View {
         Button(title, action: action)
+            .buttonStyle(FillButtonStyle())
             .keyboardShortcut(.cancelAction)
             .tint(Theme.tintFill)
+    }
+}
+
+/// White words on a capsule of `Theme.tintFill`, for `DoneButton`. Not
+/// ready yet, it goes quiet gray on a neutral fill, as the other buttons do.
+///
+/// A style of its own gets no focus ring and no pointer highlight from the
+/// system, so it draws a ring of the fill around itself while the keyboard
+/// is on it (Full Keyboard Access on the Mac, a hardware keyboard on iPad)
+/// and takes the iPad pointer's highlight.
+struct FillButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        FocusRing {
+            configuration.label
+                .font(.body.weight(.semibold))
+                // Not ready yet, the same look as the other buttons: its
+                // words and fill are the "disabled button" pairs in textPairs.
+                .foregroundStyle(isEnabled ? AnyShapeStyle(Theme.onTintFill) : AnyShapeStyle(Theme.secondaryText))
+                .padding(.horizontal, 16)
+                .frame(minHeight: 44)
+                .background(isEnabled ? AnyShapeStyle(Theme.tintFill) : AnyShapeStyle(Color.primary.opacity(Theme.disabledTint)),
+                            in: Capsule())
+        }
+        .contentShape(Capsule())
+        .pointerHover(in: Capsule())
+        .opacity(configuration.isPressed ? 0.7 : 1)
+    }
+}
+
+/// A ring of `Theme.tintFill` around a capsule button while the keyboard is
+/// on it. A view of its own inside the button, because `isFocused` read on
+/// the style itself is resolved outside the button and stays false.
+struct FocusRing<Content: View>: View {
+    @Environment(\.isFocused) private var isFocused
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        content.overlay {
+            if isFocused {
+                Capsule().strokeBorder(Theme.tintFill, lineWidth: 2).padding(-4)
+            }
+        }
     }
 }
 

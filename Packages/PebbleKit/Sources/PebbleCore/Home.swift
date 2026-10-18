@@ -36,6 +36,12 @@ public enum HomeWords {
     public static let newChatConfirm = "Start new chat"
     public static let cancelTitle = "Keep this chat"
 
+    /// What VoiceOver hears for the count beside Today: how many things
+    /// wait for the person.
+    public static func waiting(_ count: Int) -> String {
+        "\(count) waiting for you"
+    }
+
     /// Keys spelled out for VoiceOver, which reads the Command glyph as
     /// "place of interest sign".
     public static func spoken(_ keys: String) -> String {

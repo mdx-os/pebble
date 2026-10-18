@@ -151,7 +151,7 @@ struct CloudHelpTests {
         #expect(cloud.runsOnDevice(local: LocalStubModel()))
         let chat = ChatController.make(brand: brand, model: model, names: InMemoryAgentNameStore(stored: "Pip"),
                                        conversation: nil)
-        #expect(chat.conversation.onDevice)
+        #expect(chat.conversation.place == .onDevice)
         #expect(chat.review == nil)
         _ = try await chat.conversation.sending("Help me plan my morning.", with: model)
         #expect(maker.made == 0)
@@ -442,7 +442,7 @@ struct CloudHelpTests {
                          maker: maker, memory: scratchMemory("Sam's birthday is May 14."), auth: CountingAuth())
         let review = CloudReview()
         let model = cloud.chatModel(local: LocalStubModel(), review: review)
-        let chat = Conversation.firstRun(named: "Pip", onDevice: false)
+        let chat = Conversation.firstRun(named: "Pip", place: .mayLeaveDevice)
         let reply = Task { try await chat.sending("Ask Sam to bring the lemon cake to 42 Maple Street.", with: model) }
         let preview = await review.shown()
         let shown = CloudPreviewSheet.shownText(preview)
@@ -554,6 +554,126 @@ struct CloudHelpTests {
         #expect(controller.draft == "Plan my week")
         #expect(review.pending == nil)
         #expect(maker.wire.sent.isEmpty)
+    }
+
+    /// The turned-off line says what you wrote is still here. It is: the
+    /// words are back in the composer, which Today shares, ahead of
+    /// anything typed since. Once they are cleared it is no longer true,
+    /// so the line goes with them.
+    @Test func theTurnedOffLineIsTrueWhereItIsSaid() async throws {
+        #expect(CloudWords.turnedOff.hasSuffix("What you wrote is still here."))
+        let maker = TransportMaker()
+        let cloud = help(CloudHelpSettings(isOn: true), endpoint: endpoint, maker: maker)
+        let controller = chat(cloud)
+        cloud.setOn(false)
+        controller.submit("Plan my week")
+        controller.draft = "and the weekend"
+        await controller.settled()
+        #expect(controller.failure == CloudWords.turnedOff)
+        #expect(controller.draft == "Plan my week\nand the weekend", "still here, ahead of what was typed since")
+        #expect(personTurns(controller).isEmpty)
+        controller.draft = "   "
+        #expect(controller.failure == nil, "cleared, so the line goes")
+        #expect(maker.wire.sent.isEmpty)
+    }
+
+    /// "Still here" is true only while the draft still starts with the
+    /// words given back. Typing more after them keeps it; taking them out,
+    /// even with other words left, ends it.
+    @Test func theStillHereLineGoesWhenTheWordsGivenBackChange() async throws {
+        let cloud = help(CloudHelpSettings(isOn: true), endpoint: endpoint, maker: TransportMaker())
+        let controller = chat(cloud)
+        cloud.setOn(false)
+        controller.submit("Plan my week")
+        controller.draft = "and the weekend"
+        await controller.settled()
+        #expect(controller.failure == CloudWords.turnedOff)
+        controller.draft = "Plan my week\nand the weekend, please"
+        #expect(controller.failure == CloudWords.turnedOff, "more typed after the words keeps it true")
+        controller.draft = "and the weekend, please"
+        #expect(controller.failure == nil, "the words given back are gone, so the line goes")
+        #expect(!ChatController.stillHolds("Plan my week", draft: "Plan my"))
+        #expect(ChatController.stillHolds("Plan my week", draft: "Plan my week!"))
+        #expect(!ChatController.stillHolds(nil, draft: " \n"))
+        // The words given back hold whole, as a person reads them.
+        #expect(!ChatController.stillHolds("Plan my week", draft: "Plan my weekend"))
+        #expect(ChatController.stillHolds("Plan my week", draft: "Plan my week, please"))
+        #expect(ChatController.stillHolds("Plan my week!", draft: "Plan my week!!"))
+        // With no words given back, nothing holds.
+        #expect(!ChatController.stillHolds(nil, draft: "Plan my week"))
+        // Given back ahead of what was typed since, they hold.
+        let given = ChatController.draft(givingBack: "Plan my week", to: "and the weekend")
+        #expect(ChatController.stillHolds("Plan my week", draft: given))
+        #expect(!ChatController.stillHolds("Plan my week", draft: "and the weekend"))
+    }
+
+    /// Words typed while the reply was coming, then the words given back
+    /// ahead of them: the line holds while the given words stay whole, and
+    /// once the line goes, no words are held to it any more.
+    @Test func typedTextAndTheWordsGivenBackHoldTogether() async throws {
+        let cloud = help(CloudHelpSettings(isOn: true), endpoint: endpoint, maker: TransportMaker())
+        let controller = chat(cloud)
+        cloud.setOn(false)
+        controller.submit("Plan my week")
+        controller.draft = "and the weekend"
+        await controller.settled()
+        #expect(controller.failure == CloudWords.turnedOff)
+        #expect(controller.returnedWords == "Plan my week")
+        controller.draft = "Plan my week\nand the whole weekend"
+        #expect(controller.failure == CloudWords.turnedOff, "the typed part changed, the given words are whole")
+        controller.draft = "Plan my weekend\nand the whole weekend"
+        #expect(controller.failure == nil, "the given words changed")
+        #expect(controller.returnedWords == nil, "no line, so no words held to it")
+    }
+
+    /// Holds a reply until the test lets it fail with its error.
+    private actor Latch {
+        private var waiting: CheckedContinuation<Void, Never>?
+        private var open = false
+        func wait() async {
+            if open { return }
+            await withCheckedContinuation { waiting = $0 }
+        }
+        func release() {
+            open = true
+            waiting?.resume()
+            waiting = nil
+        }
+    }
+
+    private struct FailingModel: ModelClient {
+        let latch: Latch
+        let error: CloudModelError?
+        func reply(to transcript: [ChatTurn]) async throws -> String {
+            await latch.wait()
+            if let error { throw error }
+            throw URLError(.timedOut)
+        }
+    }
+
+    /// Every line that says the words are still here comes with words given
+    /// back that the draft starts with, whatever the error and whatever was
+    /// typed while the reply came. A kept newer draft gets the line that
+    /// points at the bubble instead.
+    @Test(arguments: [CloudModelError.off, .notSent, .staysHere, .notesUnreadable, .unreadableReply, nil])
+    func aStillHereLineAlwaysComesWithTheWordsGivenBack(error: CloudModelError?) async throws {
+        for typed in ["", "and the weekend"] {
+            let latch = Latch()
+            let controller = ChatController(brand: brand, model: FailingModel(latch: latch, error: error),
+                                            names: InMemoryAgentNameStore(), replyBeat: .zero)
+            controller.submit("Plan my week")
+            controller.draft = typed
+            await latch.release()
+            await controller.settled()
+            let failure = try #require(controller.failure, "\(String(describing: error)), typed \"\(typed)\"")
+            if ChatController.pointsAtTheDraft(failure) {
+                let words = try #require(controller.returnedWords, "\(failure) without words given back")
+                #expect(ChatController.stillHolds(words, draft: controller.draft), "\(failure): \(controller.draft)")
+            } else {
+                #expect(failure == CloudWords.staysHere || failure == FirstConversation.couldNotAnswerKeptDraft, "\(failure)")
+            }
+            if failure == CloudWords.turnedOff { #expect(controller.returnedWords != nil) }
+        }
     }
 
     @Test func stoppingAReplyClosesThePreviewAndSendsNothing() async throws {
@@ -1051,10 +1171,10 @@ struct CloudHelpTests {
         let review = CloudReview()
         let model = cloud.chatModel(local: LocalStubModel(), review: review)
         // A chat that promised on-device is not reused with the cloud model.
-        let promised = Conversation.firstRun(named: "Pip", onDevice: true)
+        let promised = Conversation.firstRun(named: "Pip", place: .onDevice)
         let controller = ChatController.make(brand: brand, model: model, names: InMemoryAgentNameStore(stored: "Pip"),
                                              conversation: promised)
-        #expect(!controller.conversation.onDevice)
+        #expect(!controller.conversation.place.staysOnDevice)
         #expect(controller.conversation.turns.first?.text.contains("stays") == false)
         #expect(controller.privacyPlace == .mayLeaveDevice)
         #expect(FirstConversation.presence(controller.privacyPlace) == "Here with you.")
@@ -1083,10 +1203,10 @@ struct CloudHelpTests {
     @Test func aChatThatMustStayHereSaysSoAndPointsToANewChat() async throws {
         let maker = TransportMaker()
         let cloud = help(CloudHelpSettings(isOn: true), endpoint: endpoint, maker: maker)
-        var turns = Conversation.firstRun(named: "Pip", onDevice: false).turns
+        var turns = Conversation.firstRun(named: "Pip", place: .mayLeaveDevice).turns
         turns.append(ChatTurn(id: UUID(), speaker: .person, text: "What does a crisis line do?"))
         turns.append(ChatTurn(id: UUID(), speaker: .agent, text: "It's there for anyone thinking about suicide, any time."))
-        let controller = chat(cloud, conversation: Conversation(turns: turns, onDevice: false))
+        let controller = chat(cloud, conversation: Conversation(turns: turns, place: .mayLeaveDevice))
         controller.submit("Thanks")
         await controller.settled()
         #expect(controller.failure == CloudWords.staysHere)

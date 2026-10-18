@@ -71,22 +71,50 @@ public struct HomeView: View {
         now: @escaping () -> Date = { Date() },
         cloud: CloudHelp? = nil
     ) {
+        self.init(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
+                  looks: looks, conversation: conversation, section: section, feed: feed,
+                  needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, kept: kept, notifier: notifier,
+                  opensQuestion: opensQuestion, background: background, now: now, cloud: cloud, log: nil)
+    }
+
+    /// The same, writing down what the screen makes in `log`, for tests.
+    init(
+        brand: Brand,
+        model: any ModelClient,
+        names: any AgentNameStoring,
+        onboarding: any OnboardingStoring,
+        memory: MemoryStore?,
+        looks: UserDefaults,
+        conversation: Conversation?,
+        section: HomeSection,
+        feed: [any FeedSource] = [EmptyFeedSource()],
+        needsYou: NeedsYou,
+        tasks: (any TaskEngine)? = nil,
+        drivesTasks: Bool = false,
+        kept: TaskStore? = nil,
+        notifier: (any QuestionNotifying)? = nil,
+        opensQuestion: Bool = false,
+        background: BackgroundRunner? = nil,
+        now: @escaping () -> Date = { Date() },
+        cloud: CloudHelp? = nil,
+        log: HomeScreenLog?
+    ) {
         screen = HomeScreen(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                             looks: looks, conversation: conversation, section: section, feed: feed,
                             needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, kept: kept,
                             notifier: notifier, opensQuestion: opensQuestion, background: background,
-                            now: now, cloud: cloud)
+                            now: now, cloud: cloud, log: log)
     }
 
     /// Which model the screen was made for: its kind and where its words
     /// go. Either changing makes a new screen.
     struct ModelIdentity: Hashable {
         let kind: ObjectIdentifier
-        let staysOnDevice: Bool
+        let place: PrivacyPlace
     }
 
     static func identity(of model: any ModelClient) -> ModelIdentity {
-        ModelIdentity(kind: ObjectIdentifier(type(of: model)), staysOnDevice: model.privacyPlace.staysOnDevice)
+        ModelIdentity(kind: ObjectIdentifier(type(of: model)), place: model.privacyPlace)
     }
 
     public var body: some View {
@@ -131,18 +159,21 @@ public struct HomeView: View {
     /// model, the same way. Forget everything forgets the tasks and the
     /// background work too, and the switch for background work sits here.
     static func memoryModel(store: MemoryStore, model: any ModelClient, background: BackgroundRunner? = nil,
+                            log: HomeScreenLog? = nil,
                             onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) -> MemoryModel {
-        memoryModel(store: store, place: model.privacyPlace, background: background,
+        memoryModel(store: store, place: model.privacyPlace, background: background, log: log,
                     onForgetEverything: onForgetEverything)
     }
 
     /// The same, from a place already worked out. With `cloud`, Forget
     /// everything erases the words always hidden too.
     static func memoryModel(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp? = nil,
-                            background: BackgroundRunner? = nil,
+                            background: BackgroundRunner? = nil, log: HomeScreenLog? = nil,
                             onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) -> MemoryModel {
-        MemoryModel(store: store, place: place, alsoForget: MemoryView.alsoForget(cloud), background: background,
-                    onForgetEverything: onForgetEverything)
+        let memory = MemoryModel(store: store, place: place, alsoForget: MemoryView.alsoForget(cloud),
+                                 background: background, onForgetEverything: onForgetEverything)
+        log?.memories.append(memory)
+        return memory
     }
 
     /// The send itself, apart from moving, so tests can drive it.
@@ -181,6 +212,21 @@ public struct HomeView: View {
     }
 }
 
+/// What a home screen made for itself, newest last: the chat it showed and
+/// each memory model. Only tests pass one, to see that another model makes
+/// all of it again.
+@MainActor
+final class HomeScreenLog {
+    var chats: [ChatController] = []
+    var memories: [MemoryModel] = []
+
+    /// The home screen showed `chat`. A chat that appears again, as after a
+    /// sheet or a size change, is written down once.
+    func showed(_ chat: ChatController) {
+        if !chats.contains(where: { $0 === chat }) { chats.append(chat) }
+    }
+}
+
 /// The home screen itself, for one model. See `HomeView`.
 struct HomeScreen: View {
     let brand: Brand
@@ -191,6 +237,7 @@ struct HomeScreen: View {
     let looks: UserDefaults
     /// The cloud setting. Nil, or off, means every chat stays on this device.
     let cloud: CloudHelp?
+    let log: HomeScreenLog?
     let background: BackgroundRunner?
 
     @State private var finished: Bool
@@ -244,7 +291,8 @@ struct HomeScreen: View {
         opensQuestion: Bool,
         background: BackgroundRunner?,
         now: @escaping () -> Date,
-        cloud: CloudHelp?
+        cloud: CloudHelp?,
+        log: HomeScreenLog?
     ) {
         self.brand = brand
         self.model = model
@@ -254,6 +302,7 @@ struct HomeScreen: View {
         self.looks = looks
         self.opensQuestion = opensQuestion
         self.cloud = cloud
+        self.log = log
         self.background = background
         // One store for the notes: the redactor must read the same notes
         // the memory screen writes.
@@ -319,10 +368,11 @@ struct HomeScreen: View {
                 // Today has moved to the chat.
                 .modifier(SendTap(chat: chat))
                 .transition(.opacity)
+                .onAppear { log?.showed(chat) }
             } else {
                 // No chat yet, so the hello speaks for the one about to start.
                 OnboardingView(brand: brand, names: names, store: onboarding, looks: looks,
-                               onDevice: surfacePlace.staysOnDevice) { line in
+                               place: surfacePlace) { line in
                     firstMessage = line
                     chats.chat = newChat()
                     withAnimation(.easeInOut(duration: 0.4)) { finished = true }
@@ -568,6 +618,7 @@ struct HomeScreen: View {
                         ToolbarItem(placement: .confirmationAction) {
                             DoneButton { section = memoryOverChat ? .chat : .today }
                         }
+                        .sharedBackgroundVisibility(.hidden)
                     }
             }
         }
@@ -617,7 +668,7 @@ struct HomeScreen: View {
             // Forget everything then forgets the tasks and closes an open
             // summary.
             MemoryView(model: HomeView.memoryModel(store: memory, place: surfacePlace, cloud: cloud,
-                                                   background: background,
+                                                   background: background, log: log,
                                                    onForgetEverything: { feed.forgetEverything() }),
                        place: surfacePlace, cloud: cloud, holdsMore: feed.hasSomethingToForget)
         } else {
@@ -867,15 +918,38 @@ struct HomeSplit<TodayScreen: View, ChatScreen: View, MemoryScreen: View>: View 
         NavigationSplitView {
             List(selection: $section) {
                 ForEach(HomeSection.allCases, id: \.self) { place in
+                    let chosen = Self.isChosen(place, section: section, regular: isRegular) && Self.drawsOwnFill
+                    let count = place == .today ? needsYouCount : 0
                     NavigationLink(value: place) {
-                        Label(place.title, systemImage: place.symbol)
+                        Self.ink(chosen: chosen) {
+                            HStack {
+                                Label(place.title, systemImage: place.symbol)
+                                // The system's badge is in its secondary ink,
+                                // faint on the fill, so the chosen row draws its own.
+                                if chosen, count > 0 {
+                                    Spacer()
+                                    Text(count, format: .number)
+                                        .monospacedDigit()
+                                        // Heard as what it counts, not a bare number.
+                                        .accessibilityLabel(Self.spokenCount(count))
+                                }
+                            }
+                        }
                     }
-                    .badge(place == .today ? needsYouCount : 0)
+                    // Heard the same way as the count the chosen row draws.
+                    .badge(chosen || count == 0 ? nil
+                           : Text(count, format: .number).accessibilityLabel(Self.spokenCount(count)))
+                    // iOS 26 draws a chosen sidebar row in gray glass, whatever
+                    // the tint, so the row draws its own fill, with white words.
+                    .listRowBackground(chosen ? Capsule().fill(Theme.tintFill).padding(.horizontal, 10) : nil)
+                    // Today is drawn chosen beside its own screen before the
+                    // list has a selection, so VoiceOver hears it chosen too.
+                    .accessibilityAddTraits(Self.traits(place, section: section, regular: isRegular, ownFill: Self.drawsOwnFill))
                 }
             }
-            // The selected row is filled with the tint and its words turn
-            // white, so the sidebar takes the deep fill tint, not the root's
-            // `accentText`, which is too light under white in dark mode.
+            // The deep fill tint, not the root's `accentText`, which is too
+            // light under white in dark mode, for anything the system still
+            // fills with the tint.
             .tint(Theme.tintFill)
             .navigationTitle(chat.displayName.text)
         } detail: {
@@ -893,6 +967,63 @@ struct HomeSplit<TodayScreen: View, ChatScreen: View, MemoryScreen: View>: View 
                 }
             }
         }
+    }
+
+    /// Whether the chosen row draws its own fill, with white words on it.
+    /// Only iOS, which draws the chosen row in gray glass. The Mac draws its
+    /// own selection, and turns it gray when the list loses focus, which
+    /// would leave white words on gray, so there the system's stands.
+    static var drawsOwnFill: Bool {
+        #if os(iOS)
+        true
+        #else
+        false
+        #endif
+    }
+
+    /// Whether the sidebar sits beside its detail. Collapsed, as on iPhone
+    /// or a narrow iPad window, going back to the list clears the selection
+    /// and no detail shows, so nothing is chosen.
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var isRegular: Bool { sizeClass == .regular }
+    #else
+    private var isRegular: Bool { true }
+    #endif
+
+    /// The row drawn chosen: the selection, or Today with no selection yet
+    /// while Today's screen shows beside the list. A collapsed list with no
+    /// selection has no row chosen.
+    static func isChosen(_ place: HomeSection, section: HomeSection?, regular: Bool) -> Bool {
+        if let section { return place == section }
+        return regular && place == .today
+    }
+
+    /// What VoiceOver hears for a row's count, drawn or the system's badge.
+    static func spokenCount(_ count: Int) -> String {
+        HomeWords.waiting(count)
+    }
+
+    /// White words on the chosen row's own fill. Every other row, and the
+    /// system's selection where it draws one, keeps the sidebar's own
+    /// colors, its tinted icons included.
+    @ViewBuilder
+    static func ink(chosen: Bool, @ViewBuilder row: () -> some View) -> some View {
+        if chosen {
+            row().foregroundStyle(Theme.onTintFill)
+        } else {
+            row()
+        }
+    }
+
+    /// What VoiceOver adds to a row: the selected trait on the row this code
+    /// draws chosen, and on no other. With a selection, iOS gives that same
+    /// row the trait itself as well, which is heard once; with none yet,
+    /// Today is drawn chosen and only this gives it. Where the system draws
+    /// the selection (`ownFill` false, as on the Mac) it gives the trait
+    /// itself, for the row it really selected, so nothing is added.
+    static func traits(_ place: HomeSection, section: HomeSection?, regular: Bool, ownFill: Bool) -> AccessibilityTraits {
+        ownFill && isChosen(place, section: section, regular: regular) ? .isSelected : []
     }
 
     private var newChatButton: some View {
@@ -981,6 +1112,7 @@ struct KeyboardShortcutsView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     DoneButton { dismiss() }
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
         }
         .presentationDragIndicator(.visible)
