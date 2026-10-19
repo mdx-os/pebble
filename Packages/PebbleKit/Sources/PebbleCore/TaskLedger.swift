@@ -555,12 +555,14 @@ public final class TaskLedgerBook: @unchecked Sendable {
         return kept
     }
 
-    /// True while Forget everything has anything here to take: a ledger, or
-    /// a store not read or not erased yet, which may still hold some. Never
-    /// reads the store, so it is cheap to ask while drawing.
+    /// True while Forget everything has anything here to take: a ledger, a
+    /// store not read or not erased yet, which may still hold some, or a
+    /// write or a cleared card's deletion that hasn't gone in, so the store
+    /// still holds what went. Never reads the store, so it is cheap to ask
+    /// while drawing.
     public var holdsSomething: Bool {
         lock.lock(); defer { lock.unlock() }
-        return !loaded || !kept.isEmpty
+        return !loaded || !kept.isEmpty || dirty || !pendingDeletions.isEmpty
     }
 
     /// The newest ledger for a task id.

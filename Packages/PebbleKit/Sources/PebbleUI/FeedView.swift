@@ -922,12 +922,17 @@ final class FeedModel: ObservableObject {
             // and if one of them may have reached the cloud, the line says so.
             let inCloud = (recon?.summariesPastAYes ?? 0) > 0
             let cleared = tasks.clear()
-            ledger?.forget()
             if cleared.forgotten > 0 { something = true }
             let own = Self.forgetLine(cleared.underwayLine, inCloud: inCloud)
             if let own, underway?.contains(own) != true {
                 underway = [underway, own].compactMap { $0 }.joined(separator: " ")
             }
+        }
+        if !forgetting {
+            // This window's ledger goes too, with or without an engine, and
+            // after the engine is cleared so its last snapshot goes with it.
+            if ledger?.holdsSomething == true { something = true }
+            ledger?.forget()
         }
         rebuild()
         if something { tasksForgotten = true }

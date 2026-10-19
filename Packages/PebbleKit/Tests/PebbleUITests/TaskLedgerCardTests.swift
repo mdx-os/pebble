@@ -137,6 +137,8 @@ struct TaskLedgerCardTests {
         let store: any TaskLedgerStoring = unreadable ? Unreadable(disk) : disk
         let engine = LocalFakeEngine(rule: .isolated(), scripts: [])
         let book = TaskLedgerBook(store: store, clock: { engine.currentDate })
+        // Before any snapshot owes it a write.
+        #expect(book.holdsSomething, "a store not read yet may hold some")
         let flow = NeedsYouFlow(store: TaskStore.inMemory(), notifier: nil, agentName: { "Pip" })
         let model = FeedModel(sources: [], needsYou: NeedsYou(rule: engine.rule), tasks: engine, ledger: book,
                               place: .onDevice, flow: flow, now: { ShowcaseScene.morning })
@@ -151,6 +153,56 @@ struct TaskLedgerCardTests {
         #expect(book.ledgers.isEmpty)
         #expect(!model.hasSomethingToForget)
         #expect(model.tasksForgotten, "the screen can say it went")
+    }
+
+    /// The last card is cleared after its ledger loads, while the ledger
+    /// can't be written. Its deletion is still owed, so Forget everything
+    /// stays offered until it goes in, and a relaunch before then still
+    /// offers it without showing the cleared history on a card.
+    @Test func clearingTheLastCardWhileWritesFailKeepsForgetEverything() throws {
+        let disk = LaunchWrites()
+        let store = FailingWrites(disk)
+        let engine = LocalFakeEngine(rule: .isolated(), scripts: [])
+        let book = TaskLedgerBook(store: store, clock: { engine.currentDate })
+        let model = model(engine, ledger: book)
+        let id = engine.start(TaskScript(title: "Read the note", steps: [.init("Reading", duration: 1, todo: "read")],
+                                         doneLine: "Ready.", proofs: [.check("Read the note")]))
+        engine.advance(by: 2)
+        #expect(disk.read()?.first?.taskID == id)
+        store.failing = true
+        model.dismiss(try #require(engine.task(id)))
+        #expect(!model.hasTasks)
+        #expect(book.ledgers.isEmpty)
+        #expect(disk.read()?.first?.taskID == id, "the deletion couldn't be written")
+        #expect(model.hasSomethingToForget, "the deletion is still owed")
+
+        let again = LocalFakeEngine(rule: .isolated(), scripts: [])
+        let relaunched = FeedModel(sources: [], needsYou: NeedsYou(rule: again.rule), tasks: again,
+                                   ledger: TaskLedgerBook(store: store, clock: { again.currentDate }),
+                                   place: .onDevice, now: { ShowcaseScene.morning })
+        #expect(!relaunched.hasTasks)
+        #expect(relaunched.ledgerShown.isEmpty, "no card shows the cleared history")
+        #expect(relaunched.hasSomethingToForget, "the history still on disk is something to forget")
+
+        store.failing = false
+        #expect(book.ledgers.isEmpty, "the deletion is tried again")
+        #expect(disk.read()?.isEmpty == true)
+        #expect(!model.hasSomethingToForget)
+    }
+
+    /// A ledger store that reads, but whose writes fail while `failing`.
+    private final class FailingWrites: TaskLedgerStoring, @unchecked Sendable {
+        let inner: LaunchWrites
+        private let lock = NSLock()
+        private var fails = false
+        init(_ inner: LaunchWrites) { self.inner = inner }
+        var failing: Bool {
+            get { lock.lock(); defer { lock.unlock() }; return fails }
+            set { lock.lock(); fails = newValue; lock.unlock() }
+        }
+        func read() -> [TaskLedger]? { inner.read() }
+        func write(_ ledgers: [TaskLedger]) -> Bool { failing ? false : inner.write(ledgers) }
+        func erase() -> Bool { failing ? false : inner.erase() }
     }
 
     /// A ledger store that can't be read yet, as before the first unlock.
@@ -376,9 +428,17 @@ struct TaskLedgerCardTests {
         let other = LocalFakeEngine(rule: .isolated())
         let there = FeedModel(sources: [], needsYou: NeedsYou(rule: other.rule), tasks: other, place: .onDevice,
                               flow: flow, now: { ShowcaseScene.morning })
+        // A window with no engine still holds past ledgers.
+        let past = TaskLedgerBook(store: InMemoryTaskLedgerStore(), clock: { ShowcaseScene.morning })
+        past.record(TaskSnapshot(sequence: 1, tasks: engine.tasks))
+        let engineFree = FeedModel(sources: [], needsYou: NeedsYou(rule: engine.rule), tasks: nil, ledger: past,
+                                   place: .onDevice, flow: flow, now: { ShowcaseScene.morning })
         #expect(!ledger.ledgers.isEmpty)
+        #expect(!past.ledgers.isEmpty)
         there.forgetTasks()
         #expect(ledger.ledgers.isEmpty)
+        #expect(past.ledgers.isEmpty, "the engine free window's ledger goes too")
+        #expect(!engineFree.hasSomethingToForget)
         _ = here
     }
 

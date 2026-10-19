@@ -546,9 +546,19 @@ test: forgetEverythingEmptiesTheLedger
 file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
 perl: s~        ledger\?\.forget\(\)\n        let line = ~        let line = ~
 
+# With or without an engine in the other window.
 test: forgetEverythingInAnotherWindowEmptiesItToo
 file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
-perl: s~            let cleared = tasks\.clear\(\)\n            ledger\?\.forget\(\)\n~            let cleared = tasks.clear()\n~
+perl: s~        if !forgetting \{\n~        if !forgetting, tasks != nil {\n~
+
+test: forgetEverythingInAnotherWindowEmptiesItToo
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~            ledger\?\.forget\(\)\n        \}~        }~
+
+# A cleared card's deletion still owed is something to forget.
+test: clearingTheLastCardWhileWritesFailKeepsForgetEverything
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~ \|\| dirty \|\| !pendingDeletions\.isEmpty~~
 
 # Today: Clear takes the card's ledger.
 test: clearingACardTakesItsLedger
