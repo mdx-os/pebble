@@ -60,7 +60,7 @@ public final class OnDeviceModelSetup: ObservableObject {
 
     static func state(of model: any ModelClient) -> ModelDownloadState {
         if let model = model as? MLXChatModel { return .ready(model.folder) }
-        switch (model as? LocalStubModel)?.notReady {
+        switch OnDeviceModel.notReady(of: model) {
         case .incomplete?: return .failed(.incomplete)
         case .needsMoreMemory?: return .failed(.needsMoreMemory)
         case .couldNotLoad?: return .failed(.couldNotLoad)

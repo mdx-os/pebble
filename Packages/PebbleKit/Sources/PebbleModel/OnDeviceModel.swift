@@ -111,6 +111,12 @@ public enum OnDeviceModel {
         }
     }
 
+    /// Why `model` is the placeholder, when it is one that says. So a screen
+    /// can show it without naming the placeholder itself.
+    public static func notReady(of model: any ModelClient) -> OnDeviceModelNotReady? {
+        (model as? LocalStubModel)?.notReady
+    }
+
     /// Whether weights of this size leave `headroomBytes` of `available`.
     public static func fits(weightBytes: UInt64, available: UInt64) -> Bool {
         weightBytes <= available && available - weightBytes >= headroomBytes
