@@ -19,7 +19,7 @@ echo "$build" | grep -qE '^[0-9]+(\.[0-9]+){0,2}$' || fail "CURRENT_PROJECT_VERS
 
 # The icons: every file the catalog names, at the size it claims, and the
 # iOS one without transparency, which App Store Connect refuses.
-icons="App/Resources/Assets.xcassets/AppIcon.appiconset"
+icons="App/Assets.xcassets/AppIcon.appiconset"
 wanted="$(python3 -I -c '
 import json, sys
 for image in json.load(open(sys.argv[1] + "/Contents.json"))["images"]:
@@ -136,7 +136,7 @@ if [ -n "$ios_app" ]; then
 import json, sys
 for color in json.load(open(sys.argv[1]))["colors"]:
     print("+".join(sorted(a["value"] for a in color.get("appearances", []))) or "any")
-' App/Resources/Assets.xcassets/LaunchBackground.colorset/Contents.json | sort | tr '\n' ' ')"
+' App/Assets.xcassets/LaunchBackground.colorset/Contents.json | sort | tr '\n' ' ')"
   [ "$launch_looks" = "any dark dark+high high " ] \
     || fail "LaunchBackground should have light, dark and both in high contrast; it has: $launch_looks"
   for orientation in Portrait PortraitUpsideDown LandscapeLeft LandscapeRight; do

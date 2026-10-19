@@ -66,7 +66,7 @@ archive: generate privacy-check
 ## screenshots: first screen on iPhone, iPad and Mac, written to build/screenshots,
 ## plus the dark iPad sidebar and the sheets with Done, with
 ## build/screenshots/STAMP naming the commit and working tree they show. Fails
-## unless the dark shots show the orange fill with white words on it
+## unless the dark shots show the blue fill with white words on it
 ## (scripts/check-screenshots.sh).
 screenshots: generate
 	sh scripts/screenshots.sh build/screenshots

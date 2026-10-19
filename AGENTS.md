@@ -23,7 +23,7 @@ in lint, a skill, or CI.
 - `make privacy-check`: fails when code uses a required-reason API that `App/Resources/PrivacyInfo.xcprivacy` does not list, or network code outside the opt-in cloud client's files named in `scripts/privacy-check.sh`. `make privacy-check-test` runs it on `scripts/privacy-fixtures`
 - `make pulse`: fetch the public source watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
 - `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`, plus dark shots of the
-  orange fill that `scripts/check-screenshots.sh` checks. Worktrees share simulators and
+  blue fill that `scripts/check-screenshots.sh` checks. Worktrees share simulators and
   the bundle ID, so when another session runs at once pass free ones:
   `make verify PEBBLE_IPAD="iPad Air 13-inch (M4)" PEBBLE_IPHONE="iPhone 17e"`
 - The screenshots also get a `STAMP` with the commit and the working tree's hash. `make verify` makes them and then fails with "screenshots are stale, rerun make screenshots" if the stamp is missing or the tree has changed since. The tree hash is the contract: the same files make the same screenshots, so committing or amending them with nothing changed keeps them fresh. The commit line is only there to read. Screenshots always show the code as it is now
@@ -115,6 +115,19 @@ in lint, a skill, or CI.
 - The version and build number live only in `Config/Version.xcconfig`.
 - Each user may name their own agent. Never confuse the agent's name with a
   person in the user's contacts.
+
+## Design tokens
+
+- `PebbleUI/Theme.swift` owns the design system: `Theme.TypeScale` (Dynamic
+  Type text styles, rounded `display` styles only for big warm words),
+  `Theme.Space` (4 pt grid: 4 to 40), `Theme.Radius` (small, card, sheet),
+  `Elevation` (flat, raised, floating, applied with `.elevation` or
+  `.cardSurface`) and the palette (warm neutrals, blue accent, `Ink` with
+  Increase Contrast pairs).
+- Views use tokens, never literal font sizes, paddings, radii or colors.
+  `DesignTokenTests` fails on a new `Color(red:...)` or
+  `.font(.system(size:))` in PebbleUI outside Theme.swift.
+- A new color for words needs a pair in `Theme.textPairs`.
 
 ## Principles
 

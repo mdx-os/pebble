@@ -12,8 +12,8 @@ keys that never enter the repo.
 | --- | --- |
 | Version and build number, for every target | `Config/Version.xcconfig` |
 | Product name | `Config/Brand.xcconfig` |
-| App icon, iOS (1024 single size) and macOS (16 to 1024) | `App/Resources/Assets.xcassets/AppIcon.appiconset`, drawn by `scripts/app-icon.swift` |
-| Launch screen, the backdrop color in light and dark, each also in high contrast | `UILaunchScreen` in `project.yml`, color `LaunchBackground` |
+| App icon, iOS (1024 single size, with dark and tinted) and macOS (16 to 1024) | `App/Assets.xcassets/AppIcon.appiconset`, the app's one asset catalog |
+| Launch screen, the backdrop color in light and dark, each also in high contrast | `UILaunchScreen` in `project.yml`, color `LaunchBackground` in `App/Assets.xcassets` |
 | Privacy manifest | `App/Resources/PrivacyInfo.xcprivacy`, kept honest by `make privacy-check` |
 | Export compliance | `ITSAppUsesNonExemptEncryption = NO` in `project.yml` |
 | Mac sandbox for Release | `ENABLE_APP_SANDBOX` in `project.yml`, with `App/Mac-Release.entitlements` asking only for outgoing connections |

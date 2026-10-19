@@ -1,12 +1,12 @@
 #!/bin/sh
 # PERMANENT GUARD, run by `make screenshots` and so by `make verify`.
-# The screenshot set must show the orange fill with white words on it, in
+# The screenshot set must show the blue fill with white words on it, in
 # dark mode, where it is hardest to read: the iPad sidebar with a row
 # chosen, the same row with its count of waiting questions, and a sheet
 # with its Done button on iPhone and on the Mac (on the Mac in light mode
 # as well). Each scene asked for must exist, each file must exist, and
 # scripts/fill-check.swift must find the fill in it, so a gray selection, a
-# count in the system's gray, or a Done drawn as orange words on glass fails.
+# count in the system's gray, or a Done drawn as blue words on glass fails.
 #
 # 1x rendering is covered only through a downscale. SnapshotMode draws
 # every Mac shot at 2x, whatever the display, so no shot here is ever drawn
@@ -21,7 +21,7 @@ dir="${1:-build/screenshots}"
 shots_script="${PEBBLE_SHOTS_SCRIPT:-scripts/screenshots.sh}"
 
 # Every scene the screenshots ask for must be a ShowcaseScene. An unknown
-# name falls back to hello, and would fail below as "no orange fill",
+# name falls back to hello, and would fail below as "no blue fill",
 # hiding why.
 if [ ! -f "$shots_script" ]; then
   echo "check-screenshots: $shots_script is missing, so no scene it asks for can be checked" >&2

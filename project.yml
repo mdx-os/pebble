@@ -21,8 +21,11 @@ targets:
     supportedDestinations: [iOS, macOS]
     sources:
       - App/Sources
-      # The app icon, the launch color and Apple's required-reason manifest.
+      # Apple's required-reason manifest.
       - App/Resources
+      # The app icon, the system accent and the launch background, in the
+      # colors Theme.swift defines (PebbleUI).
+      - App/Assets.xcassets
     dependencies:
       - package: PebbleKit
         products: [PebbleCore, PebbleModel, PebbleUI, PebbleBackground]
@@ -42,8 +45,8 @@ targets:
         # CryptoKit, CommonCrypto, a TLS library or pinning; see "Encryption"
         # in docs/RELEASE.md before changing this.
         ITSAppUsesNonExemptEncryption: false
-        # The launch screen is the backdrop's color, light or dark, so the
-        # first screen comes in without a flash.
+        # The backdrop's warm top, light or dark, so launch fades straight
+        # into the first screen.
         UILaunchScreen:
           UIColorName: LaunchBackground
         # Every orientation on iPad, which Split View, Slide Over and Stage Manager need.
@@ -72,13 +75,11 @@ targets:
         PRODUCT_NAME: $(BRAND_NAME)
         PRODUCT_MODULE_NAME: Pebble
         TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         CODE_SIGN_STYLE: Automatic
         "CODE_SIGN_IDENTITY[sdk=macosx*]": "-"
         ENABLE_HARDENED_RUNTIME: YES
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        # Theme draws the accent, so there is no accent color asset and the
-        # system tint stays as it was.
-        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: ""
       configs:
         # The Mac App Store and TestFlight for Mac need the sandbox. Debug
         # stays outside it so `make screenshots` can write its PNG anywhere,

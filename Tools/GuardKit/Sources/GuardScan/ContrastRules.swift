@@ -13,7 +13,7 @@ public enum ContrastLint {
     /// words; `tintFill` sits under white words, as on a selected sidebar row.
     public static let allowedTints: Set<String> = ["Theme.accentText", "Theme.tintFill"]
 
-    /// The contrast rules, then the accent rules: orange only where it belongs.
+    /// The contrast rules, then the accent rules: the accent only where it belongs.
     public static let contrastRules: [Rule] = [
         Rule("contrast.rawAccent", rawAccent),
         Rule("contrast.systemGray", systemGray),
