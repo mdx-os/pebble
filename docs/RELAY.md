@@ -123,7 +123,10 @@ says so:
   `purchase` or `sharePersonalInfo`.
 - `target`: who it goes to. `name` and `handle` must be exactly what the
   person will be shown: one line each, no hidden characters, `name` at most
-  40 code points with no `@`, `handle` at most 254.
+  40 code points with no `@`, `handle` at most 254. Hidden means control
+  and format characters, default ignorable code points, the blank braille
+  cell U+2800 and the Hangul fillers U+115F, U+1160, U+3164 and U+FFA0.
+  A joiner or emoji selector right after an emoji is fine.
 - `summary`: one line saying what would happen.
 - `price`: required for `purchase`, for example
   `"price": { "minorUnits": 1450, "currency": "CAD" }`. `minorUnits` is a
@@ -332,8 +335,10 @@ with `verify`, a changed field, a dropped receipt or a reordered pair each
 fails, as does replaying a valid chain for another run or terminal state.
 
 The overload `RelayReceipts.verify(run, clientRunId:publicKey:)` checks a
-whole `RelayRun`, using its own `runId` and `state` as the expected receipt
-context. The client ID must come from the device's original request. When
+`RelayRun`'s receipt chain against its context: the run's own `runId` and
+`state` are the expected receipt context. It does not authenticate the
+run's result text, sources, artifacts or steps; changing any of them leaves
+verification unchanged. The client ID must come from the device's original request. When
 polling, the caller must also match the response's `runId` to the requested
 run. Decoding a run alone does not authenticate its receipts.
 
@@ -401,6 +406,11 @@ Runs:
 - `run.invalid.purchase-price-null.json`
 - `run.invalid.target-combining-name.json`
 - `run.invalid.target-combining-handle.json`
+- `run.invalid.target-filler-name-3164.json`: Hangul filler U+3164 in `name`
+- `run.invalid.target-filler-name-115f.json`: Hangul choseong filler U+115F
+- `run.invalid.target-filler-name-1160.json`: Hangul jungseong filler U+1160
+- `run.invalid.target-filler-name-ffa0.json`: halfwidth Hangul filler U+FFA0
+- `run.invalid.target-filler-handle.json`: U+3164 in `handle`
 - `run.invalid.artifact-combining-slash.json`
 - `run.invalid.artifact-combining-backslash.json`
 - `run.invalid.artifact-combining-colon.json`

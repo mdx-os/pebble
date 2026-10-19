@@ -275,6 +275,9 @@ public struct RelayTarget: Codable, Sendable, Equatable {
         guard Relay.isLine(id, limit: Relay.maxTargetIDLength) else { throw refused("target id isn't one short line", decoder) }
         guard name.unicodeScalars.count <= 40 else { throw refused("target name is too long", decoder) }
         guard handle.unicodeScalars.count <= 254 else { throw refused("target handle is too long", decoder) }
+        // Fillers such as U+3164 survive Recipient's tidying but show as nothing.
+        guard !AskFirst.hasHiddenScalars(name) else { throw refused("target name has hidden characters", decoder) }
+        guard !AskFirst.hasHiddenScalars(handle) else { throw refused("target handle has hidden characters", decoder) }
         let recipient = recipient
         guard recipient.displayName == name else { throw refused("target name wouldn't be shown as written", decoder) }
         guard recipient.handle == handle else { throw refused("target handle wouldn't be shown as written", decoder) }
@@ -740,7 +743,9 @@ public enum RelayReceipts {
         }
     }
 
-    /// Verify a finished run using its own identity and state. The client ID
+    /// Verify a finished run's receipt chain using its own identity and state.
+    /// Only the receipts are checked: the result, sources, artifacts and
+    /// steps are not covered by the chain. The client ID
     /// must come from the device's original request, not from the receipts.
     /// The caller must also match run.runId to the requested run when polling.
     public static func verify(_ run: RelayRun, clientRunId: String,

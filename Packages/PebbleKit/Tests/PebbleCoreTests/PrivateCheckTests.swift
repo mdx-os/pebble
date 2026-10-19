@@ -79,6 +79,53 @@ struct PrivateCheckTests {
         #expect(!result.output.contains(planted))
     }
 
+    @Test(arguments: [false, true], [false, true])
+    func review3UTF32WithoutBOMIsChecked(bigEndian: Bool, host: Bool) throws {
+        let scratch = try Scratch()
+        let planted = host ? "relay.corp" + ".internal" : Self.word
+        let kind = host ? "a .internal or .local host" : "a private word"
+        let data = try #require("First line.\n\(planted)\n".data(using: bigEndian ? .utf32BigEndian : .utf32LittleEndian))
+        #expect(!data.starts(with: [0xff, 0xfe]) && !data.starts(with: [0x00, 0x00, 0xfe, 0xff]))
+        try FileManager.default.createDirectory(at: scratch.root.appendingPathComponent("docs"), withIntermediateDirectories: true)
+        try data.write(to: scratch.root.appendingPathComponent("docs/SETUP.md"))
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("docs/SETUP.md:2: \(kind)"), "\(result.output)")
+        #expect(!result.output.contains(planted))
+    }
+
+    /// A UTF-16 BOM followed by UTF-8 text decodes as nonsense, not as an
+    /// error, so the lossy UTF-8 is scanned beside it.
+    @Test func review3UTF8AfterABOMIsChecked() throws {
+        let scratch = try Scratch()
+        var data = Data([0xff, 0xfe])
+        data.append(Data("First line.\n\(Self.word)\n".utf8))
+        try data.write(to: scratch.root.appendingPathComponent("README.md"))
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("README.md:2: a private word"), "\(result.output)")
+        #expect(!result.output.lowercased().contains(Self.word))
+    }
+
+    /// Text after a BOM that ends in a unit that isn't a scalar (an unpaired
+    /// surrogate in UTF-16, past U+10FFFF in UTF-32) is still scanned.
+    @Test(arguments: [2, 4], [false, true])
+    func review3BrokenBOMTextIsChecked(width: Int, bigEndian: Bool) throws {
+        let scratch = try Scratch()
+        let encodings: [String.Encoding] = width == 2 ? [.utf16LittleEndian, .utf16BigEndian] : [.utf32LittleEndian, .utf32BigEndian]
+        let bom: [UInt8] = width == 2 ? [0xfe, 0xff] : [0x00, 0x00, 0xfe, 0xff]
+        let bad: [UInt8] = width == 2 ? [0xd8, 0x00] : [0x00, 0x11, 0x00, 0x00]
+        var data = Data(bigEndian ? bom : bom.reversed())
+        data.append(try #require("First line.\n\(Self.word)\n".data(using: encodings[bigEndian ? 1 : 0])))
+        data.append(contentsOf: bigEndian ? bad : bad.reversed())
+        #expect(String(data: data.dropFirst(width), encoding: encodings[bigEndian ? 1 : 0]) == nil)
+        try data.write(to: scratch.root.appendingPathComponent("README.md"))
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("README.md:2: a private word"), "\(result.output)")
+        #expect(!result.output.lowercased().contains(Self.word))
+    }
+
     @Test(arguments: [false, true])
     func review2SymlinkTargetsAreChecked(host: Bool) throws {
         let scratch = try Scratch()

@@ -457,6 +457,30 @@ struct RelayRound2Tests {
     }
 }
 
+struct RelayRound3Tests {
+    /// Fillers survive Recipient's tidying but show as nothing. Each fixture
+    /// holds the filler it's named for, written as the character itself.
+    @Test(arguments: [0x3164, 0x115F, 0x1160, 0xFFA0] as [UInt32])
+    func review3TargetNameFillersAreRefused(filler: UInt32) throws {
+        let name = "run.invalid.target-filler-name-" + String(filler, radix: 16)
+        let text = String(decoding: try RelayFixtureTests.data(name), as: UTF8.self)
+        #expect(text.unicodeScalars.contains { $0.value == filler })
+        #expect(throws: DecodingError.self) { try RelayFixtureTests.roundTrip(name) }
+    }
+
+    @Test func review3TargetHandleFillerIsRefused() throws {
+        let text = String(decoding: try RelayFixtureTests.data("run.invalid.target-filler-handle"), as: UTF8.self)
+        #expect(text.unicodeScalars.contains { $0.value == 0x3164 })
+        #expect(throws: DecodingError.self) { try RelayFixtureTests.roundTrip("run.invalid.target-filler-handle") }
+    }
+
+    /// A plain name and handle still read: the refusal is only the hidden ones.
+    @Test func review3PlainTargetStillReads() throws {
+        let target = RelayTarget(id: "contact1", name: "Sam 👋🏽", handle: "sam@example.com")
+        #expect(try Relay.decode(RelayTarget.self, from: Relay.encode(target)) == target)
+    }
+}
+
 struct RelayWholeRunTests {
     @Test(arguments: [RelayRunState.done, .failed, .stopped])
     func review2WholeRunUsesItsOwnContext(state: RelayRunState) throws {

@@ -505,11 +505,11 @@ perl: s~guard action == \.purchase \|\| price == nil else~guard true else~
 
 test: review2UTF32IsChecked
 file: scripts/private-check.swift
-perl: s~if data.starts\(with: \[0xff, 0xfe, 0x00, 0x00\]\)~if false~
+perl: s~\(\[0xff, 0xfe, 0x00, 0x00\], \.utf32LittleEndian, 4, false\),~~
 
 test: review2UTF32IsChecked
 file: scripts/private-check.swift
-perl: s~if data.starts\(with: \[0x00, 0x00, 0xfe, 0xff\]\)~if false~
+perl: s~\(\[0x00, 0x00, 0xfe, 0xff\], \.utf32BigEndian, 4, true\)~([0x00, 0x00, 0xfe, 0xff], .utf32LittleEndian, 4, false)~
 
 test: review2SymlinkTargetsAreChecked
 file: scripts/private-check.swift
@@ -525,7 +525,7 @@ perl: s~\(\?<\=\[0-9a-f\]\|\[0-9a-f\]::\)~(?<=[0-9a-f])~
 
 test: review2LossyUTF8IsChecked
 file: scripts/private-check.swift
-perl: s~texts.append\(String\(decoding: data, as: UTF8.self\)\)~~
+perl: s~add\(String\(data: data, encoding: \.utf8\) \?\? String\(decoding: data, as: UTF8\.self\)\)~add(String(data: data, encoding: .utf8))~
 
 test: review2WholeRunUsesItsOwnContext
 file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
@@ -534,3 +534,33 @@ perl: s~runId: run.runId~runId: run.receipts.first?.runId ?? ""~
 test: review2WholeRunUsesItsOwnContext
 file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
 perl: s~terminalState: run.state~terminalState: .done~
+
+# Round-3 relay review: UTF-32 without a BOM, text a BOM can't vouch for,
+# and fillers in a target's name.
+test: review3UTF32WithoutBOMIsChecked
+file: scripts/private-check.swift
+perl: s~where data.count.isMultiple\(of: width\)~where width == 2~
+
+test: review3UTF32WithoutBOMIsChecked
+file: scripts/private-check.swift
+perl: s~\[\.utf32LittleEndian, \.utf32BigEndian\]~[.utf32BigEndian]~
+
+test: review3UTF32WithoutBOMIsChecked
+file: scripts/private-check.swift
+perl: s~\[\.utf32LittleEndian, \.utf32BigEndian\]~[.utf32LittleEndian]~
+
+test: review3UTF8AfterABOMIsChecked
+file: scripts/private-check.swift
+perl: s~        add\(String\(decoding: data, as: UTF8\.self\)\)\n        return texts~        return texts~
+
+test: review3BrokenBOMTextIsChecked
+file: scripts/private-check.swift
+perl: s~\?\? lossyText\(rest, width: bom.width, bigEndian: bom.bigEndian\)~?? ""~
+
+test: review3BrokenBOMTextIsChecked
+file: scripts/private-check.swift
+perl: s~bigEndian \? \$1 : width - 1 - \$1~\$1~
+
+test: review3TargetNameFillersAreRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard !AskFirst.hasHiddenScalars\(name\) else~guard true else~

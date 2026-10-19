@@ -136,36 +136,46 @@ func words(_ line: Substring) -> Set<String> {
     return found
 }
 
-/// A BOM fixes the UTF-16 or UTF-32 byte order. Without a BOM the encoding can be
-/// ambiguous, so scan every valid text interpretation rather than guessing
-/// wrong and hiding a word. Valid UTF-8 is scanned even if it contains NUL.
+/// UTF-16 or UTF-32 code units of `width` bytes, read in the given byte
+/// order, with anything that isn't a scalar replaced instead of dropping the
+/// whole text. Trailing bytes short of a unit are left out.
+func lossyText(_ data: Data, width: Int, bigEndian: Bool) -> String {
+    let bytes = [UInt8](data)
+    let units = stride(from: 0, to: bytes.count - width + 1, by: width).map { offset in
+        (0..<width).reduce(UInt32(0)) { $0 << 8 | UInt32(bytes[offset + (bigEndian ? $1 : width - 1 - $1)]) }
+    }
+    return width == 2 ? String(decoding: units.map { UInt16($0) }, as: UTF16.self) : String(decoding: units, as: UTF32.self)
+}
+
+/// A BOM names the UTF-16 or UTF-32 byte order, but it can't prove the rest
+/// is in it: text decoded with the wrong one is still "valid" nonsense. So
+/// with a BOM scan its decoding, lossy if it doesn't decode, and the lossy
+/// UTF-8 too. Without a BOM the encoding can be ambiguous, so scan every
+/// valid text interpretation rather than guessing wrong and hiding a word.
+/// Valid UTF-8 is scanned even if it contains NUL.
 func decodedTexts(_ data: Data) -> [String] {
-    // UTF-32 LE shares UTF-16 LE's first two BOM bytes, so check it first.
-    if data.starts(with: [0xff, 0xfe, 0x00, 0x00]) {
-        return String(data: data.dropFirst(4), encoding: .utf32LittleEndian).map { [$0] } ?? []
-    }
-    if data.starts(with: [0x00, 0x00, 0xfe, 0xff]) {
-        return String(data: data.dropFirst(4), encoding: .utf32BigEndian).map { [$0] } ?? []
-    }
-    if data.starts(with: [0xff, 0xfe]) {
-        return String(data: data.dropFirst(2), encoding: .utf16LittleEndian).map { [$0] } ?? []
-    }
-    if data.starts(with: [0xfe, 0xff]) {
-        return String(data: data.dropFirst(2), encoding: .utf16BigEndian).map { [$0] } ?? []
-    }
     var texts: [String] = []
-    if let text = String(data: data, encoding: .utf8) {
-        texts.append(text)
-    } else {
-        // A stray non-UTF-8 byte must not hide otherwise readable words.
-        texts.append(String(decoding: data, as: UTF8.self))
+    func add(_ text: String?) {
+        if let text, !texts.contains(text) { texts.append(text) }
     }
-    if data.count.isMultiple(of: 2) {
-        for encoding in [String.Encoding.utf16LittleEndian, .utf16BigEndian] {
-            if let text = String(data: data, encoding: encoding), !texts.contains(text) {
-                texts.append(text)
-            }
-        }
+    // UTF-32 LE shares UTF-16 LE's first two BOM bytes, so check it first.
+    let boms: [(bytes: [UInt8], encoding: String.Encoding, width: Int, bigEndian: Bool)] = [
+        ([0xff, 0xfe, 0x00, 0x00], .utf32LittleEndian, 4, false),
+        ([0x00, 0x00, 0xfe, 0xff], .utf32BigEndian, 4, true),
+        ([0xff, 0xfe], .utf16LittleEndian, 2, false),
+        ([0xfe, 0xff], .utf16BigEndian, 2, true),
+    ]
+    if let bom = boms.first(where: { data.starts(with: $0.bytes) }) {
+        let rest = data.dropFirst(bom.bytes.count)
+        add(String(data: rest, encoding: bom.encoding) ?? lossyText(rest, width: bom.width, bigEndian: bom.bigEndian))
+        add(String(decoding: data, as: UTF8.self))
+        return texts
+    }
+    // A stray non-UTF-8 byte must not hide otherwise readable words.
+    add(String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self))
+    for (width, encodings) in [(2, [String.Encoding.utf16LittleEndian, .utf16BigEndian]),
+                               (4, [.utf32LittleEndian, .utf32BigEndian])] where data.count.isMultiple(of: width) {
+        for encoding in encodings { add(String(data: data, encoding: encoding)) }
     }
     return texts
 }
