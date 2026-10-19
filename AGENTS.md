@@ -156,10 +156,14 @@ Things no test here can reach. Check each on a real iPhone before a release.
   body runs. To react to a change, observe the object and use `onChange`.
 - An engine lets go of ended tasks by when they ended, never by when they
   began. A task dropped in the same change that ends it never tells its
-  ledger how it ended. `TaskLedgerRunTests` guards this.
+  ledger how it ended. Track pending publications before releasing the
+  engine lock, including rule work before delivery. `TaskLedgerRunTests`
+  guards this.
 - Record ledger outcomes before dispatching snapshots to the UI, whose
   sequence guard can drop older completions. Launch orphan detection waits
-  for task restoration to resolve. `TaskLedgerCardTests` guards both.
+  for task restoration to resolve and its outcomes to be recorded. Only
+  tasks absent from the reconciled snapshot are orphans, including when
+  restoration ends a task. `TaskLedgerCardTests` guards this.
 
 ## Never
 

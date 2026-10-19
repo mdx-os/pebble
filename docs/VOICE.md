@@ -193,8 +193,10 @@ the card's visible and spoken status is "Finished", and it says plainly:
 task that goes quiet says so on its own, naming its last step ("Still on
 it: reading the third page."), and after half an hour of nothing new says
 it hasn't moved forward and that the person can stop it, with Stop right
-there. A task that was going when the app closed says "This stopped when
-the app closed." The words live in `LedgerWords`.
+there. When a task that was going is absent after restoration, its ledger
+records "This stopped when the app closed." That outcome is recorded only;
+an orphan card or an offer to start again is not wired into the feed yet.
+The words live in `LedgerWords`.
 
 ### Looking into something
 

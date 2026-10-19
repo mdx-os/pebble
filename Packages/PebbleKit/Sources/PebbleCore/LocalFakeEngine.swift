@@ -157,14 +157,25 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
     private var made = 0
     /// Goes up with every change observers hear about.
     private var sequence = 0
-    /// No retention trim while any snapshot is still reaching observers,
-    /// including when an observer calls back into the engine.
-    private var deliveries = 0
+    /// Mutations awaiting publication or still reaching observers. Counted
+    /// before the first unlock, including rule work and observer callbacks.
+    /// Retention cannot discard an outcome until this count reaches zero.
+    private var pendingPublications = 0
     /// Questions to withdraw once the lock is let go.
     private var withdrawals: [ConfirmationRequest] = []
     /// Receipts made and not yet taken by `takeReceipts`.
     private var receiptsMade: [Receipt] = []
     #if DEBUG
+    private var publicationHook: (@Sendable () -> Void)?
+
+    /// Pauses one mutation after its first unlock, before any publication.
+    /// Taken under the run lock, so a concurrent mutation cannot reuse it.
+    func beforeNextPublication(_ hook: @escaping @Sendable () -> Void) {
+        lockRuns()
+        publicationHook = hook
+        unlockRuns()
+    }
+
     /// For tests: calls to `AskFirst`, and how many came while this
     /// engine's lock was held. The second must stay zero.
     private let countLock = NSLock()
@@ -793,7 +804,15 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
         let before = runs.map(\.task)
         let value = change()
         var work = takeRuleWork()
+        pendingPublications += 1
+        #if DEBUG
+        let hook = publicationHook
+        publicationHook = nil
+        #endif
         unlockRuns()
+        #if DEBUG
+        hook?()
+        #endif
         while !work.withdrawals.isEmpty || !work.asks.isEmpty {
             for request in work.withdrawals { withRule { $0.withdraw(request) } }
             let answers = work.asks.map { ask in
@@ -813,17 +832,16 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
         if changed { sequence += 1 }
         let snapshot = TaskSnapshot(sequence: sequence, tasks: Array(after.reversed()))
         let listeners = changed ? Array(observers.values) : []
-        deliveries += 1
         unlockRuns()
         for listener in listeners { listener(snapshot) }
         lockRuns()
-        deliveries -= 1
-        let trim = deliveries == 0 && runs.filter { !$0.task.isActive }.count > Self.endedLimit
+        pendingPublications -= 1
+        let trim = pendingPublications == 0 && runs.filter { !$0.task.isActive }.count > Self.endedLimit
         unlockRuns()
         if trim {
             // Everyone has heard the outcomes. Publish retention as its own
             // change, so the feed also receives the bounded list of cards.
-            mutate { if deliveries == 0 { dropOldEnded() } }
+            mutate { if pendingPublications == 0 { dropOldEnded() } }
         }
         return value
     }

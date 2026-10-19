@@ -617,8 +617,9 @@ public final class TaskLedgerBook: @unchecked Sendable {
     }
 
     /// At launch: any task with no end and no engine going on it ends as
-    /// stopped, saying it stopped when the app closed. `live` is every task
-    /// an engine has going now. If task restoration is unresolved, call
+    /// stopped, saying it stopped when the app closed. `live` is the whole
+    /// reconciled snapshot, including tasks that ended during restoration.
+    /// Record restoration outcomes before calling. If unresolved, call
     /// again after it finishes. Runs once for this book; while the ledger
     /// can't be read it waits, using subsequent snapshots for the live set.
     ///
@@ -629,7 +630,7 @@ public final class TaskLedgerBook: @unchecked Sendable {
         defer { lock.unlock() }
         guard restorationComplete, !launched else { return }
         launched = true
-        let keys = Set(live.filter(\.isActive).map(Self.key))
+        let keys = Set(live.map(Self.key))
         if loaded {
             stopOrphans(kept.indices, at: clock(), live: keys)
             save()

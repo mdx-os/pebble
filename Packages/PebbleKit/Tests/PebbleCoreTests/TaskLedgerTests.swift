@@ -43,6 +43,25 @@ struct TaskLedgerTests {
         TaskLedgerBook(store: store, artifacts: artifacts, clock: { clock.now })
     }
 
+    @Test(arguments: [false, true])
+    func reconciledTerminalTaskIsNotAnOrphan(delayedRead: Bool) throws {
+        let clock = LedgerClock()
+        let disk = InMemoryTaskLedgerStore()
+        let earlier = Self.book(disk, clock: clock)
+        earlier.record(TaskSnapshot(sequence: 1, tasks: [Self.task(), Self.task("orphan")]))
+        disk.locked = delayedRead
+        let book = Self.book(disk, clock: clock)
+        let restored = Self.task(state: .done, proofs: [Self.page])
+        book.launch(live: [restored])
+        disk.locked = false
+        // A restored terminal task is present, even before its observation
+        // reaches the ledger. Only the absent task may be stopped at launch.
+        #expect(book.takeStoppedAtLaunch().map(\.taskID) == ["orphan"])
+        book.record(TaskSnapshot(sequence: 1, tasks: [restored]))
+        #expect(try #require(book.ledger(restored.id)).end?.kind == .done(proofs: [Self.page]))
+        #expect(book.ledger("orphan")?.end?.kind == .stopped(why: LedgerWords.stoppedWhenClosed))
+    }
+
     // MARK: One end, and nothing after it
 
     @Test(arguments: [

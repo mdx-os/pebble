@@ -28,6 +28,62 @@ struct TaskLedgerCardTests {
         TaskLedgerBook(store: store, artifacts: artifacts, clock: { [engine] in engine.currentDate })
     }
 
+    /// Captures persisted reconciliation order, including the first sweep.
+    private final class LaunchWrites: TaskLedgerStoring, @unchecked Sendable {
+        private let lock = NSLock()
+        private var kept: [TaskLedger] = []
+        private var saved: [[TaskLedger]] = []
+        var writes: [[TaskLedger]] { lock.lock(); defer { lock.unlock() }; return saved }
+        func read() -> [TaskLedger]? { lock.lock(); defer { lock.unlock() }; return kept }
+        func write(_ ledgers: [TaskLedger]) -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            kept = ledgers
+            saved.append(ledgers)
+            return true
+        }
+        func erase() -> Bool { lock.lock(); defer { lock.unlock() }; kept = []; return true }
+    }
+
+    @Test(arguments: [false, true])
+    func finalQuestionExpiringWhileClosedKeepsItsFinish(proven: Bool) throws {
+        let origin = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        let proofs: [TaskProof] = proven ? [.check("Read the note")] : []
+        let script = TaskScript(title: "Read and share the note", steps: [
+            .init("Reading", duration: 1, kept: "the note", todo: "read"),
+            .init("Sharing", kind: .ask(SampleTasks.holdVisit, askLine: "May I share it?"), todo: "share"),
+        ], doneLine: "Ready.", proofs: proofs)
+        let before = LocalFakeEngine(rule: .isolated(), scripts: [script], origin: origin)
+        let id = before.start(script)
+        before.advance(by: 2)
+        #expect(before.task(id)?.state == .waitingOnYou)
+        let store = TaskStore.inMemory()
+        store.keep(before, now: before.currentDate)
+        let disk = LaunchWrites()
+        let earlier = TaskLedgerBook(store: disk, clock: { before.currentDate })
+        earlier.record(TaskSnapshot(sequence: 1, tasks: before.tasks + [
+            AgentTask(id: "orphan", title: "Old work", step: "Reading", startedAt: origin),
+        ]))
+        let original = try #require(earlier.ledger(id)).entries
+        let reopenedAt = before.currentDate + before.rule.questionWindow + 1
+        let engine = LocalFakeEngine(rule: .isolated(), scripts: [script], origin: reopenedAt)
+        let book = TaskLedgerBook(store: disk, clock: { reopenedAt })
+        let flow = NeedsYouFlow(store: store, notifier: nil, agentName: { "Pip" })
+        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: engine.rule), tasks: engine, ledger: book,
+                              place: .onDevice, flow: flow, now: { reopenedAt })
+        let task = try #require(engine.task(id))
+        #expect(task.state == .done)
+        let expected: TaskLedgerEntry.Kind = proven ? .done(proofs: proofs) : .finishedUnchecked
+        let finished = try #require(book.ledger(id))
+        #expect(finished.end?.kind == expected)
+        #expect(Array(finished.entries.prefix(original.count)) == original)
+        #expect(card(model, task).shownFinish == (proven ? .proven(proofs) : .unchecked))
+        #expect(card(model, task).statusLabel == (proven ? "Done" : "Finished"))
+        #expect(book.takeStoppedAtLaunch().map(\.taskID) == ["orphan"])
+        let swept = disk.writes.filter { $0.contains { $0.taskID == "orphan" && $0.isEnded } }
+        #expect(!swept.isEmpty)
+        #expect(swept.allSatisfy { $0.first { $0.taskID == id }?.end?.kind == expected })
+    }
+
     @Test func backgroundCompletionsSurviveANewerMainThreadSnapshot() async throws {
         let engine = LocalFakeEngine(rule: .isolated(), scripts: [])
         let book = ledger(engine)

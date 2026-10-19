@@ -648,3 +648,19 @@ perl: s~restorationComplete: keeper == nil \|\| store\?\.restorationComplete != 
 test: anEmptyRecoveredTaskStoreResolvesOrphans
 file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
 perl: s~        if let ledger, let store, let keeper \{\n            store\.keep\(keeper, now: now\(\)\)\n            ledger\.launch\(live: tasks\?\.tasks \?\? \[\], restorationComplete: store\.restorationComplete\)\n        \}\n~~
+
+# An unchanged concurrent refresh cannot trim between mutation and publication.
+test: concurrentRefreshCannotTrimUnpublishedCompletions
+file: Packages/PebbleKit/Sources/PebbleCore/LocalFakeEngine.swift
+perl: s~        pendingPublications \+= 1\n~~
+perl: s~        let listeners = changed \? Array\(observers.values\) : \[\]~$&\n        pendingPublications += 1~
+
+# The initial observation records restored outcomes before the launch sweep.
+test: finalQuestionExpiringWhileClosedKeepsItsFinish
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~        let hops = pendingRefreshes\n        watching = tasks\?\.observe~        launchLedger()\n        let hops = pendingRefreshes\n        watching = tasks?.observe~
+
+# Terminal tasks in the reconciled snapshot are present, never orphans.
+test: reconciledTerminalTaskIsNotAnOrphan
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~let keys = Set\(live.map\(Self.key\)\)~let keys = Set(live.filter(\\.isActive).map(Self.key))~

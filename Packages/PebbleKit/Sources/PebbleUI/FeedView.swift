@@ -183,10 +183,6 @@ final class FeedModel: ObservableObject {
         if let flow, let keeper {
             flow.store.restore(into: keeper, now: now())
         }
-        // Then a task the ledger has going that no engine picked up says
-        // it stopped when the app closed, rather than sit there.
-        ledger?.launch(live: tasks?.tasks ?? [],
-                       restorationComplete: keeper == nil || store?.restorationComplete != false)
         feed = Feed.build(from: self.sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
         if store?.clearedUnreadable == true { clearedUnreadable = ReceiptWords.unreadableCleared }
         flow?.pinned(Self.pinnedTasks(in: feed), rule: needsYou.rule, from: window)
@@ -209,6 +205,9 @@ final class FeedModel: ObservableObject {
                 hops.add { self?.tasksChanged(snapshot) }
             }
         }
+        // The initial observation records outcomes produced by restore
+        // before orphan detection. Also reconcile when there is no engine.
+        launchLedger()
         // A question asked, answered or withdrawn shows at once, wherever
         // the person is. A question that times out is caught by `keepFresh`.
         // Each model watches for itself, so every window's Today updates.

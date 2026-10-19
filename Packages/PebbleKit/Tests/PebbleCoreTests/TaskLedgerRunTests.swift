@@ -42,6 +42,42 @@ struct TaskLedgerRunTests {
         }
     }
 
+    @Test func concurrentRefreshCannotTrimUnpublishedCompletions() throws {
+        let engine = LocalFakeEngine(rule: .isolated(), scripts: [])
+        let book = TaskLedgerBook(store: InMemoryTaskLedgerStore(), clock: { engine.currentDate })
+        let following = book.follow(engine)
+        defer { following.cancel() }
+        let ids = (0..<13).map { index in
+            engine.start(TaskScript(title: "Short \(index)",
+                                    steps: [.init("Reading", duration: 1, todo: "read")],
+                                    doneLine: "Ready.", proofs: [.check("Read the note")]))
+        }
+        let unlocked = DispatchSemaphore(value: 0)
+        let publish = DispatchSemaphore(value: 0)
+        let finished = DispatchSemaphore(value: 0)
+        engine.beforeNextPublication {
+            unlocked.signal()
+            #expect(publish.wait(timeout: .now() + 10) == .success)
+        }
+        DispatchQueue.global().async {
+            engine.advance(by: 2)
+            finished.signal()
+        }
+        defer { publish.signal() }
+        try #require(unlocked.wait(timeout: .now() + 10) == .success)
+        // The completing mutation has unlocked but has not published.
+        // This unchanged mutation must neither publish nor trim its ends.
+        engine.refresh()
+        #expect(engine.tasks.count == 13)
+        #expect(ids.allSatisfy { book.ledger($0)?.end == nil })
+        publish.signal()
+        try #require(finished.wait(timeout: .now() + 10) == .success)
+        #expect(engine.tasks.count == LocalFakeEngine.endedLimit)
+        for id in ids {
+            #expect(try #require(book.ledger(id)).end?.kind == .done(proofs: [.check("Read the note")]))
+        }
+    }
+
     enum Outcome: CaseIterable {
         case doneWithProof, doneWithoutProof, doneWithFalseProof, fails, stalls, stuck, stopped, closedMidTask, quiet
     }
