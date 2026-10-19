@@ -41,6 +41,11 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// yes, and its card after Not now. `askLive` plays it in real time and
     /// keeps it while the app is closed, for the UI tests.
     case askWaiting, askSheet, askAnswered, askClosed, askLive
+    /// A task's question to send something, with how long the yes is for,
+    /// and the memory screen listing what the agent may do without asking.
+    /// `memoryUnavailableGrants` is the screen in its place when the notes
+    /// couldn't be opened, still listing them.
+    case confirmScopes, memoryGrants, memoryUnavailableGrants
 
     /// The launch argument that picks a scene. No name in it, product or
     /// codename, as `make brand-check` asks of new code.
@@ -151,6 +156,11 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     .defaultScrollAnchor(.bottom)
             case .memoryEmpty:
                 MemoryView(store: Self.emptyMemory(), place: LocalStubModel().privacyPlace)
+            case .memoryGrants:
+                MemoryView(store: Self.emptyMemory(), place: LocalStubModel().privacyPlace,
+                           grants: Self.sampleGrants(at: morning))
+            case .memoryUnavailableGrants:
+                MemoryUnavailableView(hasTasks: false, grants: Self.sampleGrants(at: morning), onForgetTasks: {})
             case .memorySaved:
                 MemoryView(model: Self.savedNoteMemory(place: LocalStubModel().privacyPlace),
                            place: LocalStubModel().privacyPlace)
@@ -165,12 +175,13 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                 }
             case .cloudPreview:
                 Self.cloudPreviewChat(brand: brand, looks: looks)
-            case .confirm, .confirmTimedOut:
+            case .confirm, .confirmTimedOut, .confirmScopes:
                 ZStack {
                     Backdrop()
                     if let sheet = sampleSheet {
                         ConfirmationSheet(request: sheet.request, rule: sheet.rule, isExample: sheet.isExample,
-                                          onApprove: { _ in }, onDecline: {})
+                                          onApprove: { _ in }, onGrant: sheet.offersGrants ? { _ in } : nil,
+                                          onDecline: {})
                     }
                 }
             }
@@ -183,11 +194,31 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         let rule: AskFirst
         /// Always true: a sample sheet says it is an example.
         let isExample: Bool
+        /// True when the sheet offers how long the yes is for.
+        var offersGrants = false
     }
+
+    /// A sample task's question to send a note, asked as a task asks it, so
+    /// the sheet offers every choice of how long the yes is for.
+    static let sampleSend = ProposedAction(
+        kind: .send,
+        // A reserved name, so the example never points at a real address.
+        recipient: Recipient(id: "contact:sample-sam", displayName: "Sam", handle: "sam@example.com"),
+        details: "Running ten minutes late, see you at the cafe.",
+        outcome: "I'll send this to Sam now."
+    )
+
+    /// The key the sample task asks with.
+    static let sampleTaskKey = "showcase/task:1"
 
     /// The sheet the question scenes show, asked through a rule of its own.
     /// The timed out scene uses a window that has already passed.
     var sampleSheet: SampleSheet? {
+        if self == .confirmScopes {
+            let rule = AskFirst.isolated(grants: .inMemory())
+            guard case .asking(let request) = rule.ask(Self.sampleSend, forTask: Self.sampleTaskKey) else { return nil }
+            return SampleSheet(request: request, rule: rule, isExample: true, offersGrants: true)
+        }
         guard self == .confirm || self == .confirmTimedOut else { return nil }
         let rule = AskFirst.isolated(window: self == .confirmTimedOut ? -1 : AskFirst.defaultWindow)
         guard let request = rule.ask(ProposedAction(
@@ -692,6 +723,31 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         case .ideas: .ideas
         default: .hello
         }
+    }
+
+    /// Grants for the memory screen's list, each made the one way there is:
+    /// a question asked, a choice picked on its sheet and its yes tapped.
+    /// In memory only, and nothing is really allowed by them.
+    @MainActor
+    static func sampleGrants(at now: Date) -> GrantBook {
+        let book = GrantBook.inMemory(now: { now })
+        let rule = AskFirst.isolated(grants: book)
+        let picks: [(ProposedAction, GrantChoice)] = [
+            (sampleSend, .always),
+            (ProposedAction(kind: .send,
+                            recipient: Recipient(id: "contact:sample-priya", displayName: "Priya",
+                                                 handle: "+1 555 0142"),
+                            details: "The book club moved to Thursday."), .untilTonight),
+            (SampleTasks.holdVisit, .forThisTask),
+        ]
+        for (action, choice) in picks {
+            guard case .asking(let request) = rule.ask(action, forTask: sampleTaskKey) else { continue }
+            let state = ConfirmationState(request: request, rule: rule, wallClock: { now },
+                                          onApprove: { _ in }, onGrant: { book.add($0) }, onDecline: {})
+            state.choose(choice)
+            state.tapPrimary()
+        }
+        return book
     }
 
     static func sampleMemory() -> MemoryStore {

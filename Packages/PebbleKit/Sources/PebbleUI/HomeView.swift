@@ -212,11 +212,11 @@ public struct HomeView: View {
     /// everything ends every open cloud chat first and erases the words
     /// always hidden too.
     static func memoryModel(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp? = nil,
-                            background: BackgroundRunner? = nil, log: HomeScreenLog? = nil,
+                            background: BackgroundRunner? = nil, grants: GrantBook? = nil, log: HomeScreenLog? = nil,
                             onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) -> MemoryModel {
         let memory = MemoryModel(store: store, place: place, endsCloudChats: MemoryView.endsCloudChats(cloud),
                                  alsoForget: MemoryView.alsoForget(cloud), background: background,
-                                 onForgetEverything: onForgetEverything)
+                                 grants: grants, onForgetEverything: onForgetEverything)
         log?.memories.append(memory)
         return memory
     }
@@ -224,11 +224,12 @@ public struct HomeView: View {
     /// The memory screen's model as the home screen makes it: Forget
     /// everything erases the notes, kept points included, and the
     /// background work, then forgets every task on `feed`, a recon still
-    /// going included, and closes an open summary.
+    /// going included, and closes an open summary. The list of what the
+    /// agent may do without asking is the rule's own, from `feed`.
     static func memoryModel(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp?,
                             background: BackgroundRunner? = nil, log: HomeScreenLog? = nil,
                             feed: FeedModel) -> MemoryModel {
-        memoryModel(store: store, place: place, cloud: cloud, background: background, log: log,
+        memoryModel(store: store, place: place, cloud: cloud, background: background, grants: feed.grants, log: log,
                     onForgetEverything: { [weak feed] in feed?.forgetEverything() ?? .none })
     }
 
@@ -642,6 +643,8 @@ struct HomeScreen: View {
             ConfirmationSheet(request: request, look: AgentLook.load(from: looks), rule: feed.rule,
                               isExample: feed.isSample(request),
                               onApprove: { feed.approved($0) },
+                              // A yes that lasts is offered only where it can be kept.
+                              onGrant: feed.grants == nil ? nil : { feed.granted($0, for: request) },
                               onDecline: { feed.closedQuestion(request) })
                 .onDisappear { feed.closedQuestion(request) }
         }
@@ -894,9 +897,13 @@ struct HomeScreen: View {
             //
             // Background work keeps its own file, so its switch and a way to
             // forget its summaries are here whenever its runner was built.
+            //
+            // Grants keep their own file too, and still let steps go ahead
+            // and can still be given on Today, so their list, with Remove
+            // and what couldn't be saved, is here whenever the rule has them.
             MemoryUnavailableView(hasTasks: feed.hasSomethingToForget, forgotten: feed.tasksForgotten,
                                   underway: feed.forgotUnderway, wordsErased: wordsErased,
-                                  erasesWords: cloud != nil, background: background,
+                                  erasesWords: cloud != nil, background: background, grants: feed.grants,
                                   onForgetTasks: forgetTasksWithoutNotes)
         }
     }
@@ -1016,7 +1023,7 @@ struct TodayComposer: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             if let failure {
                 GentleNotice(text: failure)
                     .transition(.opacity)
@@ -1024,7 +1031,7 @@ struct TodayComposer: View {
             }
             composer
         }
-        .padding(.vertical, 12)
+        .padding(.vertical, Theme.Space.s)
         .readableColumn(columnWidth)
         .onChange(of: chat.failure) { speakFailure() }
         .onChange(of: inFront) { speakFailure() }
@@ -1214,7 +1221,7 @@ struct HomeSplit<TodayScreen: View, ChatScreen: View, MemoryScreen: View>: View 
                            : Text(count, format: .number).accessibilityLabel(Self.spokenCount(count)))
                     // iOS 26 draws a chosen sidebar row in gray glass, whatever
                     // the tint, so the row draws its own fill, with white words.
-                    .listRowBackground(chosen ? Capsule().fill(Theme.tintFill).padding(.horizontal, 10) : nil)
+                    .listRowBackground(chosen ? Capsule().fill(Theme.tintFill).padding(.horizontal, Theme.Space.s) : nil)
                     // Today is drawn chosen beside its own screen before the
                     // list has a selection, so VoiceOver hears it chosen too.
                     .accessibilityAddTraits(Self.traits(place, section: section, regular: isRegular, ownFill: Self.drawsOwnFill))
@@ -1373,7 +1380,7 @@ struct KeyboardShortcutsView: View {
                 ForEach(HomeWords.shortcuts, id: \.action) { shortcut in
                     LabeledContent(shortcut.action) {
                         Text(shortcut.keys)
-                            .font(.body.monospaced())
+                            .font(Theme.TypeScale.body.monospaced())
                             .foregroundStyle(Theme.secondaryText)
                     }
                     .accessibilityElement(children: .ignore)

@@ -49,7 +49,7 @@ public enum DevicePromise {
                 reason: "MemoryWords.forgetEverythingDetail with no background work: where the notes and tasks are, "
                     + "not where the chat goes, so it is true with a cloud model too."),
         Allowed(file: "PebbleCore/Tasks.swift",
-                literal: "This stops any task still going, and removes every task and what you told me for it from this device. It can't be undone. Your notes aren't touched, and your choice about nudges stays as it is.",
+                literal: "This stops any task still going, and removes every task and what you told me for it from this device. It can't be undone. Your notes aren't touched, and your choice about nudges stays as it is. Anything you've allowed until tonight or always stays allowed.",
                 reason: "TaskWords.forgetTasksDetail names where the tasks are erased from, not that nothing left. "
                     + "\"From this device\" is the honest limit: without it, a cloud model's copy would seem erased too."),
         Allowed(file: "PebbleModel/LocalStubModel.swift",
@@ -218,7 +218,7 @@ public enum DevicePromise {
                 literal: "Your tasks and private words are gone. To be sure of that I cleared the cloud setting too, so help from the cloud is off. I couldn't erase your notes just now. Please try Forget everything again in a moment.",
                 reason: privateWordsName),
         Allowed(file: "PebbleCore/CloudHelp.swift",
-                literal: "This stops any task still going, and removes every task, what you told me for it and any words you asked me to hide from this device. It can't be undone. Your notes aren't touched, and your choice about nudges stays as it is.",
+                literal: "This stops any task still going, and removes every task, what you told me for it and any words you asked me to hide from this device. It can't be undone. Your notes aren't touched, and your choice about nudges stays as it is. Anything you've allowed until tonight or always stays allowed.",
                 reason: "CloudWords.forgetTasksAndWordsDetail, like TaskWords.forgetTasksDetail: \"from this device\" is "
                     + "the honest limit of what is erased, local files only, whatever the model is."),
         // "Cloud" in the lines below names the setting or the model it

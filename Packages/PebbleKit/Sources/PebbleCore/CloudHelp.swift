@@ -568,7 +568,7 @@ public enum CloudWords {
     /// Forgetting tasks when the notes can't be opened, like
     /// `TaskWords.forgetTasksDetail`, when the words always hidden go too.
     /// There may be none, so it says "any".
-    public static let forgetTasksAndWordsDetail = "This stops any task still going, and removes every task, what you told me for it and any words you asked me to hide from this device. It can't be undone. Your notes aren't touched, and your choice about nudges stays as it is."
+    public static let forgetTasksAndWordsDetail = "This stops any task still going, and removes every task, what you told me for it and any words you asked me to hide from this device. It can't be undone. Your notes aren't touched, and your choice about nudges stays as it is. Anything you've allowed until tonight or always stays allowed."
     /// The tasks and any private words went.
     public static let tasksAndWordsForgotten = "Your tasks are forgotten, and so are any words you asked me to hide."
     /// The same, when the words could only go with the whole cloud setting,

@@ -114,6 +114,12 @@ final class FeedModel: ObservableObject {
     /// handed over again is known and quietly ignored. Ids only, and gone
     /// with Forget everything.
     private(set) var usedYes: Set<UUID> = []
+    /// The grant the sheet made with a yes, by question id, kept only once
+    /// that yes has gone through.
+    private var chosenGrants: [UUID: Grant] = [:]
+
+    /// The person's grants, from the rule every question here is asked through.
+    var grants: GrantBook? { needsYou.rule.grants }
     /// Kept on Today after Forget everything, while a step the person said
     /// yes to may have happened. Names nothing the task held.
     @Published private(set) var forgotUnderway: String?
@@ -818,9 +824,13 @@ final class FeedModel: ObservableObject {
     /// `forgetTasks`. The memory screen forgets the background work just
     /// before, so it can say if its file couldn't be erased; here a summary
     /// still open to read closes, and Today shows the cards gone.
+    /// Every grant goes too, before the tasks, so no step still going is
+    /// let through by one on its way out.
     @discardableResult
     func forgetEverything() -> ClearedTasks {
         if let reading, reading.id.hasPrefix(BackgroundFeed.idPrefix) { self.reading = nil }
+        chosenGrants.removeAll()
+        grants?.forget()
         let cleared = forgetTasks()
         rebuild()
         return cleared
@@ -899,6 +909,8 @@ final class FeedModel: ObservableObject {
     /// than leave the person wondering. A late one says so in its history.
     func approved(_ approval: Approval) {
         var refusedBy: String?
+        // A grant chosen with this yes is kept only if the yes goes through.
+        let grant = chosenGrants.removeValue(forKey: approval.id)
         if usedYes.contains(approval.id) {
             // The same yes again, as from a second tap. The first one
             // stands and went through; this one does nothing and says nothing.
@@ -906,6 +918,7 @@ final class FeedModel: ObservableObject {
             switch tasks?.resume(id, with: approval) ?? .refused {
             case .proceeding:
                 usedYes.insert(approval.id)
+                if let grant { grants?.add(grant) }
                 // Kept now, not at the next change: if the app closes in
                 // between, the step is known to be under way and is never
                 // asked about or run again.
@@ -917,12 +930,18 @@ final class FeedModel: ObservableObject {
             // The task moved on before this yes came. It does nothing, and
             // never goes to `NeedsYou`.
             refusedBy = id
-        } else {
-            needsYou.approved(approval)
+        } else if needsYou.approved(approval), let grant {
+            grants?.add(grant)
         }
         reviewing = nil
         refresh()
         if let refusedBy { note(TaskWords.yesNotUsed, on: refusedBy) }
+    }
+
+    /// The sheet made `grant` with its yes to `request`. It waits for that
+    /// yes to go through in `approved` before it counts.
+    func granted(_ grant: Grant, for request: ConfirmationRequest) {
+        chosenGrants[request.id] = grant
     }
 
     /// Puts a line on a task's card, and says it, until the task moves on.
@@ -942,6 +961,7 @@ final class FeedModel: ObservableObject {
     /// and settle it as it saw fit. Only a question `NeedsYou` asked is
     /// handed to `NeedsYou`.
     func closedQuestion(_ request: ConfirmationRequest) {
+        chosenGrants[request.id] = nil
         let asking = askedBy.removeValue(forKey: request.id) ?? taskAsked[request.id]
         if asking != nil {
             tasks?.questionClosed(request)
@@ -1033,10 +1053,10 @@ struct FeedView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
-    /// Two cards side by side once each can be at least this wide. Grows
-    /// with the text size, so large text gets one roomy column.
-    @ScaledMetric(relativeTo: .body) private var cardMinimum: CGFloat = 320
-    @ScaledMetric(relativeTo: .body) private var columnWidth: CGFloat = Theme.feedWidth
+    /// Cards side by side once each can be at least this wide. Grows with
+    /// the text size, so large text gets fewer, roomier columns.
+    @ScaledMetric(relativeTo: .body) private var cardMinimum: CGFloat = FeedStyle.cardMinimum
+    @ScaledMetric(relativeTo: .body) private var columnWidth: CGFloat = FeedStyle.wideFeedWidth
 
     static let cardSpacing: CGFloat = 14
     /// The room between Today's sections. Fixed, not scaled, so it is the
@@ -1052,20 +1072,20 @@ struct FeedView: View {
             ScrollViewReader { scroller in
             ScrollView {
                 VStack(alignment: .leading, spacing: Self.sectionSpacing) {
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
                         Text(model.dateLine)
-                            .font(.subheadline.weight(.medium))
+                            .font(Theme.TypeScale.subheadline.weight(.medium))
                             .foregroundStyle(Theme.secondaryText)
                         // Said first, so no example is ever taken for real work.
                         if model.isSample && !model.feed.isEmpty {
                             Text(FeedWords.sampleNote(model.place))
-                                .font(.footnote)
+                                .font(Theme.TypeScale.footnote)
                                 .foregroundStyle(Theme.secondaryText)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .accessibilityIdentifier("sampleNote")
                         }
                     }
-                    .padding(.bottom, -12)
+                    .padding(.bottom, -Theme.Space.s)
                     if let line = model.forgotUnderway {
                         ForgotUnderwayNotice(line: line, onDismiss: model.dismissForgotUnderway)
                             .transition(Motion.arrival(reduceMotion: reduceMotion))
@@ -1106,8 +1126,8 @@ struct FeedView: View {
                         section(group.title, detail: nil, items: group.items, columns: columns)
                     }
                 }
-                .padding(.top, 8)
-                .padding(.bottom, 24)
+                .padding(.top, Theme.Space.xs)
+                .padding(.bottom, Theme.Space.xl)
                 .readableColumn(columnWidth)
                 .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.45, dampingFraction: 0.9),
                            value: model.feed)
@@ -1139,11 +1159,11 @@ struct FeedView: View {
 
     /// How many cards fit side by side, each at least `minimum` wide. One
     /// plain column at accessibility text sizes or when even one card at
-    /// `minimum` would not fit, and never more than two.
+    /// `minimum` would not fit, and never more than `FeedStyle.maxColumns`.
     static func columnCount(for width: CGFloat, minimum: CGFloat, accessibilityText: Bool) -> Int {
         guard !accessibilityText, minimum > 0 else { return 1 }
         let fit = Int((width + cardSpacing) / (minimum + cardSpacing))
-        return min(2, max(1, fit))
+        return min(FeedStyle.maxColumns, max(1, fit))
     }
 
     /// Flexible columns share whatever width there is, so a card is never
@@ -1154,14 +1174,14 @@ struct FeedView: View {
     }
 
     private func section(_ title: String, detail: String?, items: [FeedItem], columns: [GridItem]) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(.title3, design: .rounded).weight(.semibold))
+                    .font(Theme.TypeScale.displayTitle3)
                     .accessibilityAddTraits(.isHeader)
                 if let detail {
                     Text(detail)
-                        .font(.subheadline)
+                        .font(Theme.TypeScale.subheadline)
                         .foregroundStyle(Theme.secondaryText)
                 }
             }
@@ -1211,23 +1231,26 @@ struct FeedView: View {
     }
 
     private var empty: some View {
-        VStack(spacing: 14) {
-            CharacterView(look: look, size: 72)
+        VStack(spacing: Theme.Space.m) {
+            QuietIllustration(look: look)
+                .padding(.bottom, Theme.Space.xxs)
             Text(FeedWords.emptyTitle)
-                .font(.system(.title3, design: .rounded).weight(.semibold))
+                .font(Theme.TypeScale.displayTitle3)
                 .multilineTextAlignment(.center)
                 .accessibilityAddTraits(.isHeader)
             // The composer below is the one thing to do, so there is no
             // button here.
             Text(FeedWords.empty)
-                .font(.body)
+                .font(Theme.TypeScale.body)
                 .foregroundStyle(Theme.secondaryText)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: Theme.readableWidth)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 48)
+        // More room than a card gets, as the illustration's glow reaches
+        // past its frame.
+        .padding(.vertical, Theme.Space.xxxl + Theme.Space.m)
         .accessibilityElement(children: .contain)
     }
 }
@@ -1241,7 +1264,6 @@ struct FeedCard: View {
     /// True for an example card, so VoiceOver says so before anything else.
     var isSample = false
     let perform: () -> Void
-    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         if let action = item.action {
@@ -1266,7 +1288,7 @@ struct FeedCard: View {
     }
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: Theme.corner, style: .continuous)
+        RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
     }
 
     private var asks: Bool { item.kind == .needsYou }
@@ -1277,47 +1299,42 @@ struct FeedCard: View {
     }
 
     private func content(actionTitle: String?) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Label {
-                    Text(item.spokenKind)
-                } icon: {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            HStack(alignment: .center, spacing: Theme.Space.xs) {
+                KindBadge(text: item.spokenKind) {
                     Image(systemName: Self.symbol(item.kind))
                         .foregroundStyle(Theme.accentSymbol)
                 }
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(Theme.secondaryText)
-                Spacer(minLength: 8)
+                Spacer(minLength: Theme.Space.xs)
                 Text(time)
-                    .font(.footnote)
+                    .font(Theme.TypeScale.footnote)
                     .foregroundStyle(Theme.secondaryText)
             }
             Text(item.title)
-                .font(.system(.headline, design: .rounded))
+                .font(Theme.TypeScale.displayHeadline)
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
             if !item.body.isEmpty {
                 Text(item.body)
-                    .font(.subheadline)
+                    .font(Theme.TypeScale.subheadline)
                     .foregroundStyle(Theme.secondaryText)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let actionTitle {
                 Text(actionTitle)
-                    .font(.subheadline.weight(.semibold))
+                    .font(Theme.TypeScale.subheadline.weight(.semibold))
                     .foregroundStyle(asks ? AnyShapeStyle(Theme.onAccent) : AnyShapeStyle(Theme.accentText))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, Theme.Space.m)
+                    .padding(.vertical, Theme.Space.xs)
                     .background(asks ? Theme.accent : Theme.accent.opacity(Theme.accentWash), in: Capsule())
                     .padding(.top, 2)
             }
         }
-        .padding(16)
+        .padding(Theme.Space.m)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.card(scheme), in: shape)
-        .overlay(shape.stroke(asks ? Theme.accent.opacity(0.55) : Theme.hairline(scheme), lineWidth: asks ? 1.5 : 1))
+        .feedCardSurface(asks: asks)
         .contentShape(shape)
     }
 
@@ -1373,21 +1390,19 @@ struct ForgotUnderwayNotice: View {
     let line: String
     let onDismiss: () -> Void
     var identifier = "forgotUnderway"
-    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             Text(line)
-                .font(.subheadline)
+                .font(Theme.TypeScale.subheadline)
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
             Button(TaskWords.forgotUnderwayDismissTitle, action: onDismiss)
                 .buttonStyle(CardButtonStyle(kind: .quiet))
         }
-        .padding(16)
+        .padding(Theme.Space.m)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
+        .feedCardSurface()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(identifier)
     }
@@ -1398,11 +1413,11 @@ struct ForgotUnderwayNotice: View {
 struct ExampleLabel: View {
     var body: some View {
         Text(FeedWords.sampleLabel)
-            .font(.footnote.weight(.medium))
+            .font(Theme.TypeScale.footnote.weight(.medium))
             .foregroundStyle(Theme.secondaryText)
             .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.horizontal, Theme.Space.s)
+            .padding(.vertical, Theme.Space.xs)
             .background(Color.primary.opacity(Theme.fieldTint), in: Capsule())
             .accessibilityIdentifier("sampleLabel")
     }
@@ -1424,26 +1439,26 @@ struct FeedReader: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
                     if isSample {
                         ExampleLabel()
                     }
                     Label(item.spokenKind, systemImage: FeedCard.symbol(item.kind))
-                        .font(.footnote.weight(.semibold))
+                        .font(Theme.TypeScale.footnote.weight(.semibold))
                         .foregroundStyle(Theme.secondaryText)
                     Text(item.title)
-                        .font(.system(.title2, design: .rounded).weight(.bold))
+                        .font(Theme.TypeScale.displayTitle)
                         .accessibilityAddTraits(.isHeader)
                     Text(time)
-                        .font(.footnote)
+                        .font(Theme.TypeScale.footnote)
                         .foregroundStyle(Theme.secondaryText)
                     Text(text)
-                        .font(.body)
+                        .font(Theme.TypeScale.body)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 8)
+                        .padding(.top, Theme.Space.xs)
                 }
-                .padding(.vertical, 20)
+                .padding(.vertical, Theme.Space.l)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .readableColumn(Theme.readableWidth)
             }

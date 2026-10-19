@@ -62,6 +62,9 @@ struct PebbleApp: App {
         // reaches Today even when it starts the app. Asks for nothing.
         LocalQuestionNotifier.shared.install()
         kept = (try? TaskStore.onDevice()) ?? TaskStore.forgetOnly()
+        // The person's grants, read only while the device is unlocked. The
+        // rule consults them before it asks; only the question sheet adds one.
+        AskFirst.shared.keepGrants(in: GrantBook.onDevice())
         let asks = NeedsYou()
         needsYou = asks
         // Registered here, before launch ends, or the system won't run it.

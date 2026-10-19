@@ -737,7 +737,6 @@ public struct CloudHelpView: View {
     @State private var asksToTurnOn: Bool
     /// This window, so a status line is spoken only where it was asked for.
     @State private var window = UUID()
-    @Environment(\.colorScheme) private var scheme
 
     public init(help: CloudHelp, place: PrivacyPlace = .mayLeaveDevice) {
         self.init(help: help, place: place, asking: false)
@@ -757,21 +756,21 @@ public struct CloudHelpView: View {
         ZStack {
             Backdrop()
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: Theme.Space.l) {
                     Text(CloudWords.title)
-                        .font(.system(.largeTitle, design: .rounded).weight(.bold))
+                        .font(Theme.TypeScale.displayLarge)
                         .accessibilityAddTraits(.isHeader)
                     switchCard
                     privateWordsCard
                     if let status = help.status {
                         Text(status)
-                            .font(.footnote)
+                            .font(Theme.TypeScale.footnote)
                             .foregroundStyle(Theme.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 .padding(.horizontal, Theme.gutter)
-                .padding(.vertical, 20)
+                .padding(.vertical, Theme.Space.l)
                 .frame(maxWidth: Theme.readableWidth)
                 .frame(maxWidth: .infinity)
             }
@@ -810,52 +809,52 @@ public struct CloudHelpView: View {
     }
 
     private var switchCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             // What new chats get, so a saved on with nowhere to go never
             // reads as on.
             Toggle(isOn: Binding(get: { help.usesCloudForNewChats }, set: { on in act { asksToTurnOn = $0.setOn(on) } })) {
                 Label(CloudWords.toggleTitle, systemImage: help.usesCloudForNewChats ? "cloud.fill" : "lock.fill")
-                    .font(.body.weight(.semibold))
+                    .font(Theme.TypeScale.body.weight(.semibold))
             }
             .toggleStyle(.switch)
             .tint(Theme.accentText)
             .disabled(!help.isAvailable)
             .accessibilityIdentifier("cloudToggle")
             Text(Self.detail(for: help, place: place))
-                .font(.subheadline)
+                .font(Theme.TypeScale.subheadline)
                 .foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(16)
-        .card(scheme)
+        .padding(Theme.Space.m)
+        .cardSurface()
     }
 
     private var privateWordsCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 Text(CloudWords.privateTitle)
-                    .font(.headline)
+                    .font(Theme.TypeScale.headline)
                     .accessibilityAddTraits(.isHeader)
                 Text(CloudWords.privateDetail)
-                    .font(.subheadline)
+                    .font(Theme.TypeScale.subheadline)
                     .foregroundStyle(Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: 10) {
+            HStack(spacing: Theme.Space.s) {
                 PrivateWordField(word: $help.newPrivateWord) { act { $0.addPrivateWord() } }
                 AddPrivateWordButton(size: Self.addButtonSize) { act { $0.addPrivateWord() } }
                     .disabled(!Self.canAdd(help.newPrivateWord))
             }
             // Nothing typed here could be kept when the file didn't open.
             .disabled(!help.storeOpened)
-            .padding(.leading, 14)
-            .padding(.trailing, 4)
-            .padding(.vertical, 4)
-            .background(Color.primary.opacity(Theme.fieldTint), in: RoundedRectangle(cornerRadius: Theme.smallCorner, style: .continuous))
+            .padding(.leading, Theme.Space.m)
+            .padding(.trailing, Theme.Space.xxs)
+            .padding(.vertical, Theme.Space.xxs)
+            .background(Color.primary.opacity(Theme.fieldTint), in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
             PrivateWordList(words: help.settings.privateWords) { word in act { $0.removePrivateWord(word) } }
         }
-        .padding(16)
-        .card(scheme)
+        .padding(Theme.Space.m)
+        .cardSurface()
     }
 
     /// Only words can be added, not blank space.
@@ -901,7 +900,7 @@ struct AddPrivateWordButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: "plus")
-                .font(.headline)
+                .font(Theme.TypeScale.headline)
                 .foregroundStyle(Self.symbolStyle(enabled: isEnabled))
                 .frame(width: size, height: size)
                 .background(Self.fill(enabled: isEnabled), in: Circle())
@@ -965,8 +964,8 @@ struct PrivateWordList: View {
             ForEach(words, id: \.self) { word in
                 HStack {
                     Label(word, systemImage: "eye.slash")
-                        .font(.body)
-                    Spacer(minLength: 8)
+                        .font(Theme.TypeScale.body)
+                    Spacer(minLength: Theme.Space.xs)
                     Button { onRemove(word) } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(Theme.secondaryText)
@@ -991,13 +990,12 @@ struct CloudHelpRow: View {
     @ObservedObject var help: CloudHelp
     /// This window's flag, passed on to the setting.
     let place: PrivacyPlace
-    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         NavigationLink {
             CloudHelpView(help: help, place: place)
         } label: {
-            HStack(spacing: 12) {
+            HStack(spacing: Theme.Space.s) {
                 // What new chats get, as the toggle reads.
                 Image(systemName: help.usesCloudForNewChats ? "cloud.fill" : "lock.fill")
                     .foregroundStyle(Theme.accentSymbol)
@@ -1005,23 +1003,23 @@ struct CloudHelpRow: View {
                     // Decoration: "On" or "Off" beside it says the same.
                     .accessibilityHidden(true)
                 Text(CloudWords.rowTitle)
-                    .font(.body.weight(.medium))
+                    .font(Theme.TypeScale.body.weight(.medium))
                     .foregroundStyle(.primary)
-                Spacer(minLength: 8)
+                Spacer(minLength: Theme.Space.xs)
                 Text(help.usesCloudForNewChats ? CloudWords.rowOn : CloudWords.rowOff)
                     .foregroundStyle(Theme.secondaryText)
                 Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
+                    .font(Theme.TypeScale.footnote.weight(.semibold))
                     .foregroundStyle(Theme.secondaryText)
                     .accessibilityHidden(true)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, Theme.Space.m)
             .frame(minHeight: 52)
-            .card(scheme)
-            .contentShape(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
+            .cardSurface()
+            .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
         }
         .buttonStyle(.plain)
-        .pointerHover(in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
+        .pointerHover(in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
         .accessibilityIdentifier("cloudRow")
     }
 }
@@ -1031,22 +1029,21 @@ struct CloudHelpRow: View {
 struct CloudTurnOnSheet: View {
     let onYes: () -> Void
     let onNo: () -> Void
-    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
+            VStack(spacing: Theme.Space.l) {
                 Image(systemName: "cloud.fill")
-                    .font(.system(size: 30, weight: .semibold))
+                    .font(Theme.TypeScale.badgeSymbol)
                     .foregroundStyle(Theme.onAccent)
                     .frame(width: 64, height: 64)
                     .background(Theme.accent, in: Circle())
                     .accessibilityHidden(true)
                 Text(CloudWords.askQuestion)
-                    .font(.system(.title2, design: .rounded).weight(.bold))
+                    .font(Theme.TypeScale.displayTitle)
                     .multilineTextAlignment(.center)
                     .accessibilityAddTraits(.isHeader)
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: Theme.Space.m) {
                     ForEach(Array(CloudWords.askPoints.enumerated()), id: \.offset) { index, point in
                         Label {
                             Text(point)
@@ -1055,13 +1052,13 @@ struct CloudTurnOnSheet: View {
                             Image(systemName: Self.symbols[index % Self.symbols.count])
                                 .foregroundStyle(Theme.accentSymbol)
                         }
-                        .font(.body)
+                        .font(Theme.TypeScale.body)
                     }
                 }
-                .padding(16)
+                .padding(Theme.Space.m)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .card(scheme)
-                VStack(spacing: 6) {
+                .cardSurface()
+                VStack(spacing: Theme.Space.xs) {
                     Button(CloudWords.askYes, action: onYes)
                         .buttonStyle(PrimaryButtonStyle())
                     Button(CloudWords.askNo, action: onNo)
@@ -1215,23 +1212,23 @@ struct CloudPreviewSheet: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: Theme.Space.m) {
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     Text(CloudWords.previewTitle)
-                        .font(.system(.title2, design: .rounded).weight(.bold))
+                        .font(Theme.TypeScale.displayTitle)
                         .accessibilityAddTraits(.isHeader)
                     if let purpose {
                         Text(purpose)
-                            .font(.subheadline.weight(.semibold))
+                            .font(Theme.TypeScale.subheadline.weight(.semibold))
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityIdentifier("previewPurpose")
                     }
                     Text(CloudWords.previewDetail)
-                        .font(.subheadline)
+                        .font(Theme.TypeScale.subheadline)
                         .foregroundStyle(Theme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     Label(CloudWords.previewDestination(preview.request.url.host ?? ""), systemImage: "arrow.up.forward.circle")
                     Label(Self.hiddenLine(preview), systemImage: "eye.slash")
                     if Self.coversAnything(preview) {
@@ -1239,9 +1236,9 @@ struct CloudPreviewSheet: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                .font(.subheadline.weight(.medium))
+                .font(Theme.TypeScale.subheadline.weight(.medium))
                 CloudPayloadCard(preview: preview)
-                VStack(spacing: 6) {
+                VStack(spacing: Theme.Space.xs) {
                     Button(CloudWords.previewSend, action: onSend)
                         .buttonStyle(PrimaryButtonStyle())
                     Button(CloudWords.previewCancel, action: onCancel)
@@ -1274,11 +1271,11 @@ struct CloudPayloadCard: View {
 
     var body: some View {
         Text(highlighted)
-            .font(.system(.footnote, design: .monospaced))
+            .font(Theme.TypeScale.footnote.monospaced())
             .textSelection(.disabled)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
-            .card(scheme)
+            .padding(Theme.Space.m)
+            .cardSurface()
             // Hidden wherever the system hides private things, and in the
             // app switcher.
             .privacySensitive()
@@ -1300,7 +1297,7 @@ struct CloudPayloadCard: View {
             var start = text.startIndex
             while let range = text[start...].range(of: kind.mask) {
                 text[range].backgroundColor = Theme.accent.opacity(Theme.maskWash(scheme))
-                text[range].font = .system(.footnote, design: .monospaced).weight(.bold)
+                text[range].font = Theme.TypeScale.footnote.monospaced().weight(.bold)
                 start = range.upperBound
             }
         }
@@ -1328,12 +1325,6 @@ extension View {
                       purpose: ((CloudPreview) -> String?)? = nil) -> ModifiedContent<Self, CloudPreviewPresenter> {
         modifier(CloudPreviewPresenter(review: review ?? CloudReview.none, blocked: blocked, waiting: waiting,
                                        purpose: purpose))
-    }
-
-    /// The usual card surface.
-    func card(_ scheme: ColorScheme) -> some View {
-        background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
     }
 }
 

@@ -21,6 +21,9 @@ targets:
     supportedDestinations: [iOS, macOS]
     sources:
       - App/Sources
+      # The app icon, the system accent and the launch background, in the
+      # colors Theme.swift defines (PebbleUI).
+      - App/Assets.xcassets
     dependencies:
       - package: PebbleKit
         products: [PebbleCore, PebbleModel, PebbleUI, PebbleBackground]
@@ -35,7 +38,9 @@ targets:
         # Empty means no cloud model, and every build but Debug must keep it empty.
         PebbleCloudEndpoint: $(PEBBLE_CLOUD_ENDPOINT)
         LSApplicationCategoryType: public.app-category.productivity
-        UILaunchScreen: {}
+        # The backdrop's warm top, so launch fades straight into the first screen.
+        UILaunchScreen:
+          UIColorName: LaunchBackground
         # Every orientation on iPad, which Split View, Slide Over and Stage Manager need.
         UISupportedInterfaceOrientations~ipad:
           - UIInterfaceOrientationPortrait
@@ -70,6 +75,8 @@ targets:
         PRODUCT_NAME: $(BRAND_NAME)
         PRODUCT_MODULE_NAME: Pebble
         TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         CODE_SIGN_STYLE: Automatic
         "CODE_SIGN_IDENTITY[sdk=macosx*]": "-"
         ENABLE_HARDENED_RUNTIME: YES

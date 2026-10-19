@@ -24,7 +24,24 @@ struct ContrastGuardTests {
         }
     }
 
-    /// `accentText` is the one way to write in the accent's warmth, so it
+    /// With Increase Contrast on, each ink that has a deeper pair draws it,
+    /// and every pair still clears its minimum, by more than without.
+    @Test(arguments: [ColorScheme.light, .dark])
+    func everyThemePairIsReadableWithIncreasedContrast(scheme: ColorScheme) {
+        let standard = Theme.textPairs(scheme)
+        let increased = Theme.textPairs(scheme, increasedContrast: true)
+        #expect(increased.count == standard.count)
+        for (pair, before) in zip(increased, standard) {
+            #expect(pair.contrast >= pair.minimum,
+                    "\(pair.text) on \(pair.background) in \(scheme), increased, is \(String(format: "%.2f", pair.contrast)) to 1")
+            #expect(pair.contrast >= before.contrast - 0.001, "\(pair.text) on \(pair.background) in \(scheme)")
+        }
+        for ink in [Theme.secondaryText, Theme.accentText, Theme.dangerText, Theme.fieldEdge] {
+            #expect(ink.rgb(scheme, increasedContrast: true) != ink.rgb(scheme))
+        }
+    }
+
+    /// `accentText` is the one way to write in the accent's color, so it
     /// must read on a card and on the accent wash in both schemes.
     @Test(arguments: [ColorScheme.light, .dark])
     func accentWordsReadOnTheCardAndTheWash(scheme: ColorScheme) {
