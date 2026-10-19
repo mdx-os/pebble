@@ -59,7 +59,9 @@ let package = Package(
         .target(name: "TestScratch", path: "Tests/TestScratch"),
         .target(name: "PromiseWords", dependencies: ["PebbleCore"], path: "Tests/PromiseWords"),
         .testTarget(name: "PebbleCoreTests",
-                    dependencies: ["PebbleCore", "SourceScan", "ReconTestSupport", "TestScratch", "PromiseWords"]),
+                    dependencies: ["PebbleCore", "SourceScan", "ReconTestSupport", "TestScratch", "PromiseWords"],
+                    // The relay's conformance vectors, read by path (docs/RELAY.md).
+                    exclude: ["Fixtures"]),
         .testTarget(name: "PebblePulseTests", dependencies: ["PebblePulse", "PebbleCore"]),
         .testTarget(name: "PebbleModelTests", dependencies: ["PebbleModel", "PebbleCore", "SourceScan", "TestScratch"]),
         .testTarget(name: "PebbleBackgroundTests",

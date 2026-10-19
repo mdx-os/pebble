@@ -1,0 +1,31 @@
+{
+  "receipts" : [
+    {
+      "at" : "2026-10-18T09:00:00Z",
+      "clientRunId" : "c1",
+      "hash" : "aa48d6140375a6e1b85af36816d8dbbbcc209414e3524ac854640b397d3c5c01",
+      "kind" : "run.started",
+      "prevHash" : "0000000000000000000000000000000000000000000000000000000000000000",
+      "runId" : "r9Q1",
+      "seq" : 1
+    },
+    {
+      "at" : "2026-10-18T09:00:30Z",
+      "clientRunId" : "c1",
+      "hash" : "efbf2f0133ef7ccb139a1b9b461a3def26dd703e5361522755e21141725bec92",
+      "kind" : "run.failed",
+      "prevHash" : "aa48d6140375a6e1b85af36816d8dbbbcc209414e3524ac854640b397d3c5c01",
+      "runId" : "r9Q1",
+      "seq" : 2,
+      "signature" : "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+    }
+  ],
+  "runId" : "r9Q1",
+  "state" : "failed",
+  "steps" : [
+    {
+      "state" : "failed",
+      "words" : "Reading the sources"
+    }
+  ]
+}

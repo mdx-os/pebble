@@ -1,0 +1,174 @@
+{
+  "receipts" : [
+    {
+      "at" : "2026-10-18T09:00:00Z",
+      "clientRunId" : "c1",
+      "hash" : "aa48d6140375a6e1b85af36816d8dbbbcc209414e3524ac854640b397d3c5c01",
+      "kind" : "run.started",
+      "prevHash" : "0000000000000000000000000000000000000000000000000000000000000000",
+      "runId" : "r9Q1",
+      "seq" : 1
+    },
+    {
+      "at" : "2026-10-18T09:00:05Z",
+      "clientRunId" : "c1",
+      "contentSha256" : "cec2d5fabb4a3845bceb8a0cb9b90ea16f6981287d8ad4a5e391874603884427",
+      "hash" : "15fddf08bb136885eb3a97e5f1a2cd5ada531f42f6c360c41cdc2a0e42063e50",
+      "kind" : "tool.used",
+      "prevHash" : "aa48d6140375a6e1b85af36816d8dbbbcc209414e3524ac854640b397d3c5c01",
+      "runId" : "r9Q1",
+      "seq" : 2,
+      "tool" : "web.search"
+    },
+    {
+      "at" : "2026-10-18T09:02:00Z",
+      "clientRunId" : "c1",
+      "hash" : "eb0eecd7e5d549c7038a0bf97fd104764fe4f9a01f6da81f78ad2800d6670ce5",
+      "kind" : "step.done",
+      "prevHash" : "15fddf08bb136885eb3a97e5f1a2cd5ada531f42f6c360c41cdc2a0e42063e50",
+      "runId" : "r9Q1",
+      "seq" : 3
+    },
+    {
+      "at" : "2026-10-18T09:02:10Z",
+      "clientRunId" : "c1",
+      "hash" : "58220dcd6c9d575a5060fec888f3cdc30d822a0f4a6b16262468a858a9f2e407",
+      "kind" : "needsYou.asked",
+      "prevHash" : "eb0eecd7e5d549c7038a0bf97fd104764fe4f9a01f6da81f78ad2800d6670ce5",
+      "runId" : "r9Q1",
+      "seq" : 4
+    },
+    {
+      "at" : "2026-10-18T09:03:00Z",
+      "clientRunId" : "c1",
+      "hash" : "99dfd79e19437c2a072bfb7f766885aa2a031a8b911462229f7f5bcc44ab1bdc",
+      "kind" : "needsYou.answered",
+      "prevHash" : "58220dcd6c9d575a5060fec888f3cdc30d822a0f4a6b16262468a858a9f2e407",
+      "runId" : "r9Q1",
+      "seq" : 5
+    },
+    {
+      "at" : "2026-10-18T09:04:00Z",
+      "clientRunId" : "c1",
+      "hash" : "794cc5e8835e31ba64925d7e219d67b0fab521e661d49dd45befb51e378699cd",
+      "kind" : "run.done",
+      "prevHash" : "99dfd79e19437c2a072bfb7f766885aa2a031a8b911462229f7f5bcc44ab1bdc",
+      "runId" : "r9Q1",
+      "seq" : 6,
+      "signature" : "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+    }
+  ],
+  "result" : {
+    "artifacts" : [
+      {
+        "bytesBase64" : "IyBQb29sIGhvdXJzCgpPcGVuIG9uIFN1bmRheXMgZnJvbSA5IHRvIDUuCg==",
+        "kind" : "markdown",
+        "name" : "pool-hours.md",
+        "sha256" : "4903e9cb4f5c695525c0119a553bcbbaf1ed349dfb66e9e3c78fd7d04fe70e55"
+      }
+    ],
+    "sources" : [
+      {
+        "title" : "Page 1",
+        "url" : "https://example.com/1"
+      },
+      {
+        "title" : "Page 2",
+        "url" : "https://example.com/2"
+      },
+      {
+        "title" : "Page 3",
+        "url" : "https://example.com/3"
+      },
+      {
+        "title" : "Page 4",
+        "url" : "https://example.com/4"
+      },
+      {
+        "title" : "Page 5",
+        "url" : "https://example.com/5"
+      },
+      {
+        "title" : "Page 6",
+        "url" : "https://example.com/6"
+      },
+      {
+        "title" : "Page 7",
+        "url" : "https://example.com/7"
+      },
+      {
+        "title" : "Page 8",
+        "url" : "https://example.com/8"
+      },
+      {
+        "title" : "Page 9",
+        "url" : "https://example.com/9"
+      },
+      {
+        "title" : "Page 10",
+        "url" : "https://example.com/10"
+      },
+      {
+        "title" : "Page 11",
+        "url" : "https://example.com/11"
+      },
+      {
+        "title" : "Page 12",
+        "url" : "https://example.com/12"
+      },
+      {
+        "title" : "Page 13",
+        "url" : "https://example.com/13"
+      },
+      {
+        "title" : "Page 14",
+        "url" : "https://example.com/14"
+      },
+      {
+        "title" : "Page 15",
+        "url" : "https://example.com/15"
+      },
+      {
+        "title" : "Page 16",
+        "url" : "https://example.com/16"
+      },
+      {
+        "title" : "Page 17",
+        "url" : "https://example.com/17"
+      },
+      {
+        "title" : "Page 18",
+        "url" : "https://example.com/18"
+      },
+      {
+        "title" : "Page 19",
+        "url" : "https://example.com/19"
+      },
+      {
+        "title" : "Page 20",
+        "url" : "https://example.com/20"
+      },
+      {
+        "title" : "Page 21",
+        "url" : "https://example.com/21"
+      }
+    ],
+    "text" : "The pool opens on Sundays from 9 to 5, starting next week."
+  },
+  "runId" : "r9Q1",
+  "state" : "done",
+  "steps" : [
+    {
+      "state" : "done",
+      "words" : "Planning a few questions"
+    },
+    {
+      "state" : "done",
+      "words" : "Reading the sources"
+    },
+    {
+      "state" : "done",
+      "words" : "Putting it together"
+    }
+  ]
+}

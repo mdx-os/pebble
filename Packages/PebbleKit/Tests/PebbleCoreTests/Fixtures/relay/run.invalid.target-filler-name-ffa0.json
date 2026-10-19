@@ -1,0 +1,58 @@
+{
+  "needsYou" : {
+    "action" : "send",
+    "expiresAt" : "2026-10-18T10:00:00Z",
+    "questionId" : "q1",
+    "summary" : "Send the pool's Sunday hours to Sam",
+    "target" : {
+      "handle" : "sam@example.com",
+      "id" : "contact1",
+      "name" : "Samﾠ"
+    }
+  },
+  "receipts" : [
+    {
+      "at" : "2026-10-18T09:00:00Z",
+      "clientRunId" : "c1",
+      "hash" : "aa48d6140375a6e1b85af36816d8dbbbcc209414e3524ac854640b397d3c5c01",
+      "kind" : "run.started",
+      "prevHash" : "0000000000000000000000000000000000000000000000000000000000000000",
+      "runId" : "r9Q1",
+      "seq" : 1
+    },
+    {
+      "at" : "2026-10-18T09:01:00Z",
+      "clientRunId" : "c1",
+      "hash" : "4c33f17401f2346972d3f9d26853c22dc96f76c4c2524bf63b67ed4d2dfe9647",
+      "kind" : "step.done",
+      "prevHash" : "aa48d6140375a6e1b85af36816d8dbbbcc209414e3524ac854640b397d3c5c01",
+      "runId" : "r9Q1",
+      "seq" : 2
+    },
+    {
+      "at" : "2026-10-18T09:01:10Z",
+      "clientRunId" : "c1",
+      "hash" : "fae90c624fe061a924d36a4290c88a4b762d3f3b36f80a91cf1e95cab3c63517",
+      "kind" : "needsYou.asked",
+      "prevHash" : "4c33f17401f2346972d3f9d26853c22dc96f76c4c2524bf63b67ed4d2dfe9647",
+      "runId" : "r9Q1",
+      "seq" : 3
+    }
+  ],
+  "runId" : "r9Q1",
+  "state" : "needsYou",
+  "steps" : [
+    {
+      "state" : "done",
+      "words" : "Planning a few questions"
+    },
+    {
+      "state" : "working",
+      "words" : "Reading the sources"
+    },
+    {
+      "state" : "waiting",
+      "words" : "Putting it together"
+    }
+  ]
+}

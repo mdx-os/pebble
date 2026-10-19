@@ -33,6 +33,9 @@ jobs:
       - name: Secrets check
         run: make secrets-check
 
+      - name: Private words check
+        run: make private-check
+
       - name: Verify
         run: make verify
 
