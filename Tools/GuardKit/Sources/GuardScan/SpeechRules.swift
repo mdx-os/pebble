@@ -3,9 +3,11 @@ import SwiftSyntax
 /// Speech is heard on the device only, and nothing heard is kept.
 ///
 /// Every recognition request is made as a named value in one block, and
-/// that same block sets its `requiresOnDeviceRecognition` to `true`, so the
-/// system never sends speech to a server, not even as a fallback. Nothing
-/// may set it to anything else. The recognizer lives in one file,
+/// that same block sets its `requiresOnDeviceRecognition` to `true` before
+/// anything else touches it, so the system never sends speech to a server,
+/// not even as a fallback. Nothing may set it to anything else. The name is
+/// a `let` and never given another request, and in the adapter nothing is
+/// made with a `.init(...)` whose type the guard can't read. The recognizer lives in one file,
 /// `PebbleVoice/DeviceSpeech.swift`, so there is one place to read. The
 /// voice files name nothing that writes to disk or a log, so no audio and
 /// no words are kept. A name in backticks is the same name.
@@ -38,6 +40,9 @@ public enum SpeechGate {
 
     public static let rules: [Rule] = [
         Rule("speech.requestNotOnDevice", requestNotOnDevice),
+        Rule("speech.requestUnresolved", requestUnresolved),
+        Rule("speech.requestReassigned", requestReassigned),
+        Rule("speech.usedBeforeOnDevice", usedBeforeOnDevice),
         Rule("speech.onDeviceTurnedOff", onDeviceTurnedOff),
         Rule("speech.outsideAdapter", outsideAdapter),
         Rule("speech.keepsWords", keepsWords),
@@ -118,7 +123,12 @@ public enum SpeechGate {
     /// True when `scope` itself, not a block inside it, says
     /// `name.requiresOnDeviceRecognition = true`.
     static func setsOnDevice(_ name: String, in scope: Syntax) -> Bool {
-        scope.descendants(InfixOperatorExprSyntax.self).contains { infix in
+        onDeviceSetting(name, in: scope) != nil
+    }
+
+    /// The first `name.requiresOnDeviceRecognition = true` in `scope` itself.
+    static func onDeviceSetting(_ name: String, in scope: Syntax) -> InfixOperatorExprSyntax? {
+        scope.descendants(InfixOperatorExprSyntax.self).first { infix in
             guard infix.operator.is(AssignmentExprSyntax.self),
                   let target = infix.leftOperand.as(MemberAccessExprSyntax.self),
                   SyntaxSource.name(target.declName.baseName) == flag,
@@ -127,6 +137,84 @@ public enum SpeechGate {
                   SyntaxSource.enclosingBraces(of: infix)?.id == scope.id else { return false }
             return true
         }
+    }
+
+    /// The requests made by a call bound to a name, with the name and the
+    /// block they are made in.
+    static func boundRequests(in source: SyntaxSource)
+        -> [(call: FunctionCallExprSyntax, name: String, scope: Syntax)] {
+        source.nodes(FunctionCallExprSyntax.self).compactMap { call in
+            guard makesRequest(call), let name = boundName(of: call),
+                  let scope = SyntaxSource.enclosingBraces(of: call) else { return nil }
+            return (call, name, scope)
+        }
+    }
+
+    /// In the adapter, something made with `.init(...)` whose type the
+    /// guard can't read, so it could be a request made without the flag,
+    /// as in `request = .init()`; or a request type under another name,
+    /// through a `typealias`.
+    @Sendable static func requestUnresolved(_ source: SyntaxSource, _ file: String) -> [Finding] {
+        guard file == adapterFile else { return [] }
+        let made = source.nodes(FunctionCallExprSyntax.self).filter { call in
+            guard let member = call.calledExpression.as(MemberAccessExprSyntax.self),
+                  member.base == nil, SyntaxSource.name(member.declName.baseName) == "init" else { return false }
+            return declaredType(of: call) == nil
+        }.map { call in
+            Finding("speech.requestUnresolved", at: call, in: source,
+                    "in the adapter, `.init(...)` is only for `let name: Type = .init(...)`, so a recognition "
+                        + "request is never made out of sight of its on-device setting")
+        }
+        let aliases = source.nodes(TypeAliasDeclSyntax.self).filter { alias in
+            alias.initializer.value.tokens(viewMode: .sourceAccurate).contains { token in
+                token.identifier != nil && requestTypes.contains(SyntaxSource.name(token))
+            }
+        }.map { alias in
+            Finding("speech.requestUnresolved", at: alias, in: source,
+                    "a recognition request is named by its own type, never through a typealias")
+        }
+        return made + aliases
+    }
+
+    /// A request bound with `var`, or its name given something else after,
+    /// so the request that is used may not be the one set to stay on the device.
+    @Sendable static func requestReassigned(_ source: SyntaxSource, _ file: String) -> [Finding] {
+        var found: [Finding] = []
+        for (call, name, scope) in boundRequests(in: source) {
+            if let decl = call.parent?.parent?.parent?.parent?.as(VariableDeclSyntax.self),
+               decl.bindingSpecifier.tokenKind == .keyword(.var) {
+                found.append(Finding("speech.requestReassigned", at: decl, in: source,
+                                     "a recognition request is bound with `let`, so it is never swapped for "
+                                         + "another"))
+            }
+            for infix in scope.descendants(InfixOperatorExprSyntax.self) where infix.operator.is(AssignmentExprSyntax.self) {
+                guard let target = infix.leftOperand.as(DeclReferenceExprSyntax.self),
+                      SyntaxSource.name(target.baseName) == name,
+                      infix.position > call.endPosition else { continue }
+                found.append(Finding("speech.requestReassigned", at: infix, in: source,
+                                     "`\(name)` is never given another request once it is made"))
+            }
+        }
+        return found
+    }
+
+    /// A request used before `requiresOnDeviceRecognition = true` is set on
+    /// it: the setting comes right after the request is made.
+    @Sendable static func usedBeforeOnDevice(_ source: SyntaxSource, _ file: String) -> [Finding] {
+        var found: [Finding] = []
+        for (call, name, scope) in boundRequests(in: source) {
+            guard let setting = onDeviceSetting(name, in: scope) else { continue }
+            for reference in scope.descendants(DeclReferenceExprSyntax.self)
+            where SyntaxSource.name(reference.baseName) == name
+                && reference.position > call.endPosition && reference.position < setting.position {
+                // `other.request` names something else.
+                if let member = reference.parent?.as(MemberAccessExprSyntax.self),
+                   member.declName.id == reference.id { continue }
+                found.append(Finding("speech.usedBeforeOnDevice", at: reference, in: source,
+                                     "set `\(name).\(flag) = true` before `\(name)` is used"))
+            }
+        }
+        return found
     }
 
     /// `requiresOnDeviceRecognition` set to anything but `true`, toggled,

@@ -65,3 +65,45 @@ perl: s~        TalkRequests\.shared\.ask\(\)\n~~
 test: aShortcutRunLongAgoIsLetGo
 file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
 perl: s~return now\.timeIntervalSince\(asked\) <= Self\.freshFor~return true~
+
+# An answer from the listen before reaches the one going now, so its late
+# words show in the new listen and its end ends it with the finger down.
+test: aLateAnswerFromTheListenBeforeNeverReachesTheNextOne
+file: Packages/PebbleKit/Sources/PebbleVoice/DeviceSpeech.swift
+perl: s~guard current == listen, listening else \{ return \}~guard listening else { return }~
+
+# Stopping keeps the same listen number, so the next listen takes the old
+# one's answers as its own.
+test: aLateAnswerFromTheListenBeforeNeverReachesTheNextOne
+file: Packages/PebbleKit/Sources/PebbleVoice/DeviceSpeech.swift
+perl: s~        hearing\.stop\(\)\n        listen \+= 1\n~        hearing.stop()\n~
+
+# A stop no longer stops the recognizer.
+test: aCancelStopsTheRecognizerAndDropsItsLateAnswers
+file: Packages/PebbleKit/Sources/PebbleVoice/DeviceSpeech.swift
+perl: s~    private func tearDown\(\) \{\n        hearing\.stop\(\)\n~    private func tearDown() {\n~
+
+# The last listen's wait for its words runs out on the next listen's finish.
+test: theWaitForTheLastListensWordsNeverEndsTheNextOne
+file: Packages/PebbleKit/Sources/PebbleVoice/DeviceSpeech.swift
+perl: s~guard current == listen, let done = finishing~guard let done = finishing~
+
+# A finish cancelled while it waits stops the listen begun after it.
+test: aFinishCancelledAndFollowedByANewListenLeavesTheNewOneGoing
+file: Packages/PebbleKit/Sources/PebbleVoice/DeviceSpeech.swift
+perl: s~if current == listen \{ tearDown\(\) \}~tearDown()~
+
+# A touch the system takes sends the words, as a lift would.
+test: aCancelledTouchWithWordsSendsNothingAndPutsTheDraftBack
+file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
+perl: s~        \} else \{\n            voice\.cancel\(\)\n        \}~        } else {\n            Task { await voice.release() }\n        }~
+
+# A touch the system takes leaves the microphone on and the words in the draft.
+test: aCancelledTouchWithWordsSendsNothingAndPutsTheDraftBack
+file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
+perl: s~        \} else \{\n            voice\.cancel\(\)\n        \}~        }~
+
+# The reset after a lift takes it for a cancelled touch, so nothing sends.
+test: theGesturesOwnEndSendsOnceAndItsResetAfterDoesNothing
+file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
+perl: s~(slidAway: Bool\) \{\n        guard isDown else \{ return \}\n)        isDown = false\n~$1~

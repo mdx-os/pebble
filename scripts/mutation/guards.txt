@@ -26,6 +26,32 @@ test: theSpeechGuardCatchesEveryWrongCase
 file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
 perl: s~,\n                  SyntaxSource\.enclosingBraces\(of: infix\)\?\.id == scope\.id else~ else~
 
+# The speech guard: a `.init(...)` in the adapter that could make a request
+# without the flag, as `request = .init()` after the flag was set.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~Rule\("speech\.requestUnresolved", requestUnresolved\)~Rule("speech.requestUnresolved", { _, _ in [] })~
+
+# The speech guard: a request type under another name, through a typealias.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~return made \+ aliases~return made~
+
+# The speech guard: a request bound with `var`, or given another after.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~Rule\("speech\.requestReassigned", requestReassigned\)~Rule("speech.requestReassigned", { _, _ in [] })~
+
+# The speech guard: a request bound with `var` is let by.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~decl\.bindingSpecifier\.tokenKind == \.keyword\(\.var\)~decl.bindingSpecifier.tokenKind == .keyword(.inout)~
+
+# The speech guard: a request used before its on-device setting.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~Rule\("speech\.usedBeforeOnDevice", usedBeforeOnDevice\)~Rule("speech.usedBeforeOnDevice", { _, _ in [] })~
+
 # The connector gate: each rule turned off on its own.
 test: theConnectorGateCatchesEveryWrongCase
 file: Tools/GuardKit/Sources/GuardScan/ConnectorRules.swift

@@ -899,6 +899,19 @@ struct GuardWrongCaseTests {
         // Made where it can't be named.
         speech("requestNotOnDevice", "func start() {\n    task = recognizer.recognitionTask(with: SFSpeechAudioBufferRecognitionRequest(), resultHandler: handle)\n}"),
         speech("requestNotOnDevice", "let make = SFSpeechAudioBufferRecognitionRequest.init"),
+        // Set, and then swapped for a request that isn't.
+        speech("requestUnresolved", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    request.requiresOnDeviceRecognition = true\n    self.request = request\n    self.request = .init()\n}"),
+        speech("requestUnresolved", "func start() {\n    request.requiresOnDeviceRecognition = true\n    request = .init()\n}"),
+        speech("requestUnresolved", "func start() {\n    task = recognizer.recognitionTask(with: .init(), resultHandler: handle)\n}"),
+        speech("requestUnresolved", "typealias Asked = SFSpeechAudioBufferRecognitionRequest"),
+        speech("requestUnresolved", "typealias Asked = Speech.`SFSpeechURLRecognitionRequest`"),
+        speech("requestReassigned", "func start() {\n    var request = SFSpeechAudioBufferRecognitionRequest()\n    request.requiresOnDeviceRecognition = true\n}"),
+        speech("requestReassigned", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    request.requiresOnDeviceRecognition = true\n    request = other\n}"),
+        speech("requestReassigned", "func start() {\n    var request = SFSpeechAudioBufferRecognitionRequest()\n    request.requiresOnDeviceRecognition = true\n    request = SFSpeechAudioBufferRecognitionRequest()\n}"),
+        // Used before it is set to stay on the device.
+        speech("usedBeforeOnDevice", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    task = recognizer.recognitionTask(with: request, resultHandler: handle)\n    request.requiresOnDeviceRecognition = true\n}"),
+        speech("usedBeforeOnDevice", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    self.request = request\n    request.requiresOnDeviceRecognition = true\n}"),
+        speech("usedBeforeOnDevice", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in request.append(buffer) }\n    request.`requiresOnDeviceRecognition` = true\n}"),
         // Turned off, however it is written.
         speech("onDeviceTurnedOff", "request.requiresOnDeviceRecognition = false"),
         speech("onDeviceTurnedOff", "request.`requiresOnDeviceRecognition` = false"),
@@ -937,6 +950,12 @@ struct GuardWrongCaseTests {
         fine("private var request: SFSpeechAudioBufferRecognitionRequest?\nlet recognizer = SFSpeechRecognizer(locale: locale)",
              file: adapter),
         fine("let heard = request.requiresOnDeviceRecognition", file: adapter),
+        // Set first, then used and kept.
+        fine("func start() {\n    self.request = nil\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    request.requiresOnDeviceRecognition = true\n    request.addsPunctuation = true\n    self.request = request\n    task = recognizer.recognitionTask(with: request, resultHandler: handle)\n}",
+             file: adapter),
+        fine("let wait: Duration = .init(secondsComponent: 1, attosecondsComponent: 0)", file: adapter),
+        // Elsewhere, `.init(...)` makes what it makes; the Speech names are kept to the adapter.
+        fine("var request: URLRequest\nrequest = .init(url: url)", file: "PebbleCore/Relay.swift"),
         fine("// SFSpeechRecognizer, in a comment", file: "PebbleUI/Composer.swift"),
         fine("let note = \"SFSpeechRecognizer, in words\"", file: "PebbleUI/Composer.swift"),
         fine("target.write(words)\nvoice.begin(.hold, write: { draft.wrappedValue = $0 })", file: "PebbleCore/VoiceCapture.swift"),
