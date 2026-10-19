@@ -27,8 +27,14 @@ in lint, a skill, or CI.
 - The screenshots also get a `STAMP` with the commit and the working tree's hash. `make verify` makes them and then fails with "screenshots are stale, rerun make screenshots" if the stamp is missing or the tree has changed since. The tree hash is the contract: the same files make the same screenshots, so committing or amending them with nothing changed keeps them fresh. The commit line is only there to read. Screenshots always show the code as it is now
 - `make screenshots-check`: that check alone, and `make screenshots-check-test` its self-test
 - `make generate`: regenerate `Pebble.xcodeproj` after editing `project.yml`
-- `make mutation-check`: break each entry of `scripts/mutation-manifest.txt` on a copy in
-  `build/mutation` and require its tests to fail. `ONLY=` runs the entries whose tests match
+- `make mutation-check`: break each entry of `scripts/mutation-manifest.txt` and
+  `scripts/mutation/*.txt` on a copy in `build/mutation` and require its tests to fail.
+  `ONLY=` runs the entries whose tests match. Add entries to `scripts/mutation/<area>.txt`
+  (format in its README), never to the end of the old manifest
+- `make mutation-manifest-check`: fail on an entry with no `test:`, `file:` or `perl:`
+  line, a `file:` that is gone, or two `test:` or `file:` lines in one block (part of verify).
+  Merge conflicts in these files are resolved by hand, never with a union merge: two
+  entries with the same `test:` and `file:` lines would fold into one and hide a survivor
 - `make secrets-check`: gitleaks over git history
 
 ## Layout and layers
@@ -49,7 +55,7 @@ in lint, a skill, or CI.
   reads PebbleKit by path, so swift-syntax never enters the app's package
   graph: PebbleKit and `project.yml` never name it (`make graph-check`).
   A new rule goes in its guard's rule list with a name, a wrong case in
-  `GuardWrongCaseTests` that names it, and a `scripts/mutation-manifest.txt`
+  `GuardWrongCaseTests` that names it, and a `scripts/mutation/guards.txt`
   entry that turns it off. Rules compare names through `SyntaxSource.name`,
   never a token's `text`, so a name in backticks is still the name.
   swift-syntax is pinned to an exact version and only GuardScan uses it.
