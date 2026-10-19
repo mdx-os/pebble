@@ -225,13 +225,17 @@ struct TaskLedgerCardTests {
         }
         // Hold the main actor until both background snapshots have queued
         // their UI work, then overtake them with a main-thread mutation.
+        // Holding the main actor is the point, so this one wait blocks it.
+        // The snapshots come from a thread of their own, which needs
+        // neither the main actor nor any pool other tests share, so the
+        // wait ends however many tests run beside it.
         let delivered = DispatchSemaphore(value: 0)
-        DispatchQueue.global().async {
+        Thread.detachNewThread {
             engine.advance(by: 2)
             delivered.signal()
         }
-        func waitForDelivery() -> DispatchTimeoutResult { delivered.wait(timeout: .now() + 10) }
-        #expect(waitForDelivery() == .success)
+        func waitForDelivery() { delivered.wait() }
+        waitForDelivery()
         engine.start(TaskScript(title: "Next", steps: [.init("Reading", duration: 60, todo: "read")],
                                 doneLine: "Ready."))
         await model.settled()
