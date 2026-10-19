@@ -63,6 +63,94 @@ struct PrivateCheckTests {
         }
     }
 
+
+    @Test(arguments: [false, true], [false, true])
+    func reviewUTF16PrivateWordsAreChecked(bigEndian: Bool, bom: Bool) throws {
+        let scratch = try Scratch()
+        let encoding: String.Encoding = bigEndian ? .utf16BigEndian : .utf16LittleEndian
+        var data = bom ? Data(bigEndian ? [0xfe, 0xff] : [0xff, 0xfe]) : Data()
+        data.append(try #require("First line.\nAsk \(Self.word).\n".data(using: encoding)))
+        try data.write(to: scratch.root.appendingPathComponent("README.md"))
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("README.md:2: a private word"))
+        #expect(!result.output.lowercased().contains(Self.word))
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func reviewUTF16HostsAreChecked(bigEndian: Bool, bom: Bool) throws {
+        let scratch = try Scratch()
+        try scratch.write("docs/SETUP.md", "")
+        let host = "relay.corp" + ".internal"
+        let encoding: String.Encoding = bigEndian ? .utf16BigEndian : .utf16LittleEndian
+        var data = bom ? Data(bigEndian ? [0xfe, 0xff] : [0xff, 0xfe]) : Data()
+        data.append(try #require("First line.\n\(host)\n".data(using: encoding)))
+        try data.write(to: scratch.root.appendingPathComponent("docs/SETUP.md"))
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("docs/SETUP.md:2: a .internal or .local host"))
+        #expect(!result.output.contains(host))
+    }
+
+
+    @Test func reviewUTF8NULDoesNotHideWords() throws {
+        let scratch = try Scratch()
+        try scratch.write("README.md", "\0\n\(Self.word)\n")
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("README.md:2: a private word"))
+        #expect(!result.output.lowercased().contains(Self.word))
+    }
+
+
+    @Test(arguments: [false, true])
+    func reviewUTF16NULDoesNotHideWords(bigEndian: Bool) throws {
+        let scratch = try Scratch()
+        let encoding: String.Encoding = bigEndian ? .utf16BigEndian : .utf16LittleEndian
+        let data = try #require("First line.\0\n\(Self.word)\n".data(using: encoding))
+        try data.write(to: scratch.root.appendingPathComponent("README.md"))
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("README.md:2: a private word"))
+        #expect(!result.output.lowercased().contains(Self.word))
+    }
+
+    @Test func reviewBinaryFilesAreSkipped() throws {
+        let scratch = try Scratch()
+        try Data([0xff, 0x00, 0x80]).write(to: scratch.root.appendingPathComponent("image.bin"))
+        let result = try scratch.run()
+        #expect(result.status == 0, "\(result.output)")
+    }
+
+
+    @Test func reviewFixedDiagnosticPathsAreRedacted() throws {
+        let scratch = try Scratch()
+        // Even a fixed configuration path must be redacted if a segment is listed.
+        try scratch.write("Config/private-words.local.txt", "Config\n")
+        let made = try scratch.run("hash")
+        #expect(made.status == 0)
+        #expect(!made.output.contains("Config"))
+        #expect(made.output.contains("[redacted]/private-words.sha256"))
+        #expect(try scratch.git("add", "-f", "Config/private-words.local.txt") == 0)
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(!result.output.contains("Config"))
+        #expect(result.output.contains("[redacted]/private-words.local.txt is tracked"))
+    }
+
+    @Test func reviewSensitivePathsAreRedacted() throws {
+        let scratch = try Scratch()
+        let host = "relay.corp" + ".internal"
+        try scratch.write("docs/\(Self.word)/\(host)/Open\(Self.word.capitalized)Relay.md",
+                          "\(Self.word)\n\(host)\n")
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("docs/[redacted]/[redacted]/[redacted]:1: a private word"))
+        #expect(result.output.contains("docs/[redacted]/[redacted]/[redacted]:2: a .internal or .local host"))
+        #expect(!result.output.lowercased().contains(Self.word))
+        #expect(!result.output.contains(host))
+    }
+
     @Test func aCleanRepositoryPassesAndThePlainListIsNeverRead() throws {
         let scratch = try Scratch()
         let result = try scratch.run()

@@ -2,23 +2,25 @@
   "receipts" : [
     {
       "at" : "2026-10-18T09:00:00Z",
-      "hash" : "6b4e20cc1dd6100017b597df54885ed695622b6e7f4e6453b4fc4ff222529d5d",
+      "clientRunId" : "c1",
+      "hash" : "aa48d6140375a6e1b85af36816d8dbbbcc209414e3524ac854640b397d3c5c01",
       "kind" : "run.started",
       "prevHash" : "0000000000000000000000000000000000000000000000000000000000000000",
+      "runId" : "r9Q1",
       "seq" : 1
     },
     {
       "at" : "2026-10-18T09:00:30Z",
-      "hash" : "293d745658d342856e90c55e9f3688a2d64a1bc45eca8dd2d5aeb23e8b025873",
+      "clientRunId" : "c1",
+      "hash" : "daf365b1ec6436b2d11efc8920232019400c8c252ad6af575e055e2f14ee7203",
       "kind" : "run.stopped",
-      "prevHash" : "6b4e20cc1dd6100017b597df54885ed695622b6e7f4e6453b4fc4ff222529d5d",
+      "prevHash" : "aa48d6140375a6e1b85af36816d8dbbbcc209414e3524ac854640b397d3c5c01",
+      "runId" : "r9Q1",
       "seq" : 2,
       "signature" : "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
     }
   ],
   "runId" : "r9Q1",
   "state" : "stopped",
-  "steps" : [
-
-  ]
+  "steps" : []
 }

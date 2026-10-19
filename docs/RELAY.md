@@ -25,7 +25,7 @@ exactly what is sent.
 
 Every path is under the configured cloud address. Signing in is the same
 hop as for the cloud, and every call carries the same `Cloud-Session`
-header, exactly as [CLOUD.md](CLOUD.md) describes. A call without a valid
+header, exactly as the cloud sign-in contract (docs/CLOUD.md, landing with the cloud policy change) describes. A call without a valid
 session gets `signInNeeded`.
 
 Bodies are JSON in UTF-8, sent with `Content-Type: application/json`. No
@@ -123,6 +123,15 @@ says so:
   person will be shown: one line each, no hidden characters, `name` at most
   40 code points with no `@`, `handle` at most 254.
 - `summary`: one line saying what would happen.
+- `price`: required for `purchase`, for example
+  `"price": { "minorUnits": 1450, "currency": "CAD" }`. `minorUnits` is a
+  positive integer in the currency's smallest unit, at most 9,223,372,036,854,775,807.
+  Fractions, zero, negative amounts and overflow are refused. `currency` is
+  an uppercase ISO 4217 code in Foundation's common ISO currency list;
+  unknown codes and case or whitespace corrections are refused. This maps
+  exactly to AskFirst's `Price`, and `RelayQuestion.proposedAction` carries
+  that price into the device's approval sheet. A supplied price is validated
+  for every action; a purchase without one is refused.
 - `expiresAt`: after this the relay takes the answer as no.
 
 The device asks with its own approval sheet, built from these fields. The
@@ -168,7 +177,8 @@ gets `runNotFound`.
   points; each `url` is `https`, with a host, printable ASCII, at most
   2,000 bytes.
 - `artifacts`: at most 5. `name` is a plain file name: one line, at most
-  100 code points, no `/`, `\` or `:`, and not starting with `.`. `kind`
+  100 code points, no `/`, `\` or `:` Unicode scalar (even when followed
+  by a combining mark), and not starting with `.`. `kind`
   is `text`, `markdown`, `csv`, `json`, `png` or `pdf`. `bytesBase64` is
   the file in standard base64, at most 1,048,576 bytes once decoded, and
   all of a result's artifacts together at most 4,194,304. `sha256` is the
@@ -243,6 +253,8 @@ person.
 
 ```json
 {
+  "runId": "r9Q1",
+  "clientRunId": "c1",
   "seq": 2,
   "kind": "tool.used",
   "at": "2026-10-18T09:00:05Z",
@@ -253,6 +265,8 @@ person.
 }
 ```
 
+- `runId` and `clientRunId`: the run and the original request identity,
+  present on every receipt and covered by its hash.
 - `seq`: 1 for the first receipt, then one more each time.
 - `kind`: one of `run.started`, `step.done`, `tool.used`, `needsYou.asked`,
   `needsYou.answered`, `run.done`, `run.failed` and `run.stopped`. The
@@ -270,11 +284,13 @@ person.
 
 ### The canonical form
 
-Seven lines, each ending in a line feed (0x0A), in UTF-8, with nothing
+Nine lines, each ending in a line feed (0x0A), in UTF-8, with nothing
 before or after:
 
 ```
 relay-receipt/1
+runId:<runId>
+clientRunId:<clientRunId>
 seq:<seq in decimal, no leading zeros>
 kind:<kind>
 at:<at, exactly as sent>
@@ -301,11 +317,21 @@ whole chain. The key signs nothing else.
 3. Each `prevHash` is the hash before it, and 64 zeros for the first.
 4. Each `hash` is the SHA-256 of that receipt's canonical form.
 5. Nothing comes after a final receipt, and `run.started` comes only first.
-6. The chain ends in a final receipt, whose signature checks with a key
-   from `GET v1/keys`.
+6. Every receipt's `runId` and `clientRunId` match the expected identities
+   kept by the device, independently of the chain being checked.
+7. The final receipt matches the expected terminal state: `run.done` for
+   `done`, `run.failed` for `failed`, or `run.stopped` for `stopped`. A
+   nonterminal expected state is refused.
+8. The final receipt's signature checks with a key from `GET v1/keys`.
 
-While a run is going the device can check steps 1 to 5 on the chain so
-far. A changed field, a dropped receipt or a reordered pair each fails.
+`RelayReceipts.verify` requires the expected `runId`, `clientRunId` and
+terminal state as well as the public key. For completed chains checked
+with `verify`, a changed field, a dropped receipt or a reordered pair each
+fails, as does replaying a valid chain for another run or terminal state.
+
+While a run is going, `checkLinks` checks steps 1 to 5 on the chain so far.
+It cannot detect truncation or authenticate the chain. Those guarantees
+require `verify` on a completed chain with the expected context.
 
 ## Retention
 
@@ -353,6 +379,21 @@ Run requests:
 - `run-request.invalid.version-2.json`
 
 Runs:
+
+- `run.invalid.purchase-price-missing.json`
+- `run.valid.purchase.json`
+- `run.invalid.purchase-price-zero.json`
+- `run.invalid.purchase-price-negative.json`
+- `run.invalid.purchase-price-fraction.json`
+- `run.invalid.purchase-price-overflow.json`
+- `run.invalid.purchase-price-currency.json`
+- `run.invalid.purchase-price-lowercase.json`
+- `run.invalid.purchase-price-null.json`
+- `run.invalid.target-combining-name.json`
+- `run.invalid.target-combining-handle.json`
+- `run.invalid.artifact-combining-slash.json`
+- `run.invalid.artifact-combining-backslash.json`
+- `run.invalid.artifact-combining-colon.json`
 
 - `run.valid.queued.json`
 - `run.valid.working.json`

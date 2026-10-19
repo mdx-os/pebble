@@ -273,9 +273,37 @@ public struct RelayTarget: Codable, Sendable, Equatable {
         name = try container.decode(String.self, forKey: .name)
         handle = try container.decode(String.self, forKey: .handle)
         guard Relay.isLine(id, limit: Relay.maxTargetIDLength) else { throw refused("target id isn't one short line", decoder) }
+        guard name.unicodeScalars.count <= 40 else { throw refused("target name is too long", decoder) }
+        guard handle.unicodeScalars.count <= 254 else { throw refused("target handle is too long", decoder) }
         let recipient = recipient
         guard recipient.displayName == name else { throw refused("target name wouldn't be shown as written", decoder) }
         guard recipient.handle == handle else { throw refused("target handle wouldn't be shown as written", decoder) }
+    }
+}
+
+/// Exact money on the wire, in the currency's smallest unit.
+public struct RelayPrice: Codable, Sendable, Equatable {
+    public let minorUnits: Int
+    public let currency: String
+
+    public init(minorUnits: Int, currency: String) {
+        self.minorUnits = minorUnits
+        self.currency = currency
+    }
+
+    /// The same amount the device's approval sheet asks about.
+    public var price: Price? {
+        guard currency.utf8.count == 3,
+              currency.utf8.allSatisfy({ (65...90).contains($0) }),
+              Locale.commonISOCurrencyCodes.contains(currency) else { return nil }
+        return Price(minorUnits: minorUnits, currency: currency)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        minorUnits = try container.decode(Int.self, forKey: .minorUnits)
+        currency = try container.decode(String.self, forKey: .currency)
+        guard price != nil else { throw refused("price isn't positive money in an ISO 4217 currency", decoder) }
     }
 }
 
@@ -283,18 +311,24 @@ public struct RelayTarget: Codable, Sendable, Equatable {
 /// sheet; the relay never answers for the person.
 public struct RelayQuestion: Codable, Sendable, Equatable {
     public let questionId: String
+    public let price: RelayPrice?
     public let action: ConsequentialAction
     public let target: RelayTarget
     public let summary: String
     /// `YYYY-MM-DDTHH:MM:SSZ`. After it the relay takes the answer as no.
     public let expiresAt: String
 
-    public init(questionId: String, action: ConsequentialAction, target: RelayTarget, summary: String, expiresAt: String) {
+    public init(questionId: String, action: ConsequentialAction, target: RelayTarget, summary: String, expiresAt: String, price: RelayPrice? = nil) {
         self.questionId = questionId
+        self.price = price
         self.action = action
         self.target = target
         self.summary = summary
         self.expiresAt = expiresAt
+    }
+
+    public var proposedAction: ProposedAction {
+        ProposedAction(kind: action, recipient: target.recipient, details: summary, price: price?.price)
     }
 
     public var expires: Date? { Relay.date(expiresAt) }
@@ -303,6 +337,8 @@ public struct RelayQuestion: Codable, Sendable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         questionId = try container.decode(String.self, forKey: .questionId)
         action = try container.decode(ConsequentialAction.self, forKey: .action)
+        price = try container.decodeIfPresent(RelayPrice.self, forKey: .price)
+        guard action != .purchase || price != nil else { throw refused("a purchase needs a price", decoder) }
         target = try container.decode(RelayTarget.self, forKey: .target)
         summary = try container.decode(String.self, forKey: .summary)
         expiresAt = try container.decode(String.self, forKey: .expiresAt)
@@ -363,7 +399,7 @@ public struct RelayArtifact: Codable, Sendable, Equatable {
         sha256 = try container.decode(String.self, forKey: .sha256)
         bytesBase64 = try container.decode(String.self, forKey: .bytesBase64)
         guard Relay.isLine(name, limit: Relay.maxArtifactNameLength), !name.hasPrefix("."),
-              !name.contains(where: { "/\\:".contains($0) }) else {
+              !name.unicodeScalars.contains(where: { "/\\:".unicodeScalars.contains($0) }) else {
             throw refused("name isn't a plain file name", decoder)
         }
         guard Relay.isHash(sha256) else { throw refused("sha256 isn't 64 lowercase hex digits", decoder) }
@@ -579,6 +615,8 @@ public enum RelayReceiptKind: String, Codable, Sendable, CaseIterable {
 /// One link of a run's receipt chain. Content free: a kind, a time, maybe
 /// a tool's name and a hash, and the hashes that chain it.
 public struct RelayReceipt: Codable, Sendable, Equatable {
+    public let runId: String
+    public let clientRunId: String
     /// 1 for the first receipt, then one more each time.
     public let seq: Int
     public let kind: RelayReceiptKind
@@ -595,8 +633,10 @@ public struct RelayReceipt: Codable, Sendable, Equatable {
     /// Ed25519 signature over the 32 bytes of `hash`.
     public let signature: String?
 
-    public init(seq: Int, kind: RelayReceiptKind, at: String, tool: String? = nil, contentSha256: String? = nil,
+    public init(runId: String, clientRunId: String, seq: Int, kind: RelayReceiptKind, at: String, tool: String? = nil, contentSha256: String? = nil,
                 prevHash: String, hash: String, signature: String? = nil) {
+        self.runId = runId
+        self.clientRunId = clientRunId
         self.seq = seq
         self.kind = kind
         self.at = at
@@ -609,6 +649,9 @@ public struct RelayReceipt: Codable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        runId = try container.decode(String.self, forKey: .runId)
+        clientRunId = try container.decode(String.self, forKey: .clientRunId)
+        guard Relay.isPlainID(runId), Relay.isPlainID(clientRunId) else { throw refused("receipt run identity isn't plain letters and digits", decoder) }
         seq = try container.decode(Int.self, forKey: .seq)
         kind = try container.decode(RelayReceiptKind.self, forKey: .kind)
         at = try container.decode(String.self, forKey: .at)
@@ -644,17 +687,21 @@ public enum RelayReceipts {
         case kind(index: Int)
         case prevHash(index: Int)
         case hash(index: Int)
+        case identity(index: Int)
+        case terminalState
         case notFinished
         case signature
     }
 
-    /// The bytes a receipt's hash is taken over: seven lines, each ending
+    /// The bytes a receipt's hash is taken over: nine lines, each ending
     /// in a line feed, in UTF-8. An absent `tool` or `contentSha256` is
     /// written as nothing after its colon.
-    public static func canonical(seq: Int, kind: RelayReceiptKind, at: String, tool: String?,
+    public static func canonical(runId: String, clientRunId: String, seq: Int, kind: RelayReceiptKind, at: String, tool: String?,
                                  contentSha256: String?, prevHash: String) -> Data {
         let lines = [
             "relay-receipt/1",
+            "runId:\(runId)",
+            "clientRunId:\(clientRunId)",
             "seq:\(seq)",
             "kind:\(kind.rawValue)",
             "at:\(at)",
@@ -666,15 +713,16 @@ public enum RelayReceipts {
     }
 
     /// The lowercase hex SHA-256 of a receipt's canonical form.
-    public static func hash(seq: Int, kind: RelayReceiptKind, at: String, tool: String?,
+    public static func hash(runId: String, clientRunId: String, seq: Int, kind: RelayReceiptKind, at: String, tool: String?,
                             contentSha256: String?, prevHash: String) -> String {
-        let form = canonical(seq: seq, kind: kind, at: at, tool: tool, contentSha256: contentSha256, prevHash: prevHash)
+        let form = canonical(runId: runId, clientRunId: clientRunId, seq: seq, kind: kind, at: at, tool: tool, contentSha256: contentSha256, prevHash: prevHash)
         return Relay.hex(SHA256.hash(data: form))
     }
 
     /// The links of a chain, finished or not: it starts with `run.started`,
     /// `seq` counts up from 1, each `prevHash` is the hash before it, each
     /// `hash` is its own, and nothing comes after a final receipt.
+    /// This does not authenticate a chain or detect truncation.
     public static func checkLinks(_ receipts: [RelayReceipt]) throws(Problem) {
         guard let first = receipts.first else { throw .empty }
         guard first.kind == .runStarted else { throw .notStarted }
@@ -684,7 +732,7 @@ public enum RelayReceipts {
             if index > 0, receipt.kind == .runStarted { throw .kind(index: index) }
             if receipt.kind.isFinal, index != receipts.count - 1 { throw .kind(index: index) }
             guard receipt.prevHash == prevHash else { throw .prevHash(index: index) }
-            let own = hash(seq: receipt.seq, kind: receipt.kind, at: receipt.at, tool: receipt.tool,
+            let own = hash(runId: receipt.runId, clientRunId: receipt.clientRunId, seq: receipt.seq, kind: receipt.kind, at: receipt.at, tool: receipt.tool,
                            contentSha256: receipt.contentSha256, prevHash: receipt.prevHash)
             guard receipt.hash == own else { throw .hash(index: index) }
             prevHash = own
@@ -693,9 +741,22 @@ public enum RelayReceipts {
 
     /// A finished chain: its links, a final receipt at the end, and that
     /// receipt's signature over its hash with `publicKey`.
-    public static func verify(_ receipts: [RelayReceipt], publicKey: Curve25519.Signing.PublicKey) throws(Problem) {
+    public static func verify(_ receipts: [RelayReceipt], runId: String, clientRunId: String, terminalState: RelayRunState,
+                              publicKey: Curve25519.Signing.PublicKey) throws(Problem) {
         try checkLinks(receipts)
         guard let last = receipts.last, last.kind.isFinal else { throw .notFinished }
+        for (index, receipt) in receipts.enumerated() {
+            guard Relay.isPlainID(runId), Relay.isPlainID(clientRunId),
+                  receipt.runId == runId, receipt.clientRunId == clientRunId else { throw .identity(index: index) }
+        }
+        let expectedKind: RelayReceiptKind
+        switch terminalState {
+        case .done: expectedKind = .runDone
+        case .failed: expectedKind = .runFailed
+        case .stopped: expectedKind = .runStopped
+        default: throw .terminalState
+        }
+        guard last.kind == expectedKind else { throw .terminalState }
         guard let signature = last.signature.flatMap({ Data(base64Encoded: $0) }),
               let signed = Relay.bytes(hex: last.hash),
               publicKey.isValidSignature(signature, for: signed) else { throw .signature }

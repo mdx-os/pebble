@@ -403,7 +403,7 @@ file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
 perl: s~if receipt\.kind\.isFinal, index != receipts\.count - 1 \{ throw \.kind\(index: index\) \}~~
 
 # A canonical form that drifts from the one the page writes.
-test: theCanonicalFormIsSevenLines theFixtureChainsLink
+test: theCanonicalFormIsNineLines theFixtureChainsLink
 file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
 perl: s~"relay-receipt/1",~"relay-receipt/2",~
 
@@ -433,3 +433,62 @@ perl: s~let checkHosts = hostFolders\.contains \{ file\.hasPrefix\(\$0\) \}~let 
 test: aTrackedPlainListFails
 file: scripts/private-check.swift
 perl: s~guard git\(repo, \["ls-files", "--cached", "--", plainList\]\)\.isEmpty else~guard true else~
+
+# Round-1 relay review: each new refusal has an independent mutation.
+test: reviewCrossRunReplayIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~receipt.runId == runId~true~
+
+test: reviewCrossRunReplayIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~receipt.clientRunId == clientRunId~true~
+
+test: reviewRunIdentityIsSigned
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~            "runId:.*\n~~
+
+test: reviewRunIdentityIsSigned
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~            "clientRunId:.*\n~~
+
+test: reviewTerminalStateMustMatch
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard last.kind == expectedKind else \{ throw \.terminalState \}~_ = expectedKind~
+
+test: reviewTerminalStateMustMatch
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~default: throw \.terminalState~default: expectedKind = .runDone~
+
+test: reviewPurchaseRequiresPrice
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard action != \.purchase \|\| price != nil else~guard true else~
+
+test: reviewPurchaseRefusesInvalidPrice
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard price != nil else~guard true else~
+
+test: reviewArtifactSeparatorsAreScalars
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~!name.unicodeScalars.contains~!name.contains~
+perl: s~".unicodeScalars.contains\(\$0\)~".contains(\$0)~
+
+test: reviewTargetLimitsAreScalars
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~name.unicodeScalars.count <= 40~name.count <= 40~
+
+test: reviewTargetLimitsAreScalars
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~handle.unicodeScalars.count <= 254~handle.count <= 254~
+
+test: reviewUTF16PrivateWordsAreChecked reviewUTF16HostsAreChecked reviewUTF16NULDoesNotHideWords
+file: scripts/private-check.swift
+perl: s~for text in decodedTexts\(data\)~for text in (data.contains(0) ? [] : [String(decoding: data, as: UTF8.self)])~
+
+test: reviewSensitivePathsAreRedacted
+file: scripts/private-check.swift
+perl: s~let path = diagnosticPath\(file, salt: salt, hashes: hashes\)~let path = file~
+
+
+test: reviewFixedDiagnosticPathsAreRedacted
+file: scripts/private-check.swift
+perl: s~return diagnosticPath\(path, salt: salt, hashes: Set\(lines.dropFirst\(\)\)\)~return path~

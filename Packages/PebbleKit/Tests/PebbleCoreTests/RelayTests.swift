@@ -193,8 +193,8 @@ struct RelayReceiptTests {
 
     static func receipt(_ seq: Int, _ kind: RelayReceiptKind, at: String, tool: String?, content: String?,
                         prevHash: String, signature: String? = nil) -> RelayReceipt {
-        let hash = RelayReceipts.hash(seq: seq, kind: kind, at: at, tool: tool, contentSha256: content, prevHash: prevHash)
-        return RelayReceipt(seq: seq, kind: kind, at: at, tool: tool, contentSha256: content,
+        let hash = RelayReceipts.hash(runId: "r1", clientRunId: "c1", seq: seq, kind: kind, at: at, tool: tool, contentSha256: content, prevHash: prevHash)
+        return RelayReceipt(runId: "r1", clientRunId: "c1", seq: seq, kind: kind, at: at, tool: tool, contentSha256: content,
                             prevHash: prevHash, hash: hash, signature: signature)
     }
 
@@ -233,7 +233,7 @@ struct RelayReceiptTests {
 
     /// The same receipt with a different time and its old hash.
     static func changedTime(_ receipt: RelayReceipt) -> RelayReceipt {
-        RelayReceipt(seq: receipt.seq, kind: receipt.kind, at: time(99), tool: receipt.tool,
+        RelayReceipt(runId: "r1", clientRunId: "c1", seq: receipt.seq, kind: receipt.kind, at: time(99), tool: receipt.tool,
                      contentSha256: receipt.contentSha256, prevHash: receipt.prevHash, hash: receipt.hash,
                      signature: receipt.signature)
     }
@@ -241,17 +241,17 @@ struct RelayReceiptTests {
     @Test func aWholeSignedChainVerifies() throws {
         let key = Curve25519.Signing.PrivateKey()
         let receipts = try Self.chain(key)
-        try RelayReceipts.verify(receipts, publicKey: key.publicKey)
+        try RelayReceipts.verify(receipts, runId: "r1", clientRunId: "c1", terminalState: .done, publicKey: key.publicKey)
         // And reads back the same through the wire.
         let read = try Relay.decode([RelayReceipt].self, from: Relay.encode(receipts))
-        try RelayReceipts.verify(read, publicKey: key.publicKey)
+        try RelayReceipts.verify(read, runId: "r1", clientRunId: "c1", terminalState: .done, publicKey: key.publicKey)
     }
 
     @Test func aChangedFieldFails() throws {
         let key = Curve25519.Signing.PrivateKey()
         var receipts = try Self.chain(key)
         receipts[2] = Self.changedTime(receipts[2])
-        #expect(throws: RelayReceipts.Problem.hash(index: 2)) { try RelayReceipts.verify(receipts, publicKey: key.publicKey) }
+        #expect(throws: RelayReceipts.Problem.hash(index: 2)) { try RelayReceipts.verify(receipts, runId: "r1", clientRunId: "c1", terminalState: .done, publicKey: key.publicKey) }
     }
 
     /// Every hash made again after the change still fails: only the relay's
@@ -269,7 +269,7 @@ struct RelayReceiptTests {
             prevHash = next.hash
         }
         try RelayReceipts.checkLinks(remade)
-        #expect(throws: RelayReceipts.Problem.signature) { try RelayReceipts.verify(remade, publicKey: key.publicKey) }
+        #expect(throws: RelayReceipts.Problem.signature) { try RelayReceipts.verify(remade, runId: "r1", clientRunId: "c1", terminalState: .done, publicKey: key.publicKey) }
     }
 
     @Test(arguments: [0, 1, 2, 3, 4, 5])
@@ -277,7 +277,7 @@ struct RelayReceiptTests {
         let key = Curve25519.Signing.PrivateKey()
         var receipts = try Self.chain(key)
         receipts.remove(at: index)
-        #expect(throws: RelayReceipts.Problem.self) { try RelayReceipts.verify(receipts, publicKey: key.publicKey) }
+        #expect(throws: RelayReceipts.Problem.self) { try RelayReceipts.verify(receipts, runId: "r1", clientRunId: "c1", terminalState: .done, publicKey: key.publicKey) }
     }
 
     @Test(arguments: [0, 1, 2, 3, 4])
@@ -285,7 +285,7 @@ struct RelayReceiptTests {
         let key = Curve25519.Signing.PrivateKey()
         var receipts = try Self.chain(key)
         receipts.swapAt(index, index + 1)
-        #expect(throws: RelayReceipts.Problem.self) { try RelayReceipts.verify(receipts, publicKey: key.publicKey) }
+        #expect(throws: RelayReceipts.Problem.self) { try RelayReceipts.verify(receipts, runId: "r1", clientRunId: "c1", terminalState: .done, publicKey: key.publicKey) }
     }
 
     /// A reordered pair with its seq numbers put back in order still fails
@@ -295,44 +295,44 @@ struct RelayReceiptTests {
         var receipts = try Self.chain(key)
         receipts.swapAt(1, 2)
         receipts = receipts.enumerated().map { index, old in
-            RelayReceipt(seq: index + 1, kind: old.kind, at: old.at, tool: old.tool, contentSha256: old.contentSha256,
+            RelayReceipt(runId: "r1", clientRunId: "c1", seq: index + 1, kind: old.kind, at: old.at, tool: old.tool, contentSha256: old.contentSha256,
                          prevHash: old.prevHash, hash: old.hash, signature: old.signature)
         }
-        #expect(throws: RelayReceipts.Problem.prevHash(index: 1)) { try RelayReceipts.verify(receipts, publicKey: key.publicKey) }
+        #expect(throws: RelayReceipts.Problem.prevHash(index: 1)) { try RelayReceipts.verify(receipts, runId: "r1", clientRunId: "c1", terminalState: .done, publicKey: key.publicKey) }
     }
 
     @Test func aWrongKeyFails() throws {
         let receipts = try Self.chain(Curve25519.Signing.PrivateKey())
         let other = Curve25519.Signing.PrivateKey()
-        #expect(throws: RelayReceipts.Problem.signature) { try RelayReceipts.verify(receipts, publicKey: other.publicKey) }
+        #expect(throws: RelayReceipts.Problem.signature) { try RelayReceipts.verify(receipts, runId: "r1", clientRunId: "c1", terminalState: .done, publicKey: other.publicKey) }
     }
 
     @Test func anUnfinishedChainFailsButItsLinksHold() throws {
         let key = Curve25519.Signing.PrivateKey()
         let receipts = try Self.chain(key, kinds: [.runStarted, .toolUsed, .stepDone])
         try RelayReceipts.checkLinks(receipts)
-        #expect(throws: RelayReceipts.Problem.notFinished) { try RelayReceipts.verify(receipts, publicKey: key.publicKey) }
+        #expect(throws: RelayReceipts.Problem.notFinished) { try RelayReceipts.verify(receipts, runId: "r1", clientRunId: "c1", terminalState: .done, publicKey: key.publicKey) }
     }
 
     @Test func nothingComesAfterTheEnd() throws {
         let key = Curve25519.Signing.PrivateKey()
         let receipts = try Self.chain(key, kinds: [.runStarted, .runStopped, .stepDone])
-        #expect(throws: RelayReceipts.Problem.kind(index: 1)) { try RelayReceipts.verify(receipts, publicKey: key.publicKey) }
+        #expect(throws: RelayReceipts.Problem.kind(index: 1)) { try RelayReceipts.verify(receipts, runId: "r1", clientRunId: "c1", terminalState: .done, publicKey: key.publicKey) }
         let twice = try Self.chain(key, kinds: [.runStarted, .stepDone, .runStarted, .runDone])
-        #expect(throws: RelayReceipts.Problem.kind(index: 2)) { try RelayReceipts.verify(twice, publicKey: key.publicKey) }
+        #expect(throws: RelayReceipts.Problem.kind(index: 2)) { try RelayReceipts.verify(twice, runId: "r1", clientRunId: "c1", terminalState: .done, publicKey: key.publicKey) }
     }
 
     @Test func anEmptyChainFails() {
         #expect(throws: RelayReceipts.Problem.empty) {
-            try RelayReceipts.verify([], publicKey: Curve25519.Signing.PrivateKey().publicKey)
+            try RelayReceipts.verify([], runId: "r1", clientRunId: "c1", terminalState: .done, publicKey: Curve25519.Signing.PrivateKey().publicKey)
         }
     }
 
     /// The canonical form, byte for byte, as docs/RELAY.md writes it.
-    @Test func theCanonicalFormIsSevenLines() {
-        let form = RelayReceipts.canonical(seq: 2, kind: .toolUsed, at: "2026-10-18T09:00:05Z", tool: "web.search",
+    @Test func theCanonicalFormIsNineLines() {
+        let form = RelayReceipts.canonical(runId: "r1", clientRunId: "c1", seq: 2, kind: .toolUsed, at: "2026-10-18T09:00:05Z", tool: "web.search",
                                            contentSha256: nil, prevHash: RelayReceipts.firstPrevHash)
-        let expected = "relay-receipt/1\nseq:2\nkind:tool.used\nat:2026-10-18T09:00:05Z\ntool:web.search\n"
+        let expected = "relay-receipt/1\nrunId:r1\nclientRunId:c1\nseq:2\nkind:tool.used\nat:2026-10-18T09:00:05Z\ntool:web.search\n"
             + "contentSha256:\nprevHash:" + RelayReceipts.firstPrevHash + "\n"
         #expect(String(decoding: form, as: UTF8.self) == expected)
     }
@@ -343,6 +343,102 @@ struct RelayReceiptTests {
         let keys = RelayKeys(keys: [RelayKey(id: "k1", publicKey: key.publicKey)])
         let read = try Relay.decode(RelayKeys.self, from: Relay.encode(keys))
         let publicKey = try #require(read.keys.first?.publicKey)
-        try RelayReceipts.verify(Self.chain(key), publicKey: publicKey)
+        try RelayReceipts.verify(Self.chain(key), runId: "r1", clientRunId: "c1", terminalState: .done, publicKey: publicKey)
+    }
+}
+
+// Explicit context supplied by the caller, never taken from the untrusted chain.
+private func verifyContext(_ receipts: [RelayReceipt], runId: String, clientRunId: String,
+                           state: RelayRunState, key: Curve25519.Signing.PublicKey) throws {
+    try RelayReceipts.verify(receipts, runId: runId, clientRunId: clientRunId, terminalState: state, publicKey: key)
+}
+
+struct RelayReviewTests {
+    @Test func reviewPurchaseMapsToAskFirst() throws {
+        let run = try Relay.decode(RelayRun.self, from: RelayFixtureTests.data("run.valid.purchase"))
+        let question = try #require(run.needsYou)
+        #expect(question.proposedAction.price == Price(minorUnits: 1450, currency: "CAD"))
+        #expect(AskFirst.shared.ask(question.proposedAction) != nil)
+    }
+
+    @Test func reviewRunIdentityIsSigned() throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let original = try RelayReceiptTests.chain(key)
+        for changeRun in [true, false] {
+            let runId = changeRun ? "r2" : "r1"
+            let clientRunId = changeRun ? "c1" : "c2"
+            var previous = RelayReceipts.firstPrevHash
+            let relabelled = original.map { old in
+                let hash = RelayReceipts.hash(runId: runId, clientRunId: clientRunId, seq: old.seq,
+                    kind: old.kind, at: old.at, tool: old.tool, contentSha256: old.contentSha256, prevHash: previous)
+                let receipt = RelayReceipt(runId: runId, clientRunId: clientRunId, seq: old.seq, kind: old.kind,
+                    at: old.at, tool: old.tool, contentSha256: old.contentSha256, prevHash: previous,
+                    hash: hash, signature: old.signature)
+                previous = hash
+                return receipt
+            }
+            try RelayReceipts.checkLinks(relabelled)
+            #expect(throws: RelayReceipts.Problem.signature) {
+                try RelayReceipts.verify(relabelled, runId: runId, clientRunId: clientRunId,
+                                         terminalState: .done, publicKey: key.publicKey)
+            }
+        }
+    }
+
+    @Test(arguments: [RelayRunState.done, .failed, .stopped])
+    func reviewMatchingTerminalStatesVerify(state: RelayRunState) throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let kind: RelayReceiptKind = state == .done ? .runDone : state == .failed ? .runFailed : .runStopped
+        let receipts = try RelayReceiptTests.chain(key, kinds: [.runStarted, kind])
+        try verifyContext(receipts, runId: "r1", clientRunId: "c1", state: state, key: key.publicKey)
+    }
+
+    @Test func reviewCrossRunReplayIsRefused() throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let chain = try RelayReceiptTests.chain(key)
+        try verifyContext(chain, runId: "r1", clientRunId: "c1", state: .done, key: key.publicKey)
+        #expect(throws: (any Error).self) {
+            try verifyContext(chain, runId: "r2", clientRunId: "c1", state: .done, key: key.publicKey)
+        }
+        #expect(throws: (any Error).self) {
+            try verifyContext(chain, runId: "r1", clientRunId: "c2", state: .done, key: key.publicKey)
+        }
+    }
+
+    @Test func reviewTerminalStateMustMatch() throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let chain = try RelayReceiptTests.chain(key)
+        for state in [RelayRunState.failed, .stopped, .working, .queued, .needsYou] {
+            #expect(throws: (any Error).self) {
+                try verifyContext(chain, runId: "r1", clientRunId: "c1", state: state, key: key.publicKey)
+            }
+        }
+    }
+
+    @Test func reviewPurchaseRequiresPrice() throws {
+        #expect(throws: DecodingError.self) {
+            try RelayFixtureTests.roundTrip("run.invalid.purchase-price-missing")
+        }
+    }
+
+    @Test(arguments: ["zero", "negative", "fraction", "overflow", "currency", "lowercase", "null"])
+    func reviewPurchaseRefusesInvalidPrice(reason: String) throws {
+        #expect(throws: DecodingError.self) {
+            try RelayFixtureTests.roundTrip("run.invalid.purchase-price-" + reason)
+        }
+    }
+
+    @Test(arguments: ["slash", "backslash", "colon"])
+    func reviewArtifactSeparatorsAreScalars(separator: String) throws {
+        #expect(throws: DecodingError.self) {
+            try RelayFixtureTests.roundTrip("run.invalid.artifact-combining-" + separator)
+        }
+    }
+
+    @Test(arguments: ["name", "handle"])
+    func reviewTargetLimitsAreScalars(field: String) throws {
+        #expect(throws: DecodingError.self) {
+            try RelayFixtureTests.roundTrip("run.invalid.target-combining-" + field)
+        }
     }
 }

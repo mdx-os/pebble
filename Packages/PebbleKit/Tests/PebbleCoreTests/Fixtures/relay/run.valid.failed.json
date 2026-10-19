@@ -2,16 +2,20 @@
   "receipts" : [
     {
       "at" : "2026-10-18T09:00:00Z",
-      "hash" : "6b4e20cc1dd6100017b597df54885ed695622b6e7f4e6453b4fc4ff222529d5d",
+      "clientRunId" : "c1",
+      "hash" : "aa48d6140375a6e1b85af36816d8dbbbcc209414e3524ac854640b397d3c5c01",
       "kind" : "run.started",
       "prevHash" : "0000000000000000000000000000000000000000000000000000000000000000",
+      "runId" : "r9Q1",
       "seq" : 1
     },
     {
       "at" : "2026-10-18T09:00:30Z",
-      "hash" : "740a63e5e59572874739620108c925fae9a7f783f62db500cce2759cafa9f28d",
+      "clientRunId" : "c1",
+      "hash" : "efbf2f0133ef7ccb139a1b9b461a3def26dd703e5361522755e21141725bec92",
       "kind" : "run.failed",
-      "prevHash" : "6b4e20cc1dd6100017b597df54885ed695622b6e7f4e6453b4fc4ff222529d5d",
+      "prevHash" : "aa48d6140375a6e1b85af36816d8dbbbcc209414e3524ac854640b397d3c5c01",
+      "runId" : "r9Q1",
       "seq" : 2,
       "signature" : "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
     }

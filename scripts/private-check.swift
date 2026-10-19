@@ -68,10 +68,12 @@ func git(_ repo: URL, _ arguments: [String]) -> String {
     process.arguments = ["git", "-C", repo.path] + arguments
     let pipe = Pipe()
     process.standardOutput = pipe
+    // Git can echo the repository path on failure. Do not forward it.
+    process.standardError = FileHandle.nullDevice
     do { try process.run() } catch { fail("couldn't run git") }
     let data = pipe.fileHandleForReading.readDataToEndOfFile()
     process.waitUntilExit()
-    guard process.terminationStatus == 0 else { fail("git \(arguments.first ?? "") failed in \(repo.path)") }
+    guard process.terminationStatus == 0 else { fail("git \(arguments.first ?? "") failed") }
     return String(decoding: data, as: UTF8.self)
 }
 
@@ -94,15 +96,15 @@ func readHashes(_ repo: URL) -> (salt: String, hashes: Set<String>)? {
         if line.isEmpty || line.hasPrefix("#") { continue }
         if salt == nil {
             guard line.hasPrefix("salt "), isHex(line.dropFirst(5)) else {
-                fail("\(hashFile):\(index + 1): the first line must be \"salt\" and at least 32 hex digits")
+                fail("\(diagnosticPath(hashFile, in: repo)):\(index + 1): the first line must be \"salt\" and at least 32 hex digits")
             }
             salt = String(line.dropFirst(5))
         } else {
-            guard isHex(Substring(line), count: 64) else { fail("\(hashFile):\(index + 1): not a SHA-256 in lowercase hex") }
+            guard isHex(Substring(line), count: 64) else { fail("\(diagnosticPath(hashFile, in: repo)):\(index + 1): not a SHA-256 in lowercase hex") }
             hashes.insert(line)
         }
     }
-    guard let salt else { fail("\(hashFile) has no salt line") }
+    guard let salt else { fail("\(diagnosticPath(hashFile, in: repo)) has no salt line") }
     return (salt, hashes)
 }
 
@@ -134,11 +136,55 @@ func words(_ line: Substring) -> Set<String> {
     return found
 }
 
+/// A BOM fixes the UTF-16 byte order. Without a BOM the encoding can be
+/// ambiguous, so scan every valid text interpretation rather than guessing
+/// wrong and hiding a word. Valid UTF-8 is scanned even if it contains NUL.
+func decodedTexts(_ data: Data) -> [String] {
+    if data.starts(with: [0xff, 0xfe]) {
+        return String(data: data.dropFirst(2), encoding: .utf16LittleEndian).map { [$0] } ?? []
+    }
+    if data.starts(with: [0xfe, 0xff]) {
+        return String(data: data.dropFirst(2), encoding: .utf16BigEndian).map { [$0] } ?? []
+    }
+    var texts: [String] = []
+    if let text = String(data: data, encoding: .utf8) { texts.append(text) }
+    if data.count.isMultiple(of: 2) {
+        for encoding in [String.Encoding.utf16LittleEndian, .utf16BigEndian] {
+            if let text = String(data: data, encoding: encoding), !texts.contains(text) {
+                texts.append(text)
+            }
+        }
+    }
+    return texts
+}
+
+/// Redact the whole segment, including extensions and camel-case names.
+/// Host rules apply here even outside the folders whose contents we scan.
+func diagnosticPath(_ path: String, salt: String, hashes: Set<String>) -> String {
+    path.split(separator: "/", omittingEmptySubsequences: false).map { segment in
+        let text = String(segment)
+        let privateWord = words(segment).contains { hashes.contains(hash(salt, $0)) }
+        let host = hostRules.contains { $0.1.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil }
+        return privateWord || host ? "[redacted]" : text
+    }.joined(separator: "/")
+}
+
+/// Fixed paths in setup/hash errors need the same protection as scanned
+/// filenames. Read only the hash file, without issuing recursive diagnostics,
+/// so even an error while validating that file can redact its path.
+func diagnosticPath(_ path: String, in repo: URL) -> String {
+    let text = (try? String(contentsOf: repo.appendingPathComponent(hashFile), encoding: .utf8)) ?? ""
+    let lines = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+    let salt = lines.first.flatMap { $0.hasPrefix("salt ") ? String($0.dropFirst(5)) : nil } ?? ""
+    return diagnosticPath(path, salt: salt, hashes: Set(lines.dropFirst()))
+}
+
 func check(_ repo: URL) {
     guard git(repo, ["ls-files", "--cached", "--", plainList]).isEmpty else {
-        fail("\(plainList) is tracked by git. It holds the private words in plain text. Remove it with: git rm --cached \(plainList)")
+        fail("\(diagnosticPath(plainList, in: repo)) is tracked by git. It holds the private words in plain text. Remove it with: git rm --cached \(diagnosticPath(plainList, in: repo))")
     }
-    guard let (salt, hashes) = readHashes(repo) else { fail("\(hashFile) is missing. Make it with make hash-private-words") }
+    guard let (salt, hashes) = readHashes(repo) else { fail("\(diagnosticPath(hashFile, in: repo)) is missing. Make it with make hash-private-words") }
     let files = git(repo, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
         .split(separator: "\0").map(String.init).sorted()
     var seen: [String: Bool] = [:]
@@ -148,25 +194,26 @@ func check(_ repo: URL) {
         guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
               values.isRegularFile == true, values.isSymbolicLink != true,
               let data = try? Data(contentsOf: url) else { continue }
-        if data.prefix(8_000).contains(0) { continue }
-        let text = String(decoding: data, as: UTF8.self)
+        let path = diagnosticPath(file, salt: salt, hashes: hashes)
         let checkHosts = hostFolders.contains { file.hasPrefix($0) }
-        for (index, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
-            for word in words(line) {
-                let listed = seen[word] ?? hashes.contains(hash(salt, word))
-                seen[word] = listed
-                if listed {
-                    print("private-check: \(file):\(index + 1): a private word")
-                    problems += 1
-                    break
+        for text in decodedTexts(data) {
+            for (index, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+                for word in words(line) {
+                    let listed = seen[word] ?? hashes.contains(hash(salt, word))
+                    seen[word] = listed
+                    if listed {
+                        print("private-check: \(path):\(index + 1): a private word")
+                        problems += 1
+                        break
+                    }
                 }
-            }
-            guard checkHosts else { continue }
-            let string = String(line)
-            let range = NSRange(string.startIndex..., in: string)
-            for (kind, rule) in hostRules where rule.firstMatch(in: string, range: range) != nil {
-                print("private-check: \(file):\(index + 1): \(kind)")
-                problems += 1
+                guard checkHosts else { continue }
+                let string = String(line)
+                let range = NSRange(string.startIndex..., in: string)
+                for (kind, rule) in hostRules where rule.firstMatch(in: string, range: range) != nil {
+                    print("private-check: \(path):\(index + 1): \(kind)")
+                    problems += 1
+                }
             }
         }
     }
@@ -178,7 +225,7 @@ func check(_ repo: URL) {
 
 func makeHashes(_ repo: URL) {
     guard let text = try? String(contentsOf: repo.appendingPathComponent(plainList), encoding: .utf8) else {
-        fail("\(plainList) is missing. The owner keeps the plain list there, one word a line")
+        fail("\(diagnosticPath(plainList, in: repo)) is missing. The owner keeps the plain list there, one word a line")
     }
     var hashes: Set<String> = []
     let salt = readHashes(repo)?.salt
@@ -187,7 +234,7 @@ func makeHashes(_ repo: URL) {
         let line = raw.trimmingCharacters(in: .whitespaces)
         if line.isEmpty || line.hasPrefix("#") { continue }
         guard line.allSatisfy({ $0.isLetter || $0.isNumber }) else {
-            fail("\(plainList):\(index + 1) is not one word of letters and digits")
+            fail("\(diagnosticPath(plainList, in: repo)):\(index + 1) is not one word of letters and digits")
         }
         hashes.insert(hash(salt, line.lowercased()))
     }
@@ -203,8 +250,8 @@ func makeHashes(_ repo: URL) {
     let body = hashes.sorted().map { $0 + "\n" }.joined()
     do {
         try (head + body).write(to: repo.appendingPathComponent(hashFile), atomically: true, encoding: .utf8)
-    } catch { fail("couldn't write \(hashFile)") }
-    print("private-check: wrote \(hashFile) (private words: \(hashes.count))")
+    } catch { fail("couldn't write \(diagnosticPath(hashFile, in: repo))") }
+    print("private-check: wrote \(diagnosticPath(hashFile, in: repo)) (private words: \(hashes.count))")
 }
 
 let arguments = CommandLine.arguments.dropFirst()
