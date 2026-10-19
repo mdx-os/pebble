@@ -353,7 +353,7 @@ if [ "${1:-}" = "--hash-names" ]; then
   exit 0
 fi
 
-[ "$#" -gt 0 ] || set -- Packages/PebbleKit/Sources Packages/PebbleKit/Tests App AppUITests scripts project.yml Makefile
+[ "$#" -gt 0 ] || set -- Packages/PebbleKit/Sources Packages/PebbleKit/Tests Tools/GuardKit App AppUITests scripts project.yml Makefile
 
 for path in "$@"; do
   if [ ! -e "$path" ]; then

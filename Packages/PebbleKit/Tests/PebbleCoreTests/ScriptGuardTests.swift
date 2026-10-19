@@ -495,7 +495,7 @@ struct ScriptGuardTests {
     @Test func theCommentLintCoversTheProjectFiles() throws {
         let lint = try String(contentsOf: URL(fileURLWithPath: Self.script("comment-lint.sh")), encoding: .utf8)
         let defaults = try #require(lint.split(separator: "\n").first { $0.contains("|| set -- ") })
-        for path in ["Packages/PebbleKit/Sources", "Packages/PebbleKit/Tests", "App", "AppUITests", "scripts",
+        for path in ["Packages/PebbleKit/Sources", "Packages/PebbleKit/Tests", "Tools/GuardKit", "App", "AppUITests", "scripts",
                      "project.yml", "Makefile"] {
             #expect(defaults.contains(" \(path)"), "\(path)")
         }
@@ -544,11 +544,11 @@ struct ScriptGuardTests {
     /// file `HELPERS` names, when it is set.
     func mutationRepo(manifest: String) throws -> (root: URL, environment: [String: String]) {
         let root = try scratchFolder()
-        for part in ["scripts", "App", "AppUITests", ".github", "Packages/PebbleKit/Sources/Fixture"] {
+        for part in ["scripts", "App", "AppUITests", ".github", "docs", "Tools/GuardKit", "Packages/PebbleKit/Sources/Fixture"] {
             try FileManager.default.createDirectory(at: root.appendingPathComponent(part),
                                                     withIntermediateDirectories: true)
         }
-        for file in ["Makefile", "project.yml", ".gitignore"] {
+        for file in ["Makefile", "project.yml", ".gitignore", "README.md", "AGENTS.md"] {
             try Data().write(to: root.appendingPathComponent(file))
         }
         try FileManager.default.copyItem(atPath: Self.script("mutation-check.sh"),
@@ -567,6 +567,9 @@ struct ScriptGuardTests {
           esac
           shift
         done
+        case "$package" in
+          */Tools/GuardKit) echo "Test run with 0 tests"; exit 0 ;;
+        esac
         works=no
         grep -q 'let works = true' "$package/Sources/Fixture/Code.swift" && works=yes
         ran=0

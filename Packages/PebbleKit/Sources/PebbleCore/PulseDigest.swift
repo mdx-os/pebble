@@ -1,6 +1,6 @@
 import Foundation
 
-/// One competitor-watch run.
+/// One public source watch run.
 ///
 /// `modelInput` contains only sources whose text changed after normalization.
 /// Ratings and relative dates are removed before that comparison, so a page

@@ -730,6 +730,10 @@ test: theCommentLintCoversTheProjectFiles
 file: scripts/comment-lint.sh
 perl: s~ scripts project\.yml Makefile~ scripts~
 
+test: theCommentLintCoversTheProjectFiles
+file: scripts/comment-lint.sh
+perl: s~ Tools/GuardKit App~ App~
+
 # The plain list stays out of the repository; --hash-names keeps the salt, and a stale hash file fails.
 test: theNamesAreCommittedOnlyAsSaltedHashes
 file: scripts/comment-lint.sh
@@ -781,11 +785,11 @@ perl: s~out="\$\(bounded "\$baseline_timeout" \\\n\s*~out="\$(~
 
 test: verifyRunsTheCommentLintAndTheMutationCheck
 file: Makefile
-perl: s~ mutation-check build build-release~ build build-release~
+perl: s~^(verify:[^\n]*) mutation-check build build-release~$1 build build-release~m
 
 test: verifyRunsTheCommentLintAndTheMutationCheck
 file: Makefile
-perl: s~ comment-lint screenshots-check-test test release-test~ screenshots-check-test test release-test~
+perl: s~ comment-lint screenshots-check-test graph-check-test test release-test~ screenshots-check-test graph-check-test test release-test~
 
 test: verifyRunsTheCommentLintAndTheMutationCheck
 file: Makefile
@@ -942,3 +946,341 @@ perl: s~WritingOptions = \[\.noFileProtection\]~WritingOptions = [.noFileProtect
 test: verifyRunsTheCommentLintAndTheMutationCheck
 file: Makefile
 perl: s~(\nverify:[^\n]*) build build-release\n~$1 build\n~
+
+# What `make mutation-check` breaks, and the tests that must then fail.
+# Format: see scripts/mutation-check.sh. Substitutions use ~ as the
+# delimiter. An entry that needs several changes gives each its own perl:
+# line, and each must apply.
+#
+# The source guards. Each rule in GuardScan (Tools/GuardKit) is turned off
+# on its own, and the wrong-case suite for its guard must fail: no rule can
+# stop catching its cases unseen. Then the scanner's own reading is broken,
+# one way at a time, and the cases that rest on it must fail.
+
+# The privacy promise guard: its words, then each rule that keeps the gate's
+# flag the model's own.
+test: thePromiseGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~(public static func ungated\(in source: SyntaxSource, file: String, allows: Allows\) -> \[Finding\] \{)~$1\n        if true { return [] }~
+
+test: thePromiseGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~Rule\("promise\.staysOnDeviceDeclared", staysOnDeviceDeclared\)~Rule("promise.staysOnDeviceDeclared", { _, _ in [] })~
+
+test: thePromiseGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~Rule\("promise\.placeWritten", placeWritten\)~Rule("promise.placeWritten", { _, _ in [] })~
+
+test: thePromiseGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~Rule\("promise\.placeAlias", placeAlias\)~Rule("promise.placeAlias", { _, _ in [] })~
+
+test: thePromiseGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~Rule\("promise\.emptyAll", emptyAll\)~Rule("promise.emptyAll", { _, _ in [] })~
+
+test: thePromiseGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~Rule\("promise\.placeMade", placeMade\)~Rule("promise.placeMade", { _, _ in [] })~
+
+test: thePromiseGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~Rule\("promise\.stubMade", stubMade\)~Rule("promise.stubMade", { _, _ in [] })~
+
+test: thePromiseGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~Rule\("promise\.onDeviceBool", onDeviceBool\)~Rule("promise.onDeviceBool", { _, _ in [] })~
+
+test: thePromiseGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~Rule\("promise\.dynamicLookup", dynamicLookup\)~Rule("promise.dynamicLookup", { _, _ in [] })~
+
+test: thePromiseGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~Rule\("promise\.modelMade", modelMade\)~Rule("promise.modelMade", { _, _ in [] })~
+
+test: thePromiseGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~Rule\("promise\.modelAlias", modelAlias\)~Rule("promise.modelAlias", { _, _ in [] })~
+
+test: thePromiseGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~(public static func makerKindProblems\(in source: SyntaxSource, file: String\) -> \[Finding\] \{)~$1\n        if true { return [] }~
+
+test: thePromiseGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~guard \["PrivacyPlace", "PebbleCore\.PrivacyPlace"\]\.contains\(SyntaxSource\.code\(decl\.extendedType\)\) else \{ return nil \}~guard false else { return nil }~
+
+test: thePromiseGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~(public static func placeMemberProblems\(in source: SyntaxSource, file: String\) -> \[Finding\] \{)~$1\n        if true { return [] }~
+
+# A rule left out of the one list: it never runs, and nothing asks for its
+# wrong case.
+test: thePromiseGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~\n\s*Rule\("promise\.placeMember"\) \{ placeMemberProblems\(in: \$0, file: \$1\) \},~~
+
+# A new rule added to the one list with no wrong case of its own.
+test: everyRuleHasAWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~(Rule\("promise\.placeMember"\) \{ placeMemberProblems\(in: \$0, file: \$1\) \},)~$1\n                Rule("promise.unseen") { _, _ in [] },~
+
+# The gate trusts any receiver, or a flag that is only part of the condition.
+test: thePromiseGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~return receivers\.contains\(SyntaxSource\.code\(base\)\)~return true~
+
+test: thePromiseGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~let condition = SyntaxSource\.unparenthesized\(ternary\.condition\)~let condition = SyntaxSource.unparenthesized(ternary.condition.as(InfixOperatorExprSyntax.self)?.rightOperand ?? ternary.condition)~
+
+# The stub named as a type, or extended, is let by.
+test: thePromiseGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~for type in types where~for type in types.prefix(0) where~
+
+# The stub's metatype, LocalStubModel.self, is let by.
+test: thePromiseGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~\["init", "self"\]\.contains~["init"].contains~
+
+# The stub qualified by its module, PebbleModel.LocalStubModel(), is let by.
+test: thePromiseGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~named = ExprSyntax\(qualified\)~_ = qualified~
+
+# One more file let make the stub: the suite names the makers itself.
+test: thePromiseGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~("PebbleModel/LocalStubModel\.swift",\n    \])~"PebbleUI/Other.swift",\n        $1~
+
+# The contrast guard.
+test: theContrastGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~Rule\("contrast\.rawAccent", rawAccent\)~Rule("contrast.rawAccent", { _, _ in [] })~
+
+test: theContrastGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~Rule\("contrast\.systemGray", systemGray\)~Rule("contrast.systemGray", { _, _ in [] })~
+
+test: theContrastGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~Rule\("contrast\.gray", gray\)~Rule("contrast.gray", { _, _ in [] })~
+
+test: theContrastGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~Rule\("contrast\.red", red\)~Rule("contrast.red", { _, _ in [] })~
+
+test: theContrastGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~Rule\("contrast\.fadedWhite", fadedWhite\)~Rule("contrast.fadedWhite", { _, _ in [] })~
+
+test: theContrastGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~Rule\("contrast\.white", white\)~Rule("contrast.white", { _, _ in [] })~
+
+test: theContrastGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~Rule\("contrast\.accentSymbol", accentSymbol\)~Rule("contrast.accentSymbol", { _, _ in [] })~
+
+test: theContrastGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~Rule\("contrast\.surface", surface\)~Rule("contrast.surface", { _, _ in [] })~
+
+test: theContrastGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~Rule\("contrast\.tint", tint\)~Rule("contrast.tint", { _, _ in [] })~
+
+test: theContrastGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~Rule\("contrast\.orange", orange\)~Rule("contrast.orange", { _, _ in [] })~
+
+test: theContrastGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~Rule\("contrast\.bordered", bordered\)~Rule("contrast.bordered", { _, _ in [] })~
+
+test: theContrastGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~Rule\("contrast\.splitCall", splitCall\)~Rule("contrast.splitCall", { _, _ in [] })~
+
+# A system color is read off any base, Theme's own included.
+test: theContrastGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~!isTheme\(member, name\(member\)\)~true~
+
+# A system color only off Color: UIColor.gray and
+# HierarchicalShapeStyle.secondary are let by.
+test: theContrastGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~!isTheme\(member, name\(member\)\)~member.base.map { ["Color", "SwiftUI.Color"].contains(SyntaxSource.code(\$0)) || !(SyntaxSource.code(\$0).last?.isLetter ?? false) } ?? true~
+
+# Theme only when written bare: PebbleUI.Theme.accent is let by.
+test: theContrastGuardCatchesEveryWrongCase theAccentGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~if let qualified = base\.as\(MemberAccessExprSyntax\.self\) \{ return name\(qualified\) == "Theme" \}~~
+
+# An accent rule that flags words the contrast suite says are right: only
+# a suite that keeps every rule quiet on its right cases sees it.
+test: theContrastGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~(wordRule\("accent\.tintFillWords", "Theme\.tintFill is a fill, never words", source\) \{\n\s*)isTheme\(\$0, "tintFill"\)~$1isTheme(\$0, "tintFill") || isTheme(\$0, "accentText")~
+
+# The accent guard: orange only where it belongs.
+test: theAccentGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~Rule\("accent\.tintFillTint", tintFillTint\)~Rule("accent.tintFillTint", { _, _ in [] })~
+
+test: theAccentGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~Rule\("accent\.tintFillWords", tintFillWords\)~Rule("accent.tintFillWords", { _, _ in [] })~
+
+test: theAccentGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~Rule\("accent\.onTintFill", onTintFill\)~Rule("accent.onTintFill", { _, _ in [] })~
+
+test: theAccentGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~Rule\("accent\.doneInItem", doneInItem\)~Rule("accent.doneInItem", { _, _ in [] })~
+
+test: theAccentGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~Rule\("accent\.confirmation", confirmation\)~Rule("accent.confirmation", { _, _ in [] })~
+
+test: theAccentGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~Rule\("accent\.doneRing", doneRing\)~Rule("accent.doneRing", { _, _ in [] })~
+
+test: theAccentGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~Rule\("accent\.ink", ink\)~Rule("accent.ink", { _, _ in [] })~
+
+# The row's `chosen` found by text, not by scope: the nearest function's
+# parameter list is never asked, so another function's `chosen` counts.
+test: theAccentGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~(if let function = parent\.as\(FunctionDeclSyntax\.self\) \{\n\s*)return parameter\(in: function\.signature\.parameterClause\)~$1if case .parameter = parameter(in: function.signature.parameterClause) { return .parameter(type: "Bool") }~
+perl: s~if parent\.is\(MemberBlockSyntax\.self\) \|\| parent\.is\(AccessorBlockSyntax\.self\) \{ return \.other \}~if parent.is(MemberBlockSyntax.self) { return .parameter(type: "Bool") }~
+
+# A `chosen` bound by a switch case, a while or a catch, read past.
+test: theAccentGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~switchCase\.statements\.id == child\.id,~switchCase.statements.id == child.id, false,~
+
+test: theAccentGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~if let loop = parent\.as\(WhileStmtSyntax\.self\), loop\.body\.id == child\.id, binds\(loop\.conditions\) \{ return \.other \}~~
+
+test: theAccentGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~clause\.body\.id == child\.id, mentionsChosen\(clause\.catchItems\)~clause.body.id == child.id, false~
+
+# A `chosen` a tuple binds, as in `let (chosen, _)`, read past.
+test: theAccentGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~if variable\.bindings\.contains\(where: \{ mentionsChosen\(\$0\.pattern\) \}\) \{ return \.other \}~~
+
+# A `chosen` declared inside an #if before it, read past.
+test: theAccentGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
+perl: s~if let config = item\.item\.as\(IfConfigDeclSyntax\.self\), declaresChosen\(config\) \{ return \.other \}~~
+
+# Inside a type means after its name, however far: no exact body.
+test: theAccentGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
+perl: s~guard let type = context\(of: node\)\.type else \{ return false \}\n(\s*)return type\.bareName == name && type\.kind != "protocol"~return context(of: node).types.contains { \$0.bareName.hasPrefix(name) } || text.range(of: "struct " + name) != nil~
+
+# The platform gate.
+test: thePlatformGateCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PlatformRules.swift
+perl: s~Rule\("platform\.nsName", nsName\)~Rule("platform.nsName", { _, _ in [] })~
+
+test: thePlatformGateCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PlatformRules.swift
+perl: s~Rule\("platform\.macOnlyName", macOnlyName\)~Rule("platform.macOnlyName", { _, _ in [] })~
+
+test: thePlatformGateCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PlatformRules.swift
+perl: s~Rule\("platform\.macOnlyImport", macOnlyImport\)~Rule("platform.macOnlyImport", { _, _ in [] })~
+
+# An #elseif or #else that forgets the branches before it.
+test: thePlatformGateCatchesEveryWrongCase ifConditionsAreEvaluated
+file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
+perl: s~holds = \.and\(holds, \.not\(earlier\.condition\.map\(Condition\.init\) \?\? \.constant\(true\)\)\)~holds = .and(holds, .constant(true))~
+
+# The same, kept to #else: it reads as always built.
+test: thePlatformGateCatchesEveryWrongCase ifConditionsAreEvaluated
+file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
+perl: s~if earlier\.id == clause\.id \{ break \}~if earlier.id == clause.id || clause.condition == nil { break }~
+
+# A `!` that is read as if it weren't there.
+test: thePlatformGateCatchesEveryWrongCase ifConditionsAreEvaluated
+file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
+perl: s~self = \.not\(Condition\(prefix\.expression\)\)~self = Condition(prefix.expression)~
+
+# Mac Catalyst taken for a platform without AppKit.
+test: thePlatformGateCatchesEveryWrongCase ifConditionsAreEvaluated
+file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
+perl: s~modules: apple\.union\(\["UIKit", "AppKit", "Cocoa"\]\)\)~modules: apple.union(["UIKit", "Cocoa"]))~
+
+# Mac Catalyst taken for a platform without Cocoa, so canImport(Cocoa)
+# reads as a Mac gate.
+test: thePlatformGateCatchesEveryWrongCase ifConditionsAreEvaluated
+file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
+perl: s~modules: apple\.union\(\["UIKit", "AppKit", "Cocoa"\]\)\)~modules: apple.union(["UIKit", "AppKit"]))~
+
+# A flag such as DEBUG taken as always off, so a branch under it reads as
+# never built, and then as always on.
+test: thePlatformGateCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
+perl: s~case \.flag\(let name\): names\.append\(name\)~case .flag: break~
+perl: s~case \.flag\(let name\): return values\[name\] \?\? false~case .flag: return false~
+
+test: ifConditionsAreEvaluated
+file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
+perl: s~case \.flag\(let name\): names\.append\(name\)~case .flag: break~
+perl: s~case \.flag\(let name\): return values\[name\] \?\? false~case .flag: return true~
+
+# Names past the sixteenth dropped, so they read as false and a gate on
+# one of them looks Mac only or Debug only.
+test: thePlatformGateCatchesEveryWrongCase ifConditionsAreEvaluated
+file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
+perl: s~let names = free\.filter \{ fixed\[\$0\] == nil \}~let names = Array(free.filter { fixed[\$0] == nil }.prefix(Self.mostFreeNames))~
+
+# Names read as written, backticks and all, by every guard.
+test: thePromiseGuardCatchesEveryWrongCase theContrastGuardCatchesEveryWrongCase theAccentGuardCatchesEveryWrongCase thePlatformGateCatchesEveryWrongCase namesAreReadWithoutBackticks
+file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
+perl: s~token\.identifier\?\.name \?\? token\.text~token.text~
+
+# The scanner's reading of the words.
+
+# Literals joined by + read one at a time.
+test: thePromiseGuardCatchesEveryWrongCase plusJoinsLiteralsIntoChains
+file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
+perl: s~for chain in joined \{ for literal in chain \{ taken\.insert\(literal\.offset\) \} \}~joined = []~
+
+# A literal read as written, escapes and all.
+test: thePromiseGuardCatchesEveryWrongCase literalsAreReadAsTheProgramSeesThem
+file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
+perl: s~if let value = node\.representedLiteralValue \{ return \(value, false\) \}~if !node.segments.contains(where: { if case .expressionSegment = \$0 { true } else { false } }) { return (String(decoding: bytes[node.openingQuote.endPositionBeforeTrailingTrivia.utf8Offset..<node.closingQuote.positionAfterSkippingLeadingTrivia.utf8Offset], as: UTF8.self), false) }~
+
+# Zero-width characters only ever taken out, never read as a gap. The
+# phrases live in PebbleKit, and both packages' tests read them.
+test: thePromiseGuardCatchesEveryWrongCase phrasesAreReadAsAPersonReadsThem
+file: Packages/PebbleKit/Tests/PromiseWords/Phrases.swift
+perl: s~let readings = Set\(\[folded\(line, asGaps: true\), folded\(line, asGaps: false\)\]\)~let readings = Set([folded(line, asGaps: false)])~
+
+# A curly apostrophe left as it is.
+test: thePromiseGuardCatchesEveryWrongCase phrasesAreReadAsAPersonReadsThem
+file: Packages/PebbleKit/Tests/PromiseWords/Phrases.swift
+perl: s~if apostrophes\.contains\(scalar\) \{ scalar = "'" \}~~
+
+# A #Preview's scope runs to the end of the file.
+test: thePromiseGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PromiseRules.swift
+perl: s~guard called \|\| reached, !source\.context\(of: reference\)\.inPreview else \{ continue \}~guard called || reached, !source.text.contains("#Preview") else { continue }~
+
+# Columns counted in UTF-16, not Characters.
+test: diagnosticsCountCharacters
+file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
+perl: s~let column = String\(decoding: bytes\[start\.\.<min\(max\(start, offset\), bytes\.count\)\], as: UTF8\.self\)\.count \+ 1~let column = String(decoding: bytes[start..<min(max(start, offset), bytes.count)], as: UTF8.self).utf16.count + 1~

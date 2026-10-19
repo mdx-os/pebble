@@ -16,6 +16,12 @@
 # entry that needs several changes gives one perl: line for each, applied
 # in order, and every one of them must change the file.
 #
+# The tests live in two packages: PebbleKit, and Tools/GuardKit, the source
+# guards' own package, which reads PebbleKit by path. Each test is found
+# in the package that has it, and an entry builds and runs only the
+# packages its tests are in. A broken PebbleKit file reaches GuardKit's
+# tests too, since GuardKit builds the copy's PebbleKit.
+#
 # Usage: scripts/mutation-check.sh [manifest [pattern]]
 # With a pattern (or ONLY=), only entries whose test line matches it run.
 #
@@ -35,8 +41,10 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 manifest="${1:-$root/scripts/mutation-manifest.txt}"
 only="${2:-${ONLY:-}}"
 work="$root/build/mutation"
-package="$work/Packages/PebbleKit"
+packages="${MUTATION_PACKAGES:-Packages/PebbleKit Tools/GuardKit}"
 results="$work/results.txt"
+# Which package each listed test is in: one "test package" line each.
+where="$work/where.txt"
 swift="${MUTATION_SWIFT:-swift}"
 timeout="${MUTATION_TIMEOUT:-180}"
 baseline_timeout="${MUTATION_BASELINE_TIMEOUT:-900}"
@@ -76,27 +84,47 @@ fi
 
 # A copy of everything the tests read, kept between runs so each build after
 # the first only compiles what an entry changed.
-mkdir -p "$package"
-rsync -a --delete --exclude .build --exclude .swiftpm "$root/Packages/PebbleKit/" "$package/"
-for part in scripts Config App AppUITests .github; do
+for package in $packages; do
+  mkdir -p "$work/$package"
+  rsync -a --delete --exclude .build --exclude .swiftpm "$root/$package/" "$work/$package/"
+done
+for part in scripts Config App AppUITests .github docs; do
   rsync -a --delete "$root/$part/" "$work/$part/"
 done
-for file in Makefile project.yml .gitignore; do
+for file in Makefile project.yml .gitignore README.md AGENTS.md; do
   cp "$root/$file" "$work/$file"
 done
 : > "$results"
 
+# Builds one package of the copy, or with no argument every one.
 build() {
-  $swift build --package-path "$package" --build-tests --quiet </dev/null >"$work/build.log" 2>&1
+  for package in ${1:-$packages}; do
+    $swift build --package-path "$work/$package" --build-tests --quiet </dev/null >"$work/build.log" 2>&1 || return 1
+  done
+}
+
+# The package a listed test is in, from the first run.
+package_of() {
+  sed -n "s|^$1 ||p" "$where" | head -1
+}
+
+# The packages the tests in $tests are in, each once.
+packages_of() {
+  for test in $tests; do package_of "$test"; done | sort -u
 }
 
 # Runs one test on the copy. Prints passed, failed, timedout or missing. A
 # test that hangs once its code is broken is stopped after $timeout
 # seconds: it did not pass, but it did not plainly fail either.
 run_test() {
+  package="$(package_of "$1")"
+  if [ -z "$package" ]; then
+    echo missing
+    return 0
+  fi
   status=0
   out="$(bounded "$timeout" \
-      $swift test --package-path "$package" --skip-build --filter "/$1\(" </dev/null 2>&1)" || status=$?
+      $swift test --package-path "$work/$package" --skip-build --filter "/$1\(" </dev/null 2>&1)" || status=$?
   if printf '%s\n' "$out" | grep -q "Test run with 0 tests"; then
     echo missing
   elif [ "$status" -eq 0 ]; then
@@ -121,23 +149,32 @@ if ! build; then
   echo "mutation-check: the unbroken copy doesn't build. See $work/build.log"
   exit 1
 fi
-# One run for all of them; each must be found, so a misspelled name fails.
+# One run for all of them in each package; each must be found, so a
+# misspelled name fails, and the package it is found in is kept.
+: > "$where"
 listed="$(printf '%s\n' "$all_tests" | grep -c . || true)"
 if [ "$listed" -gt 0 ]; then
   alternatives="$(printf '%s\n' "$all_tests" | paste -sd '|' -)"
-  status=0
-  out="$(bounded "$baseline_timeout" \
-      $swift test --package-path "$package" --skip-build --filter "/($alternatives)\(" </dev/null 2>&1)" || status=$?
-  if [ "$status" -eq "$alarmed" ]; then
-    say "mutation-check: the listed tests didn't finish in ${baseline_timeout}s before anything was broken"
-    exit 1
-  elif [ "$status" -ne 0 ]; then
-    printf '%s\n' "$out" | grep -E "✘" | head -20
-    say "mutation-check: a listed test fails before anything is broken"
-    exit 1
-  fi
+  for package in $packages; do
+    status=0
+    out="$(bounded "$baseline_timeout" \
+        $swift test --package-path "$work/$package" --skip-build --filter "/($alternatives)\(" </dev/null 2>&1)" \
+        || status=$?
+    if printf '%s\n' "$out" | grep -q "Test run with 0 tests"; then continue; fi
+    if [ "$status" -eq "$alarmed" ]; then
+      say "mutation-check: the listed tests in $package didn't finish in ${baseline_timeout}s before anything was broken"
+      exit 1
+    elif [ "$status" -ne 0 ]; then
+      printf '%s\n' "$out" | grep -E "✘" | head -20
+      say "mutation-check: a listed test in $package fails before anything is broken"
+      exit 1
+    fi
+    for test in $all_tests; do
+      if printf '%s\n' "$out" | grep -q "Test $test("; then echo "$test $package" >> "$where"; fi
+    done
+  done
   for test in $all_tests; do
-    if ! printf '%s\n' "$out" | grep -q "Test $test("; then
+    if [ -z "$(package_of "$test")" ]; then
       say "mutation-check: no test named $test"
       exit 1
     fi
@@ -177,9 +214,9 @@ EOF
     return 0
   fi
   case "$file" in
-    Packages/PebbleKit/*)
+    Packages/*|Tools/*)
       built="$(date +%s)"
-      if ! build; then
+      if ! build "$(packages_of)"; then
         say "PROBLEM: $file doesn't build once broken by: $perl"
         problems=$((problems + 1))
         restore

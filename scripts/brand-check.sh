@@ -48,7 +48,7 @@ if [ "$(missing_from "$work/self-found" "$work/self-known")" != "a.swift: new" ]
 fi
 
 # shellcheck disable=SC2086
-if hits="$(grep -rniw $skip --include='*.swift' -e "$brand" App AppUITests Packages)"; then
+if hits="$(grep -rniw $skip --include='*.swift' -e "$brand" App AppUITests Packages Tools)"; then
   echo "brand-check: \"$brand\" is spelled out in code. Read it from Brand instead:"
   echo "$hits"
   exit 1
@@ -57,7 +57,7 @@ fi
 # Each hit as "path: line", without its line number, so moving code
 # around never breaks the list.
 # shellcheck disable=SC2086
-grep -rn $skip --include='*.swift' -e "$codename" App AppUITests Packages \
+grep -rn $skip --include='*.swift' -e "$codename" App AppUITests Packages Tools \
   | sed -E 's/^([^:]+):[0-9]+:[[:space:]]*/\1: /' | sort -u > "$work/found" || true
 new="$(missing_from "$work/found" "$known")"
 if [ -n "$new" ]; then

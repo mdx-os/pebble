@@ -1,12 +1,14 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test release-test repeat-test build build-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-config-check comment-lint hash-names mutation-check secrets-check pulse clean
+.PHONY: verify generate test release-test repeat-test mutation-check build build-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-config-check graph-check graph-check-test comment-lint hash-names secrets-check pulse clean
 
-## verify: everything CI runs. Run this before every PR. The screenshots are
-## made after every other step and then checked against the working tree.
-## Both are the recipe, so even with -j nothing runs beside them that could
-## change the tree between the stamp and the check.
-verify: brand-check local-config-check comment-lint screenshots-check-test test release-test mutation-check build build-release
+## verify: everything CI runs. Run this before every PR. The graph check
+## runs once the builds have made the project, so it reads that too. The
+## screenshots are made after every other step and then checked against the
+## working tree. Both are the recipe, so even with -j nothing runs beside
+## them that could change the tree between the stamp and the check.
+verify: brand-check local-config-check comment-lint screenshots-check-test graph-check-test test release-test mutation-check build build-release
+	$(MAKE) graph-check
 	$(MAKE) screenshots
 	sh scripts/screenshot-stamp.sh check build/screenshots
 
@@ -14,9 +16,11 @@ verify: brand-check local-config-check comment-lint screenshots-check-test test 
 generate:
 	xcodegen generate --quiet
 
-## test: unit tests for the shared packages
+## test: unit tests for the shared packages, then the source guards, which
+## live in Tools/GuardKit so swift-syntax stays out of the app's graph
 test:
 	swift test --package-path Packages/PebbleKit --quiet
+	swift test --package-path Tools/GuardKit --quiet
 
 ## release-test: run the promise that a shipped build reads no cloud
 ## address in a Release build of PebbleCore, so what it checks is the code
@@ -29,7 +33,14 @@ release-test:
 repeat-test:
 	sh scripts/repeat-test.sh $(or $(N),30) "$(FILTER)"
 
-## pulse: fetch the competitor watch and write a digest of real changes.
+## mutation-check: prove the tests can fail. Each entry in
+## scripts/mutation-manifest.txt breaks one thing, such as one source guard
+## rule, on a copy in build/mutation, and its tests must then fail. The
+## working tree is never touched. ONLY= runs the entries whose tests match.
+mutation-check:
+	sh scripts/mutation-check.sh scripts/mutation-manifest.txt "$(ONLY)"
+
+## pulse: fetch the public source watch and write a digest of real changes.
 ## When something changed, also write build/pulse/notify.md and build/pulse/summary.json.
 pulse:
 	swift run --package-path Packages/PebbleKit pulse -- --root "$(CURDIR)"
@@ -97,6 +108,15 @@ ui-test: generate
 brand-check:
 	sh scripts/brand-check.sh
 
+## graph-check: fail if swift-syntax, which only Tools/GuardKit uses, can
+## reach PebbleKit or the app project, named or through a dependency
+graph-check:
+	sh scripts/graph-check.sh
+
+## graph-check-test: self-test for that check, in a scratch tree
+graph-check-test:
+	sh scripts/graph-check-test.sh
+
 ## local-config-check: fail if Config/Cloud.local.xcconfig is tracked by git,
 ## or any tracked config sets a cloud address
 local-config-check:
@@ -113,12 +133,6 @@ comment-lint:
 hash-names:
 	sh scripts/comment-lint.sh --hash-names
 
-## mutation-check: break the code each behavior test in
-## scripts/mutation-manifest.txt covers, on a copy in build/mutation, and
-## require that test to fail. ONLY= runs the entries whose tests match.
-mutation-check:
-	sh scripts/mutation-check.sh
-
 ## secrets-check: scan git history for leaked secrets, and fail if the
 ## one-machine Config/Cloud.local.xcconfig is ever tracked
 secrets-check:
@@ -126,4 +140,4 @@ secrets-check:
 	gitleaks git --no-banner --redact .
 
 clean:
-	rm -rf build Pebble.xcodeproj Packages/PebbleKit/.build
+	rm -rf build Pebble.xcodeproj Packages/PebbleKit/.build Tools/GuardKit/.build

@@ -48,7 +48,7 @@ App/                  the app target (one target for Mac, iPhone and iPad)
 Config/Brand.xcconfig the product name, set once
 Packages/PebbleKit/   shared code, in layers
   PebbleCore            plain types, no UI, no networking
-  PebblePulse           competitor watch fetching and snapshots
+  PebblePulse           public source watch fetching and snapshots
   PebbleModel           model adapter and the on-device placeholder
   PebbleUI              SwiftUI views
 pulse/                source list and snapshots
