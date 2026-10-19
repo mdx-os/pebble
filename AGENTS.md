@@ -41,6 +41,9 @@ in lint, a skill, or CI.
   - `PebbleModel`: model adapter. `ModelClient`, the on-device placeholder and `CloudModel` (off by default, every request previewed and redacted by `Redactor` in PebbleCore). Imports PebbleCore. MLX and Ollama adapters plug in here.
   - `PebbleBackground`: gives the background runner time (`BGTaskScheduler` on iOS, `NSBackgroundActivityScheduler` on the Mac). Imports PebbleCore. Scheduling decisions are pure functions in `BackgroundPlan`; the runner, its store and its switch live in PebbleCore's `Background.swift`, so no platform code goes there.
   - `PebbleUI`: SwiftUI views shared by every platform. Imports PebbleCore and PebbleModel.
+- Where work is done (kept context, a framework, the relay, a remote run,
+  then the person) is decided only by `FallbackRouter` in PebbleCore.
+  The order and rules are in `docs/ROUTING.md`.
 - New code goes in a package, not in `App/`. New layers get added to
   `Package.swift` with their place in the order written down.
 - The source guards (privacy promise, contrast, accent, platform gate) read

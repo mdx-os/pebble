@@ -64,6 +64,7 @@ struct CopyDashTests {
       + ReceiptWords.all
       + NudgeWords.all
       + GrantWords.all
+      + RouteWords.all
 
     @Test func noScreenWordsUseADash() {
         for line in Self.copy {
