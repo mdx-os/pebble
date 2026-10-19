@@ -210,6 +210,36 @@ struct GrantSheetTests {
         try smokeRender(AllowedSection(grants: [], now: Self.morning) { _ in }.frame(width: 393))
     }
 
+    /// A Remove the store couldn't save is never called done: VoiceOver
+    /// hears that it couldn't be saved, the list says so under it, and the
+    /// line goes once the change is saved.
+    @Test(.scratchFiles) func aRemoveThatCouldNotBeSavedIsSaidOnTheList() throws {
+        let store = GrantMemoryStore()
+        let book = GrantBook(store: store, now: { Self.morning })
+        let rule = AskFirst.isolated(grants: book)
+        let state = try sheet(Self.send, rule: rule, granted: { book.add($0) })
+        state.choose(.always)
+        state.tapPrimary()
+        let memory = MemoryModel(store: MemoryStore(fileURL: Scratch.url("memory")), place: .onDevice,
+                                 grants: book, now: { Self.morning })
+        var heard: [String] = []
+        memory.announce = { heard.append($0) }
+        let grant = try #require(memory.allowed.first)
+        #expect(memory.grantsUnsaved == nil)
+        store.failing = true
+        store.failingErase = true
+        memory.removeGrant(grant)
+        #expect(memory.allowed.isEmpty)
+        #expect(memory.grantsUnsaved == .removal)
+        #expect(heard == [GrantWords.unsaved(.removal)])
+        try smokeRender(AllowedSection(grants: [], unsaved: .removal, now: Self.morning) { _ in }.frame(width: 393))
+        store.failing = false
+        store.failingErase = false
+        memory.refreshGrants()
+        #expect(memory.grantsUnsaved == nil)
+        #expect(GrantBook(store: store, now: { Self.morning }).grants.isEmpty)
+    }
+
     // MARK: Words are not a grant
 
     @Test(.scratchFiles) func aChatOrANoteThatSaysAlwaysAllowMakesNoGrant() async throws {

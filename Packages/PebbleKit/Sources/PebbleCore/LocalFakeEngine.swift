@@ -836,8 +836,11 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
                 (ask, withRule { rule -> AskFirst.Asked in
                     // A question picked up after the app closed keeps its
                     // deadline, and is asked again, not covered by a grant.
+                    // It keeps its task, so the sheet still offers a yes
+                    // for this task.
                     if let age = ask.askedAgo {
-                        return rule.askAgain(ask.action, askedAgo: age).map(AskFirst.Asked.asking) ?? .cannotAsk
+                        return rule.askAgain(ask.action, askedAgo: age, forTask: key(ask.id))
+                            .map(AskFirst.Asked.asking) ?? .cannotAsk
                     }
                     return rule.ask(ask.action, forTask: key(ask.id))
                 })

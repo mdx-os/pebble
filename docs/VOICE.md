@@ -104,7 +104,8 @@ its own review.
 
 ## Asking before acting
 
-Before the agent sends, buys or shares anything, it asks. The question
+Before the agent sends, buys or shares anything, it asks, unless a yes the
+person made last longer (below) covers that exact step. The question
 names exactly what will happen, to whom, and for how much. The buttons say
 what they do ("Yes, go ahead" and "Not now", from `ProposedAction.yesTitle`
 and `noTitle`; `CopyDashTests` checks they match), and the promise underneath

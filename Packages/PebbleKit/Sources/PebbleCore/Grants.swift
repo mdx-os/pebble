@@ -213,8 +213,15 @@ public final class GrantMemoryStore: GrantStoring, @unchecked Sendable {
     private var data: Data?
     private var isLocked = false
     private var failsWrites = false
+    private var failsErases = false
 
     public init() {}
+
+    /// While true, erases fail too, and leave what was kept.
+    package var failingErase: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return failsErases }
+        set { lock.lock(); failsErases = newValue; lock.unlock() }
+    }
 
     /// While true, reads say unavailable, as a file before the first unlock.
     package var locked: Bool {
@@ -249,6 +256,7 @@ public final class GrantMemoryStore: GrantStoring, @unchecked Sendable {
 
     public func erase() -> Bool {
         lock.lock(); defer { lock.unlock() }
+        guard !failsErases else { return false }
         data = nil
         return true
     }
@@ -263,10 +271,39 @@ public final class GrantFileStore: GrantStoring, @unchecked Sendable {
     public let fileURL: URL
     private let markerURL: URL
     private let lock = NSLock()
+    /// True for a store that keeps its grants in memory, as when its folder
+    /// couldn't be opened, and only forgets the file.
+    private let forgetOnly: Bool
+    /// What a forget-only store keeps.
+    private var held: Data?
 
     package init(fileURL: URL, forgetMarker: URL) {
         self.fileURL = fileURL
         markerURL = forgetMarker
+        forgetOnly = false
+    }
+
+    /// Kept in memory only, but Forget everything still deletes the file at
+    /// `forgets`, left by an earlier launch, which is never read. Any erase
+    /// deletes it, so nothing in it can come back. A forget an earlier launch
+    /// still owed is carried out now.
+    package init(forgetOnly forgets: URL, forgetMarker: URL) {
+        fileURL = forgets
+        markerURL = forgetMarker
+        forgetOnly = true
+        lock.lock()
+        if FileManager.default.fileExists(atPath: markerURL.path) { _ = eraseOwed() }
+        lock.unlock()
+    }
+
+    /// For when `onDevice` couldn't open its folder: keeps the grants in
+    /// memory, and Forget everything still deletes a file an earlier launch
+    /// left there.
+    public static func forgetOnly(fileManager: FileManager = .default) -> any GrantStoring {
+        guard let base = try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                              appropriateFor: nil, create: false) else { return GrantMemoryStore() }
+        let (file, marker) = location(base: base, app: TaskStore.appFolder)
+        return GrantFileStore(forgetOnly: file, forgetMarker: marker)
     }
 
     /// Where the file and its marker go, under `app`'s own folder.
@@ -297,6 +334,7 @@ public final class GrantFileStore: GrantStoring, @unchecked Sendable {
 
     public func read() -> GrantFile {
         lock.lock(); defer { lock.unlock() }
+        if forgetOnly { return held.map(GrantFile.data) ?? .empty }
         let manager = FileManager.default
         if manager.fileExists(atPath: markerURL.path), !eraseOwed() { return .unavailable }
         guard manager.fileExists(atPath: fileURL.path) else { return .empty }
@@ -306,6 +344,10 @@ public final class GrantFileStore: GrantStoring, @unchecked Sendable {
 
     public func write(_ data: Data) -> Bool {
         lock.lock(); defer { lock.unlock() }
+        if forgetOnly {
+            held = data
+            return true
+        }
         let manager = FileManager.default
         if manager.fileExists(atPath: markerURL.path), !eraseOwed() { return false }
         try? manager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -314,6 +356,7 @@ public final class GrantFileStore: GrantStoring, @unchecked Sendable {
 
     public func erase() -> Bool {
         lock.lock(); defer { lock.unlock() }
+        held = nil
         // Written first, with no protection, so a forget cut short is
         // still owed on the next launch.
         try? FileManager.default.createDirectory(at: markerURL.deletingLastPathComponent(),
@@ -366,10 +409,11 @@ public final class GrantBook: @unchecked Sendable {
     }
 
     /// The book on this device, its kept grants in the file. If the file's
-    /// folder can't be made, they are kept in memory.
-    public static func onDevice() -> GrantBook {
-        if let store = try? GrantFileStore.onDevice() { return GrantBook(store: store) }
-        return inMemory()
+    /// folder can't be made, they are kept in memory, and Forget everything
+    /// still deletes the file an earlier launch left.
+    public static func onDevice(fileManager: FileManager = .default) -> GrantBook {
+        if let store = try? GrantFileStore.onDevice(fileManager: fileManager) { return GrantBook(store: store) }
+        return GrantBook(store: GrantFileStore.forgetOnly(fileManager: fileManager))
     }
 
     /// Every grant still in force, newest first, for the list.
@@ -403,22 +447,53 @@ public final class GrantBook: @unchecked Sendable {
     }
 
     /// Removes one grant, at once: the next step it would have covered asks.
+    /// True once it is gone for good. False when there was no such grant,
+    /// or when the store couldn't take the change: it is off for this
+    /// launch, the change is tried again at each use, and `unsaved` says so.
     @discardableResult
     public func remove(_ id: UUID) -> Bool {
         locked { () -> (Bool, Bool) in
             loadIfNeeded()
             guard let index = all.firstIndex(where: { $0.id == id }) else { return (false, false) }
             let grant = all.remove(at: index)
-            if grant.isKept {
-                if loaded {
-                    save()
-                } else {
-                    addedWhileUnread.removeAll { $0.id == id }
-                    removedWhileUnread.insert(id)
-                }
+            guard grant.isKept else { return (true, true) }
+            guard loaded else {
+                // Given this launch and never written, so nothing to undo.
+                addedWhileUnread.removeAll { $0.id == id }
+                removedWhileUnread.insert(id)
+                return (true, true)
             }
-            return (true, true)
+            save()
+            // The old file still holds it, so a later launch would read it
+            // back. Every kept grant is erased instead: none can come back
+            // as a yes, and the rest are written again once the store takes
+            // them. Until then a restart loses them, and the agent asks.
+            if dirty, !owesErase, !store.erase() { owesErase = true }
+            return (!owesErase, true)
         }
+    }
+
+    /// What couldn't be saved yet, for the list. Each is tried again at
+    /// each use.
+    public enum Unsaved: Sendable, Equatable {
+        /// Grants in force that the store couldn't take. If the app closes
+        /// first they are gone, and the agent asks again.
+        case grants
+        /// A grant removed, or Forget everything, that the store couldn't
+        /// take yet. Until it does, the old file may still hold it.
+        case removal
+    }
+
+    /// Nil once every change is saved.
+    public var unsaved: Unsaved? {
+        lock.lock(); defer { lock.unlock() }
+        return unsavedNow
+    }
+
+    /// Called with the lock held.
+    private var unsavedNow: Unsaved? {
+        if owesErase { return .removal }
+        return dirty ? .grants : nil
     }
 
     /// A task ended: its task grants end with it.
@@ -487,11 +562,12 @@ public final class GrantBook: @unchecked Sendable {
     // MARK: Storage
 
     /// Runs `body` with the lock held, then calls the watchers when it
-    /// says something changed.
+    /// says something changed, or a change was saved or failed to be.
     private func locked<T>(_ body: () -> (T, Bool)) -> T {
         lock.lock()
+        let before = unsavedNow
         let (value, changed) = body()
-        let hooks = changed ? Array(observers.values) : []
+        let hooks = changed || unsavedNow != before ? Array(observers.values) : []
         lock.unlock()
         for hook in hooks { hook() }
         return value
@@ -671,6 +747,15 @@ public enum GrantWords {
     }
     /// Said once a grant is removed, since its row goes from under VoiceOver.
     public static let removed = "Removed. I'll ask you first next time."
+    /// Under the list while a change couldn't be saved yet.
+    public static func unsaved(_ what: GrantBook.Unsaved) -> String {
+        switch what {
+        case .removal:
+            "I couldn't save that just now. It's off for now, and I'll keep trying. If the app closes first, check this list when you're back."
+        case .grants:
+            "I couldn't save this list just now, and I'll keep trying. If the app closes first, I'll ask you first again for these."
+        }
+    }
     public static let alwaysLine = "Always, until you remove it"
     public static let whileTaskRuns = "For this task, until it ends"
     public static let untilMidnight = "Until midnight tonight"

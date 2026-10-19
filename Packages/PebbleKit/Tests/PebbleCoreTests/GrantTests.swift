@@ -381,6 +381,48 @@ struct GrantEngineTests {
         #expect(receipt.grantedAt == F.morning)
         #expect(receipt.line == GrantWords.receiptMayBeDone)
     }
+
+    /// A question still open when the app closed is asked again on the
+    /// next launch with this launch's key for its task, so the sheet still
+    /// offers "For this task". It keeps the deadline it had, needs a fresh
+    /// yes, and a yes for this task covers the task's later steps.
+    @Test func aQuestionPickedUpAfterTheAppClosedStillOffersForThisTask() throws {
+        let script = F.script([F.share(), F.share()], title: "Hold a visit")
+        let first = LocalFakeEngine(rule: AskFirst.isolated(), scripts: [script], origin: F.morning)
+        let id = first.start(script)
+        let saved = first.saved()
+        #expect(saved.first?.phase == .waiting)
+        let clock = TestClock()
+        let book = GrantBook.inMemory(now: { F.morning + 100 })
+        let rule = AskFirst.isolated(now: clock.now, grants: book)
+        let later = LocalFakeEngine(rule: rule, scripts: [script], origin: F.morning + 100)
+        later.restore(saved, now: F.morning + 100)
+        let question = try #require(later.task(id)?.question)
+        #expect(question.task != nil)
+        #expect(GrantChoice.offered(for: question.action.kind, task: question.task) == [.justThisOnce, .forThisTask])
+        // A fresh yes: the restored question is only asked, never answered.
+        #expect(later.task(id)?.waitsForApproval == true)
+        // The deadline it had: asked 100 seconds before, 200 are left.
+        clock.advance(200)
+        #expect(!rule.isClosed(question))
+        clock.advance(0.001)
+        #expect(rule.isClosed(question))
+        // Asked again in time, a yes for this task covers the next step.
+        let again = LocalFakeEngine(rule: rule, scripts: [script], origin: F.morning + 100)
+        again.restore(saved, now: F.morning + 100)
+        let open = try #require(again.task(id)?.question)
+        guard case .approved(let approval) = rule.sayYes(to: open) else {
+            Issue.record("no approval")
+            return
+        }
+        book.add(try #require(GrantIssuer().issue(.forThisTask, for: approval, now: F.morning + 100)))
+        #expect(again.resume(id, with: approval) == .proceeding)
+        again.advance(by: 3)
+        #expect(again.task(id)?.waitsForApproval == false)
+        again.advance(by: 3)
+        #expect(again.task(id)?.state == .done)
+        #expect(again.takeReceipts().map(\.grantedAt) == [nil, F.morning + 100])
+    }
 }
 
 /// Where grants are kept, and Forget everything.
@@ -469,13 +511,127 @@ struct GrantStoreTests {
         #expect(!FileManager.default.fileExists(atPath: marker.path))
         #expect(GrantBook(store: GrantFileStore(fileURL: file, forgetMarker: marker), now: { F.morning }).grants.isEmpty)
     }
+
+    /// A grant removed while the store won't write never comes back on the
+    /// next launch: every kept grant is erased instead, and the rest are
+    /// written again once the store takes them.
+    @Test func aRemovalTheStoreCouldNotWriteNeverComesBack() throws {
+        let store = GrantMemoryStore()
+        let book = GrantBook(store: store, now: { F.morning })
+        let sam = try #require(try F.grant(.always, for: F.send()))
+        let other = try #require(try F.grant(.always, for: F.send(to: F.otherSam), at: F.morning + 1))
+        book.add(sam)
+        book.add(other)
+        store.failing = true
+        #expect(book.remove(sam.id))
+        #expect(book.grants == [other])
+        #expect(book.unsaved == .grants)
+        // The app closes now: the next launch has no grant for Sam.
+        #expect(GrantBook(store: store, now: { F.morning }).grants.isEmpty)
+        // Once the store writes again, the one left is kept again.
+        store.failing = false
+        #expect(book.grants == [other])
+        #expect(book.unsaved == nil)
+        #expect(GrantBook(store: store, now: { F.morning }).grants == [other])
+    }
+
+    /// When the store takes neither the write nor the erase, the removal is
+    /// not called done, the list can say so, and the grant still covers
+    /// nothing. It is tried again until it goes through.
+    @Test func aRemovalTheStoreTookNoneOfIsNotCalledDone() throws {
+        let store = GrantMemoryStore()
+        let book = GrantBook(store: store, now: { F.morning })
+        let rule = AskFirst.isolated(grants: book)
+        let sam = try #require(try F.grant(.always, for: F.send()))
+        let other = try #require(try F.grant(.always, for: F.send(to: F.otherSam), at: F.morning + 1))
+        book.add(sam)
+        book.add(other)
+        store.failing = true
+        store.failingErase = true
+        let heard = Heard()
+        let watch = book.observe { heard.count() }
+        defer { book.stopObserving(watch) }
+        #expect(!book.remove(sam.id))
+        #expect(book.unsaved == .removal)
+        #expect(heard.times == 1)
+        guard case .asking = rule.ask(F.send(), forTask: "k") else {
+            Issue.record("a removed grant let a step go")
+            return
+        }
+        store.failing = false
+        store.failingErase = false
+        #expect(book.grants == [other])
+        #expect(book.unsaved == nil)
+        #expect(heard.times == 2, "the list hears the change went through")
+        #expect(GrantBook(store: store, now: { F.morning }).grants == [other])
+    }
+
+    /// Counts the book's calls to its watchers.
+    private final class Heard: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+        var times: Int { lock.lock(); defer { lock.unlock() }; return value }
+        func count() { lock.lock(); value += 1; lock.unlock() }
+    }
+
+    /// Answers Application Support with a folder of the test's own, where
+    /// no folder can be made, so the store on this device can't open.
+    private final class NoFolders: FileManager, @unchecked Sendable {
+        let base: URL
+        init(base: URL) {
+            self.base = base
+            super.init()
+        }
+        override func url(for directory: FileManager.SearchPathDirectory, in domain: FileManager.SearchPathDomainMask,
+                          appropriateFor url: URL?, create shouldCreate: Bool) throws -> URL {
+            base
+        }
+        override func createDirectory(at url: URL, withIntermediateDirectories createIntermediates: Bool,
+                                      attributes: [FileAttributeKey: Any]? = nil) throws {
+            throw CocoaError(.fileWriteNoPermission)
+        }
+    }
+
+    /// A book whose folder couldn't be opened keeps its grants in memory,
+    /// and Forget everything still deletes the file an earlier launch left,
+    /// so nothing in it comes back once the folder opens again.
+    @Test(.scratchFiles) func aBookThatCouldNotOpenItsFolderStillForgetsTheFileThere() throws {
+        let base = Scratch.url("support").deletingPathExtension()
+        let (file, marker) = GrantFileStore.location(base: base, app: TaskStore.appFolder)
+        let always = try #require(try F.grant(.always, for: F.send()))
+        GrantBook(store: GrantFileStore(fileURL: file, forgetMarker: marker), now: { F.morning }).add(always)
+        #expect(FileManager.default.fileExists(atPath: file.path))
+        let book = GrantBook.onDevice(fileManager: NoFolders(base: base))
+        #expect(book.grants.isEmpty, "it never reads the file")
+        book.add(try #require(try F.grant(.always, for: F.send(to: F.otherSam))))
+        #expect(book.grants.count == 1, "kept in memory")
+        book.forget()
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+        // The next launch, with its folder open again, has nothing back.
+        #expect(GrantBook(store: GrantFileStore(fileURL: file, forgetMarker: marker), now: { F.morning }).grants.isEmpty)
+    }
+
+    /// A forget an earlier launch still owed is carried out by a book that
+    /// couldn't open its folder, as soon as it opens.
+    @Test(.scratchFiles) func aBookThatCouldNotOpenItsFolderCarriesOutAForgetStillOwed() throws {
+        let base = Scratch.url("support").deletingPathExtension()
+        let (file, marker) = GrantFileStore.location(base: base, app: TaskStore.appFolder)
+        GrantBook(store: GrantFileStore(fileURL: file, forgetMarker: marker), now: { F.morning })
+            .add(try #require(try F.grant(.always, for: F.send())))
+        try FileManager.default.createDirectory(at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: marker)
+        _ = GrantBook.onDevice(fileManager: NoFolders(base: base))
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+    }
 }
 
 extension GrantWords {
     /// Every fixed line, for the dash check.
     static var all: [String] {
         [choiceHeading, justThisOnce, forThisTask, untilTonight, always("Sam"), listTitle, listDetail, listEmpty,
-         removeTitle, removeLabel(.send, "Sam"), removed, alwaysLine, whileTaskRuns, untilMidnight, wentAhead,
+         removeTitle, removeLabel(.send, "Sam"), removed, unsaved(.removal), unsaved(.grants), alwaysLine, whileTaskRuns, untilMidnight, wentAhead,
          receiptLine(.send, sameDay: true), receiptLine(.purchase, sameDay: false),
          receiptLine(.sharePersonalInfo, sameDay: true), receiptMayBeDone,
          title(.send, "Sam"), title(.purchase, "Rise Bakery"), title(.sharePersonalInfo, "Maple Dental")]

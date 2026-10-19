@@ -513,3 +513,52 @@ perl: s~(let grant = chosenGrants\.removeValue\(forKey: approval\.id\))~$1\n    
 test: removingFromTheListTakesEffectAtOnceForATaskAlreadyRunning
 file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
 perl: s~let removed = grants\?\.remove\(grant\.id\) == true~let removed = true~
+
+# A removal the store couldn't write left in the old file, for the next
+# launch to read back.
+test: aRemovalTheStoreCouldNotWriteNeverComesBack aRemovalTheStoreTookNoneOfIsNotCalledDone
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~if dirty, !owesErase, !store\.erase\(\) \{ owesErase = true \}~~
+
+# A removal the store took none of, called done.
+test: aRemovalTheStoreTookNoneOfIsNotCalledDone aRemoveThatCouldNotBeSavedIsSaidOnTheList
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~return \(!owesErase, true\)~return (true, true)~
+
+# The list never told that a change went through, or didn't.
+test: aRemovalTheStoreTookNoneOfIsNotCalledDone
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~changed \|\| unsavedNow != before \?~changed ?~
+
+# A Remove that couldn't be saved, said to no one.
+test: aRemoveThatCouldNotBeSavedIsSaidOnTheList
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~ else if let grantsUnsaved \{\n            announce\(GrantWords\.unsaved\(grantsUnsaved\)\)\n        \}~~
+
+# A book whose folder couldn't open that forgets nothing on disk.
+test: aBookThatCouldNotOpenItsFolderStillForgetsTheFileThere aBookThatCouldNotOpenItsFolderCarriesOutAForgetStillOwed
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~return GrantBook\(store: GrantFileStore\.forgetOnly\(fileManager: fileManager\)\)~return inMemory()~
+
+# A forget-only store that reads the file it should only forget.
+test: aBookThatCouldNotOpenItsFolderStillForgetsTheFileThere
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~if forgetOnly \{ return held\.map\(GrantFile\.data\) \?\? \.empty \}~~
+
+# A question picked up after the app closed, asked without its task.
+test: aQuestionPickedUpAfterTheAppClosedStillOffersForThisTask
+file: Packages/PebbleKit/Sources/PebbleCore/LocalFakeEngine.swift
+perl: s~askedAgo: age, forTask: key\(ask\.id\)\)~askedAgo: age)~
+
+test: aQuestionPickedUpAfterTheAppClosedStillOffersForThisTask
+file: Packages/PebbleKit/Sources/PebbleCore/AskFirst.swift
+perl: s~rounded\(\.up\)\)\), task: task\)~rounded(.up))))~
+
+# The granting state guard turned off, then a sheet answered in code.
+test: theGrantIssuerGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/GrantRules.swift
+perl: s~Rule\("grant\.grantingStateOutsideSheet", grantingStateOutsideSheet\)~Rule("grant.grantingStateOutsideSheet", { _, _ in [] })~
+
+test: onlyTheQuestionSheetMakesGrants
+file: Packages/PebbleKit/Sources/PebbleUI/ShowcaseScene.swift
+perl: s~onApprove: \{ _ = engine\.resume\(task\.id, with: \$0\) \}, onDecline: \{\}\)~onApprove: { _ = engine.resume(task.id, with: \$0) }, onGrant: { _ in }, onDecline: {})~

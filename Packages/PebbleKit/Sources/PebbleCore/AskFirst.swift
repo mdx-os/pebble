@@ -186,7 +186,8 @@ public struct ConfirmationRequest: Sendable, Equatable, Identifiable {
     }
 }
 
-/// The rule: the agent asks before it sends, buys or shares, every time.
+/// The rule: the agent asks before it sends, buys or shares, whenever no
+/// grant the person gave covers that exact step.
 ///
 /// There is no setting that turns this off. There is one rule for the app.
 /// It honors only approvals for questions it asked, for the identical
@@ -316,9 +317,14 @@ public final class AskFirst: @unchecked Sendable {
     /// while the app is closed. Setting that clock back while the app is
     /// closed can give a question more time, so the deadline holds only
     /// within one launch. The question still needs a fresh yes.
-    public func askAgain(_ action: ProposedAction, askedAgo age: TimeInterval) -> ConfirmationRequest? {
+    ///
+    /// `task` is the asking task's key in this launch, so the sheet can
+    /// still offer a yes for this task. No grant is looked at: a question
+    /// already asked is answered by the person.
+    public func askAgain(_ action: ProposedAction, askedAgo age: TimeInterval,
+                         forTask task: String? = nil) -> ConfirmationRequest? {
         guard age.isFinite, age >= 0, age <= questionWindow else { return nil }
-        return ask(action, askedAgo: .milliseconds(Int64((age * 1000).rounded(.up))))
+        return ask(action, askedAgo: .milliseconds(Int64((age * 1000).rounded(.up))), task: task)
     }
 
     /// False when a question about `action` can't say exactly where it

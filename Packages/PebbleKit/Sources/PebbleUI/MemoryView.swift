@@ -123,7 +123,8 @@ public struct MemoryView: View {
                         }
                     }
                     if model.grants != nil {
-                        AllowedSection(grants: model.allowed, now: model.currentDate) { model.removeGrant($0) }
+                        AllowedSection(grants: model.allowed, unsaved: model.grantsUnsaved,
+                                       now: model.currentDate) { model.removeGrant($0) }
                             .padding(.top, 8)
                     }
                     if model.background != nil {
@@ -439,6 +440,8 @@ struct MemoryUnavailableView: View {
 /// where exactly, and for how long, each with Remove.
 struct AllowedSection: View {
     let grants: [Grant]
+    /// What couldn't be saved yet, said under the list.
+    var unsaved: GrantBook.Unsaved? = nil
     let now: Date
     let onRemove: (Grant) -> Void
     @Environment(\.colorScheme) private var scheme
@@ -466,6 +469,12 @@ struct AllowedSection: View {
             }
             .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
+            if let unsaved {
+                Text(GrantWords.unsaved(unsaved))
+                    .font(.footnote)
+                    .foregroundStyle(Theme.secondaryText)
+                    .accessibilityIdentifier("grantsUnsaved")
+            }
         }
     }
 
@@ -854,6 +863,8 @@ final class MemoryModel: ObservableObject {
     let grants: GrantBook?
     /// Every grant in force, newest first, as the list shows them.
     @Published private(set) var allowed: [Grant] = []
+    /// What couldn't be saved yet, said under the list. Nil once saved.
+    @Published private(set) var grantsUnsaved: GrantBook.Unsaved?
     /// This model's watch on `grants`, so a grant given in Today, or every
     /// grant gone with Forget everything, shows here at once.
     private var grantsWatch: GrantBook.Observation?
@@ -920,16 +931,21 @@ final class MemoryModel: ObservableObject {
     func refreshGrants() {
         let now = grants?.grants ?? []
         if allowed != now { allowed = now }
+        let unsaved = grants?.unsaved
+        if grantsUnsaved != unsaved { grantsUnsaved = unsaved }
     }
 
     /// Takes one grant away. It counts at once, for a task already going
-    /// too: the next step it would have covered asks first.
+    /// too: the next step it would have covered asks first. When the change
+    /// couldn't be saved, VoiceOver hears that instead of "Removed".
     func removeGrant(_ grant: Grant) {
         let removed = grants?.remove(grant.id) == true
         refreshGrants()
         if removed {
             forgottenCount += 1
             announce(GrantWords.removed)
+        } else if let grantsUnsaved {
+            announce(GrantWords.unsaved(grantsUnsaved))
         }
     }
 
