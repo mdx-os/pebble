@@ -7,7 +7,6 @@ import SwiftUI
 /// or erased, and everything can be forgotten at once.
 public struct MemoryView: View {
     @StateObject private var model: MemoryModel
-    @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @FocusState private var addFocused: Bool
@@ -29,10 +28,14 @@ public struct MemoryView: View {
     /// what it forgot, so the status line can be honest about it.
     ///
     /// `background` puts its switch here, off until the person turns it on.
+    ///
+    /// `grants` puts the list of what the agent may do without asking
+    /// here, each with Remove.
     public init(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp? = nil, background: BackgroundRunner? = nil,
+                grants: GrantBook? = nil,
                 onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) {
         _model = StateObject(wrappedValue: MemoryModel(store: store, place: place, alsoForget: Self.alsoForget(cloud),
-                                                       background: background,
+                                                       background: background, grants: grants,
                                                        onForgetEverything: onForgetEverything))
         self.place = place
         self.cloud = cloud
@@ -87,7 +90,7 @@ public struct MemoryView: View {
         ZStack {
             Backdrop()
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: Theme.Space.l) {
                     header
                     addField
                     if model.isUnreadable {
@@ -101,7 +104,7 @@ public struct MemoryView: View {
                             .transition(.opacity)
                     }
                     if !model.notes.isEmpty {
-                        VStack(spacing: 10) {
+                        VStack(spacing: Theme.Space.s) {
                             ForEach(model.notes) { note in
                                 MemoryRow(
                                     note: note,
@@ -119,26 +122,31 @@ public struct MemoryView: View {
                             }
                         }
                     }
+                    if model.grants != nil {
+                        AllowedSection(grants: model.allowed, unsaved: model.grantsUnsaved,
+                                       now: model.currentDate) { model.removeGrant($0) }
+                            .padding(.top, Theme.Space.xs)
+                    }
                     if model.background != nil {
                         BackgroundRow(isOn: Binding(get: { model.backgroundOn }, set: { model.setBackground($0) }),
                                       detail: model.backgroundDetail, nextDue: model.backgroundNext)
-                            .padding(.top, 8)
+                            .padding(.top, Theme.Space.xs)
                     }
                     forgetEverythingSection
                     if let cloud {
                         CloudHelpRow(help: cloud, place: model.place)
-                            .padding(.top, 8)
+                            .padding(.top, Theme.Space.xs)
                     }
                     if let status = model.status {
                         Text(status)
-                            .font(.footnote)
+                            .font(Theme.TypeScale.footnote)
                             .foregroundStyle(Theme.secondaryText)
                             .frame(maxWidth: .infinity)
                             .accessibilityAddTraits(.updatesFrequently)
                     }
                 }
                 .padding(.horizontal, Theme.gutter)
-                .padding(.vertical, 20)
+                .padding(.vertical, Theme.Space.l)
                 .frame(maxWidth: Theme.readableWidth)
                 .frame(maxWidth: .infinity)
             }
@@ -190,11 +198,12 @@ public struct MemoryView: View {
             // may be private words to erase.
             CloudWatcher(help: cloud) { help in
                 forgetEverythingButton(shown: Self.showsForgetEverything(
-                    hasNotes: model.hasSomethingToForget, mayHaveWords: help.mayHavePrivateWords, holdsMore: holdsMore))
+                    hasNotes: model.hasSomethingToForget, mayHaveWords: help.mayHavePrivateWords,
+                    holdsMore: holdsMore || !model.allowed.isEmpty))
             }
         } else {
             forgetEverythingButton(shown: Self.showsForgetEverything(
-                hasNotes: model.hasSomethingToForget, mayHaveWords: false, holdsMore: holdsMore))
+                hasNotes: model.hasSomethingToForget, mayHaveWords: false, holdsMore: holdsMore || !model.allowed.isEmpty))
         }
     }
 
@@ -203,28 +212,28 @@ public struct MemoryView: View {
         if shown {
             Button(role: .destructive) { model.askForgetEverything = true } label: {
                 Text(MemoryWords.forgetEverythingTitle)
-                    .font(.subheadline.weight(.semibold))
+                    .font(Theme.TypeScale.subheadline.weight(.semibold))
                     // The system red is about 3.6 to 1 on white.
                     .foregroundStyle(Theme.dangerText)
                     .frame(maxWidth: .infinity, minHeight: 44)
             }
-            .padding(.top, 8)
+            .padding(.top, Theme.Space.xs)
         }
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
             Text(MemoryWords.title)
-                .font(.system(.largeTitle, design: .rounded).weight(.bold))
+                .font(Theme.TypeScale.displayLarge)
                 .accessibilityAddTraits(.isHeader)
             Label(MemoryWords.privacyNote(model.place), systemImage: "lock.fill")
-                .font(.footnote)
+                .font(Theme.TypeScale.footnote)
                 .foregroundStyle(Theme.secondaryText)
         }
     }
 
     private var addField: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: Theme.Space.s) {
             TextField(MemoryWords.addPlaceholder, text: $model.newNote, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...4)
@@ -232,7 +241,7 @@ public struct MemoryView: View {
                 .onSubmit { model.add() }
             Button { model.add() } label: {
                 Image(systemName: "plus")
-                    .font(.headline)
+                    .font(Theme.TypeScale.headline)
                     .foregroundStyle(Theme.onAccent)
                     .frame(width: 36, height: 36)
                     .background(Theme.accent, in: Circle())
@@ -247,11 +256,10 @@ public struct MemoryView: View {
         // added on top of them. The notice below says why.
         .disabled(!model.canAdd)
         .opacity(model.canAdd ? 1 : 0.5)
-        .padding(.leading, 16)
-        .padding(.trailing, 8)
-        .padding(.vertical, 8)
-        .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
+        .padding(.leading, Theme.Space.m)
+        .padding(.trailing, Theme.Space.xs)
+        .padding(.vertical, Theme.Space.xs)
+        .cardSurface()
     }
 
     private var empty: some View {
@@ -339,6 +347,9 @@ struct MemoryUnavailableView: View {
     /// Background work, whose switch and summaries need no notes, so they
     /// are here too. Nil hides them.
     var background: BackgroundRunner?
+    /// The person's grants, kept apart from the notes, so they can still be
+    /// seen and removed here. Nil hides the list.
+    var grants: GrantBook?
     let onForgetTasks: @MainActor () -> Void
     @State private var asking = false
     /// The button goes once the tasks do, so VoiceOver goes to the line
@@ -384,12 +395,12 @@ struct MemoryUnavailableView: View {
     }
 
     private var content: some View {
-        VStack(spacing: 18) {
+        VStack(spacing: Theme.Space.l) {
             GentleNotice(text: MemoryWords.couldNotOpen)
             if hasTasks {
                 Button(role: .destructive) { asking = true } label: {
                     Text(TaskWords.forgetTasksTitle)
-                        .font(.subheadline.weight(.semibold))
+                        .font(Theme.TypeScale.subheadline.weight(.semibold))
                         // The system red is about 3.6 to 1 on white.
                         .foregroundStyle(Theme.dangerText)
                         .frame(maxWidth: .infinity, minHeight: 44)
@@ -397,7 +408,7 @@ struct MemoryUnavailableView: View {
                 .accessibilityIdentifier("forgetTasks")
             } else if let status {
                 Text(status)
-                    .font(.footnote)
+                    .font(Theme.TypeScale.footnote)
                     .foregroundStyle(Theme.secondaryText)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -410,9 +421,13 @@ struct MemoryUnavailableView: View {
                         Task { @MainActor in statusFocused = true }
                     }
             }
+            if let grants {
+                AllowedFallbackSection(model: AllowedModel(grants: grants))
+                    .padding(.top, Theme.Space.xs)
+            }
             if let background {
                 BackgroundFallbackSection(model: BackgroundSettingModel(runner: background))
-                    .padding(.top, 8)
+                    .padding(.top, Theme.Space.xs)
             }
         }
         .padding(Theme.gutter)
@@ -427,12 +442,157 @@ struct MemoryUnavailableView: View {
 
 /// The switch for background work: what it does in a plain line, and when
 /// the next summary is due while it is on.
+/// What the agent may do without asking each time, in plain words: who,
+/// where exactly, and for how long, each with Remove.
+struct AllowedSection: View {
+    let grants: [Grant]
+    /// What couldn't be saved yet, said under the list.
+    var unsaved: GrantBook.Unsaved? = nil
+    let now: Date
+    let onRemove: (Grant) -> Void
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            Text(GrantWords.listTitle)
+                .font(Theme.TypeScale.headline)
+                .accessibilityAddTraits(.isHeader)
+            Text(GrantWords.listDetail)
+                .font(Theme.TypeScale.footnote)
+                .foregroundStyle(Theme.secondaryText)
+            VStack(spacing: 0) {
+                if grants.isEmpty {
+                    Text(GrantWords.listEmpty)
+                        .font(Theme.TypeScale.subheadline)
+                        .foregroundStyle(Theme.secondaryText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(Theme.Space.m)
+                }
+                ForEach(Array(grants.enumerated()), id: \.element.id) { index, grant in
+                    if index > 0 { Divider().overlay(Theme.hairline(scheme)) }
+                    row(grant)
+                }
+            }
+            .cardSurface()
+            if let unsaved {
+                Text(GrantWords.unsaved(unsaved))
+                    .font(Theme.TypeScale.footnote)
+                    .foregroundStyle(Theme.secondaryText)
+                    .accessibilityIdentifier("grantsUnsaved")
+            }
+        }
+    }
+
+    private func row(_ grant: Grant) -> some View {
+        HStack(alignment: .center, spacing: Theme.Space.s) {
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                Text(grant.title)
+                    .font(Theme.TypeScale.body.weight(.medium))
+                // The exact handle on a line of its own, never in a sentence
+                // with the name, which is free text.
+                if let handle = grant.target.handle {
+                    Text(handle)
+                        .font(Theme.TypeScale.footnote)
+                        .foregroundStyle(Theme.secondaryText)
+                }
+                Text(grant.scopeLine(now: now))
+                    .font(Theme.TypeScale.footnote)
+                    .foregroundStyle(Theme.secondaryText)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("grantRow")
+            Spacer(minLength: 0)
+            Button(role: .destructive) { onRemove(grant) } label: {
+                Text(GrantWords.removeTitle)
+                    .font(Theme.TypeScale.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.dangerText)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(GrantWords.removeLabel(grant.action, grant.target.displayName))
+            .accessibilityIdentifier("removeGrant")
+        }
+        .padding(.leading, Theme.Space.m)
+        .padding(.trailing, Theme.Space.xs)
+        .padding(.vertical, Theme.Space.s)
+    }
+}
+
+/// The list of what the agent may do without asking, on the screen with
+/// no notes. Grants never need the notes, so they are always listed, each
+/// with Remove, and a change that couldn't be saved is said under it.
+struct AllowedFallbackSection: View {
+    @StateObject private var model: AllowedModel
+
+    init(model: @autoclosure @escaping () -> AllowedModel) {
+        _model = StateObject(wrappedValue: model())
+    }
+
+    var body: some View {
+        AllowedSection(grants: model.allowed, unsaved: model.unsaved, now: model.currentDate) { model.remove($0) }
+            .haptic(.forgotten, trigger: model.removedCount)
+    }
+}
+
+/// The grants on their own, for the screen with no notes. The memory
+/// screen's own model lists them the same way.
+@MainActor
+final class AllowedModel: ObservableObject {
+    let grants: GrantBook
+    /// Every grant in force, newest first, as the list shows them.
+    @Published private(set) var allowed: [Grant] = []
+    /// What couldn't be saved yet, said under the list. Nil once saved.
+    @Published private(set) var unsaved: GrantBook.Unsaved?
+    /// Goes up by one each time a grant is removed, for a light tap.
+    @Published private(set) var removedCount = 0
+    private let now: () -> Date
+    private var watch: GrantBook.Observation?
+    /// Speaks a line to VoiceOver. Tests listen in.
+    var announce: @MainActor (String) -> Void = { AccessibilityNotification.Announcement($0).post() }
+
+    /// The time the list's lines are told against.
+    var currentDate: Date { now() }
+
+    init(grants: GrantBook, now: @escaping () -> Date = { Date() }) {
+        self.grants = grants
+        self.now = now
+        refresh()
+        watch = grants.observe { [weak self] in
+            Task { @MainActor in self?.refresh() }
+        }
+    }
+
+    deinit {
+        if let watch { grants.stopObserving(watch) }
+    }
+
+    func refresh() {
+        let now = grants.grants
+        if allowed != now { allowed = now }
+        let still = grants.unsaved
+        if unsaved != still { unsaved = still }
+    }
+
+    /// Takes one grant away, at once. When the change couldn't be saved,
+    /// VoiceOver hears that instead of "Removed".
+    func remove(_ grant: Grant) {
+        let removed = grants.remove(grant.id)
+        refresh()
+        if removed {
+            removedCount += 1
+            announce(GrantWords.removed)
+        } else if let unsaved {
+            announce(GrantWords.unsaved(unsaved))
+        }
+    }
+}
+
 struct BackgroundRow: View {
     @Binding var isOn: Bool
     /// What the switch does, from `MemoryModel.backgroundDetail`.
     let detail: String
     let nextDue: String?
-    @Environment(\.colorScheme) private var scheme
 
     /// True where the system may give the app time while it is closed.
     /// On the Mac it runs while the app is open, so the line says that.
@@ -445,14 +605,14 @@ struct BackgroundRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
             // One control for the whole row, so the target stays large at
             // any text size and a tap anywhere, the knob included, turns it
             // over exactly once. The switch inside only shows the state.
             Button { isOn.toggle() } label: {
-                HStack(spacing: 12) {
+                HStack(spacing: Theme.Space.s) {
                     Text(BackgroundWords.settingTitle)
-                        .font(.body.weight(.medium))
+                        .font(Theme.TypeScale.body.weight(.medium))
                         .foregroundStyle(.primary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Toggle(BackgroundWords.settingTitle, isOn: .constant(isOn))
@@ -474,21 +634,20 @@ struct BackgroundRow: View {
             // Its own element, read right after the switch, so VoiceOver
             // users hear that it asks first even with hints turned off.
             Text(detail)
-                .font(.footnote)
+                .font(Theme.TypeScale.footnote)
                 .foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("backgroundDetail")
             if let nextDue {
                 Text(nextDue)
-                    .font(.footnote.weight(.medium))
+                    .font(Theme.TypeScale.footnote.weight(.medium))
                     .foregroundStyle(Theme.secondaryText)
                     .accessibilityIdentifier("backgroundNext")
             }
         }
-        .padding(16)
+        .padding(Theme.Space.m)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
+        .cardSurface()
     }
 }
 
@@ -595,13 +754,13 @@ struct BackgroundFallbackSection: View {
     }
 
     var body: some View {
-        VStack(spacing: 18) {
+        VStack(spacing: Theme.Space.l) {
             BackgroundRow(isOn: Binding(get: { model.setting.isOn }, set: { model.set($0) }),
                           detail: model.detail, nextDue: model.setting.next)
             if model.setting.hasSomethingToForget {
                 Button(role: .destructive) { model.askForget = true } label: {
                     Text(MemoryWords.forgetSummariesTitle)
-                        .font(.subheadline.weight(.semibold))
+                        .font(Theme.TypeScale.subheadline.weight(.semibold))
                         // The system red is about 3.6 to 1 on white.
                         .foregroundStyle(Theme.dangerText)
                         .frame(maxWidth: .infinity, minHeight: 44)
@@ -610,7 +769,7 @@ struct BackgroundFallbackSection: View {
             }
             if let status = model.status {
                 Text(status)
-                    .font(.footnote)
+                    .font(Theme.TypeScale.footnote)
                     .foregroundStyle(Theme.secondaryText)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -638,41 +797,40 @@ struct MemoryRow: View {
     let onSave: () -> Void
     let onCancel: () -> Void
     let onForget: () -> Void
-    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             if isEditing {
                 TextField(MemoryWords.editPlaceholder, text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
-                    .font(.body)
+                    .font(Theme.TypeScale.body)
                     .lineLimit(1...6)
                 HStack {
                     Button(MemoryWords.cancelTitle, action: onCancel)
                         .buttonStyle(QuietButtonStyle())
                     Spacer()
                     Button(MemoryWords.saveTitle, action: onSave)
-                        .font(.subheadline.weight(.semibold))
+                        .font(Theme.TypeScale.subheadline.weight(.semibold))
                         .foregroundStyle(Theme.accentText)
                         .frame(minHeight: 44)
                 }
             } else {
                 Text(note.text)
-                    .font(.body)
+                    .font(Theme.TypeScale.body)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 16) {
+                HStack(spacing: Theme.Space.m) {
                 ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 10) {
+                    HStack(spacing: Theme.Space.s) {
                         SourceLabel(source: note.source)
                         Text(note.savedAt, format: .dateTime.month(.abbreviated).day())
-                            .font(.caption)
+                            .font(Theme.TypeScale.caption)
                             .foregroundStyle(Theme.secondaryText)
                     }
                     // At large text sizes the source gets its own line so it never clips.
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                         SourceLabel(source: note.source)
                         Text(note.savedAt, format: .dateTime.month(.abbreviated).day())
-                            .font(.caption)
+                            .font(Theme.TypeScale.caption)
                             .foregroundStyle(Theme.secondaryText)
                     }
                 }
@@ -690,16 +848,15 @@ struct MemoryRow: View {
                         .help(MemoryWords.forgetTitle)
                         .accessibilityLabel(MemoryWords.forgetTitle)
                 }
-                .font(.subheadline)
+                .font(Theme.TypeScale.subheadline)
                 .foregroundStyle(Theme.secondaryText)
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 14)
-        .padding(.bottom, isEditing ? 6 : 0)
-        .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
+        .padding(.horizontal, Theme.Space.m)
+        .padding(.top, Theme.Space.m)
+        .padding(.bottom, isEditing ? Theme.Space.xs : 0)
+        .cardSurface()
         .accessibilityElement(children: .contain)
         .accessibilityAction(named: MemoryWords.editTitle, onEdit)
         .accessibilityAction(named: MemoryWords.forgetTitle, onForget)
@@ -719,9 +876,9 @@ struct SourceLabel: View {
             Image(systemName: source.symbol)
                 .foregroundStyle(source == .inferred ? AnyShapeStyle(Theme.accentSymbol) : AnyShapeStyle(Theme.secondaryText))
         }
-            .font(.caption.weight(.medium))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .font(Theme.TypeScale.caption.weight(.medium))
+            .padding(.horizontal, Theme.Space.xs)
+            .padding(.vertical, Theme.Space.xxs)
             .background(
                 source == .inferred ? Theme.accent.opacity(Theme.accentWash) : Color.primary.opacity(Theme.fieldTint),
                 in: Capsule()
@@ -788,6 +945,17 @@ final class MemoryModel: ObservableObject {
     /// another window shows here, and an edit of it stops.
     private var notesWatch: TaskObservation?
 
+    /// The person's grants, listed on this screen, each with Remove. Nil
+    /// hides the list.
+    let grants: GrantBook?
+    /// Every grant in force, newest first, as the list shows them.
+    @Published private(set) var allowed: [Grant] = []
+    /// What couldn't be saved yet, said under the list. Nil once saved.
+    @Published private(set) var grantsUnsaved: GrantBook.Unsaved?
+    /// This model's watch on `grants`, so a grant given in Today, or every
+    /// grant gone with Forget everything, shows here at once.
+    private var grantsWatch: GrantBook.Observation?
+
     /// Background work, whose switch sits on this screen. Nil hides it.
     let background: BackgroundRunner?
     @Published private(set) var backgroundOn = false
@@ -808,6 +976,9 @@ final class MemoryModel: ObservableObject {
     /// Forget everything shows while there is anything for it to remove.
     var hasSomethingToForget: Bool { hasStoredFile || hasBackgroundToForget }
 
+    /// The time the list's lines are told against.
+    var currentDate: Date { now() }
+
     /// Whether the question before Forget everything names work while away:
     /// only while it is on or has summaries to erase, so it promises only
     /// what this tap will do.
@@ -824,7 +995,7 @@ final class MemoryModel: ObservableObject {
     /// when a task elsewhere makes or erases its file, so Forget everything
     /// shows while there is anything to erase.
     init(store: MemoryStore, place: PrivacyPlace, alsoForget: (@MainActor () throws -> CloudHelp.Forgot)? = nil,
-         background: BackgroundRunner? = nil, now: @escaping () -> Date = { Date() },
+         background: BackgroundRunner? = nil, grants: GrantBook? = nil, now: @escaping () -> Date = { Date() },
          onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none },
          othersStored: @escaping @MainActor () -> Bool = { false },
          othersChanged: AnyPublisher<Void, Never>? = nil,
@@ -834,6 +1005,7 @@ final class MemoryModel: ObservableObject {
         self.place = place
         self.alsoForget = alsoForget
         self.background = background
+        self.grants = grants
         self.now = now
         self.onForgetEverything = onForgetEverything
         self.othersStored = othersStored
@@ -849,10 +1021,35 @@ final class MemoryModel: ObservableObject {
         backgroundWatch = background?.observe { [weak self] in
             Task { @MainActor in self?.refreshBackground() }
         }
+        grantsWatch = grants?.observe { [weak self] in
+            Task { @MainActor in self?.refreshGrants() }
+        }
     }
 
     deinit {
         if let backgroundWatch { background?.stopObserving(backgroundWatch) }
+        if let grantsWatch { grants?.stopObserving(grantsWatch) }
+    }
+
+    func refreshGrants() {
+        let now = grants?.grants ?? []
+        if allowed != now { allowed = now }
+        let unsaved = grants?.unsaved
+        if grantsUnsaved != unsaved { grantsUnsaved = unsaved }
+    }
+
+    /// Takes one grant away. It counts at once, for a task already going
+    /// too: the next step it would have covered asks first. When the change
+    /// couldn't be saved, VoiceOver hears that instead of "Removed".
+    func removeGrant(_ grant: Grant) {
+        let removed = grants?.remove(grant.id) == true
+        refreshGrants()
+        if removed {
+            forgottenCount += 1
+            announce(GrantWords.removed)
+        } else if let grantsUnsaved {
+            announce(GrantWords.unsaved(grantsUnsaved))
+        }
     }
 
     /// Turns background work on or off. On, the summary is due the next
@@ -911,6 +1108,7 @@ final class MemoryModel: ObservableObject {
         hasStoredFile = store.hasStoredFile || othersStored()
         // Forget everything turns background work off, so the switch follows.
         refreshBackground()
+        refreshGrants()
     }
 
     /// An edit or a forget question about a note that changed or went since

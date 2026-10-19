@@ -103,10 +103,21 @@ final class DigestUITests: XCTestCase {
         app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "This week in your notes"))
     }
 
+    /// Scrolls Today until the offer sits clear of the composer. Below the
+    /// empty state, on a small phone it starts under the composer, where a
+    /// tap reaches the composer instead.
+    private func reveal(_ offer: XCUIElement, _ app: XCUIApplication) {
+        let field = app.descendants(matching: .any).matching(identifier: "todayComposer").firstMatch
+        for _ in 0..<3 where !offer.isHittable || (field.exists && offer.frame.maxY > field.frame.minY - 12) {
+            app.scrollViews.firstMatch.swipeUp()
+        }
+    }
+
     /// Runs the digest to its question on Today.
     private func startDigest(_ app: XCUIApplication) -> XCUIElement {
         let offer = app.buttons["Tidy my notes into a short weekly digest"].firstMatch
         XCTAssertTrue(offer.waitForExistence(timeout: 10))
+        reveal(offer, app)
         offer.tap()
         let approve = app.buttons["Check and approve"].firstMatch
         XCTAssertTrue(approve.waitForExistence(timeout: 15))
@@ -171,6 +182,7 @@ final class DigestUITests: XCTestCase {
         let offer = app.buttons["Tidy my notes into a short weekly digest"].firstMatch
         XCTAssertTrue(offer.waitForExistence(timeout: 10))
         keep("today-offer", app)
+        reveal(offer, app)
         offer.tap()
         let approve = app.buttons["Check and approve"].firstMatch
         XCTAssertTrue(approve.waitForExistence(timeout: 15))

@@ -206,6 +206,21 @@ test: theAccentGuardCatchesEveryWrongCase
 file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
 perl: s~Rule\("accent\.ink", ink\)~Rule("accent.ink", { _, _ in [] })~
 
+# The design token guard: no literal color or fixed font size in PebbleUI
+# outside Theme.swift.
+test: theTokenGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/TokenRules.swift
+perl: s~Rule\("token\.literalColor", literalColor\)~Rule("token.literalColor", { _, _ in [] })~
+
+test: theTokenGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/TokenRules.swift
+perl: s~Rule\("token\.fixedFont", fixedFont\)~Rule("token.fixedFont", { _, _ in [] })~
+
+# Theme.swift left out by prefix, so every file is let by.
+test: theTokenGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/TokenRules.swift
+perl: s~file\.hasPrefix\("PebbleUI/"\) && file != themeFile~file.hasPrefix("PebbleUI/") \&\& !file.hasPrefix("PebbleUI/")~
+
 # The row's `chosen` found by text, not by scope: the nearest function's
 # parameter list is never asked, so another function's `chosen` counts.
 test: theAccentGuardCatchesEveryWrongCase
@@ -358,3 +373,296 @@ perl: s~Task \{ \@MainActor in self\?\.refresh\(\) \}\n        \}\n        backg
 test: aWindowPutsAwayAnEditOnceItHearsTheNoteChanged
 file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
 perl: s~(private func dropStale\(\) \{)~$1\n        if true { return }~
+
+# Grants. Only the sheet's answer makes one, and each covers only its own
+# action, its own exact target, inside its scope.
+
+# The issuer guard turned off, then GrantIssuer named outside the sheet.
+test: theGrantIssuerGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/GrantRules.swift
+perl: s~Rule\("grant\.issuerOutsideSheet", issuerOutsideSheet\)~Rule("grant.issuerOutsideSheet", { _, _ in [] })~
+
+test: onlyTheQuestionSheetMakesGrants
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~(func granted\(_ grant: Grant, for request: ConfirmationRequest\) \{)~$1\n        _ = GrantIssuer()~
+
+# A grant matched by the name alone, not the exact target.
+test: aGrantCoversOnlyItsOwnActionAndExactTarget
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~grant\.target == action\.recipient,~grant.target.displayName == action.recipient.displayName,~
+
+# A grant for one action covering another.
+test: aGrantCoversOnlyItsOwnActionAndExactTarget
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~guard grant\.action == action\.kind, ~guard ~
+
+# An until grant that never stops. The book also drops a lapsed grant
+# before the gate looks, which the lapsed entry below breaks.
+test: anUntilGrantStopsAtItsTime
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~case \.until\(let end\): return now < end~case .until: return true~
+
+# A clock set back before the grant covering what it covers.
+test: anUntilGrantStopsAtItsTime
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~allows\(grant\.scope, for: grant\.action\), now >= grant\.createdAt else~allows(grant.scope, for: grant.action) else~
+
+# Lapsed grants left on the list.
+test: anExpiredUsedUpOrOtherTaskGrantDoesNotAuthorize
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~let lapsed = all\.filter \{ if case \.until\(let end\) = \$0\.scope \{ time >= end \} else \{ false \} \}~let lapsed: [Grant] = []~
+
+# A task grant covering any task.
+test: aTaskGrantCoversOnlyItsOwnTask anExpiredUsedUpOrOtherTaskGrantDoesNotAuthorize
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~case \.thisTask\(let key\): return task == key~case .thisTask: return true~
+
+# A once grant never spent.
+test: aGrantLetsTheStepGoAheadAndAOnceGrantIsUsedUp
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~if grant\.scope == \.once \{~if false {~
+
+# A once grant spent while a lasting one covers the same step.
+test: theGateIsDeterministicAndKeepsAOnceGrantForLast
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~\(a\.scope == \.once \? 1 : 0, ~(0, ~
+
+# Spending and sharing offered a yes past one task.
+test: spendingAndSharingOfferOnlyOnceAndThisTask spendingAndSharingSheetsOfferOnlyOnceAndThisTask
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~if kind == \.send \{ out \+= \[\.untilTonight, \.always\] \}~out += [.untilTonight, .always]~
+
+# A kept grant changed into one to spend money, read back as it is.
+test: aChangedFileCanNeverWidenAGrant
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~case \.until, \.always: kind == \.send~case .until, .always: true~
+
+# Until tonight ending at some other time.
+test: anUntilGrantStopsAtItsTime untilTonightEndsAtMidnightAndForThisTaskNamesTheTaskThatAsked
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~case \.untilTonight: scope = \.until\(GrantGate\.endOfDay\(now, calendar: calendar\)\)~case .untilTonight: scope = .until(now + 60 * 60)~
+
+# Just this once added to the book, so it would cover a later step.
+test: onlyLastingGrantsAreKeptAndTheyComeBack
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~guard grant\.scope != \.once else \{ return \}~~
+
+# A store that can't be read yet taken for an empty one.
+test: whileTheStoreIsLockedKeptGrantsAllowNothingAndNothingIsWrittenOver
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~case \.unavailable: return~case .unavailable: kept = []~
+
+# Remove that removes nothing.
+test: removingAGrantTakesEffectAtOnceForATaskAlreadyRunning removingFromTheListTakesEffectAtOnceForATaskAlreadyRunning
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~guard let index = all\.firstIndex\(where: \{ \$0\.id == id \}\) else \{ return \(false, false\) \}~guard let index = Optional<Int>.none else { return (false, false) }~
+
+# Forget everything that leaves the grants in memory.
+test: forgetEverythingRemovesEveryGrant
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~(let had = !all\.isEmpty)\n            all = \[\]~$1~
+
+# The file written without complete protection.
+test: theFileHasCompleteProtectionAndForgetDeletesIt
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~protected \? \[\.atomic, \.completeFileProtection\] : \[\.atomic\]~[.atomic]~
+
+# Today's Forget everything that leaves the grants.
+test: forgetEverythingRemovesEveryGrant
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~\n        grants\?\.forget\(\)~~
+
+# The rule that never looks at its grants.
+test: aGrantLetsTheStepGoAheadAndAOnceGrantIsUsedUp aStepAGrantAllowsStillWritesItsReceiptNamingTheGrant
+file: Packages/PebbleKit/Sources/PebbleCore/AskFirst.swift
+perl: s~if let step = grants\?\.use\(action, task: task\) \{ return \.granted\(step\) \}~~
+
+# A step with no grant that no longer asks: words in a chat or a note, or
+# no grant at all, would then let it go.
+test: withNoGrantTheRuleAsksAsItAlwaysHas withNoGrantTheTaskWaitsForAYesAsBefore aChatOrANoteThatSaysAlwaysAllowMakesNoGrant
+file: Packages/PebbleKit/Sources/PebbleCore/AskFirst.swift
+perl: s~return ask\(action, askedAgo: \.zero, task: task\)\.map\(Asked\.asking\) \?\? \.cannotAsk~return .cannotAsk~
+
+# A book that can be swapped for another.
+test: aRuleTakesItsBookOnceAndKeepsIt
+file: Packages/PebbleKit/Sources/PebbleCore/AskFirst.swift
+perl: s~if book == nil \{ book = grants \}~book = grants~
+
+# A receipt that doesn't name the grant.
+test: aStepAGrantAllowsStillWritesItsReceiptNamingTheGrant
+file: Packages/PebbleKit/Sources/PebbleCore/TaskStore.swift
+perl: s~guard let grantedAt else \{~guard let grantedAt, false else {~
+
+test: aStepAGrantAllowsStillWritesItsReceiptNamingTheGrant aTaskGrantCoversItsOwnLaterStepsAndEndsWithTheTask removingAGrantTakesEffectAtOnceForATaskAlreadyRunning
+file: Packages/PebbleKit/Sources/PebbleCore/LocalFakeEngine.swift
+perl: s~isSample: isSample, grantedAt: run\.grantedAt\)\)~isSample: isSample))~
+
+# A granted step under way when the app closed, its grant not kept.
+test: aGrantedStepUnderWayWhenTheAppClosedKeepsItsReceiptLine
+file: Packages/PebbleKit/Sources/PebbleCore/LocalFakeEngine.swift
+perl: s~grantedAt: phase == \.approved \? run\.grantedAt : nil,~grantedAt: nil,~
+
+# A task that ends without ending its task grants.
+test: aTaskGrantCoversItsOwnLaterStepsAndEndsWithTheTask aTaskStoppedEndsItsTaskGrant
+file: Packages/PebbleKit/Sources/PebbleCore/LocalFakeEngine.swift
+perl: s~if run\.task\.isActive \{ endedKeys\.append\(key\(run\.task\.id\)\) \}~~
+
+# Task keys shared between windows.
+test: aTaskGrantNeverCoversATaskWithTheSameIdInAnotherWindow
+file: Packages/PebbleKit/Sources/PebbleCore/LocalFakeEngine.swift
+perl: s~instance\.uuidString \+ "/" \+ id~id~
+
+# The sheet starting on a wider yes.
+test: theSheetOffersEveryScopeInPlainWordsAndStartsOnJustThisOnce
+file: Packages/PebbleKit/Sources/PebbleUI/ConfirmationSheet.swift
+perl: s~var choice: GrantChoice = \.standard~var choice: GrantChoice = .always~
+
+# The choices in other words.
+test: theChoicesAreSaidInPlainWords theSheetOffersEveryScopeInPlainWordsAndStartsOnJustThisOnce
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~public static let justThisOnce = "Just this once"~public static let justThisOnce = "Only now"~
+
+# Just this once handed on as a grant too.
+test: justThisOnceALateYesOrNotNowMakesNoGrant
+file: Packages/PebbleKit/Sources/PebbleUI/ConfirmationSheet.swift
+perl: s~if choice != \.justThisOnce, let onGrant,~if let onGrant,~
+
+# A choice the question doesn't offer taken anyway.
+test: spendingAndSharingSheetsOfferOnlyOnceAndThisTask
+file: Packages/PebbleKit/Sources/PebbleUI/ConfirmationSheet.swift
+perl: s~guard screen == \.asking, choices\.contains\(next\) else \{ return \}~guard screen == .asking else { return }~
+
+# The yes handed on without its grant.
+test: alwaysForANameGrantsExactlyThatTargetBeforeTheYesIsHandedOn untilTonightEndsAtMidnightAndForThisTaskNamesTheTaskThatAsked
+file: Packages/PebbleKit/Sources/PebbleUI/ConfirmationSheet.swift
+perl: s~\n                onGrant\(grant\)~~
+
+# Choices offered with nowhere to keep them.
+test: withNowhereToKeepThemTheSheetOffersNoChoice
+file: Packages/PebbleKit/Sources/PebbleUI/ConfirmationSheet.swift
+perl: s~choices = onGrant == nil \? \[\.standard\] : GrantChoice~choices = GrantChoice~
+
+# A grant kept before its yes has gone through.
+test: aGrantCountsOnlyOnceItsYesGoesThrough
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~(let grant = chosenGrants\.removeValue\(forKey: approval\.id\))~$1\n        if let grant { grants?.add(grant) }~
+
+# Remove on the list that removes nothing.
+test: removingFromTheListTakesEffectAtOnceForATaskAlreadyRunning
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~let removed = grants\?\.remove\(grant\.id\) == true~let removed = true~
+
+# A removal the store couldn't write left in the old file, for the next
+# launch to read back.
+test: aRemovalTheStoreCouldNotWriteNeverComesBack aRemovalTheStoreTookNoneOfIsNotCalledDone
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~if dirty, !owesErase, !store\.erase\(\) \{ owesErase = true \}~~
+
+# A removal the store took none of, called done.
+test: aRemovalTheStoreTookNoneOfIsNotCalledDone aRemoveThatCouldNotBeSavedIsSaidOnTheList
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~return \(!owesErase, true\)~return (true, true)~
+
+# The list never told that a change went through, or didn't.
+test: aRemovalTheStoreTookNoneOfIsNotCalledDone
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~changed \|\| all != grantsBefore \|\| unsavedNow != before \?~changed || all != grantsBefore ?~
+
+# A Remove that couldn't be saved, said to no one.
+test: aRemoveThatCouldNotBeSavedIsSaidOnTheList
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~ else if let grantsUnsaved \{\n            announce\(GrantWords\.unsaved\(grantsUnsaved\)\)\n        \}~~
+
+# A book whose folder couldn't open that forgets nothing on disk.
+test: aBookThatCouldNotOpenItsFolderStillForgetsTheFileThere aBookThatCouldNotOpenItsFolderCarriesOutAForgetStillOwed
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~return GrantBook\(store: GrantFileStore\.forgetOnly\(fileManager: fileManager\)\)~return inMemory()~
+
+# A forget-only store that reads the file it should only forget.
+test: aBookThatCouldNotOpenItsFolderStillForgetsTheFileThere
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~if forgetOnly \{ return held\.map\(GrantFile\.data\) \?\? \.empty \}~~
+
+# A question picked up after the app closed, asked without its task.
+test: aQuestionPickedUpAfterTheAppClosedStillOffersForThisTask
+file: Packages/PebbleKit/Sources/PebbleCore/LocalFakeEngine.swift
+perl: s~askedAgo: age, forTask: key\(ask\.id\)\)~askedAgo: age)~
+
+test: aQuestionPickedUpAfterTheAppClosedStillOffersForThisTask
+file: Packages/PebbleKit/Sources/PebbleCore/AskFirst.swift
+perl: s~rounded\(\.up\)\)\), task: task\)~rounded(.up))))~
+
+# The granting state guard turned off, then a sheet answered in code.
+test: theGrantIssuerGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/GrantRules.swift
+perl: s~Rule\("grant\.grantingStateOutsideSheet", grantingStateOutsideSheet\)~Rule("grant.grantingStateOutsideSheet", { _, _ in [] })~
+
+test: onlyTheQuestionSheetMakesGrants
+file: Packages/PebbleKit/Sources/PebbleUI/ShowcaseScene.swift
+perl: s~onApprove: \{ _ = engine\.resume\(task\.id, with: \$0\) \}, onDecline: \{\}\)~onApprove: { _ = engine.resume(task.id, with: \$0) }, onGrant: { _ in }, onDecline: {})~
+
+# A forget whose delete failed, taken as done because the file can't be seen.
+test: aForgetTheFolderWouldNotLetThroughIsCarriedOutOnceItOpens
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~guard Self\.delete\(fileURL\) else \{ return false \}~_ = Self.delete(fileURL)~
+
+# A file that can't be looked at, taken as not there.
+test: aForgetTheFolderWouldNotLetThroughIsCarriedOutOnceItOpens aFileThatCanNotBeLookedAtIsNotTakenAsNone
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~return failure == ENOENT \? \.absent : \.inaccessible~return .absent~
+
+# A grants file read as none whenever it can't be seen.
+test: aFileThatCanNotBeLookedAtIsNotTakenAsNone
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~if Self\.isAbsent\(fileURL\) \{ return \.empty \}~if !FileManager.default.fileExists(atPath: fileURL.path) { return .empty }~
+
+# The screen with no notes handed no grants, so none can be removed there.
+test: aGrantIsListedAndRemovedWhenTheNotesCouldNotOpen
+file: Packages/PebbleKit/Sources/PebbleUI/HomeView.swift
+perl: s~erasesWords: cloud != nil, background: background, grants: feed\.grants,~erasesWords: cloud != nil, background: background,~
+
+# The screen with no notes that never lists its grants.
+test: aGrantIsListedAndRemovedWhenTheNotesCouldNotOpen
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~            if let grants \{\n                AllowedFallbackSection\(model: AllowedModel\(grants: grants\)\)\n                    \.padding\(\.top, Theme\.Space\.xs\)\n            \}\n~~
+
+# Its Remove that takes nothing away.
+test: aGrantIsListedAndRemovedWhenTheNotesCouldNotOpen
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~let removed = grants\.remove\(grant\.id\)~let removed = true~
+
+# Its Remove that couldn't be saved, said to no one.
+test: aGrantIsListedAndRemovedWhenTheNotesCouldNotOpen
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~ else if let unsaved \{\n            announce\(GrantWords\.unsaved\(unsaved\)\)\n        \}~~
+
+# Unknown marker state must never become a forget request.
+test: anInaccessibleMarkerNeverForgetsReadableGrants
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~case \.inaccessible: return false~case .inaccessible: return eraseOwed()~
+
+# The fallback initializer must also leave an unknown marker alone.
+test: anInaccessibleMarkerNeverForgetsReadableGrants
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~if Self\.presence\(markerURL\) == \.present~if Self.presence(markerURL) != .absent~
+
+# A stale marker cannot sit behind a successful write.
+test: aMarkerThatCannotBeRemovedNeverSilentlyLosesANewGrant
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~guard Self\.delete\(markerURL\) else \{ return false \}~_ = Self.delete(markerURL)~
+perl: s~pendingErase = !marked \|\| !erased~pendingErase = !erased~
+
+# Failing to record the forget must remain visible.
+test: aFailedMarkerWriteStaysVisibleUntilRetried
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~pendingErase = !marked \|\| !erased~pendingErase = !erased~
+
+# A recovered grant must reach the settings that were already observing.
+test: settingsSeesGrantsRecoveredByAnotherWindow
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~changed \|\| all != grantsBefore \|\| unsavedNow~changed || unsavedNow~
+
+# A new book must also report grants waiting for marker cleanup as unsaved.
+test: aMarkerThatCannotBeRemovedNeverSilentlyLosesANewGrant
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~dirty \|\| !addedWhileUnread\.isEmpty \?~dirty ?~

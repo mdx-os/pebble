@@ -64,6 +64,7 @@ struct CopyDashTests {
       + MemoryWords.couldNotForgetSummariesLines
       + ReceiptWords.all
       + NudgeWords.all
+      + GrantWords.all
 
     @Test func noScreenWordsUseADash() throws {
         for line in Self.copy + (try DigestWords.all()) {

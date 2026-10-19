@@ -657,14 +657,13 @@ private final class BackgroundMoment {
 /// The one time offer, shown in Needs you while a question waits.
 struct NudgeOffer: View {
     @ObservedObject var flow: NeedsYouFlow
-    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         if flow.offersNudges {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
                 Label {
                     Text(NudgeWords.offerTitle)
-                        .font(.system(.headline, design: .rounded))
+                        .font(Theme.TypeScale.displayHeadline)
                         .foregroundStyle(.primary)
                         .fixedSize(horizontal: false, vertical: true)
                 } icon: {
@@ -673,24 +672,23 @@ struct NudgeOffer: View {
                         .accessibilityHidden(true)
                 }
                 Text(NudgeWords.offerDetail)
-                    .font(.subheadline)
+                    .font(Theme.TypeScale.subheadline)
                     .foregroundStyle(Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
                 ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { buttons }
-                    VStack(alignment: .leading, spacing: 8) { buttons }
+                    HStack(spacing: Theme.Space.xs) { buttons }
+                    VStack(alignment: .leading, spacing: Theme.Space.xs) { buttons }
                 }
                 .padding(.top, 2)
             }
-            .padding(16)
+            .padding(Theme.Space.m)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
+            .feedCardSurface()
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("nudgeOffer")
         } else if let note = flow.nudgeNote {
             Text(note)
-                .font(.subheadline)
+                .font(Theme.TypeScale.subheadline)
                 .foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("nudgeNote")
@@ -711,7 +709,6 @@ struct ReceiptCard: View {
     let receipt: Receipt
     let time: String
     let onClear: () -> Void
-    @Environment(\.colorScheme) private var scheme
     @Environment(\.dynamicTypeSize) private var typeSize
     @ScaledMetric(relativeTo: .footnote) private var labelWidth: CGFloat = 92
     /// For tests: the rows' and the header's layout set by hand, so the
@@ -720,7 +717,7 @@ struct ReceiptCard: View {
     var headerStacks: Bool?
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: Theme.corner, style: .continuous)
+        RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
     }
 
     /// At accessibility sizes the label, the example marker and the time
@@ -738,19 +735,19 @@ struct ReceiptCard: View {
             Image(systemName: FeedCard.symbol(.receipt))
                 .foregroundStyle(Theme.accentSymbol)
         }
-        .font(.footnote.weight(.semibold))
+        .font(Theme.TypeScale.footnote.weight(.semibold))
         .foregroundStyle(Theme.secondaryText)
         let marker = Text(FeedWords.exampleMarker)
-            .font(.caption.weight(.medium))
+            .font(Theme.TypeScale.caption.weight(.medium))
             .foregroundStyle(Theme.secondaryText)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, Theme.Space.xs)
             .padding(.vertical, 3)
             .background(Color.primary.opacity(Theme.fieldTint), in: Capsule())
         let when = Text(time)
-            .font(.footnote)
+            .font(Theme.TypeScale.footnote)
             .foregroundStyle(Theme.secondaryText)
         if headerStacks ?? Self.stacksHeader(at: typeSize) {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 label
                     .fixedSize(horizontal: false, vertical: true)
                 if receipt.isSample { marker.fixedSize(horizontal: false, vertical: true) }
@@ -758,10 +755,10 @@ struct ReceiptCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         } else {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
                 label
                 if receipt.isSample { marker }
-                Spacer(minLength: 8)
+                Spacer(minLength: Theme.Space.xs)
                 when
             }
         }
@@ -783,15 +780,15 @@ struct ReceiptCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 header
                 Text(receipt.title)
-                    .font(.system(.headline, design: .rounded))
+                    .font(Theme.TypeScale.displayHeadline)
                     .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(receipt.line)
-                    .font(.subheadline)
+                    .font(Theme.TypeScale.subheadline)
                     .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -800,17 +797,17 @@ struct ReceiptCard: View {
             // The receipt as the UI tests find it: one element, its words
             // the summary VoiceOver reads.
             .accessibilityIdentifier("receipt")
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 ForEach(rows, id: \.label) { row in
                     LabeledRow(stacked: rowsStack ?? ConfirmationSheet.stacksLabels(at: typeSize), labelWidth: labelWidth,
-                               spacing: 10) {
+                               spacing: Theme.Space.s) {
                         Text(row.label)
                             .foregroundStyle(Theme.secondaryText)
                     } value: {
                         Text(row.value)
                             .foregroundStyle(.primary)
                     }
-                    .font(.footnote)
+                    .font(Theme.TypeScale.footnote)
                     .accessibilityElement(children: .combine)
                 }
             }
@@ -824,10 +821,9 @@ struct ReceiptCard: View {
                 .accessibilityHint(ReceiptWords.clearHint)
                 .accessibilityIdentifier("clearReceipt")
         }
-        .padding(16)
+        .padding(Theme.Space.m)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.card(scheme), in: shape)
-        .overlay(shape.stroke(Theme.hairline(scheme), lineWidth: 1))
+        .feedCardSurface()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("receiptCard")
     }
@@ -845,7 +841,7 @@ struct LabeledRow<Label: View, Value: View>: View {
 
     var body: some View {
         if stacked {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 label()
                     .fixedSize(horizontal: false, vertical: true)
                 value()
