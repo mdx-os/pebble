@@ -115,6 +115,19 @@ public enum CloudConsent: Sendable, Equatable {
 /// unless this says `.send`.
 public protocol CloudReviewing: Sendable {
     func review(_ preview: CloudPreview) async -> CloudConsent
+    /// As `review`, but withdrawn unshown when `isOn` says the cloud is off
+    /// as the preview would go on screen. A reviewer that shows previews
+    /// on the actor the switch is turned off on asks there, so a switch off
+    /// just after the check that let the request be built never leaves a
+    /// preview up that nothing will withdraw.
+    func review(_ preview: CloudPreview, whileOn isOn: @escaping @Sendable () -> Bool) async -> CloudConsent
+}
+
+extension CloudReviewing {
+    public func review(_ preview: CloudPreview, whileOn isOn: @escaping @Sendable () -> Bool) async -> CloudConsent {
+        guard isOn() else { return .withdrawn }
+        return await review(preview)
+    }
 }
 
 /// Carries a request to the cloud model and brings back the answer's bytes.
@@ -252,8 +265,9 @@ public struct CloudModel: ModelClient {
 
     /// `redactor` is asked for each reply, so newly saved notes and private
     /// words count right away; it throws when they can't be read. `isOn` is
-    /// checked before building a request and again before sending, so
-    /// turning the setting off stops a reply already waiting in the preview.
+    /// checked before building a request, as its preview goes on screen and
+    /// again before sending, so turning the setting off stops a reply already
+    /// waiting in the preview or still on its way there.
     /// It throws when the setting can't be read, which is not the same as
     /// off: nothing is sent, and the chat says it couldn't read them.
     public init(
@@ -295,7 +309,11 @@ public struct CloudModel: ModelClient {
             forSummary: CloudAsk.forSummary,
             run: CloudAsk.forSummary ? CloudYes.run : nil
         )
-        switch await reviewer.review(preview) {
+        // Checked again where the preview goes on screen: the setting may
+        // have been switched off since the check above. Unreadable counts as
+        // off there, so nothing shows that couldn't be sent.
+        let isOn = self.isOn
+        switch await reviewer.review(preview, whileOn: { (try? isOn()) == true }) {
         case .send: break
         case .cancel: throw CloudModelError.notSent
         case .withdrawn: throw CloudModelError.withdrawn

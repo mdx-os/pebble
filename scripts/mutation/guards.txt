@@ -25,3 +25,20 @@ perl: s~Rule\("speech\.keepsWords", keepsWords\)~Rule("speech.keepsWords", { _, 
 test: theSpeechGuardCatchesEveryWrongCase
 file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
 perl: s~,\n                  SyntaxSource\.enclosingBraces\(of: infix\)\?\.id == scope\.id else~ else~
+
+# The connector gate: each rule turned off on its own.
+test: theConnectorGateCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ConnectorRules.swift
+perl: s~Rule\("connector\.import", importOutsideList\)~Rule("connector.import", { _, _ in [] })~
+
+test: theConnectorGateCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ConnectorRules.swift
+perl: s~Rule\("connector\.network", network\)~Rule("connector.network", { _, _ in [] })~
+
+test: theConnectorGateCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ConnectorRules.swift
+perl: s~Rule\("connector\.keep", keep\)~Rule("connector.keep", { _, _ in [] })~
+
+test: theConnectorGateCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/ConnectorRules.swift
+perl: s~Rule\("connector\.log", log\)~Rule("connector.log", { _, _ in [] })~

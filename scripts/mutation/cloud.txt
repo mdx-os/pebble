@@ -1,0 +1,6 @@
+# The preview no longer asks whether the cloud is still on as it goes on
+# screen, so a switch off just after the reply's own check leaves a preview
+# up that nothing withdraws.
+test: aSwitchOffJustAfterTheCheckNeverShowsAPreview
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~if Task\.isCancelled \|\| !isOn\(\) \{ return \.withdrawn \}~if Task.isCancelled { return .withdrawn }~

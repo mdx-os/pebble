@@ -952,15 +952,76 @@ struct GuardWrongCaseTests {
         }
     }
 
+    // MARK: The connector gate
+
+    static func connector(_ rule: String, _ text: String) -> WrongCase {
+        WrongCase(rule: "connector." + rule, text: text, file: "PebbleConnectors/Wrong.swift")
+    }
+
+    static let connectorWrong: [WrongCase] = [
+        connector("import", "import Network"),
+        connector("import", "import os"),
+        connector("import", "import OSLog"),
+        connector("import", "@testable import PebbleCore"),
+        connector("import", "import PebbleModel"),
+        connector("import", "import class Network.NWConnection"),
+        connector("import", "import `Network`"),
+        connector("import", "#if DEBUG\nimport Network\n#endif"),
+        connector("network", "let session = URLSession(configuration: .ephemeral)"),
+        connector("network", "let task = Foundation.URLSession.shared.dataTask(with: request)"),
+        connector("network", "let place = URL(string: \"https://example.com\")!"),
+        connector("network", "let data = try Data(contentsOf: `URL`(fileURLWithPath: path))"),
+        connector("network", "var request = URLRequest(url: address)"),
+        connector("network", "let connection = NWConnection(host: host, port: 443, using: .tcp)"),
+        connector("network", "#if os(macOS)\nlet run = Process()\n#endif"),
+        connector("keep", "try FileManager.default.removeItem(atPath: path)"),
+        connector("keep", "try data.write(to: place)"),
+        connector("keep", "try text.write(toFile: path, atomically: true, encoding: .utf8)"),
+        connector("keep", "UserDefaults.standard.set(titles, forKey: \"events\")"),
+        connector("keep", "let handle = FileHandle(forWritingAtPath: path)"),
+        connector("keep", "let out = OutputStream(toFileAtPath: path, append: true)"),
+        connector("keep", "let file = fopen(path, \"w\")"),
+        connector("keep", "#if canImport(EventKit)\n_ = FileManager.default.createFile(atPath: path, contents: data)\n#endif"),
+        connector("log", "print(event.title)"),
+        connector("log", "Swift.print(event.title)"),
+        connector("log", "debugPrint(events)"),
+        connector("log", "dump(reminders)"),
+        connector("log", "NSLog(\"%@\", title)"),
+        connector("log", "let log = Logger(subsystem: \"a\", category: \"b\")"),
+        connector("log", "os_log(\"%@\", title)"),
+        connector("log", "let say = `print`\nsay(event.title)"),
+    ]
+
+    static func fineConnector(_ text: String) -> RightCase { fine(text, file: "PebbleConnectors/Right.swift") }
+
+    static let connectorRight: [RightCase] = [
+        fineConnector("import Foundation\nimport EventKit"),
+        fineConnector("#if canImport(EventKit)\nimport EventKit\n#endif"),
+        fineConnector("let window = DateInterval(start: start, duration: 3_600)"),
+        fineConnector("let found = store.events(matching: predicate).map(Self.event)"),
+        fineConnector("// No URLSession, FileManager or print here."),
+        fineConnector("let words = \"I couldn't print or write that down.\""),
+        fineConnector("let lock = NSLock()\nlock.withLock { allowed[kind] = access }"),
+        fineConnector("let location = event.location.flatMap { $0.isEmpty ? nil : $0 }"),
+        fineConnector("func overlaps(_ window: DateInterval) -> Bool { start < window.end }"),
+    ]
+
+    @Test func theConnectorGateCatchesEveryWrongCase() {
+        check(Self.connectorWrong, Self.connectorRight, rules: ConnectorGate.rules.map(\.name)) {
+            ConnectorGate.problems(in: $0, file: $1)
+        }
+    }
+
     // MARK: The suite itself
 
     /// Every rule of every guard has a wrong case here, so none can be
     /// added, or stop working, unseen.
     @Test func everyRuleHasAWrongCase() {
         let all = Self.promiseWrong + Self.contrastWrong + Self.accentWrong + Self.tokenWrong + Self.platformWrong
-            + Self.grantWrong + Self.speechWrong
+            + Self.grantWrong + Self.speechWrong + Self.connectorWrong
         let rules = PromiseRules.allRuleNames + ContrastLint.rules.map(\.name) + TokenLint.rules.map(\.name)
             + PlatformGate.rules.map(\.name) + GrantIssuerGate.rules.map(\.name) + SpeechGate.rules.map(\.name)
+            + ConnectorGate.rules.map(\.name)
         #expect(Set(rules).count == rules.count, "each rule has its own name")
         for rule in rules {
             #expect(all.contains { $0.rule == rule }, "no wrong case for \(rule)")
