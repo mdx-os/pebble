@@ -46,8 +46,21 @@ products="$(sed -n 's/^product //p' "$work/linked" | tr '\n' ' ')"
 
 # Every source file of those products' targets and everything they depend
 # on. A dependency on another package can't be read here, so it fails.
-swift package --package-path "$package" describe --type json > "$work/package.json" \
-  || { echo "privacy-check: swift package describe failed for $package"; exit 1; }
+# PRIVACY_DESCRIBE_CACHE, a folder, keeps describe's output by all it reads:
+# Package.swift and the names of every file and folder in the package. The
+# self-test sets it, so a tree that changes neither reuses the output.
+kept=""
+if [ -n "${PRIVACY_DESCRIBE_CACHE:-}" ]; then
+  key="$( { cat "$package/Package.swift"; (cd "$package" && find . \( -name .build -o -name .swiftpm \) -prune -o -print | LC_ALL=C sort); } | shasum | cut -d ' ' -f 1)"
+  kept="$PRIVACY_DESCRIBE_CACHE/$key.json"
+fi
+if [ -n "$kept" ] && [ -f "$kept" ]; then
+  cp "$kept" "$work/package.json"
+else
+  swift package --package-path "$package" describe --type json > "$work/package.json" \
+    || { echo "privacy-check: swift package describe failed for $package"; exit 1; }
+  [ -z "$kept" ] || { cp "$work/package.json" "$kept.$$" && mv "$kept.$$" "$kept"; }
+fi
 # shellcheck disable=SC2086
 python3 -I -c '
 import json, sys
