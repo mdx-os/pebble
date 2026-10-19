@@ -191,6 +191,8 @@ struct LiveDot: View {
 /// haptics engine, so there it does nothing.
 enum Haptic: Equatable {
     case sent, answered, saved, forgotten
+    /// The microphone has started listening.
+    case listening
 
     /// The kinds of device the app runs on, as far as haptics care.
     enum Device: Equatable, CaseIterable {
@@ -221,6 +223,7 @@ enum Haptic: Equatable {
         case .answered: .impact(weight: .light, intensity: 0.7)
         case .saved: .success
         case .forgotten: .impact(weight: .light, intensity: 0.6)
+        case .listening: .impact(weight: .light, intensity: 0.4)
         }
     }
 }

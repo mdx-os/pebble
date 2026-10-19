@@ -25,6 +25,12 @@ struct Composer: View {
     var focus: FocusState<Bool>.Binding?
     let send: (String) -> Void
     @Environment(\.colorScheme) private var scheme
+    /// Talking instead of typing, where the app offers it. Without one in
+    /// the environment, as on the Mac for now, there is no microphone.
+    @Environment(VoiceCapture.self) private var voice: VoiceCapture?
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @State private var slidAway = false
 
     /// The placeholder, in `Theme.secondaryText` on the field, a pair
     /// `Theme.textPairs` holds to 4.5 to 1.
@@ -37,6 +43,34 @@ struct Composer: View {
     }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            if let voice, voice.owner == identifier {
+                TalkLine(voice: voice, slidAway: slidAway)
+                    .transition(.opacity)
+            }
+            bar
+        }
+        .onAppear { answerShortcut() }
+        .onChange(of: voice?.requests.waiting) { answerShortcut() }
+        .onChange(of: keyboardSends) { answerShortcut() }
+        .onChange(of: voice?.phase) { _, phase in voiceChanged(phase) }
+        // A line about the microphone goes once the person types instead.
+        .onChange(of: draft) {
+            if let voice, voice.owner == identifier, case .unavailable = voice.phase { voice.settle() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { voice?.cancel(owner: identifier) }
+        }
+        .onDisappear { voice?.cancel(owner: identifier) }
+    }
+
+    private var listeningHere: Bool {
+        guard let voice else { return false }
+        return voice.owner == identifier && voice.isActive
+    }
+
+    @ViewBuilder
+    private var bar: some View {
         let bar = RoundedRectangle(cornerRadius: ChatStyle.composerCorner, style: .continuous)
         HStack(alignment: .bottom, spacing: Theme.Space.xxs) {
             // Return sends and Shift Return starts a new line.
@@ -66,6 +100,9 @@ struct Composer: View {
                     return .handled
                 }
                 #endif
+            if let voice {
+                TalkButton(voice: voice, owner: identifier, start: { listen(voice, $0) }, slidAway: $slidAway)
+            }
             Button {
                 send(draft)
             } label: {
@@ -74,7 +111,7 @@ struct Composer: View {
             }
             .buttonStyle(SendButtonStyle())
             .keyboardShortcut(keyboardSends ? KeyboardShortcut(.return, modifiers: .command) : nil)
-            .disabled(!canSend)
+            .disabled(!canSend || listeningHere)
         }
         .padding(Theme.Space.xxs)
         // A floating bar on a soft material, tinted like a field so the
@@ -87,6 +124,48 @@ struct Composer: View {
         // sidebar's chosen row on launch, over the fill the dark
         // screenshots check.
         .overlay(bar.stroke(Theme.fieldEdge, lineWidth: 1))
+    }
+
+    /// Starts listening here: what is written stays in front of the words
+    /// heard, which show in the field as they come, and a send goes the
+    /// way a typed one does.
+    private func listen(_ voice: VoiceCapture, _ mode: VoiceCapture.Mode) {
+        let draft = $draft
+        let send = self.send
+        let owner = identifier
+        Task {
+            await voice.begin(mode, owner: owner, draft: draft.wrappedValue,
+                              write: { draft.wrappedValue = $0 }, send: send)
+        }
+    }
+
+    /// Takes the Talk shortcut, when it is waiting and this composer is the
+    /// one in front.
+    private func answerShortcut() {
+        guard let voice, keyboardSends, voice.requests.waiting != nil else { return }
+        let draft = $draft
+        let send = self.send
+        let owner = identifier
+        Task {
+            await voice.answerShortcut(owner: owner, draft: draft.wrappedValue,
+                                       write: { draft.wrappedValue = $0 }, send: send)
+        }
+    }
+
+    /// Says what happened to VoiceOver, and lets a "nothing sent" line go
+    /// after a moment. Never anything while listening, so nothing is
+    /// spoken into the microphone, and focus is never moved.
+    private func voiceChanged(_ phase: VoiceCapture.Phase?) {
+        guard let voice, voice.owner == identifier, let phase else { return }
+        if voiceOver, let line = TalkLine.spoken(phase) {
+            AccessibilityNotification.Announcement(line).post()
+        }
+        if phase == .cancelled {
+            Task {
+                try? await Task.sleep(for: .seconds(3))
+                if voice.phase == .cancelled { voice.settle() }
+            }
+        }
     }
 
     @ViewBuilder

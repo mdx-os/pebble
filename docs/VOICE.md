@@ -4,7 +4,7 @@ How the agent talks, everywhere: the first run, the chat, memory, and the
 questions it asks before it acts. Read this before writing any words a
 person will see. The words themselves live in `PebbleCore` (`FirstRunWords`,
 `FirstConversation`, `MemoryWords`, `ConfirmationWords`, `FeedWords`, `TaskWords`, `BackgroundWords`,
-`ReconWords` and friends), so a
+`ReconWords`, `VoiceWords` and friends), so a
 change here usually means a change there.
 
 ## Who the agent is
@@ -291,6 +291,24 @@ words to hide only when they were erased. If the summaries' file couldn't
 be erased, it says so and asks to try again. It never says "no trace": once
 an earlier version's setting was seen, an empty marker file stays beside the
 switch, holding nothing, but its being there shows the switch was once set.
+
+### Talking instead of typing
+
+The microphone sits beside the send button. Holding it says "I'm
+listening." with "Let go to send, or slide away to cancel." under it, and
+the words show in the field as they are heard. Sliding away changes the
+line to "Let go, and I won't send it." From the Talk shortcut or with
+VoiceOver, a tap starts it and the line says "Tap Send when you're done.",
+with Send and Don't send. A cancel says "Okay, I didn't send anything." and
+a release with nothing heard sends nothing and says nothing.
+
+The system's questions for the microphone and speech come only the first
+time the person holds the microphone. When the answer is no, or the device
+can't hear their language by itself, one honest line says so and that
+typing works just as before. It never says the voice stays on the device,
+since that line reads no flag; it says the voice isn't sent elsewhere to be
+understood, which `SpeechGate` keeps true. Nothing is said aloud while the
+microphone is on. The words live in `VoiceWords`.
 
 ### Confirmations
 

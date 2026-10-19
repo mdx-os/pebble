@@ -1,0 +1,27 @@
+# The source guards. Each rule turned off must fail the wrong-case suite.
+
+# The speech guard: a request made without on-device recognition.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~Rule\("speech\.requestNotOnDevice", requestNotOnDevice\)~Rule("speech.requestNotOnDevice", { _, _ in [] })~
+
+# The speech guard: on-device recognition turned off.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~Rule\("speech\.onDeviceTurnedOff", onDeviceTurnedOff\)~Rule("speech.onDeviceTurnedOff", { _, _ in [] })~
+
+# The speech guard: the Speech framework outside the adapter.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~Rule\("speech\.outsideAdapter", outsideAdapter\)~Rule("speech.outsideAdapter", { _, _ in [] })~
+
+# The speech guard: a voice file that could keep what was heard.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~Rule\("speech\.keepsWords", keepsWords\)~Rule("speech.keepsWords", { _, _ in [] })~
+
+# A request whose on-device setting sits in a block inside the one that
+# made it, as behind an `if`, is let by.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~,\n                  SyntaxSource\.enclosingBraces\(of: infix\)\?\.id == scope\.id else~ else~

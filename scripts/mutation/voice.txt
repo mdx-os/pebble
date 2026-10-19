@@ -1,0 +1,67 @@
+# Talking to the agent: hold to talk, let go to send, and the Talk shortcut.
+
+# The request no longer asks for on-device recognition, so speech could go
+# to a server.
+test: speechIsHeardOnTheDeviceOnlyAndNeverKept
+file: Packages/PebbleKit/Sources/PebbleVoice/DeviceSpeech.swift
+perl: s~\n        request\.requiresOnDeviceRecognition = true~~
+
+# The same, turned off rather than left out.
+test: speechIsHeardOnTheDeviceOnlyAndNeverKept
+file: Packages/PebbleKit/Sources/PebbleVoice/DeviceSpeech.swift
+perl: s~request\.requiresOnDeviceRecognition = true~request.requiresOnDeviceRecognition = false~
+
+# The capture asks for a listen that may leave the device.
+test: noServerFallbackIsEverRequested
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~ListenRequest\(onDeviceOnly: true\)~ListenRequest(onDeviceOnly: false)~
+
+# A cancel sends what was heard.
+test: cancelSendsNothing
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~        target\.write\(target\.before\)\n        stop\(\.cancelled\)~        target.send(heard)\n        target.write(target.before)\n        stop(.cancelled)~
+
+# A release with nothing heard sends an empty message.
+test: aShortTapWithNothingHeardSendsNothing emptyOrBlankWordsSendNothing
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~guard !words\.isEmpty else \{~guard true else {~
+
+# A declined microphone still starts listening.
+test: aDeclinedMicrophoneSaysSoAndNeverStarts
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~case \.microphoneDeclined: return stop\(\.unavailable\(\.microphoneDeclined\)\)~case .microphoneDeclined: break~
+
+# Declined speech still starts listening.
+test: declinedSpeechSaysSoAndNeverStarts
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~case \.speechDeclined: return stop\(\.unavailable\(\.speechDeclined\)\)~case .speechDeclined: break~
+
+# A device that can't hear the language by itself is asked anyway.
+test: withoutOnDeviceRecognitionNothingIsAskedOrStarted
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~guard listener\.hearsOnDevice else \{ return stop\(\.unavailable\(\.notOnDevice\)\) \}~~
+
+# A hold the system's question took starts listening after all.
+test: lettingGoWhileAskedSendsNothingAndDoesNotListen
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~if mode == \.hold, letGoWhileAsking \{ return stop\(\.idle\) \}~~
+
+# Something heard is printed, so it would reach a log.
+test: speechIsHeardOnTheDeviceOnlyAndNeverKept
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~(        let message = message\(with: words\)\n)~$1        print(message)\n~
+
+# The Talk shortcut no longer opens the app.
+test: theTalkShortcutOpensTheAppListening
+file: Packages/PebbleKit/Sources/PebbleVoice/TalkIntent.swift
+perl: s~public static let openAppWhenRun = true~public static let openAppWhenRun = false~
+
+# The Talk shortcut opens the app but asks for nothing.
+test: theTalkShortcutOpensTheAppListening
+file: Packages/PebbleKit/Sources/PebbleVoice/TalkIntent.swift
+perl: s~        TalkRequests\.shared\.ask\(\)\n~~
+
+# A shortcut run long ago still turns the microphone on.
+test: aShortcutRunLongAgoIsLetGo
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~return now\.timeIntervalSince\(asked\) <= Self\.freshFor~return true~
