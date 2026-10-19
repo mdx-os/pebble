@@ -1,0 +1,113 @@
+# The retry and resume kit (docs/RETRY.md). A finished step whose
+# checkpoint is never kept is done again after the app closes.
+test: closingMidTaskThenPickingUpRepeatsNothing aRunThatCannotKeepItsPlaceStopsThere
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~guard keep\(&checkpoint\) else \{ return \.failed\(step: index, reason: \.notSaved\) \}\n(\s+)break stepTries~break stepTries~
+
+# A Retry-After value that is never read.
+test: retryAfterIsHonouredButCapped a429WaitsAsLongAsRetryAfterSays
+file: Packages/PebbleKit/Sources/PebbleCore/RetryKit.swift
+perl: s~if let value = failure\.retryAfter, ~if let value = Optional<String>.none, ~
+
+# A failure that isn't transient, tried again anyway.
+test: aFailureThatIsNotTransientIsNeverTriedAgain anErrorThatIsNotAStepFailureEndsTheRunWithoutATryAgain
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~if !failure\.isTransient \|\| tryNumber >= policy\.maxTries~if tryNumber >= policy.maxTries~
+
+# One try more than the most there may be.
+test: triesRunOutAfterTheMaximum
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~tryNumber >= policy\.maxTries~tryNumber > policy.maxTries~
+
+# A key made from the time, not the step, differs on every try.
+test: aKeyComesFromTheTaskAndTheStepAlone aDropMidStepIsTriedAgainWithTheSameKey closingMidTaskThenPickingUpRepeatsNothing
+file: Packages/PebbleKit/Sources/PebbleCore/RetryKit.swift
+perl: s~value = "\\\(taskID\):\\\(step\)"~value = "\\(taskID):\\(Date().timeIntervalSince1970)"~
+
+# Picked up again, the run starts from the top and redoes finished steps.
+test: closingMidTaskThenPickingUpRepeatsNothing aQuestionForThePersonKeepsItsPlaceAndGoesOnWithTheAnswer aCheckpointOnDiskIsPickedUpByANewStore
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~var index = checkpoint\.finished~var index = 0~
+
+# A save that reads and writes in two goes: a change in between is lost.
+test: twoChangesAtOnceAreBothKept
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~update \{ \$0\[checkpoint\.taskID\] = checkpoint \}~guard var all = read() else { return false }; all[checkpoint.taskID] = checkpoint; return update { \$0 = all }~
+
+# A remove that reads and writes in two goes: a save in between is lost.
+test: twoChangesAtOnceAreBothKept
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~update \{ \$0\[taskID\] = nil \}~guard var all = read() else { return false }; all[taskID] = nil; return update { \$0 = all }~
+
+# How the run ended is let go when it can't be kept, so the run claims an
+# end it never kept and a step that failed for good runs again.
+test: anEndThatCannotBeKeptIsKeptLaterAndNeverRunAgain aDoneThatCannotBeKeptSaysSo
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~guard keep\(&checkpoint\) else \{\n\s+heldEnd = checkpoint\n\s+return \.failed\(step: endingStep\(outcome\), reason: \.notSaved\)\n\s+\}~_ = keep(&checkpoint)~
+
+# An end held because it couldn't be kept is not kept first, so the step
+# that ended the run runs again once the store opens.
+test: anEndThatCannotBeKeptIsKeptLaterAndNeverRunAgain
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~if var unkept, let ended = unkept\.ended \{ return end\(&unkept, ended\) \}~~
+
+# Each store has a lock of its own again: two stores for one file, as
+# onDevice() makes, both read before either writes and one change is lost.
+test: twoStoresForOneFileKeepEachOthersChanges
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~fileLock = FileLock\.shared\(for: fileURL\)~fileLock = FileLock()~
+
+# The shared lock is found by the path as written, so a store for the same
+# file reached another way gets a lock of its own.
+test: twoStoresForOneFileKeepEachOthersChanges
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~fileURL\.standardizedFileURL\.resolvingSymlinksInPath\(\)\.path~fileURL.path~
+
+# A kept place past the last step is told as done.
+test: aKeptPlaceOutsideTheStepsIsUnreadable
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~guard checkpoint\.finished >= 0, checkpoint\.finished <= last else~guard checkpoint.finished >= 0 else~
+
+# A kept place below the first step is run from.
+test: aKeptPlaceOutsideTheStepsIsUnreadable
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~guard checkpoint\.finished >= 0, checkpoint\.finished <= last else~guard checkpoint.finished <= last else~
+
+# A question kept past the last step is answered with a done.
+test: aKeptPlaceOutsideTheStepsIsUnreadable
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~checkpoint\.question == nil \? steps\.count : steps\.count - 1~steps.count~
+
+# A checkpoint file that can't be understood is deleted again, so every
+# task in it, an ended one too, starts from the top.
+test: aFileNoOneCanUnderstandStaysAsItIs
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~guard let records = CheckpointRecords\.split\(data\) else \{ return \.unreadable \}~guard let records = CheckpointRecords.split(data) else { try? FileManager.default.removeItem(at: fileURL); return .kept(Kept()) }~
+
+# The file is read all or nothing: one record that can't be understood
+# makes every task unreadable, an ended one too.
+test: aRecordNoOneCanUnderstandCostsOnlyItsOwnTask
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~kept\.unreadable\[taskID\] = record~return .unreadable~
+
+# A record that can't be understood is dropped: its task reads as never
+# started and runs from the top, and the next write loses the record.
+test: aRecordNoOneCanUnderstandCostsOnlyItsOwnTask
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~kept\.unreadable\[taskID\] = record~_ = record~
+
+# A save for another task leaves out the record that can't be understood.
+test: aRecordNoOneCanUnderstandCostsOnlyItsOwnTask
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~var records = kept\.unreadable~var records: [String: Data] = [:]~
+
+# A save for the task whose record can't be understood writes over it.
+test: aRecordNoOneCanUnderstandCostsOnlyItsOwnTask
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~guard kept\.unreadable\.keys\.allSatisfy\(\{ all\[\$0\] == nil \}\) else \{ return false \}~~
+
+# Forgetting a task leaves its record that can't be understood, so the
+# task stays unreadable for good.
+test: aRecordNoOneCanUnderstandCostsOnlyItsOwnTask
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~kept\.unreadable\[taskID\] = nil\n~~

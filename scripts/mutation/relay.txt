@@ -1,0 +1,148 @@
+# The relay protocol (docs/RELAY.md). Each refusal is turned off on its own,
+# and a conformance vector or a test of its own must then be let by.
+
+# An id with more than letters and digits.
+test: idsArePlainLettersAndDigits anInvalidFixtureIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~text\.utf8\.allSatisfy\(isLetterOrDigit\)~true~
+
+test: anInvalidFixtureIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard \(1\.\.\.Relay\.maxMinutes\)\.contains\(maxMinutes\) else~guard true else~
+
+test: anInvalidFixtureIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard \(state == \.needsYou\) == \(needsYou != nil\) else~guard true else~
+
+test: anInvalidFixtureIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard Relay\.hex\(SHA256\.hash\(data: bytes\)\) == sha256 else~guard true else~
+
+# A handle the approval sheet wouldn't show as the relay sent it.
+test: anInvalidFixtureIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard recipient\.handle == handle else~guard true else~
+
+test: anInvalidFixtureIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard kind\.isFinal == \(signature != nil\) else~guard true else~
+
+test: oneLineFieldsRefuseWhatIsNotOneLine
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~return scalars\.allSatisfy \{ !isControl\(\$0\) && \$0 != "\\u\{2028\}" && \$0 != "\\u\{2029\}" \}~return true~
+
+test: timesAreUTCInWholeSeconds
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~formatter\.string\(from: date\) == text~true~
+
+test: aBodyPastTheLimitIsRefusedUnread
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard data\.count <= maxBodyBytes else~guard true else~
+
+# The receipt chain: each check of RelayReceipts.verify on its own.
+test: anInvalidFixtureIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard receipt\.seq == index \+ 1 else \{ throw \.seq\(index: index\) \}~~
+
+test: aReorderedPairWithSeqRenumberedFails anInvalidFixtureIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard receipt\.prevHash == prevHash else \{ throw \.prevHash\(index: index\) \}~~
+
+test: aChangedFieldFails anInvalidFixtureIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard receipt\.hash == own else \{ throw \.hash\(index: index\) \}~~
+
+test: aWrongKeyFails aChangedFieldWithEveryHashRemadeFails
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~publicKey\.isValidSignature\(signature, for: signed\)~signed.count == 32~
+
+test: anUnfinishedChainFailsButItsLinksHold
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard let last = receipts\.last, last\.kind\.isFinal else~guard let last = receipts.last else~
+
+test: nothingComesAfterTheEnd
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~if receipt\.kind\.isFinal, index != receipts\.count - 1 \{ throw \.kind\(index: index\) \}~~
+
+# A canonical form that drifts from the one the page writes.
+test: theCanonicalFormIsNineLines theFixtureChainsLink
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~"relay-receipt/1",~"relay-receipt/2",~
+
+# Round-1 relay review: each new refusal has an independent mutation.
+test: reviewCrossRunReplayIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~receipt.runId == runId~true~
+
+test: reviewCrossRunReplayIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~receipt.clientRunId == clientRunId~true~
+
+test: reviewRunIdentityIsSigned
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~            "runId:.*\n~~
+
+test: reviewRunIdentityIsSigned
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~            "clientRunId:.*\n~~
+
+test: reviewTerminalStateMustMatch
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard last.kind == expectedKind else \{ throw \.terminalState \}~_ = expectedKind~
+
+test: reviewTerminalStateMustMatch
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~default: throw \.terminalState~default: expectedKind = .runDone~
+
+test: reviewPurchaseRequiresPrice
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard action != \.purchase \|\| price != nil else~guard true else~
+
+test: reviewPurchaseRefusesInvalidPrice
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard price != nil else~guard true else~
+
+test: reviewArtifactSeparatorsAreScalars
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~!name.unicodeScalars.contains~!name.contains~
+perl: s~".unicodeScalars.contains\(\$0\)~".contains(\$0)~
+
+test: reviewTargetLimitsAreScalars
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~name.unicodeScalars.count <= 40~name.count <= 40~
+
+test: reviewTargetLimitsAreScalars
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~handle.unicodeScalars.count <= 254~handle.count <= 254~
+
+# Round-2 relay review: keep encoding, link text and scalar refusals covered.
+test: review2LeadingDotIsAScalar
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~name.unicodeScalars.first != "\."~!name.hasPrefix(".")~
+
+test: review2NonPurchaseRefusesPrice
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard action == \.purchase \|\| price == nil else~guard true else~
+
+test: review2WholeRunUsesItsOwnContext
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~runId: run.runId~runId: run.receipts.first?.runId ?? ""~
+
+test: review2WholeRunUsesItsOwnContext
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~terminalState: run.state~terminalState: .done~
+
+# Round-3 relay review: fillers in a target's name.
+test: review3TargetNameFillersAreRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard !AskFirst.hasHiddenScalars\(name\) else~guard true else~
+
+# Round-4 relay review: the joiner in a target's name.
+test: review4JoinedEmojiNameIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/AskFirst.swift
+perl: s~\.unicodeScalars\.filter \{ !CharacterSet\.controlCharacters~.unicodeScalars.filter { \$0.value == 0x200D || !CharacterSet.controlCharacters~
+
+# Round-8 relay review: a hidden character in an artifact's name.
+test: review8ArtifactNameHiddenScalarsAreRefused anInvalidFixtureIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard !AskFirst\.hasHiddenScalars\(name\) else \{ throw refused\("name has hidden characters", decoder\) \}~~

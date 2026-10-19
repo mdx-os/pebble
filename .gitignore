@@ -18,3 +18,6 @@ Config/Signing.local.xcconfig
 *.certSigningRequest
 # A real cloud address for one machine. Never committed.
 Config/Cloud.local.xcconfig
+# The private words in plain text, kept only by the owner. Never committed;
+# Config/private-words.sha256 holds their hashes.
+Config/private-words.local.txt

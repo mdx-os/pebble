@@ -1,0 +1,4 @@
+{
+  "error" : "slowDown",
+  "retryAfterSeconds" : 30
+}

@@ -16,7 +16,8 @@ import PebbleCore
 /// the network.
 ///
 /// Ollama plugs in locally: send the transcript to an Ollama server the
-/// person is already running on this machine, at 127.0.0.1 port 11434.
+/// person is already running on this machine, at its loopback address on
+/// port 11434.
 /// That request stays in this layer.
 ///
 /// PebbleCore does not do networking. A cloud model stays off until the
