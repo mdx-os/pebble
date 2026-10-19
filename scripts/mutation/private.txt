@@ -183,20 +183,20 @@ perl: s~contains\(where: \{ holdsPrivateWord\(\$0, salt: salt, hashes: hashes\) 
 
 # Round-10 relay review: a listed word right after a whitespace escape in
 # a string. Without the escape reading, "\nfoo" reads only as nfoo.
-test: review10AWordAfterAWhitespaceEscapeIsFound review10TheTextAsWrittenIsStillRead
+test: review10AWordAfterAWhitespaceEscapeIsFound review10TheTextAsWrittenIsStillRead review11AWordAfterAnyEscapeIsFound
 file: scripts/private-check.swift
 perl: s~return texts \+ broken\.filter~return texts + broken.prefix(0).filter~
 
 # Only one backslash counts, so an escape written doubled in source hides
 # the word.
-test: review10AWordAfterAWhitespaceEscapeIsFound
+test: review10AWordAfterAWhitespaceEscapeIsFound review11AWordAfterAnyEscapeIsFound
 file: scripts/private-check.swift
-perl: s~pattern: #"\\\\\+\[ntr\]"#~pattern: #"(?<!\\\\)\\\\[ntr]"#~
+perl: s~pattern: #"\\\\\+\(\?:~pattern: #"(?<!\\\\)\\\\(?:~
 
 # Only \n counts as a break, never \t or \r.
 test: review10AWordAfterAWhitespaceEscapeIsFound
 file: scripts/private-check.swift
-perl: s~pattern: #"\\\\\+\[ntr\]"#~pattern: #"\\\\+n"#~
+perl: s~\|\[A-Za-z\]\)"#~|n)"#~
 
 # The escape reading takes the place of the text as written, so a word
 # that starts with an escape's letter after a backslash is lost.
@@ -208,3 +208,46 @@ perl: s~return texts \+ broken\.filter \{ !texts\.contains\(\$0\) \}~return text
 test: review10TheTextAsWrittenIsStillRead
 file: scripts/private-check.swift
 perl: s~(guard checkHosts) else~$1, decodedTexts(data).contains(text) else~
+
+# Round-11 relay review: a listed word right after any string or regex
+# escape. Letters limited back to the whitespace ones, so #"\bfoo\b"#,
+# \d and \w hide the word.
+test: review11AWordAfterAnyEscapeIsFound
+file: scripts/private-check.swift
+perl: s~\|\[A-Za-z\]\)"#~|[ntr])"#~
+
+# Only small letters count, so \B hides the word.
+test: review11AWordAfterAnyEscapeIsFound
+file: scripts/private-check.swift
+perl: s~\|\[A-Za-z\]\)"#~|[a-z])"#~
+
+# A character by its number is not read, so \u000a and \x0a leave their
+# digits on the word.
+test: review11AWordAfterAnyEscapeIsFound
+file: scripts/private-check.swift
+perl: s~u\\\{\[0-9A-Fa-f\]\+\\\}\|u\[0-9A-Fa-f\]\{4\}\|x\\\{\[0-9A-Fa-f\]\+\\\}\|x\[0-9A-Fa-f\]\{2\}\|~~
+
+# Only \uHHHH is dropped.
+test: review11AWordAfterAnyEscapeIsFound
+file: scripts/private-check.swift
+perl: s~\|u\[0-9A-Fa-f\]\{4\}~~
+
+# Only \xHH is dropped.
+test: review11AWordAfterAnyEscapeIsFound
+file: scripts/private-check.swift
+perl: s~\|x\[0-9A-Fa-f\]\{2\}~~
+
+# \uHHHH reads small hex digits only, so \u000A leaves 000A on the word.
+test: review11AWordAfterAnyEscapeIsFound
+file: scripts/private-check.swift
+perl: s~u\[0-9A-Fa-f\]\{4\}~u[0-9a-f]{4}~
+
+# \0 is not read.
+test: review11AWordAfterAnyEscapeIsFound
+file: scripts/private-check.swift
+perl: s~\|0\[0-7\]\{0,2\}~~
+
+# \0 takes no octal digits after it, so \012 leaves 12 on the word.
+test: review11AWordAfterAnyEscapeIsFound
+file: scripts/private-check.swift
+perl: s~\|0\[0-7\]\{0,2\}~|0~

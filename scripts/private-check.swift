@@ -27,9 +27,12 @@
 // listed foobar written with a separator (foo_bar, foo-bar, Foo Bar) or
 // inside a run with no case change (openfoobarrelay) is not found. Where
 // that matters, list each part, or each run it can hide in, as a word of
-// its own. Text is read as written and again with each whitespace escape
-// (\n, \t, \r, with one backslash or more) as a break, so "\nfoo" in a
-// string gives foo as well as nfoo. Each line of the
+// its own. Text is read as written and again with each string or regex
+// escape as a break, after one backslash or more: any ASCII letter (\n,
+// \t, \b, \d, \w and the rest), \0 with up to two more octal digits, \xHH,
+// \x{H...}, \uHHHH and \u{H...}. So "\nfoo" in a string gives foo as well
+// as nfoo, and #"\bfoo\b"# gives foo as well as bfoo. A word encoded
+// another way, as %0A in a URL or &#10; in HTML, is not read. Each line of the
 // hash file after the salt is the lowercase hex SHA-256 of "<salt>:<word>",
 // the word in lowercase NFC.
 import CryptoKit
@@ -240,20 +243,23 @@ func decodedTexts(_ data: Data) -> [String] {
     return texts
 }
 
-/// A whitespace escape as a string writes it: \n, \t or \r, after one
-/// backslash or more, so the doubled one source writes to pass an escape on
-/// counts too.
-let whitespaceEscape = try! NSRegularExpression(pattern: #"\\+[ntr]"#)
+/// A string or regex escape as source writes it, after one backslash or
+/// more, so the doubled one source writes to pass an escape on counts too:
+/// a character by its number (\u{H...}, \uHHHH, \x{H...}, \xHH), \0 with up
+/// to two more octal digits, or any one ASCII letter (\n, \t, \b, \d, \w
+/// and the rest).
+let escape = try! NSRegularExpression(
+    pattern: #"\\+(?:u\{[0-9A-Fa-f]+\}|u[0-9A-Fa-f]{4}|x\{[0-9A-Fa-f]+\}|x[0-9A-Fa-f]{2}|0[0-7]{0,2}|[A-Za-z])"#)
 
 /// Every reading of `data` to scan: each decoded text as written, and again
-/// with each whitespace escape read as a space. As written, "\nfoo" reads as
-/// the word nfoo, never foo, so the second reading finds a listed word right
-/// after an escape. It only adds words, and a space never adds a line, so
-/// line numbers stay the same.
+/// with each escape read as a space. As written, "\nfoo" reads as the word
+/// nfoo and #"\bfoo\b"# as bfoo, never foo, so the second reading finds a
+/// listed word right after an escape. It only adds words, and a space never
+/// adds a line, so line numbers stay the same.
 func readings(_ data: Data) -> [String] {
     let texts = decodedTexts(data)
     let broken = texts.filter { $0.contains("\\") }.map { text in
-        whitespaceEscape.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: " ")
+        escape.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: " ")
     }
     return texts + broken.filter { !texts.contains($0) }
 }

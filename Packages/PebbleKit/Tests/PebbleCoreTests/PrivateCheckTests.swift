@@ -672,6 +672,49 @@ struct PrivateCheckTests {
         #expect(result.status == 0, "\(result.output)")
     }
 
+    /// A listed word right after any standard string or regex escape is
+    /// found, never read as one word with the escape's letter or digits:
+    /// a whole word regex, a doubled backslash, a class like \d or \w, a
+    /// character written by its number (\u000a, \u{a}, \x0a) and \0.
+    @Test(arguments: [
+        ##"let pattern = #"\b%\b"#"##,
+        ##"let pattern = "\\b%\\b""##,
+        ##"let pattern = #"\B%\s"#"##,
+        ##"let pattern = #"\d%"#"##,
+        ##"let pattern = #"\w%"#"##,
+        ##"let note = "Hello\f%\v""##,
+        ##"{"note":"Hello\u000a%"}"##,
+        ##"{"note":"Hello\u000A%"}"##,
+        ##"let note = "Hello\u{a}%""##,
+        ##"let note = "Hello\x0a%""##,
+        ##"let note = "Hello\0%""##,
+        ##"let note = "Hello\012%""##,
+    ])
+    func review11AWordAfterAnyEscapeIsFound(line: String) throws {
+        for word in [Self.word, Self.word.capitalized] {
+            let scratch = try Scratch()
+            try scratch.write("Sources/Note.swift", "First line.\n" + line.replacingOccurrences(of: "%", with: word) + "\n")
+            let result = try scratch.run()
+            #expect(result.status != 0, "\(line)")
+            #expect(result.output.contains("Sources/Note.swift:2: a private word"), "\(result.output)")
+            let named = result.output.lowercased().contains(Self.word)
+            #expect(!named, "the output names what was planted")
+        }
+    }
+
+    /// Ordinary regexes and escapes by number pass, as everyday code holds.
+    @Test func review11OrdinaryRegexesPass() throws {
+        let scratch = try Scratch()
+        try scratch.write("Sources/Match.swift", """
+            let a = #"\\bword\\b\\d+\\s*\\w"#
+            let b = "\\\\bname\\\\b"
+            let c = "\\u{1F600}\\u00e9\\x41\\0"
+
+            """)
+        let result = try scratch.run()
+        #expect(result.status == 0, "\(result.output)")
+    }
+
     @Test(arguments: [
         ("relay.example" + ".herokuapp.com", "a hosting provider's hostname"),
         ("https://run-" + "abc.fly" + ".dev/v1", "a hosting provider's hostname"),
