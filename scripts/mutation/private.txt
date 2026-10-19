@@ -28,7 +28,7 @@ perl: s~guard git\(repo, \["ls-files", "--cached", "--", plainList\]\)\.isEmpty 
 # Round-1 relay review: each new refusal has an independent mutation.
 test: reviewUTF16PrivateWordsAreChecked reviewUTF16HostsAreChecked reviewUTF16NULDoesNotHideWords
 file: scripts/private-check.swift
-perl: s~for text in decodedTexts\(data\)~for text in (data.contains(0) ? [] : [String(decoding: data, as: UTF8.self)])~
+perl: s~let texts = decodedTexts\(data\)~let texts = data.contains(0) ? [] : [String(decoding: data, as: UTF8.self)]~
 
 test: reviewSensitivePathsAreRedacted
 file: scripts/private-check.swift
@@ -180,3 +180,31 @@ perl: s~(a private word in its path"\)\n\s*)problems \+= 1~$1~
 test: review9AWordInAPathFailsWhateverTheFileHolds review9EitherSpellingOfAWordInAPathFails
 file: scripts/private-check.swift
 perl: s~contains\(where: \{ holdsPrivateWord\(\$0, salt: salt, hashes: hashes\) \}\)~contains(where: { \$0.split(separator: ".").contains { hashes.contains(hash(salt, key(\$0))) } })~
+
+# Round-10 relay review: a listed word right after a whitespace escape in
+# a string. Without the escape reading, "\nfoo" reads only as nfoo.
+test: review10AWordAfterAWhitespaceEscapeIsFound review10TheTextAsWrittenIsStillRead
+file: scripts/private-check.swift
+perl: s~return texts \+ broken\.filter~return texts + broken.prefix(0).filter~
+
+# Only one backslash counts, so an escape written doubled in source hides
+# the word.
+test: review10AWordAfterAWhitespaceEscapeIsFound
+file: scripts/private-check.swift
+perl: s~pattern: #"\\\\\+\[ntr\]"#~pattern: #"(?<!\\\\)\\\\[ntr]"#~
+
+# Only \n counts as a break, never \t or \r.
+test: review10AWordAfterAWhitespaceEscapeIsFound
+file: scripts/private-check.swift
+perl: s~pattern: #"\\\\\+\[ntr\]"#~pattern: #"\\\\+n"#~
+
+# The escape reading takes the place of the text as written, so a word
+# that starts with an escape's letter after a backslash is lost.
+test: review10TheTextAsWrittenIsStillRead
+file: scripts/private-check.swift
+perl: s~return texts \+ broken\.filter \{ !texts\.contains\(\$0\) \}~return texts.filter { !\$0.contains("\\\\") } + broken~
+
+# The escape reading is scanned for words but not for hosts.
+test: review10TheTextAsWrittenIsStillRead
+file: scripts/private-check.swift
+perl: s~(guard checkHosts) else~$1, decodedTexts(data).contains(text) else~

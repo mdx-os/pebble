@@ -622,6 +622,56 @@ struct PrivateCheckTests {
         #expect(result.status == 0, "\(result.output)")
     }
 
+    /// A listed word right after a whitespace escape in a string, as JSON
+    /// and Swift write a new line or a tab, is found: the escape is a break,
+    /// never the first letter of the word. So is one written with a doubled
+    /// backslash, as source holds an escape it passes on, and one in
+    /// capitals.
+    @Test(arguments: [
+        ("docs/example.json", "{\"note\":\"%\"}\n"),
+        ("Sources/Note.swift", "let note = \"%\"\n"),
+    ], [#"\n"#, #"\t"#, #"\r"#, #"\\n"#, #"\\t"#])
+    func review10AWordAfterAWhitespaceEscapeIsFound(file: (path: String, text: String), escape: String) throws {
+        for word in [Self.word, Self.word.capitalized] {
+            let scratch = try Scratch()
+            try scratch.write(file.path, "First line.\n" + file.text.replacingOccurrences(of: "%", with: "Hello" + escape + word))
+            let result = try scratch.run()
+            #expect(result.status != 0, "\(file.path) \(escape)")
+            #expect(result.output.contains("\(file.path):2: a private word"), "\(result.output)")
+            let named = result.output.lowercased().contains(Self.word)
+            #expect(!named, "the output names what was planted")
+        }
+    }
+
+    /// The escape reading only adds words. A listed word that starts with
+    /// the letter of an escape, written after a backslash as in a Windows
+    /// path, is still found as written, and a host right after an escape
+    /// is found too.
+    @Test func review10TheTextAsWrittenIsStillRead() throws {
+        let listed = "t" + Self.word
+        let scratch = try Scratch(listed: listed.capitalized)
+        let host = "10.20" + ".30.40"
+        try scratch.write("docs/paths.md", "First line.\nKept in C:\\Users\\\(listed)\\notes.\n")
+        try scratch.write("docs/hosts.json", "{\"relay\":\"\\n\(host)\"}\n")
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("docs/paths.md:2: a private word"), "\(result.output)")
+        #expect(result.output.contains("docs/hosts.json:1: an IPv4 address"), "\(result.output)")
+        #expect(result.output.contains("2 found."), "\(result.output)")
+        let named = result.output.lowercased().contains(Self.word) || result.output.contains(host)
+        #expect(!named, "the output names what was planted")
+    }
+
+    /// Ordinary escapes pass: a word the escape's letter starts is not
+    /// listed once the letter is a break, so everyday code stays clean.
+    @Test func review10OrdinaryEscapesPass() throws {
+        let scratch = try Scratch()
+        try scratch.write("Sources/Note.swift", "let a = \"one\\ntwo\\tthree\\r\\nfour\"\nlet b = \"\\\\name\"\n")
+        try scratch.write("docs/example.json", "{\"note\":\"line\\nnext\"}\n")
+        let result = try scratch.run()
+        #expect(result.status == 0, "\(result.output)")
+    }
+
     @Test(arguments: [
         ("relay.example" + ".herokuapp.com", "a hosting provider's hostname"),
         ("https://run-" + "abc.fly" + ".dev/v1", "a hosting provider's hostname"),

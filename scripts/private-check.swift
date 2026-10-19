@@ -27,7 +27,9 @@
 // listed foobar written with a separator (foo_bar, foo-bar, Foo Bar) or
 // inside a run with no case change (openfoobarrelay) is not found. Where
 // that matters, list each part, or each run it can hide in, as a word of
-// its own. Each line of the
+// its own. Text is read as written and again with each whitespace escape
+// (\n, \t, \r, with one backslash or more) as a break, so "\nfoo" in a
+// string gives foo as well as nfoo. Each line of the
 // hash file after the salt is the lowercase hex SHA-256 of "<salt>:<word>",
 // the word in lowercase NFC.
 import CryptoKit
@@ -238,6 +240,24 @@ func decodedTexts(_ data: Data) -> [String] {
     return texts
 }
 
+/// A whitespace escape as a string writes it: \n, \t or \r, after one
+/// backslash or more, so the doubled one source writes to pass an escape on
+/// counts too.
+let whitespaceEscape = try! NSRegularExpression(pattern: #"\\+[ntr]"#)
+
+/// Every reading of `data` to scan: each decoded text as written, and again
+/// with each whitespace escape read as a space. As written, "\nfoo" reads as
+/// the word nfoo, never foo, so the second reading finds a listed word right
+/// after an escape. It only adds words, and a space never adds a line, so
+/// line numbers stay the same.
+func readings(_ data: Data) -> [String] {
+    let texts = decodedTexts(data)
+    let broken = texts.filter { $0.contains("\\") }.map { text in
+        whitespaceEscape.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: " ")
+    }
+    return texts + broken.filter { !texts.contains($0) }
+}
+
 /// Whether one segment of a path holds a listed word, read as a line of
 /// text is: either Unicode spelling, camel case parts and their joins.
 func holdsPrivateWord(_ segment: Substring, salt: String, hashes: Set<String>) -> Bool {
@@ -303,7 +323,7 @@ func check(_ repo: URL) {
             print("private-check: \(path):\(line): \(kind)")
             problems += 1
         }
-        for text in decodedTexts(data) {
+        for text in readings(data) {
             for (index, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
                 for word in words(line) {
                     let listed = seen[word] ?? hashes.contains(hash(salt, word))
