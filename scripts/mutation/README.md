@@ -27,5 +27,7 @@ perl: s~what the code says~what breaks it~
 
 `make mutation-manifest-check` (part of `make verify`) fails on a block
 with no `test:`, `file:` or `perl:` line, a `file:` that is gone, or two
-entries run together. `make mutation-check ONLY=nameOfATest` runs just the
+`test:` or `file:` lines in one block. Resolve merge conflicts in these
+files by hand and keep every entry from both sides; never use a union
+merge, which folds two entries with the same `test:` and `file:` into one. `make mutation-check ONLY=nameOfATest` runs just the
 entries whose tests match.

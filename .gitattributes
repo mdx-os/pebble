@@ -1,6 +1,0 @@
-# Every branch adds its mutation entries at the end of the old manifest, so
-# a merge keeps both sides of its tail instead of stopping on a conflict.
-# Only safe for blocks added at the end: an edit to an existing entry must
-# be checked in the merged file by hand. scripts/mutation-manifest-check.sh
-# catches two entries run together. New entries go in scripts/mutation/.
-scripts/mutation-manifest.txt merge=union

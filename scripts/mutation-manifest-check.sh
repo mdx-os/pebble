@@ -1,8 +1,7 @@
 #!/bin/sh
 # Fails on a mutation entry that is shaped wrong, before anything is built.
-# A merge that keeps both sides of a file's tail (see .gitattributes) can
-# join two entries into one or drop a line, and mutation-check would then
-# break the wrong thing, or nothing. Each entry, a block of lines between
+# A conflict resolved by hand can join two entries into one or drop a
+# line, and mutation-check would then break the wrong thing, or nothing. Each entry, a block of lines between
 # blank lines, must have exactly one test: line naming at least one test,
 # exactly one file: line naming a file that exists, and at least one perl:
 # line. A block of comments alone is not an entry.

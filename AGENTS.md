@@ -32,11 +32,9 @@ in lint, a skill, or CI.
   `ONLY=` runs the entries whose tests match. Add entries to `scripts/mutation/<area>.txt`
   (format in its README), never to the end of the old manifest
 - `make mutation-manifest-check`: fail on an entry with no `test:`, `file:` or `perl:`
-  line, a `file:` that is gone, or two entries run together (part of verify)
-- `.gitattributes` merges `scripts/mutation-manifest.txt` with `merge=union`, so the
-  open branches that still add to its end keep both sides instead of conflicting.
-  Union can only be trusted for blocks added at the end: a branch that edits an
-  existing entry must read the merged result by hand
+  line, a `file:` that is gone, or two `test:` or `file:` lines in one block (part of verify).
+  Merge conflicts in these files are resolved by hand, never with a union merge: two
+  entries with the same `test:` and `file:` lines would fold into one and hide a survivor
 - `make secrets-check`: gitleaks over git history
 
 ## Layout and layers

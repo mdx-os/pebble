@@ -1,6 +1,6 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test repeat-test mutation-check mutation-manifest-check mutation-manifest-check-test buildbuild-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-config-check graph-check graph-check-test secrets-check pulse clean
+.PHONY: verify generate test repeat-test mutation-check mutation-manifest-check mutation-manifest-check-test build build-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-config-check graph-check graph-check-test secrets-check pulse clean
 
 ## verify: everything CI runs. Run this before every PR. The graph check
 ## runs once the builds have made the project, so it reads that too. The
