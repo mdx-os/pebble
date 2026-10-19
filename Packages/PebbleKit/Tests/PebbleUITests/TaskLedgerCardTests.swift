@@ -3,6 +3,7 @@ import Foundation
 @testable import PebbleCore
 import PebbleModel
 import SwiftUI
+import SourceScan
 import Testing
 @testable import PebbleUI
 
@@ -36,6 +37,8 @@ struct TaskLedgerCardTests {
         #expect(card.spokenProofs == ["Source: Maple Dental hours", "Source: Harbour Smiles visits",
                                       "Made: Saturday dentists"])
         #expect(card.shownFinish?.line == nil)
+        #expect(card.statusLabel == "Done")
+        #expect(card.spoken.hasPrefix("Done."))
     }
 
     @Test func anUncheckedCardSaysSoInPlainWords() throws {
@@ -44,6 +47,14 @@ struct TaskLedgerCardTests {
         let task = try #require(engine.tasks.first)
         #expect(task.state == .done)
         let card = card(model, task)
+        // Keep the visible Text wired to the same status that VoiceOver reads.
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        let source = try String(contentsOf: root.appendingPathComponent("Packages/PebbleKit/Sources/PebbleUI/TaskCard.swift"),
+                                encoding: .utf8)
+        #expect(SwiftSource(source).calls(named: ["Text"]).contains { $0.arguments == "statusLabel" })
+        #expect(card.statusLabel == "Finished")
+        #expect(card.spoken.hasPrefix("Finished."))
+        #expect(!card.spoken.hasPrefix("Done."))
         #expect(card.shownFinish == .unchecked)
         #expect(card.shownFinish?.line == "Finished, but I couldn't check the result.")
         #expect(card.spokenProofs.isEmpty)

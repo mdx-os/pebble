@@ -23,6 +23,25 @@ struct SeededRandom: RandomNumberGenerator {
 /// `LocalFakeEngine`'s own clock, with `QuietWatch` looking each minute.
 /// The rule this guards: no task ever ends silently.
 struct TaskLedgerRunTests {
+    @Test(arguments: [false, true])
+    func thirteenTasksFinishingTogetherAllReachTheirLedgers(reentrant: Bool) throws {
+        let engine = LocalFakeEngine(rule: .isolated(), scripts: [])
+        let book = TaskLedgerBook(store: InMemoryTaskLedgerStore(), clock: { engine.currentDate })
+        let refreshing = reentrant ? engine.observe { _ in engine.refresh() } : nil
+        let following = book.follow(engine)
+        defer { following.cancel(); refreshing?.cancel() }
+        let ids = (0..<13).map { index in
+            engine.start(TaskScript(title: "Short \(index)",
+                                    steps: [.init("Reading", duration: 1, todo: "read")],
+                                    doneLine: "Ready.", proofs: [.check("Read the note")]))
+        }
+        engine.advance(by: 2)
+        #expect(engine.tasks.count == LocalFakeEngine.endedLimit)
+        for id in ids {
+            #expect(try #require(book.ledger(id)).end?.kind == .done(proofs: [.check("Read the note")]))
+        }
+    }
+
     enum Outcome: CaseIterable {
         case doneWithProof, doneWithoutProof, doneWithFalseProof, fails, stalls, stuck, stopped, closedMidTask, quiet
     }

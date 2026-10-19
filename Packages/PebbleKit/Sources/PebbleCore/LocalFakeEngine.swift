@@ -157,6 +157,9 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
     private var made = 0
     /// Goes up with every change observers hear about.
     private var sequence = 0
+    /// No retention trim while any snapshot is still reaching observers,
+    /// including when an observer calls back into the engine.
+    private var deliveries = 0
     /// Questions to withdraw once the lock is let go.
     private var withdrawals: [ConfirmationRequest] = []
     /// Receipts made and not yet taken by `takeReceipts`.
@@ -778,7 +781,8 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
         run.task.progress = .fraction(max(shown, min(1, next)))
     }
 
-    /// Runs a change inside the lock, then tells observers once.
+    /// Runs a change inside the lock, then tells observers. Retention is a
+    /// separate change after every observer has received the outcomes.
     ///
     /// `AskFirst` is told and asked only with the lock let go, so if it ever
     /// calls out, and someone calls back in, nothing deadlocks. An answer
@@ -804,20 +808,29 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
             unlockRuns()
         }
         lockRuns()
-        dropOldEnded()
         let after = runs.map(\.task)
         let changed = before != after
         if changed { sequence += 1 }
         let snapshot = TaskSnapshot(sequence: sequence, tasks: Array(after.reversed()))
         let listeners = changed ? Array(observers.values) : []
+        deliveries += 1
         unlockRuns()
         for listener in listeners { listener(snapshot) }
+        lockRuns()
+        deliveries -= 1
+        let trim = deliveries == 0 && runs.filter { !$0.task.isActive }.count > Self.endedLimit
+        unlockRuns()
+        if trim {
+            // Everyone has heard the outcomes. Publish retention as its own
+            // change, so the feed also receives the bounded list of cards.
+            mutate { if deliveries == 0 { dropOldEnded() } }
+        }
         return value
     }
 
     /// Keeps at most `endedLimit` ended tasks, the ones that ended last. A
     /// task that ends now outlasts those that ended before it, whenever it
-    /// began, so the change that ends it always reaches observers.
+    /// began. Called only after outcome delivery, even for simultaneous ends.
     private func dropOldEnded() {
         // Runs are oldest first, so a tie goes to the one begun first.
         let ended = runs.indices.filter { !runs[$0].task.isActive }

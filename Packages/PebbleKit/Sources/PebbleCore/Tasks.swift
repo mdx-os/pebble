@@ -23,9 +23,10 @@ public struct AgentTask: Identifiable, Sendable, Equatable {
     public var wrapUp: TaskWrapUp?
     /// The finished result to read, once the task is done.
     public var result: String?
-    /// What the engine says shows the result, once the task is done. Taken
-    /// on its word by no one: `TaskLedgerBook` keeps only proofs that point
-    /// at something real, and a done with none is finished unchecked.
+    /// Evidence supplied by the engine for its result. `TaskLedgerBook`
+    /// checks source and check shapes and resolves local artifact references.
+    /// Sources and checks remain supplied claims until backed by trusted
+    /// execution records. A done with no accepted evidence is finished unchecked.
     public var proofs: [TaskProof] = []
     public let startedAt: Date
     public var updatedAt: Date

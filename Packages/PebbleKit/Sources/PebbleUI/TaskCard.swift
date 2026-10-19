@@ -236,10 +236,13 @@ struct TaskCard: View {
 
     // MARK: What it says
 
+    /// The same completion status in the visible label and VoiceOver.
+    var statusLabel: String { shownFinish?.label ?? task.state.label }
+
     /// The card's first line for VoiceOver. An example says so first, as it
     /// is seen first.
     var spoken: String {
-        [isSample ? FeedWords.exampleMarker : "", task.state.label, task.title, task.step, time]
+        [isSample ? FeedWords.exampleMarker : "", statusLabel, task.title, task.step, time]
             .filter { !$0.isEmpty }.joined(separator: ". ")
     }
 
@@ -255,7 +258,7 @@ struct TaskCard: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Label {
-                    Text(task.state.label)
+                    Text(statusLabel)
                 } icon: {
                     if isLive {
                         LiveDot()

@@ -501,8 +501,8 @@ test: theStillLineReadsAsASentence
 file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
 perl: s~if !capitals \{ text~if true { text~
 
-# The engine lets go of the tasks that ended first, never one ending now.
-test: aTaskThatEndsAfterManyOthersStillSaysHowItEnded fiftySeededTasksNeverEndSilently
+# Engine retention keeps the latest finishes. Outcome delivery is guarded separately.
+test: aTaskThatEndsAfterManyOthersStillSaysHowItEnded
 file: Packages/PebbleKit/Sources/PebbleCore/LocalFakeEngine.swift
 perl: s~\n            \.sorted \{ \(runs\[\$0\]\.task\.updatedAt, \$0\) < \(runs\[\$1\]\.task\.updatedAt, \$1\) \}~~
 
@@ -539,3 +539,76 @@ perl: s~            let cleared = tasks\.clear\(\)\n            ledger\?\.forget
 test: clearingACardTakesItsLedger
 file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
 perl: s~        ledger\?\.remove\(task\.id\)\n~~
+
+# Round-one ledger regressions: deletion is owed independently of marker creation.
+test: forgetTriesDeletionWhenItsMarkerCannotBeWritten
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~(private func erased\(\) -> Bool \{)\n        pendingErase = true~$1~
+
+# A failed marker write must not make the in-memory erase disappear.
+test: forgetTriesDeletionWhenItsMarkerCannotBeWritten
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~guard pendingErase \|\| manager\.fileExists~guard manager.fileExists~
+
+# An inaccessible data folder is not an empty one.
+test: anInaccessibleFolderIsNotProofThatErasureFinished
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~return lstat\(url\.path, &info\) != 0 && \(errno == ENOENT \|\| errno == ENOTDIR\)~return !FileManager.default.fileExists(atPath: url.path)~
+
+# Deletions made while reads fail survive recovery.
+test: clearingWhileUnreadableStaysClearedAfterReadsRecover
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~        pendingDeletions\.insert\(id\)\n~~
+
+# Pending deletions are applied before merging disk entries.
+test: clearingWhileUnreadableStaysClearedAfterReadsRecover
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~read\.filter \{ !pendingDeletions\.contains\(\$0\.taskID\) \}~read~
+
+# A failed save cannot retire pending deletions.
+test: clearingWhileUnreadableStaysClearedAfterReadsRecover
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~if !dirty \{ pendingDeletions\.removeAll\(\) \}~pendingDeletions.removeAll()~
+
+# A successful save does retire them, allowing a new run with that id.
+test: clearingWhileUnreadableStaysClearedAfterReadsRecover
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~if !dirty \{ pendingDeletions\.removeAll\(\) \}~~
+
+# Snapshots cannot restore a deletion that is still pending persistence.
+test: clearingWhileUnreadableStaysClearedAfterReadsRecover
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~        guard !pendingDeletions\.contains\(task\.id\) else \{ return \}\n~~
+
+# Ledger retention orders by terminal time, with insertion order only for ties.
+test: aLongTaskOutlastsSixtyEarlierFinishes
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~\n            \.sorted \{ \(kept\[\$0\]\.end!\.at, \$0\) < \(kept\[\$1\]\.end!\.at, \$1\) \}~~
+
+# An unchanged snapshot cannot recreate an evicted end as queued.
+test: anEvictedEndIsNotRecreatedByAnUnchangedSnapshot aLongTaskOutlastsSixtyEarlierFinishes
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~        guard last\[key\]\?\.state\.isFinished != true else \{ return \}\n~~
+
+# Every simultaneous completion reaches observers before the engine's trim.
+test: thirteenTasksFinishingTogetherAllReachTheirLedgers
+file: Packages/PebbleKit/Sources/PebbleCore/LocalFakeEngine.swift
+perl: s~        lockRuns\(\)\n        let after = runs~        lockRuns()\n        dropOldEnded()\n        let after = runs~
+
+# Folder proofs cannot traverse a symlink out of the root.
+test: aFolderRejectsSymlinksOutsideItsRoot
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~resolvedFile\.starts\(with: resolvedRoot\)~true~
+
+# The unchecked status comes from TaskFinish, visibly and for VoiceOver.
+test: anUncheckedCardSaysSoInPlainWords
+file: Packages/PebbleKit/Sources/PebbleUI/TaskCard.swift
+perl: s~shownFinish\?\.label \?\? task\.state\.label~task.state.label~
+
+test: anUncheckedCardSaysSoInPlainWords
+file: Packages/PebbleKit/Sources/PebbleUI/TaskCard.swift
+perl: s~Text\(statusLabel\)~Text(task.state.label)~
+
+test: anUncheckedCardSaysSoInPlainWords
+file: Packages/PebbleKit/Sources/PebbleUI/TaskCard.swift
+perl: s~"", statusLabel, task\.title~"", task.state.label, task.title~

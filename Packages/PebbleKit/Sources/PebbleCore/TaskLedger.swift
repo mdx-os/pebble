@@ -1,18 +1,18 @@
 import Foundation
 
-/// Something that shows a task really did what it says: a page that was
-/// read, a thing made on this device, or a check that passed. A task can
-/// end as done only with at least one, and each must point at something
-/// real (see `TaskProof.checked`).
+/// Evidence supplied by an engine for its result: a source, a local artifact,
+/// or a check. Sources and checks are supplied claims, not trusted execution
+/// records. Validation checks their shape and resolves local artifacts; it
+/// does not establish that a page was read or a check ran.
 public enum TaskProof: Codable, Sendable, Hashable {
-    /// A page that was read, by its title and its web address.
+    /// A supplied source, by its title and web address.
     case source(title: String, url: URL)
     /// Something made on this device, by its name, what kind of thing it
     /// is, and where it is kept here. The reference is resolved by the
     /// ledger's `TaskArtifactResolving`, never taken on the engine's word.
     case artifact(name: String, kind: Kind, reference: String)
-    /// A check that was run and passed, in plain words, such as "All three
-    /// open on Saturdays".
+    /// A supplied claim that a check passed, in plain words, such as
+    /// "All three open on Saturdays". Not a record of execution.
     case check(String)
 
     /// What kind of thing an artifact is.
@@ -39,20 +39,21 @@ public enum TaskProof: Codable, Sendable, Hashable {
         }
     }
 
-    /// The proofs that point at something real, in order, each once. A
-    /// source needs a title and an http or https address with a host. An
-    /// artifact needs a name and a reference `artifacts` resolves on this
-    /// device. A check needs words. Anything else is dropped.
+    /// Supplied evidence with a valid shape, in order, each once. A source
+    /// needs a title and an http or https address with a host. An artifact
+    /// needs a name and a reference `artifacts` resolves on this device.
+    /// A check needs words. Sources and checks are not verified against
+    /// trusted execution records. Anything else is dropped.
     public static func checked(_ proofs: [TaskProof], artifacts: any TaskArtifactResolving) -> [TaskProof] {
         var seen = Set<TaskProof>()
         return proofs.filter { proof in
-            guard proof.isReal(artifacts: artifacts), !seen.contains(proof) else { return false }
+            guard proof.isValid(artifacts: artifacts), !seen.contains(proof) else { return false }
             seen.insert(proof)
             return true
         }
     }
 
-    func isReal(artifacts: any TaskArtifactResolving) -> Bool {
+    func isValid(artifacts: any TaskArtifactResolving) -> Bool {
         guard Self.readable(title) else { return false }
         switch self {
         case .source(_, let url):
@@ -98,7 +99,7 @@ public struct KnownArtifacts: TaskArtifactResolving {
 
 /// Resolves a reference that names a file inside `root` that is there now.
 /// A reference that climbs out of `root`, or starts at the top of the
-/// disk, resolves nothing.
+/// disk, resolves nothing. Symbolic links must resolve inside `root` too.
 public struct FolderArtifacts: TaskArtifactResolving {
     public let root: URL
 
@@ -111,6 +112,10 @@ public struct FolderArtifacts: TaskArtifactResolving {
         guard !reference.hasPrefix("/"), !parts.isEmpty,
               !parts.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else { return false }
         let file = parts.reduce(root) { $0.appendingPathComponent(String($1)) }
+        let resolvedRoot = root.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        let resolvedFile = file.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        guard resolvedFile.count > resolvedRoot.count,
+              resolvedFile.starts(with: resolvedRoot) else { return false }
         var folder: ObjCBool = false
         return FileManager.default.fileExists(atPath: file.path, isDirectory: &folder) && !folder.boolValue
     }
@@ -207,9 +212,9 @@ public struct TaskLedger: Codable, Sendable, Equatable, Identifiable {
     }
 
     /// Writes one line. Nothing is written after the end, and false says
-    /// so. A done is checked first: proofs that don't point at something
-    /// real are dropped, and a done left with none is written as finished
-    /// unchecked instead.
+    /// so. A done is checked first: evidence with an invalid shape or an
+    /// unresolved artifact is dropped. A done left with none is written as
+    /// finished unchecked instead.
     @discardableResult
     public mutating func append(_ kind: TaskLedgerEntry.Kind, at: Date, watched: Bool = false,
                                 artifacts: any TaskArtifactResolving) -> Bool {
@@ -259,6 +264,9 @@ public enum TaskFinish: Sendable, Equatable {
     case proven([TaskProof])
     /// With nothing that showed it, so the card says so.
     case unchecked
+
+    /// The visible and spoken status on a completed card.
+    public var label: String { self == .unchecked ? LedgerWords.finishedLabel : TaskState.done.label }
 
     /// "Finished, but I couldn't check the result." Nil when proven.
     public var line: String? {
@@ -366,6 +374,8 @@ public final class TaskLedgerFileStore: TaskLedgerStoring, @unchecked Sendable {
     public let fileURL: URL
     private let markerURL: URL
     private let lock = NSLock()
+    /// An erase is owed even if its durable marker could not be written.
+    private var pendingErase = false
 
     package init(fileURL: URL, forgetMarker: URL) {
         self.fileURL = fileURL
@@ -396,8 +406,8 @@ public final class TaskLedgerFileStore: TaskLedgerStoring, @unchecked Sendable {
     }
 
     /// How the file is written: as the kept tasks are, so it can't be read
-    /// until the device is first unlocked. It names pages read and things
-    /// made for the person.
+    /// until the device is first unlocked. It names supplied sources and
+    /// artifacts for the person.
     package static func fileWriting(protected: Bool = TaskStore.protectsFiles) -> Data.WritingOptions {
         TaskStore.fileWriting(protected: protected)
     }
@@ -434,7 +444,7 @@ public final class TaskLedgerFileStore: TaskLedgerStoring, @unchecked Sendable {
         if ledgers.isEmpty {
             try? manager.removeItem(at: fileURL)
             try? manager.removeItem(at: stagingURL)
-            return !manager.fileExists(atPath: fileURL.path)
+            return [fileURL, stagingURL].allSatisfy(Self.isMissing)
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -453,23 +463,33 @@ public final class TaskLedgerFileStore: TaskLedgerStoring, @unchecked Sendable {
         return erased()
     }
 
-    /// Writes the marker, deletes the file and its staged copy, and takes
-    /// the marker away once both are gone. Called with the lock held.
+    /// Owes an erase before trying any disk operation. Called with the lock held.
     private func erased() -> Bool {
-        let manager = FileManager.default
-        try? manager.createDirectory(at: markerURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? Data().write(to: markerURL, options: Self.markerWriting())
+        pendingErase = true
         return eraseIfOwed()
     }
 
-    /// True once no erase is owed. Called with the lock held.
+    /// True once the data and marker are confirmed gone. Marker failure must
+    /// never skip deletion or permit reads of data still owed an erase.
     private func eraseIfOwed() -> Bool {
         let manager = FileManager.default
-        guard manager.fileExists(atPath: markerURL.path) else { return true }
+        guard pendingErase || manager.fileExists(atPath: markerURL.path) else { return true }
+        pendingErase = true
+        try? manager.createDirectory(at: markerURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? Data().write(to: markerURL, options: Self.markerWriting())
         for url in [fileURL, stagingURL] { try? manager.removeItem(at: url) }
-        guard ![fileURL, stagingURL].contains(where: { manager.fileExists(atPath: $0.path) }) else { return false }
+        guard [fileURL, stagingURL].allSatisfy(Self.isMissing) else { return false }
         try? manager.removeItem(at: markerURL)
+        guard Self.isMissing(markerURL) else { return false }
+        pendingErase = false
         return true
+    }
+
+    /// A permission error is not proof of absence. lstat also sees dangling
+    /// links, which fileExists would mistake for a missing file.
+    private static func isMissing(_ url: URL) -> Bool {
+        var info = stat()
+        return lstat(url.path, &info) != 0 && (errno == ENOENT || errno == ENOTDIR)
     }
 }
 
@@ -498,6 +518,8 @@ public final class TaskLedgerBook: @unchecked Sendable {
     private var loaded = false
     /// What is here couldn't be written yet.
     private var dirty = false
+    /// Cleared task ids, kept until a save persists their removal.
+    private var pendingDeletions: Set<String> = []
     /// The newest snapshot written down, so a late one is dropped.
     private var seen = -1
     /// What each task was doing at the last snapshot, by ledger.
@@ -629,6 +651,7 @@ public final class TaskLedgerBook: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         loadIfNeeded()
+        pendingDeletions.insert(id)
         kept.removeAll { $0.taskID == id }
         last = last.filter { $0.key.task != id }
         stoppedAtLaunch.removeAll { $0.task == id }
@@ -642,6 +665,7 @@ public final class TaskLedgerBook: @unchecked Sendable {
         defer { lock.unlock() }
         kept = []
         last = [:]
+        pendingDeletions = []
         stoppedAtLaunch = []
         sweep = nil
         dirty = false
@@ -660,11 +684,15 @@ public final class TaskLedgerBook: @unchecked Sendable {
     // MARK: Inside the lock
 
     private func record(_ task: AgentTask, at now: Date) {
+        guard !pendingDeletions.contains(task.id) else { return }
         let key = Self.key(task)
         let index: Int
         if let found = kept.lastIndex(where: { $0.key == key }) {
             index = found
         } else {
+            // Its terminal ledger was evicted; an unchanged snapshot must
+            // not recreate it as queued, or give it a newer terminal time.
+            guard last[key]?.state.isFinished != true else { return }
             var ledger = TaskLedger(key: key)
             ledger.append(.queued, at: now, artifacts: artifacts)
             kept.append(ledger)
@@ -718,7 +746,8 @@ public final class TaskLedgerBook: @unchecked Sendable {
         }
         guard let read = store.read() else { return }
         loaded = true
-        let before = read.map { $0.replayed(artifacts: artifacts) }
+        let before = read.filter { !pendingDeletions.contains($0.taskID) }
+            .map { $0.replayed(artifacts: artifacts) }
         var merged = before
         for ledger in kept {
             if let index = merged.firstIndex(where: { $0.key == ledger.key }) {
@@ -748,17 +777,20 @@ public final class TaskLedgerBook: @unchecked Sendable {
             return
         }
         dirty = !store.write(kept)
+        if !dirty { pendingDeletions.removeAll() }
     }
 
     private func dropOldEnded() {
         let ended = kept.indices.filter { kept[$0].isEnded }
+            .sorted { (kept[$0].end!.at, $0) < (kept[$1].end!.at, $1) }
         guard ended.count > Self.endedLimit else { return }
-        for index in ended.prefix(ended.count - Self.endedLimit).reversed() { kept.remove(at: index) }
+        for index in ended.prefix(ended.count - Self.endedLimit).sorted().reversed() { kept.remove(at: index) }
     }
 }
 
 /// Words for what a task's ledger shows on its card.
 public enum LedgerWords {
+    public static let finishedLabel = "Finished"
     /// On a finished card with nothing to show for it.
     public static let unchecked = "Finished, but I couldn't check the result."
     /// "Still on it: reading the third page."

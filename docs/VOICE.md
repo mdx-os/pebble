@@ -183,10 +183,12 @@ stays on Today to say it may be done, naming nothing the task held. A
 scripted task's card says "Example", like every other example.
 
 A done card shows what backs it, as small chips under the result: the
-title of a page that was read, the name of something made on this device,
-or what a check found. VoiceOver reads each as "Source: Maple Dental
+title of a supplied source, the name of something found on this device,
+or a supplied check result. VoiceOver reads each as "Source: Maple Dental
 hours", "Made: Saturday dentists" or "Checked: All three open on
-Saturdays". Done with nothing real to show, the card says so plainly:
+Saturdays". Sources and checks are supplied evidence; their shape is checked,
+not whether the page was read or the check ran. With no accepted evidence,
+the card's visible and spoken status is "Finished", and it says plainly:
 "Finished, but I couldn't check the result." It never calls that done. A
 task that goes quiet says so on its own, naming its last step ("Still on
 it: reading the third page."), and after half an hour of nothing new says

@@ -488,6 +488,149 @@ struct TaskLedgerTests {
         #expect(book.ledger("task:0") == nil)
     }
 
+    @Test func clearingWhileUnreadableStaysClearedAfterReadsRecover() {
+        final class RecoveringStore: TaskLedgerStoring, @unchecked Sendable {
+            var ledgers: [TaskLedger] = []
+            var readable = false
+            var writable = false
+            func read() -> [TaskLedger]? { readable ? ledgers : nil }
+            func write(_ value: [TaskLedger]) -> Bool {
+                guard writable else { return false }
+                ledgers = value
+                return true
+            }
+            func erase() -> Bool { ledgers = []; return true }
+        }
+        let clock = LedgerClock()
+        let store = RecoveringStore()
+        store.ledgers = ["task:clear", "task:keep"].map {
+            TaskLedger(key: .init(task: $0, startedAt: Self.start)).appending(.queued, at: Self.start)
+        }
+        let book = Self.book(store, clock: clock)
+        book.remove("task:clear")
+        #expect(store.ledgers.count == 2)
+        store.readable = true
+        #expect(book.ledgers.map(\.taskID) == ["task:keep"])
+        #expect(store.ledgers.count == 2, "a failed save must keep the deletion pending")
+        // A snapshot still carrying the cleared card must not undo that pending deletion.
+        book.record(TaskSnapshot(sequence: 1, tasks: [Self.task("task:clear"), Self.task("task:keep")]))
+        #expect(book.ledger("task:clear") == nil)
+        store.writable = true
+        #expect(book.ledgers.map(\.taskID) == ["task:keep"])
+        #expect(store.ledgers.map(\.taskID) == ["task:keep"])
+        #expect(Self.book(store, clock: clock).ledgers.map(\.taskID) == ["task:keep"])
+        book.record(TaskSnapshot(sequence: 2, tasks: [Self.task("task:clear", started: Self.start + 1)]))
+        #expect(book.ledger("task:clear")?.key.startedAt == Self.start + 1,
+                "a successful save retires the pending deletion so a new run can reuse the id")
+    }
+
+    @Test func aLongTaskOutlastsSixtyEarlierFinishes() throws {
+        let clock = LedgerClock()
+        let book = Self.book(clock: clock)
+        var long = Self.task("task:long")
+        var tasks = [long]
+        book.record(TaskSnapshot(sequence: 1, tasks: tasks))
+        for index in 0..<TaskLedgerBook.endedLimit {
+            clock.advance(1)
+            tasks.insert(Self.task("task:short:\(index)", state: .done, proofs: [Self.page]), at: 0)
+            book.record(TaskSnapshot(sequence: index + 2, tasks: tasks))
+        }
+        clock.advance(1)
+        long.state = .done
+        long.proofs = [Self.page]
+        tasks[tasks.count - 1] = long
+        book.record(TaskSnapshot(sequence: 100, tasks: tasks))
+        #expect(try #require(book.ledger(for: long)).end?.kind == .done(proofs: [Self.page]))
+        #expect(book.ledger("task:short:0") == nil)
+        book.record(TaskSnapshot(sequence: 101, tasks: tasks))
+        #expect(book.ledgers.count == TaskLedgerBook.endedLimit)
+        #expect(book.ledgers.allSatisfy { $0.isEnded })
+        #expect(book.ledger(for: long)?.finish == .proven([Self.page]))
+        #expect(book.ledger("task:short:0") == nil)
+    }
+
+    @Test func anEvictedEndIsNotRecreatedByAnUnchangedSnapshot() {
+        let clock = LedgerClock()
+        let book = Self.book(clock: clock)
+        let tasks = (0...TaskLedgerBook.endedLimit).map { Self.task("task:\($0)", state: .failed) }
+        book.record(TaskSnapshot(sequence: 1, tasks: tasks.reversed()))
+        #expect(book.ledger("task:0") == nil)
+        book.record(TaskSnapshot(sequence: 2, tasks: tasks.reversed()))
+        #expect(book.ledgers.count == TaskLedgerBook.endedLimit)
+        #expect(book.ledger("task:0") == nil)
+        #expect(book.ledgers.allSatisfy { $0.isEnded })
+    }
+
+    @Test(.scratchFiles) func aFolderRejectsSymlinksOutsideItsRoot() throws {
+        let base = try #require(Scratch.folder)
+        let root = base.appendingPathComponent("made")
+        let outside = base.appendingPathComponent("made-elsewhere")
+        let manager = FileManager.default
+        try manager.createDirectory(at: root, withIntermediateDirectories: true)
+        try manager.createDirectory(at: outside, withIntermediateDirectories: true)
+        try Data("private".utf8).write(to: outside.appendingPathComponent("note.txt"))
+        try manager.createSymbolicLink(at: root.appendingPathComponent("link"), withDestinationURL: outside)
+        try manager.createSymbolicLink(at: root.appendingPathComponent("file.txt"),
+                                      withDestinationURL: outside.appendingPathComponent("note.txt"))
+        let folder = FolderArtifacts(root: root)
+        #expect(!folder.resolves("link/note.txt"))
+        #expect(!folder.resolves("file.txt"))
+    }
+
+    @Test(.scratchFiles, .fileModesHoldOrCI, .failsAsRoot, arguments: [false, true])
+    func forgetTriesDeletionWhenItsMarkerCannotBeWritten(blockDeletion: Bool) throws {
+        let base = try #require(Scratch.folder)
+        let folder = base.appendingPathComponent("data")
+        let manager = FileManager.default
+        try manager.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent("ledger.json")
+        let staged = folder.appendingPathComponent(".ledger.json.next")
+        let markerParent = base.appendingPathComponent("not-a-folder")
+        try Data().write(to: markerParent)
+        let marker = markerParent.appendingPathComponent("forgotten")
+        let store = TaskLedgerFileStore(fileURL: file, forgetMarker: marker)
+        let book = Self.book(store, clock: LedgerClock())
+        book.record(TaskSnapshot(sequence: 1, tasks: [Self.task()]))
+        try Data(contentsOf: file).write(to: staged)
+        if blockDeletion { try manager.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path) }
+        defer { try? manager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+        book.forget()
+        #expect(store.erase() == !blockDeletion)
+        #expect(!manager.fileExists(atPath: marker.path))
+        if blockDeletion {
+            #expect(store.read() == nil)
+            #expect(!store.write([]))
+            #expect(book.ledgers.isEmpty)
+            #expect(manager.fileExists(atPath: file.path))
+            try manager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+        }
+        #expect(store.read() == [])
+        #expect(book.ledgers.isEmpty)
+        #expect(!manager.fileExists(atPath: file.path))
+        #expect(!manager.fileExists(atPath: staged.path))
+        #expect(TaskLedgerFileStore(fileURL: file, forgetMarker: marker).read() == [])
+    }
+
+    @Test(.scratchFiles, .fileModesHoldOrCI, .failsAsRoot)
+    func anInaccessibleFolderIsNotProofThatErasureFinished() throws {
+        let base = try #require(Scratch.folder)
+        let folder = base.appendingPathComponent("hidden")
+        let manager = FileManager.default
+        try manager.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent("ledger.json")
+        let marker = base.appendingPathComponent("erase-owed")
+        let store = TaskLedgerFileStore(fileURL: file, forgetMarker: marker)
+        Self.book(store, clock: LedgerClock()).record(TaskSnapshot(sequence: 1, tasks: [Self.task()]))
+        try manager.setAttributes([.posixPermissions: 0o000], ofItemAtPath: folder.path)
+        defer { try? manager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+        #expect(!store.erase())
+        #expect(store.read() == nil)
+        #expect(manager.fileExists(atPath: marker.path))
+        try manager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+        #expect(store.read() == [])
+        #expect(!manager.fileExists(atPath: file.path))
+    }
+
     // MARK: The file
 
     @Test(.scratchFiles) func theFileIsKeptBesideTheTasksAndReadBackAsWritten() throws {
