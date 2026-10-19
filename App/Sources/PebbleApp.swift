@@ -92,6 +92,9 @@ struct PebbleApp: App {
         tasks = wiring.tasks
         background = wiring.service
         background.start()
+        // Scene notifications, so leaving the screen drains graphics work
+        // before UIKit's own callback returns.
+        foreground.watchSystemScenes()
     }
 
     var body: some Scene {

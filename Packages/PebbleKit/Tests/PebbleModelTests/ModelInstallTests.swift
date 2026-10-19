@@ -144,7 +144,7 @@ struct ModelInstallTests {
         let installer = ModelInstaller(pin: place.pin, folders: place.folders, fetcher: FakeFetcher(),
                                        freeSpace: { _ in nil })
         let end = await installer.install(report: steps.add)
-        #expect(end == .ready(place.ready))
+        #expect(end == .installed(place.ready))
         #expect(installer.readyFolder() == place.ready)
         for (name, data) in TestPin.contents {
             #expect(try Data(contentsOf: place.ready.appendingPathComponent(name)) == data)
@@ -240,7 +240,7 @@ struct ModelInstallTests {
         let installer = ModelInstaller(pin: place.pin, folders: place.folders, fetcher: FakeFetcher(),
                                        freeSpace: { _ in nil })
         #expect(installer.hasIncompleteFolder())
-        #expect(await installer.install(report: { _ in }) == .ready(place.ready))
+        #expect(await installer.install(report: { _ in }) == .installed(place.ready))
         #expect(!FileManager.default.fileExists(atPath: place.ready.appendingPathComponent("stray.txt").path))
         #expect(installer.readyFolder() == place.ready)
     }

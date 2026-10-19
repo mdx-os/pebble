@@ -34,11 +34,13 @@ public enum OnDeviceModel {
     /// Memory the model needs beyond its weights: the key and value cache
     /// for a long chat (about 150 KB a token for the pinned model, so about
     /// 300 MB at 2,000 tokens), the MLX buffer cache (capped at 64 MB), the
-    /// work of one step, and the app itself. Measured on a Mac, the pinned
-    /// model peaked 0.49 GB over its weights on short chats; this leaves
-    /// twice that. The rule it replaced let weights use only half of the
-    /// memory available, which on iPhone 17e would turn away the 2.26 GB
-    /// model that runs there at about 26 tokens a second.
+    /// work of one step, and the app itself. This 1 GB is an admission
+    /// estimate. On a Mac the pinned model peaked 0.49 GB over its weights
+    /// in short chats, and this leaves about twice that. It is not a
+    /// measurement of the peak while the weights load, or at the longest
+    /// context, on a phone or on the Mac. The rule it replaced let weights
+    /// use only half of the memory available, which would turn away the
+    /// 2.26 GB model on a phone with about 3 GB free.
     public static let headroomBytes: UInt64 = 1 << 30
 
     /// The key and value cache for one token of the pinned model: 36
@@ -47,8 +49,8 @@ public enum OnDeviceModel {
 
     /// The most tokens one reply may hold in the cache, the prompt and the
     /// reply together. The cache is bounded to this. At 3,072 tokens it is
-    /// about 450 MB, which with the 0.49 GB measured on short chats stays
-    /// inside `headroomBytes`. The turn limit alone did not bound this: one
+    /// about 450 MB. With the 0.49 GB seen on short Mac chats, that estimate
+    /// stays inside `headroomBytes`. The turn limit alone did not bound this: one
     /// pasted document could fill the cache past the headroom, and the
     /// system would end the app and the chat with it.
     public static let contextTokens = 3072

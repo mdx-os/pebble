@@ -40,7 +40,7 @@ in lint, a skill, or CI.
   below it; `Package.swift` enforces this.
   - `PebbleCore`: plain types. No SwiftUI, no networking.
   - `PebblePulse`: competitor watch fetching and snapshots. Imports PebbleCore.
-  - `PebbleModel`: model adapter. `ModelClient`, the on-device placeholder, `MLXChatModel` with its pinned download (`PinnedModel`, `ModelInstaller`, network only in `ModelDownload.swift`), the app's one `OnDeviceChat`, and `CloudModel` (off by default, every request previewed and redacted by `Redactor` in PebbleCore). Imports PebbleCore. An Ollama adapter plugs in here.
+  - `PebbleModel`: model adapter. `ModelClient`, the on-device placeholder, `MLXChatModel` with its pinned download (`PinnedModel`, `ModelInstaller`, network only in `ModelDownload.swift`), the app's one `OnDeviceChat`, and `CloudModel` (off by default, every request previewed and redacted by `Redactor` in PebbleCore). Imports PebbleCore. `MLXLLM` and `MLXLMCommon` come from the local `Packages/MLXLM` copy of mlx-swift-lm 3.32.3, without its macro. An Ollama adapter plugs in here.
   - `PebbleBackground`: gives the background runner time (`BGTaskScheduler` on iOS, `NSBackgroundActivityScheduler` on the Mac). Imports PebbleCore. Scheduling decisions are pure functions in `BackgroundPlan`; the runner, its store and its switch live in PebbleCore's `Background.swift`, so no platform code goes there.
   - `PebbleUI`: SwiftUI views shared by every platform. Imports PebbleCore and PebbleModel.
 - New code goes in a package, not in `App/`. New layers get added to
@@ -115,12 +115,13 @@ Things no test here can reach. Check each on a real iPhone before a release.
   (or the job in `background.json`) should hold `"locked"`. If neither
   does, opening the file failed with another error, and the runner took
   it as a disk error.
-- The on-device model fits iPhone 17e. Download it from What I remember on
-  an iPhone 17e, then open the chat and send a line. The row must say
-  "Ready" (not "There isn't enough memory free here"), and the reply must
-  come from the model. The memory rule (`OnDeviceModel.headroomBytes`) was
-  set from a Mac measurement and the 26 tokens a second seen on that phone,
-  not from the phone's own memory limit.
+- Peak memory of the on-device model on a real iPhone 17e is still to be
+  measured, during a cold load and a reply that fills the context. Download
+  it from What I remember, open the chat, and send that long line. Before
+  the first reply the row says the model is downloaded, not "Ready". After
+  a reply comes from the model, the row says "Ready". The 1 GB reserve
+  (`OnDeviceModel.headroomBytes`) is an admission estimate from a short Mac
+  chat that peaked 0.49 GB over the weights. It is not a measured fit.
 
 ## The name
 
@@ -168,11 +169,13 @@ Things no test here can reach. Check each on a real iPhone before a release.
 - The app never makes its own `LocalStubModel`. It takes `OnDeviceChat`
   from `OnDeviceModelSetup.forApp`, or the chat answers with canned lines
   however the model is set up. `PromiseRules.stubMakers` in GuardKit guards this.
-- After any edit to PebbleKit's `Package.swift`, a comment too, the next
-  resolve (even `make graph-check`'s) pins swift-syntax in its
-  `Package.resolved`, though only an mlx-swift-lm macro PebbleKit never
-  links uses it, and the next `make graph-check` fails. Take that pin out
-  of it and `Config/Package.resolved`, keeping the new `originHash`.
+- The on-device libraries live in `Packages/MLXLM`, copied from mlx-swift-lm
+  3.32.3 without its macro. Depending on the published mlx-swift-lm package
+  pulls swift-syntax into PebbleKit. `swift test --disable-automatic-resolution`
+  then needs that pin, and `make graph-check` fails if the pin is in
+  PebbleKit's resolved file or the graph can reach the app. Keep the local
+  copy. Do not turn automatic resolution back on, and do not weaken
+  graph-check, to hide the pin.
 
 ## Never
 

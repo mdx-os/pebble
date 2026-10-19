@@ -104,12 +104,11 @@ struct OnDeviceModelTests {
         #expect(OnDeviceModel.kind(configuredPath: folder.path, availableMemory: 99) == .stub(.needsMoreMemory))
     }
 
-    /// The pinned weights must fit iPhone 17e, where they run at about 26
-    /// tokens a second. 3.5 GB stands for what that 8 GB phone leaves the
-    /// app; the real figure is a manual check before release (AGENTS.md).
-    /// The half-of-available rule this replaced turned the model away
-    /// there, and the new rule still fits a Mac and still turns away the
-    /// 5.1 GB Gemma 4 E4B file.
+    /// The admission rule lets the pinned weights through when 3.5 GB is
+    /// free. That figure stands in for an 8 GB phone's leftover memory. It
+    /// is not a measurement that the model fits iPhone 17e or the Mac. The
+    /// half-of-available rule this replaced turned the model away at that
+    /// figure, and this rule still turns away the 5.1 GB Gemma 4 E4B file.
     @Test func thePinnedModelFitsWhereTheHalfRuleTurnedItAway() throws {
         let weights = try #require(PinnedModel.default.files.first { $0.name.hasSuffix(".safetensors") }).bytes
         let phone: UInt64 = 3_500_000_000

@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 import PebbleCore
-import PebbleModel
+@testable import PebbleModel
 @testable import PebbleUI
 import SourceScan
 import Testing
@@ -89,8 +89,9 @@ struct OnDeviceModelSetupTests {
         setup.download()
         #expect(setup.state.isUnderWay)
         await setup.underway?.value
-        #expect(setup.state == .ready(folders.ready(for: Tiny.pin)))
+        #expect(setup.state == .installed(folders.ready(for: Tiny.pin)))
         #expect(chat.active is MLXChatModel)
+        #expect((chat.active as? MLXChatModel)?.hasLoaded == false)
     }
 
     @Test func aMismatchedDownloadFailsAndTheChatStaysHonest() async throws {
@@ -127,10 +128,12 @@ struct OnDeviceModelSetupTests {
     }
 
     /// A downloaded folder whose files are all there at their sizes but
-    /// won't load (here, config.json isn't JSON) first reads as ready. The
-    /// first reply finds it out: the chat says the model isn't ready, the
-    /// row shows it failed with Download again, and that removes the bad
-    /// folder, fetches it again, and moves the chat to the new model.
+    /// won't load (here, config.json isn't JSON) is not ready: the weights
+    /// have not opened. The first reply finds it out: the chat says the
+    /// model isn't ready, the row shows it failed with Download again, and
+    /// that removes the bad folder, fetches it again, and moves the chat
+    /// to the new model. The new files are installed, not ready, until a
+    /// reply opens them.
     @Test func aModelThatWontLoadShowsFailedAndDownloadAgainRepairsIt() async throws {
         let folders = try Tiny.folders()
         defer { try? FileManager.default.removeItem(at: folders.root) }
@@ -147,7 +150,8 @@ struct OnDeviceModelSetupTests {
         let setup = OnDeviceModelSetup(installer: ModelInstaller(pin: Tiny.pin, folders: folders, fetcher: fetcher,
                                                                  freeSpace: { _ in nil }),
                                        chat: chat, availableMemory: { 64 << 30 })
-        #expect(setup.state == .ready(ready))
+        #expect(setup.state == .installed(ready))
+        #expect(OnDeviceModelRow.detail(for: setup.state, pin: Tiny.pin) != OnDeviceModelWords.ready)
 
         let turns = [ChatTurn(id: UUID(), speaker: .person, text: "What should I cook tonight?")]
         #expect(try await chat.reply(to: turns) == OnDeviceModelWords.notReadyReply(.couldNotLoad))
@@ -161,7 +165,7 @@ struct OnDeviceModelSetupTests {
         #expect(setup.state.isUnderWay)
         await setup.underway?.value
         #expect(fetcher.fetched == Tiny.contents.count)
-        #expect(setup.state == .ready(ready))
+        #expect(setup.state == .installed(ready))
         #expect(try Data(contentsOf: ready.appendingPathComponent("config.json")) == Tiny.contents["config.json"])
         let repaired = try #require(chat.active as? MLXChatModel)
         #expect(repaired !== failing)
@@ -188,7 +192,33 @@ struct OnDeviceModelSetupTests {
         setup.repair()
         await setup.underway?.value
         #expect(FileManager.default.fileExists(atPath: own.appendingPathComponent("config.json").path))
-        #expect(setup.state == .ready(folders.ready(for: Tiny.pin)))
+        #expect(setup.state == .installed(folders.ready(for: Tiny.pin)))
+    }
+
+    /// Files on disk are not Ready. Ready is published only after the
+    /// weights open. Opening them needs the graphics chip, so the test
+    /// records the load itself.
+    @Test func readyIsPublishedOnlyAfterTheWeightsOpen() async throws {
+        let folders = try Tiny.folders()
+        defer { try? FileManager.default.removeItem(at: folders.root) }
+        let ready = folders.ready(for: Tiny.pin)
+        try FileManager.default.createDirectory(at: ready, withIntermediateDirectories: true)
+        for (name, data) in Tiny.contents {
+            try data.write(to: ready.appendingPathComponent(name))
+        }
+        let chat = OnDeviceModel.client(environment: [:], folders: folders, pin: Tiny.pin,
+                                        availableMemory: 64 << 30)
+        let model = try #require(chat.active as? MLXChatModel)
+        let setup = OnDeviceModelSetup(installer: ModelInstaller(pin: Tiny.pin, folders: folders,
+                                                                 fetcher: TinyFetcher(), freeSpace: { _ in nil }),
+                                       chat: chat, availableMemory: { 64 << 30 })
+        #expect(setup.state == .installed(ready))
+        #expect(OnDeviceModelRow.detail(for: setup.state, pin: Tiny.pin) == OnDeviceModelWords.installed)
+        #expect(!setup.state.isReady)
+        model.noteLoaded()
+        for _ in 0..<20 where setup.state != .ready(ready) { await Task.yield() }
+        #expect(setup.state == .ready(ready))
+        #expect(OnDeviceModelRow.detail(for: setup.state, pin: Tiny.pin) == OnDeviceModelWords.ready)
     }
 
     /// The app finds the model the download put in its own folder, with no
@@ -212,7 +242,7 @@ struct OnDeviceModelSetupTests {
         let app = OnDeviceModelSetup.forApp(brand: Brand(name: "Example"), environment: [:], defaults: defaults,
                                             folders: folders, availableMemory: { 64 << 30 })
         #expect(app.model.active is MLXChatModel)
-        #expect(app.setup?.state == .ready(ready))
+        #expect(app.setup?.state == .installed(ready))
     }
 
     /// The app hands its one on-device client to the home screen and the
@@ -226,13 +256,15 @@ struct OnDeviceModelSetupTests {
         #expect(code.contains("OnDeviceModelSetup.forApp(brand: brand)"))
         #expect(code.contains("model: model,"))
         #expect(code.contains(".environment(\\.onDeviceModelSetup, modelSetup)"))
+        #expect(code.contains("foreground.watchSystemScenes()"))
     }
 
     @Test func eachStepHasItsOwnWords() {
         let pin = PinnedModel.default
         let states: [ModelDownloadState] = [
             .notDownloaded, .downloading(received: 0, total: pin.totalBytes), .verifying,
-            .ready(URL(fileURLWithPath: "/tmp")), .failed(.couldNotFetch), .failed(.didNotMatch), .failed(.noRoom),
+            .installed(URL(fileURLWithPath: "/tmp/installed")), .ready(URL(fileURLWithPath: "/tmp")),
+            .failed(.couldNotFetch), .failed(.didNotMatch), .failed(.noRoom),
             .failed(.couldNotSave), .failed(.incomplete), .failed(.needsMoreMemory), .failed(.couldNotLoad),
         ]
         let words = states.map { OnDeviceModelRow.detail(for: $0, pin: pin) }

@@ -28,11 +28,10 @@ import PackageDescription
 // SourceScan and PromiseWords are products only so Tools/GuardKit, the
 // source guards' own package, can read them. The app never links them.
 // Its only outside dependencies are MLX and swift-transformers, for the
-// model adapter. swift-syntax lives only in Tools/GuardKit, and `make
-// graph-check` fails if it ever comes in here. mlx-swift-lm declares it for
-// a macro this package never links, so SwiftPM leaves it out of the graph,
-// but any edit here, a comment too, makes the next resolve pin it again:
-// take that pin out of Package.resolved and Config/Package.resolved.
+// model adapter, plus the local MLXLM package. That package is the two
+// libraries from mlx-swift-lm this adapter calls, without the macro that
+// depends on swift-syntax. swift-syntax lives only in Tools/GuardKit, and
+// `make graph-check` fails if it ever comes in here.
 let package = Package(
     name: "PebbleKit",
     platforms: [.iOS(.v26), .macOS(.v26)],
@@ -47,13 +46,7 @@ let package = Package(
         .executable(name: "pulse", targets: ["pulse"]),
     ],
     dependencies: [
-        // Pinned. The default mlx-swift-lm trait builds an Apple framework
-        // bridge this adapter does not call, so no traits are enabled.
-        .package(
-            url: "https://github.com/ml-explore/mlx-swift-lm.git",
-            exact: "3.32.3",
-            traits: []
-        ),
+        .package(path: "../MLXLM"),
         // Direct so the adapter can cap the memory cache. Package.resolved
         // pins the exact revision.
         .package(
@@ -73,8 +66,8 @@ let package = Package(
             dependencies: [
                 "PebbleCore",
                 .product(name: "MLX", package: "mlx-swift"),
-                .product(name: "MLXLLM", package: "mlx-swift-lm"),
-                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "MLXLLM", package: "MLXLM"),
+                .product(name: "MLXLMCommon", package: "MLXLM"),
                 .product(name: "Hub", package: "swift-transformers"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
             ]

@@ -7,9 +7,9 @@ import SwiftUI
 /// Getting the on-device model, as the memory screen shows it.
 ///
 /// The download starts only from `download()`, which only the button calls:
-/// never at launch and never on its own. When it ends ready, the app's one
-/// `OnDeviceChat` moves to the model, so the next reply in any chat comes
-/// from it.
+/// never at launch and never on its own. When the files are in place, the
+/// app's one `OnDeviceChat` moves to the model, so the next reply in any
+/// chat comes from it. The row says Ready only after those weights open.
 @MainActor
 public final class OnDeviceModelSetup: ObservableObject {
     @Published public private(set) var state: ModelDownloadState
@@ -32,6 +32,10 @@ public final class OnDeviceModelSetup: ObservableObject {
         // A model that fails to load, found on the first reply, shows here.
         chat.onLoadFailure { [weak self] folder in
             Task { @MainActor in self?.couldNotLoad(folder) }
+        }
+        // Ready only once a reply has opened the weights.
+        chat.onLoaded { [weak self] folder in
+            Task { @MainActor in self?.didLoad(folder) }
         }
         // What a download cut short by the app closing left behind.
         Task { await installer.removeLeftovers() }
@@ -59,13 +63,21 @@ public final class OnDeviceModelSetup: ObservableObject {
     }
 
     static func state(of model: any ModelClient) -> ModelDownloadState {
-        if let model = model as? MLXChatModel { return .ready(model.folder) }
+        if let model = model as? MLXChatModel {
+            return model.hasLoaded ? .ready(model.folder) : .installed(model.folder)
+        }
         switch OnDeviceModel.notReady(of: model) {
         case .incomplete?: return .failed(.incomplete)
         case .needsMoreMemory?: return .failed(.needsMoreMemory)
         case .couldNotLoad?: return .failed(.couldNotLoad)
         case .notDownloaded?, nil: return .notDownloaded
         }
+    }
+
+    /// The weights in `folder` opened, so the row can say the model is ready.
+    private func didLoad(_ folder: URL) {
+        guard running == nil, !state.isUnderWay else { return }
+        state = .ready(folder)
     }
 
     /// The chat found `folder` would not load and went back to the placeholder.
@@ -93,9 +105,9 @@ public final class OnDeviceModelSetup: ObservableObject {
     }
 
     /// The person asked for the model. Does nothing while one is coming,
-    /// once it is ready, or where it can't fit.
+    /// once its files are on disk, or where it can't fit.
     public func download() {
-        guard running == nil, !state.isReady else { return }
+        guard running == nil, !state.hasFiles else { return }
         if case .failed(let problem) = state, !problem.canTryAgain { return }
         if state == .failed(.couldNotLoad) { return repair() }
         state = .downloading(received: 0, total: pin.totalBytes)
@@ -131,7 +143,7 @@ public final class OnDeviceModelSetup: ObservableObject {
 
     func finish(_ end: ModelDownloadState) {
         running = nil
-        guard case .ready(let folder) = end else {
+        guard case .installed(let folder) = end else {
             state = end
             return
         }
@@ -214,7 +226,7 @@ struct OnDeviceModelRow: View {
                 Button(OnDeviceModelWords.tryAgainTitle) { setup.download() }
                     .buttonStyle(PrimaryButtonStyle())
                     .accessibilityIdentifier("downloadModel")
-            case .failed, .ready:
+            case .failed, .installed, .ready:
                 EmptyView()
             }
         }
@@ -233,6 +245,7 @@ struct OnDeviceModelRow: View {
         case .notDownloaded: OnDeviceModelWords.notDownloadedDetail
         case .downloading(let received, let total): OnDeviceModelWords.downloading(received: received, total: total)
         case .verifying: OnDeviceModelWords.verifying
+        case .installed: OnDeviceModelWords.installed
         case .ready: OnDeviceModelWords.ready
         case .failed(.couldNotFetch): OnDeviceModelWords.couldNotFetch
         case .failed(.didNotMatch): OnDeviceModelWords.didNotMatch
@@ -250,6 +263,7 @@ struct OnDeviceModelRow: View {
         case .downloading: "downloading"
         case .verifying: "verifying"
         case .notDownloaded: "notDownloaded"
+        case .installed: "installed"
         case .ready: "ready"
         case .failed(let problem): "failed \(problem)"
         }

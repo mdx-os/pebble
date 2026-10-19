@@ -11,11 +11,13 @@ import PebbleCore
 ///
 /// When the model's folder can't be loaded, it moves back to the
 /// placeholder, which says the model isn't ready, and tells whoever
-/// listens through `onLoadFailure` which folder failed.
+/// listens through `onLoadFailure` which folder failed. When the weights
+/// do open, it tells whoever listens through `onLoaded`.
 public final class OnDeviceChat: ModelClient, @unchecked Sendable {
     private let lock = NSLock()
     private var current: any ModelClient
     private var loadFailureListener: (@Sendable (URL) -> Void)?
+    private var loadListener: (@Sendable (URL) -> Void)?
 
     public init(_ initial: any ModelClient) {
         precondition(initial.runsOnDevice, "OnDeviceChat takes only a model whose runsOnDevice is true")
@@ -39,6 +41,7 @@ public final class OnDeviceChat: ModelClient, @unchecked Sendable {
         lock.lock()
         current = model
         lock.unlock()
+        watch(model)
         return true
     }
 
@@ -47,6 +50,39 @@ public final class OnDeviceChat: ModelClient, @unchecked Sendable {
         lock.lock()
         loadFailureListener = listener
         lock.unlock()
+    }
+
+    /// Called with the folder once the weights have opened. A model that
+    /// opened before this was set is reported at once, and so is each model
+    /// put in place afterwards.
+    public func onLoaded(_ listener: @escaping @Sendable (URL) -> Void) {
+        let model: any ModelClient
+        lock.lock()
+        loadListener = listener
+        model = current
+        lock.unlock()
+        watch(model)
+    }
+
+    /// Asks `model` to report a successful load, if it can load at all.
+    private func watch(_ model: any ModelClient) {
+        guard let model = model as? MLXChatModel else { return }
+        model.whenLoaded { [weak self] folder in
+            self?.loaded(model, folder: folder)
+        }
+    }
+
+    /// Forwards a load only while `model` is still the one answering.
+    private func loaded(_ model: MLXChatModel, folder: URL) {
+        let listener: (@Sendable (URL) -> Void)?
+        lock.lock()
+        if (current as? MLXChatModel) === model {
+            listener = loadListener
+        } else {
+            listener = nil
+        }
+        lock.unlock()
+        listener?(folder)
     }
 
     public func reply(to transcript: [ChatTurn]) async throws -> String {

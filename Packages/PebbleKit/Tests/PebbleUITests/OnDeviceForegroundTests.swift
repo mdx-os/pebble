@@ -103,6 +103,27 @@ private struct DrainingGenerator: OnDeviceGenerating {
     }
 }
 
+/// Stands in for the weight loader: a stop does not keep it from evaluating.
+/// Only after that evaluation does it notice the stop, and `drain` records
+/// the wait for the graphics chip.
+private struct UngovernedLoad: OnDeviceGenerating {
+    let events: Events
+
+    func reply(to transcript: [ChatTurn]) async throws -> String {
+        events.add("load")
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+        events.add("eval")
+        try Task.checkCancellation()
+        return "opened \(transcript.last?.text ?? "")"
+    }
+
+    func drain() async {
+        events.add("sync")
+    }
+}
+
 /// Every task the controller asked to keep the app open for.
 @MainActor
 private final class KeptOpen {
@@ -193,6 +214,7 @@ struct OnDeviceForegroundTests {
         let under = Task { try await model.reply(to: turns("under way")) }
         await events.waitFor("start under way")
         foreground.follow(.inactive)
+        #expect(events.list == ["start under way", "drained"])
         #expect(runner.isAway)
         #expect(kept.tasks.count == 1, "the app is kept open from the moment it turns inactive")
         let late = Task { try await model.reply(to: turns("after inactive")) }
@@ -202,6 +224,44 @@ struct OnDeviceForegroundTests {
         await #expect(throws: MLXChatModelError.interrupted) { try await under.value }
         await #expect(throws: MLXChatModelError.interrupted) { try await late.value }
         #expect(events.list == ["start under way", "drained", "background done"])
+    }
+
+    /// A weight load that keeps evaluating after it was stopped still has
+    /// to finish, and its work has to drain, before leaving returns.
+    @Test func leavingWaitsForALoadThatIgnoresCancellation() async throws {
+        let events = Events()
+        let runner = OnDeviceRunner()
+        let model = MLXChatModel(directory: folder, runner: runner, generator: UngovernedLoad(events: events))
+        let foreground = OnDeviceForeground(runner: runner, stopsInBackground: true) { _ in }
+
+        let reply = Task { try await model.reply(to: turns("load the weights")) }
+        await events.waitFor("load")
+        foreground.moved(to: .background)
+        #expect(events.list == ["load", "eval", "sync"])
+        await #expect(throws: MLXChatModelError.interrupted) { try await reply.value }
+    }
+
+    /// One window leaving does not stop a reply while another is still in
+    /// front. The last one waits until the reply's work has drained.
+    @Test func theLastWindowToLeaveWaitsForTheDrain() async throws {
+        let events = Events()
+        let runner = OnDeviceRunner()
+        let model = MLXChatModel(directory: folder, runner: runner, generator: DrainingGenerator(events: events))
+        let foreground = OnDeviceForeground(runner: runner, stopsInBackground: true) { _ in }
+        let first = NSObject()
+        let second = NSObject()
+        foreground.sceneActivated(ObjectIdentifier(first))
+        foreground.sceneActivated(ObjectIdentifier(second))
+
+        let reply = Task { try await model.reply(to: turns("in the other window")) }
+        await events.waitFor("start in the other window")
+        foreground.sceneDeactivated(ObjectIdentifier(first))
+        #expect(!runner.isAway)
+        #expect(events.list == ["start in the other window"])
+        foreground.sceneDeactivated(ObjectIdentifier(second))
+        #expect(runner.isAway)
+        #expect(events.list == ["start in the other window", "drained"])
+        await #expect(throws: MLXChatModelError.interrupted) { try await reply.value }
     }
 
     /// With nothing running, a reply asked for after the app turned

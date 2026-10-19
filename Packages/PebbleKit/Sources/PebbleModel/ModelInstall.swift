@@ -7,6 +7,10 @@ public enum ModelDownloadState: Sendable, Equatable {
     case notDownloaded
     case downloading(received: Int64, total: Int64)
     case verifying
+    /// The files are on disk. The weights have not been opened yet, so the
+    /// row must not say the model is ready to answer.
+    case installed(URL)
+    /// A reply has opened the weights and can answer with them.
     case ready(URL)
     case failed(ModelDownloadProblem)
 
@@ -15,11 +19,20 @@ public enum ModelDownloadState: Sendable, Equatable {
         return false
     }
 
+    /// True once the files are on disk, loaded or not. Another download
+    /// waits until those files are gone.
+    public var hasFiles: Bool {
+        switch self {
+        case .installed, .ready: true
+        case .notDownloaded, .downloading, .verifying, .failed: false
+        }
+    }
+
     /// True while a download is under way, from the first byte to the last check.
     public var isUnderWay: Bool {
         switch self {
         case .downloading, .verifying: true
-        case .notDownloaded, .ready, .failed: false
+        case .notDownloaded, .installed, .ready, .failed: false
         }
     }
 }
@@ -146,12 +159,13 @@ public actor ModelInstaller {
         }
     }
 
-    /// Downloads and checks every pinned file. Ends `.ready` with the
+    /// Downloads and checks every pinned file. Ends `.installed` with the
     /// finished folder, `.failed` with why, or `.notDownloaded` when
-    /// stopped. `report` hears each step on the way.
+    /// stopped. Opening the weights is a later step. `report` hears each
+    /// step on the way.
     public func install(report: @escaping @Sendable (ModelDownloadState) -> Void) async -> ModelDownloadState {
         removeLeftovers()
-        if let ready = readyFolder() { return .ready(ready) }
+        if let ready = readyFolder() { return .installed(ready) }
         let fileManager = FileManager.default
         let total = pin.totalBytes
         do {
@@ -212,7 +226,7 @@ public actor ModelInstaller {
                 try? fileManager.removeItem(at: ready)
                 return .failed(.couldNotSave)
             }
-            return .ready(ready)
+            return .installed(ready)
         } catch {
             return .failed(.couldNotSave)
         }

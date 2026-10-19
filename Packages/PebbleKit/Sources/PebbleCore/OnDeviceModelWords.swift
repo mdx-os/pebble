@@ -39,6 +39,7 @@ public enum OnDeviceModelWords {
 
     public static let stopTitle = "Stop download"
     public static let verifying = "Checking the files."
+    public static let installed = "Downloaded. I'll open it the next time you ask, and use it to answer."
     public static let ready = "Ready. The model is downloaded, and I use it to answer."
     public static let tryAgainTitle = "Try again"
 
@@ -81,7 +82,8 @@ public enum OnDeviceModelWords {
     /// Every fixed line, for the voice checks.
     public static var all: [String] {
         [title, downloadTitle(bytes: 2_274_455_727), notDownloadedDetail,
-         downloading(received: 1_200_000_000, total: 2_274_455_727), stopTitle, verifying, ready, tryAgainTitle,
+         downloading(received: 1_200_000_000, total: 2_274_455_727), stopTitle, verifying, installed, ready,
+         tryAgainTitle,
          couldNotFetch, didNotMatch, noRoom(bytes: 2_274_455_727), couldNotSave, incomplete, needsMoreMemory,
          couldNotLoad, downloadAgainTitle, tooLong, interrupted]
             + OnDeviceModelNotReady.allCases.map(notReadyReply)

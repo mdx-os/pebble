@@ -81,7 +81,11 @@ code is in `PebbleModel/ModelDownload.swift`; `make local-only-check` lets
 nowhere else in the app, `PebbleCore`, `PebbleBackground` or `PebbleModel`.
 
 The model is used only if its weights leave 1 GB of the memory this process
-can draw on (`OnDeviceModel.headroomBytes`), so it fits iPhone 17e and the Mac.
+can draw on (`OnDeviceModel.headroomBytes`). That 1 GB is an admission
+estimate. On a Mac, short chats peaked 0.49 GB over the weights, and the
+reserve is about twice that for the cache, the MLX buffer and the app. It
+is not a measurement of peak memory while the weights load, or at the
+longest context, on iPhone 17e or the Mac.
 
 Developers can point the app at another folder: the environment variable
 `PEBBLE_MLX_MODEL`, or the UserDefaults key `onDeviceModelFolder`, wins over

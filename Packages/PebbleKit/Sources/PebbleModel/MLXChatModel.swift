@@ -121,6 +121,36 @@ protocol OnDeviceGenerating: Sendable {
     func drain() async
 }
 
+/// Remembers that the weights opened, and tells one listener, including a
+/// listener set after the fact.
+final class LoadSignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var listener: (@Sendable (URL) -> Void)?
+    private var folder: URL?
+
+    var hasLoaded: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return folder != nil
+    }
+
+    func whenLoaded(_ listener: @escaping @Sendable (URL) -> Void) {
+        let existing: URL? = lock.withLock {
+            self.listener = listener
+            return folder
+        }
+        if let existing { listener(existing) }
+    }
+
+    func didLoad(_ folder: URL) {
+        let listener: (@Sendable (URL) -> Void)? = lock.withLock {
+            self.folder = folder
+            return self.listener
+        }
+        listener?(folder)
+    }
+}
+
 /// On-device MLX adapter for `ModelClient`.
 ///
 /// Loads weights from a directory the person already has on this device.
@@ -135,15 +165,35 @@ public final class MLXChatModel: ModelClient, Sendable {
     private let directory: URL
     private let runner: OnDeviceRunner
     private let generator: any OnDeviceGenerating
+    private let loads: LoadSignal
 
     public convenience init(directory: URL, runner: OnDeviceRunner = .shared) {
-        self.init(directory: directory, runner: runner, generator: MLXGenerator(directory: directory))
+        let loads = LoadSignal()
+        self.init(directory: directory, runner: runner,
+                  generator: MLXGenerator(directory: directory, onLoaded: { loads.didLoad($0) }),
+                  loads: loads)
     }
 
-    init(directory: URL, runner: OnDeviceRunner, generator: any OnDeviceGenerating) {
+    init(directory: URL, runner: OnDeviceRunner, generator: any OnDeviceGenerating, loads: LoadSignal = LoadSignal()) {
         self.directory = directory
         self.runner = runner
         self.generator = generator
+        self.loads = loads
+    }
+
+    /// True after the weights have opened. A new model is not ready before this.
+    public var hasLoaded: Bool { loads.hasLoaded }
+
+    /// Called with the folder once the weights have opened, including when
+    /// they opened before the listener was set.
+    func whenLoaded(_ listener: @escaping @Sendable (URL) -> Void) {
+        loads.whenLoaded(listener)
+    }
+
+    /// Records a successful load. The real load calls this; tests do too,
+    /// because opening the weights needs the graphics chip.
+    func noteLoaded() {
+        loads.didLoad(directory)
     }
 
     /// The weights and every word stay on this device.
@@ -174,13 +224,15 @@ public final class MLXChatModel: ModelClient, Sendable {
 /// failure, and the next reply loads again.
 actor MLXGenerator: OnDeviceGenerating {
     private let directory: URL
+    private let onLoaded: @Sendable (URL) -> Void
     private var loaded: ModelContainer?
     private var loadFailure: MLXChatModelError?
     /// True once MLX was asked to load, so there may be work to wait for.
     private var touchedModel = false
 
-    init(directory: URL) {
+    init(directory: URL, onLoaded: @escaping @Sendable (URL) -> Void = { _ in }) {
         self.directory = directory
+        self.onLoaded = onLoaded
     }
 
     /// A stop while the prompt is read throws before its last evaluation,
@@ -241,6 +293,7 @@ actor MLXGenerator: OnDeviceGenerating {
         do {
             let container = try await performLoad()
             loaded = container
+            onLoaded(directory)
             return container
         } catch let error as MLXChatModelError {
             loadFailure = error
