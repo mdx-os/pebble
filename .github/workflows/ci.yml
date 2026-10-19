@@ -35,9 +35,10 @@ jobs:
 
       # The comment lint needs no secret: it checks names against the salted
       # hashes in Config/comment-lint-names.sha256, so a fork's pull request
-      # is checked the same as any other.
+      # is checked the same as any other. This is make verify but the
+      # mutation check, which runs in full in the job below.
       - name: Verify
-        run: make verify
+        run: make verify-ci
 
       - name: Upload screenshots
         if: always()
@@ -46,3 +47,26 @@ jobs:
           name: screenshots
           path: build/screenshots
           if-no-files-found: warn
+
+  # The rest of make verify: every entry of the manifest, on every push and
+  # pull request, beside the job above. It takes longer than that job's
+  # limit, so it has its own.
+  mutation:
+    name: Mutation check
+    runs-on: macos-26
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install tools
+        run: brew install xcodegen gitleaks
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Mutation check
+        run: make mutation-check

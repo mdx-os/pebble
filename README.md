@@ -24,7 +24,7 @@ Requirements: macOS 26 or later, Xcode 26, and [XcodeGen](https://github.com/yon
 (`brew install xcodegen`).
 
 ```sh
-make verify       # brand check, tests, builds, and screenshots on iPhone, iPad and Mac
+make verify       # brand check, tests, mutation check, builds, and screenshots on iPhone, iPad and Mac
 make test         # unit tests only
 make pulse        # fetch public sources, snapshot them, write pulse/digest.json
 make screenshots  # writes build/screenshots/{iphone,ipad,mac}.png

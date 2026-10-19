@@ -1,13 +1,19 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test release-test repeat-test mutation-check build build-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-config-check graph-check graph-check-test comment-lint hash-names secrets-check pulse clean
+.PHONY: verify verify-ci generate test release-test repeat-test mutation-check build build-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-config-check graph-check graph-check-test comment-lint hash-names secrets-check pulse clean
 
-## verify: everything CI runs. Run this before every PR. The graph check
-## runs once the builds have made the project, so it reads that too. The
-## screenshots are made after every other step and then checked against the
-## working tree. Both are the recipe, so even with -j nothing runs beside
-## them that could change the tree between the stamp and the check.
-verify: brand-check local-config-check comment-lint screenshots-check-test graph-check-test test release-test mutation-check build build-release
+## verify: everything CI runs. Run this before every PR. It is verify-ci and
+## then the full mutation check, which CI runs as a job of its own beside
+## it, so neither has to fit in the other's time limit.
+verify: verify-ci mutation-check
+
+## verify-ci: every step of verify but the mutation check, as CI's Verify
+## job runs it. The graph check runs once the builds have made the project,
+## so it reads that too. The screenshots are made after every other step
+## and then checked against the working tree. Both are the recipe, so even
+## with -j nothing runs beside them that could change the tree between the
+## stamp and the check.
+verify-ci: brand-check local-config-check comment-lint screenshots-check-test graph-check-test test release-test build build-release
 	$(MAKE) graph-check
 	$(MAKE) screenshots
 	sh scripts/screenshot-stamp.sh check build/screenshots

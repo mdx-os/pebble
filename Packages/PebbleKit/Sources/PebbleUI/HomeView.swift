@@ -65,6 +65,7 @@ public struct HomeView: View {
         // never touch the app's `AskFirst.shared`.
         needsYou: NeedsYou,
         tasks: (any TaskEngine)? = nil,
+        ledger: TaskLedgerBook? = nil,
         drivesTasks: Bool = false,
         sources: (any SourceProvider)? = nil,
         kept: TaskStore? = nil,
@@ -79,7 +80,7 @@ public struct HomeView: View {
     ) {
         self.init(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                   looks: looks, conversation: conversation, section: section, feed: feed,
-                  needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, sources: sources, kept: kept,
+                  needsYou: needsYou, tasks: tasks, ledger: ledger, drivesTasks: drivesTasks, sources: sources, kept: kept,
                   notifier: notifier, opensQuestion: opensQuestion, background: background, now: now,
                   cloud: cloud, reportsPlace: reportsPlace, log: nil)
     }
@@ -97,6 +98,7 @@ public struct HomeView: View {
         feed: [any FeedSource] = [EmptyFeedSource()],
         needsYou: NeedsYou,
         tasks: (any TaskEngine)? = nil,
+        ledger: TaskLedgerBook? = nil,
         drivesTasks: Bool = false,
         sources: (any SourceProvider)? = nil,
         kept: TaskStore? = nil,
@@ -110,7 +112,7 @@ public struct HomeView: View {
     ) {
         screen = HomeScreen(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                             looks: looks, conversation: conversation, section: section, feed: feed,
-                            needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
+                            needsYou: needsYou, tasks: tasks, ledger: ledger, drivesTasks: drivesTasks,
                             sources: Self.reconSources(sources, now: now), kept: kept, notifier: notifier,
                             opensQuestion: opensQuestion, background: background, now: now, cloud: cloud,
                             reportsPlace: reportsPlace, chatLine: nil, log: log)
@@ -142,7 +144,7 @@ public struct HomeView: View {
          feed: [any FeedSource], needsYou: NeedsYou, now: @escaping @Sendable () -> Date, chatLine: String) {
         screen = HomeScreen(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                             looks: looks, conversation: conversation, section: section, feed: feed,
-                            needsYou: needsYou, tasks: nil, drivesTasks: false,
+                            needsYou: needsYou, tasks: nil, ledger: nil, drivesTasks: false,
                             sources: Self.reconSources(nil, now: now), kept: nil, notifier: nil,
                             opensQuestion: false, background: nil, now: now, cloud: nil, reportsPlace: nil,
                             chatLine: chatLine, log: nil)
@@ -191,10 +193,10 @@ public struct HomeView: View {
     /// The same, from a place already worked out, as the home screen does
     /// with the cloud setting in it. `memory` is where Remember this saves.
     static func feedModel(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)? = nil,
-                          drivesTasks: Bool = false, flow: NeedsYouFlow? = nil,
+                          ledger: TaskLedgerBook? = nil, drivesTasks: Bool = false, flow: NeedsYouFlow? = nil,
                           background: BackgroundRunner? = nil, place: PrivacyPlace, memory: MemoryStore? = nil,
                           now: @escaping () -> Date) -> FeedModel {
-        FeedModel(sources: sources, needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
+        FeedModel(sources: sources, needsYou: needsYou, tasks: tasks, ledger: ledger, drivesTasks: drivesTasks,
                   place: place, memory: memory, flow: flow, background: background, now: now)
     }
 
@@ -243,7 +245,7 @@ public struct HomeView: View {
     /// so "Gathered today at 9:12" is when it was read. An engine passed in,
     /// as the showcase's, keeps its own clock.
     static func reconFeedModel(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)?,
-                               drivesTasks: Bool, reading: any SourceProvider, place: PrivacyPlace,
+                               ledger: TaskLedgerBook? = nil, drivesTasks: Bool, reading: any SourceProvider, place: PrivacyPlace,
                                memory: MemoryStore?, model: any ModelClient, cloud: CloudHelp?,
                                flow: NeedsYouFlow? = nil, background: BackgroundRunner? = nil,
                                now: @escaping @Sendable () -> Date) -> FeedModel {
@@ -253,7 +255,7 @@ public struct HomeView: View {
         } else {
             runner = ReconRunner(engine: LocalFakeEngine(rule: needsYou.rule, wallClock: now), provider: reading, now: now)
         }
-        let feed = feedModel(sources: sources, needsYou: needsYou, tasks: runner,
+        let feed = feedModel(sources: sources, needsYou: needsYou, tasks: runner, ledger: ledger,
                              drivesTasks: drivesTasks || tasks == nil, flow: flow, background: background,
                              place: place, memory: memory, now: now)
         // Asked at each start, so turning the cloud on or off counts from
@@ -422,6 +424,7 @@ struct HomeScreen: View {
         feed: [any FeedSource],
         needsYou: NeedsYou,
         tasks: (any TaskEngine)?,
+        ledger: TaskLedgerBook?,
         drivesTasks: Bool,
         sources: any SourceProvider,
         kept: TaskStore?,
@@ -461,7 +464,8 @@ struct HomeScreen: View {
         // Today is made once, for the feed and the chat wired to it both,
         // whichever `StateObject` asks first.
         let today = TodayMaker {
-            HomeView.reconFeedModel(sources: feed, needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
+            HomeView.reconFeedModel(sources: feed, needsYou: needsYou, tasks: tasks, ledger: ledger,
+                                    drivesTasks: drivesTasks,
                                     reading: sources, place: newChatPlace, memory: memory, model: model,
                                     cloud: cloud,
                                     // A nudge says the name the person chose, read when it is sent.

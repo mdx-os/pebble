@@ -487,7 +487,26 @@ struct ScriptGuardTests {
         #expect(!workflow.contains("COMMENT_LINT"))
         #expect(!workflow.contains("secrets."))
         let verify = try #require(workflow.range(of: "      - name: Verify\n"))
-        #expect(workflow[verify.upperBound...].hasPrefix("        run: make verify\n"))
+        #expect(workflow[verify.upperBound...].hasPrefix("        run: make verify-ci\n"))
+    }
+
+    /// CI runs all of make verify on every push and pull request: verify-ci
+    /// in the Verify job, and the full mutation check, every entry with no
+    /// timeout let by, in a job of its own with a longer limit.
+    @Test func ciRunsTheFullMutationCheckInItsOwnJob() throws {
+        let workflow = try String(contentsOf: Self.root.appendingPathComponent(".github/workflows/ci.yml"), encoding: .utf8)
+        #expect(workflow.contains("  push:\n    branches: [main]\n  pull_request:\n"))
+        #expect(workflow.contains("    name: Verify on Mac, iPhone and iPad\n"))
+        let job = try #require(workflow.range(of: "    name: Mutation check\n"))
+        let rest = workflow[job.upperBound...]
+        let steps = rest.split(separator: "\n").filter { $0.hasPrefix("        run: ") }
+        #expect(steps.contains("        run: make mutation-check"))
+        #expect(!rest.contains("        if: "))
+        for loophole in ["ONLY", "MUTATION_ALLOW_TIMEOUTS", "continue-on-error"] {
+            #expect(!workflow.contains(loophole), "\(loophole)")
+        }
+        let limit = try #require(rest.split(separator: "\n").first { $0.hasPrefix("    timeout-minutes: ") })
+        #expect((Int(limit.dropFirst("    timeout-minutes: ".count)) ?? 0) >= 90)
     }
 
     /// The lint looks at project.yml, the Makefile and the mutation
@@ -506,13 +525,18 @@ struct ScriptGuardTests {
     /// `make verify` runs the lint, its self-test and the mutation check,
     /// the Release check by one rule (verify builds `build-release`, whose
     /// first step is the check, pinned in `everyReleaseBuildRunsTheCheck`),
-    /// and the tests that only a Release build can run.
+    /// and the tests that only a Release build can run. Verify is verify-ci
+    /// and the mutation check, so what CI's Verify job runs can't drift
+    /// from it.
     @Test func verifyRunsTheCommentLintAndTheMutationCheck() throws {
         let makefile = try String(contentsOf: Self.root.appendingPathComponent("Makefile"), encoding: .utf8)
-        let verify = try #require(makefile.split(separator: "\n").first { $0.hasPrefix("verify:") })
-        let steps = verify.split(separator: " ")
+        let lines = makefile.split(separator: "\n")
+        let verify = try #require(lines.first { $0.hasPrefix("verify:") })
+        #expect(verify == "verify: verify-ci mutation-check")
+        let ci = try #require(lines.first { $0.hasPrefix("verify-ci:") })
+        let steps = ci.split(separator: " ")
         #expect(steps.contains("comment-lint"))
-        #expect(steps.contains("mutation-check"))
+        #expect(!steps.contains("mutation-check"))
         #expect(steps.contains("build-release"))
         #expect(steps.contains("release-test"))
         #expect(makefile.contains("comment-lint:\n\tsh scripts/comment-lint.sh --self-test\n\tsh scripts/comment-lint.sh\n"))
