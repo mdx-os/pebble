@@ -52,6 +52,24 @@ test: theSpeechGuardCatchesEveryWrongCase
 file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
 perl: s~Rule\("speech\.usedBeforeOnDevice", usedBeforeOnDevice\)~Rule("speech.usedBeforeOnDevice", { _, _ in [] })~
 
+# The speech guard: an on-device setting only under `#if DEBUG`, or another
+# branch, while the request is used in every build.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~Rule\("speech\.onDeviceOnlySometimes", onDeviceOnlySometimes\)~Rule("speech.onDeviceOnlySometimes", { _, _ in [] })~
+
+# The speech guard: a `#if` branch around the setting is not counted, so a
+# setting in each of `#if` and `#else` passes for one made in every build.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~                clauses\.append\(clause\.id\)\n~~
+
+# The speech guard: the on-device setting passed as inout, where a helper
+# could set it back to false.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~if written\.parent\?\.is\(InOutExprSyntax\.self\) == true \{~if false {~
+
 # The connector gate: each rule turned off on its own.
 test: theConnectorGateCatchesEveryWrongCase
 file: Tools/GuardKit/Sources/GuardScan/ConnectorRules.swift

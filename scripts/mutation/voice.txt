@@ -96,12 +96,18 @@ perl: s~if current == listen \{ tearDown\(\) \}~tearDown()~
 # A touch the system takes sends the words, as a lift would.
 test: aCancelledTouchWithWordsSendsNothingAndPutsTheDraftBack
 file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
-perl: s~        \} else \{\n            voice\.cancel\(\)\n        \}~        } else {\n            Task { await voice.release() }\n        }~
+perl: s~or sends\.\n        voice\.cancel\(\)~or sends.\n        Task { await voice.release() }~
 
 # A touch the system takes leaves the microphone on and the words in the draft.
 test: aCancelledTouchWithWordsSendsNothingAndPutsTheDraftBack
 file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
-perl: s~        \} else \{\n            voice\.cancel\(\)\n        \}~        }~
+perl: s~or sends\.\n        voice\.cancel\(\)~or sends.~
+
+# A touch taken while the system asks waits for the answer instead of
+# cancelling, so a late yes on a tap starts listening and can send.
+test: aTouchTakenWhileAskedNeverListensOnALateYes
+file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
+perl: s~or sends\.\n        voice\.cancel\(\)~or sends.\n        if voice.phase == .asking { Task { await voice.release() } } else { voice.cancel() }~
 
 # The reset after a lift takes it for a cancelled touch, so nothing sends.
 test: theGesturesOwnEndSendsOnceAndItsResetAfterDoesNothing

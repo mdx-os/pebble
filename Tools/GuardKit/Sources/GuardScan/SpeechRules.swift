@@ -4,8 +4,9 @@ import SwiftSyntax
 ///
 /// Every recognition request is made as a named value in one block, and
 /// that same block sets its `requiresOnDeviceRecognition` to `true` before
-/// anything else touches it, so the system never sends speech to a server,
-/// not even as a fallback. Nothing may set it to anything else. The name is
+/// anything else touches it, under the same `#if` as the request, so the
+/// system never sends speech to a server, not even as a fallback. Nothing
+/// may set it to anything else or take it as inout. The name is
 /// a `let` and never given another request, and in the adapter nothing is
 /// made with a `.init(...)` whose type the guard can't read. The recognizer lives in one file,
 /// `PebbleVoice/DeviceSpeech.swift`, so there is one place to read. The
@@ -43,6 +44,7 @@ public enum SpeechGate {
         Rule("speech.requestUnresolved", requestUnresolved),
         Rule("speech.requestReassigned", requestReassigned),
         Rule("speech.usedBeforeOnDevice", usedBeforeOnDevice),
+        Rule("speech.onDeviceOnlySometimes", onDeviceOnlySometimes),
         Rule("speech.onDeviceTurnedOff", onDeviceTurnedOff),
         Rule("speech.outsideAdapter", outsideAdapter),
         Rule("speech.keepsWords", keepsWords),
@@ -217,8 +219,37 @@ public enum SpeechGate {
         return found
     }
 
+    /// A request whose first on-device setting sits behind a `#if` the
+    /// request itself is not behind, as `#if DEBUG`: in every other build
+    /// the request is used with the setting compiled out.
+    @Sendable static func onDeviceOnlySometimes(_ source: SyntaxSource, _ file: String) -> [Finding] {
+        boundRequests(in: source).compactMap { call, name, scope in
+            guard let setting = onDeviceSetting(name, in: scope),
+                  compileClauses(of: setting, upTo: scope) != compileClauses(of: call, upTo: scope) else { return nil }
+            return Finding("speech.onDeviceOnlySometimes", at: setting, in: source,
+                           "set `\(name).\(flag) = true` under the same `#if` as the request is made, so every "
+                               + "build that uses it hears on the device only")
+        }
+    }
+
+    /// The `#if` branches around `node`, innermost first, up to `scope`.
+    static func compileClauses(of node: some SyntaxProtocol, upTo scope: Syntax) -> [SyntaxIdentifier] {
+        var clauses: [SyntaxIdentifier] = []
+        var child = Syntax(node)
+        var current = child.parent
+        while let parent = current, parent.id != scope.id {
+            if let clause = parent.as(IfConfigClauseSyntax.self), clause.condition?.id != child.id {
+                clauses.append(clause.id)
+            }
+            child = parent
+            current = parent.parent
+        }
+        return clauses
+    }
+
     /// `requiresOnDeviceRecognition` set to anything but `true`, toggled,
-    /// written through a key path, or named in a string for key-value coding.
+    /// passed as inout, written through a key path, or named in a string
+    /// for key-value coding.
     @Sendable static func onDeviceTurnedOff(_ source: SyntaxSource, _ file: String) -> [Finding] {
         var found: [Finding] = []
         for token in source.tokens where token.identifier != nil && SyntaxSource.name(token) == flag {
@@ -233,6 +264,12 @@ public enum SpeechGate {
                 }
                 found.append(Finding("speech.onDeviceTurnedOff", at: token, in: source,
                                      "\(flag) is only ever set to true"))
+                continue
+            }
+            // `&request.flag`: handed to something that can write anything to it.
+            if written.parent?.is(InOutExprSyntax.self) == true {
+                found.append(Finding("speech.onDeviceTurnedOff", at: token, in: source,
+                                     "\(flag) is never passed as inout, where it could be set back"))
                 continue
             }
             if let outer = written.parent?.as(MemberAccessExprSyntax.self), outer.base?.id == written.id,

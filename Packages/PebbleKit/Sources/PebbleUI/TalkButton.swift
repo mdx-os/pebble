@@ -117,13 +117,9 @@ final class TalkPress {
         guard isDown else { return }
         isDown = false
         guard voice.owner == owner, voice.isActive else { return }
-        if voice.phase == .asking {
-            // The system's question took the touch: once it is answered,
-            // nothing listens until the next hold, and nothing is sent.
-            Task { await voice.release() }
-        } else {
-            voice.cancel()
-        }
+        // Cancelled at once, even while the system's question is open, so
+        // a yes that comes later never starts listening or sends.
+        voice.cancel()
     }
 }
 

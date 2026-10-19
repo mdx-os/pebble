@@ -92,6 +92,66 @@ struct TalkPressTests {
         #expect(draft.sent.isEmpty)
     }
 
+    /// Holds the system's question open until the test answers it.
+    final class AskingListener: SpeechListening {
+        private(set) var access = SpeechAccess.notAsked
+        let hearsOnDevice = true
+        private(set) var starts = 0
+        private var answer: CheckedContinuation<SpeechAccess, Never>?
+        var isAsking: Bool { answer != nil }
+        func askForAccess() async -> SpeechAccess {
+            await withCheckedContinuation { answer = $0 }
+        }
+        /// The person says yes, after the touch has gone.
+        func allow() {
+            access = .allowed
+            answer?.resume(returning: .allowed)
+            answer = nil
+        }
+        func start(_ request: ListenRequest, heard: @escaping @MainActor (String) -> Void,
+                   ended: @escaping @MainActor () -> Void) throws {
+            starts += 1
+        }
+        func finish() async -> String? { "call Sam" }
+        func cancel() {}
+    }
+
+    /// The system's question takes the touch, then the person allows it.
+    /// The reset cancels there and then, so the late yes never listens and
+    /// nothing is sent, held or tapped.
+    @Test(arguments: [VoiceCapture.Mode.hold, .tap])
+    func aTouchTakenWhileAskedNeverListensOnALateYes(_ mode: VoiceCapture.Mode) async throws {
+        let listener = AskingListener()
+        let voice = VoiceCapture(listener: listener, requests: TalkRequests())
+        let draft = draft
+        let begin = { (mode: VoiceCapture.Mode) in
+            Task {
+                await voice.begin(mode, owner: "composer", draft: draft.text, write: { draft.text = $0 },
+                                  send: { draft.sent.append($0); draft.text = "" })
+            }
+        }
+        var started: Task<Void, Never>?
+        if mode == .tap {
+            // Tapped, or the Talk shortcut, then a finger lands while it asks.
+            started = begin(.tap)
+            try #require(await until { listener.isAsking })
+        }
+        press.down(voice) { started = begin($0) }
+        try #require(await until { listener.isAsking })
+        #expect(voice.phase == .asking)
+        press.reset(voice, owner: "composer")
+        #expect(voice.phase == .cancelled, "cancelled at once, not once the question is answered")
+        #expect(!voice.isActive)
+        listener.allow()
+        await started?.value
+        #expect(listener.starts == 0, "a late yes never starts listening")
+        #expect(voice.phase == .cancelled)
+        await voice.release()
+        await settle()
+        #expect(draft.sent.isEmpty)
+        #expect(draft.text == "Before")
+    }
+
     /// Lets every task already started run.
     func settle() async {
         try? await Task.sleep(for: .milliseconds(50))

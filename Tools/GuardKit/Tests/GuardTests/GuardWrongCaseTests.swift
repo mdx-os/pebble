@@ -912,7 +912,13 @@ struct GuardWrongCaseTests {
         speech("usedBeforeOnDevice", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    task = recognizer.recognitionTask(with: request, resultHandler: handle)\n    request.requiresOnDeviceRecognition = true\n}"),
         speech("usedBeforeOnDevice", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    self.request = request\n    request.requiresOnDeviceRecognition = true\n}"),
         speech("usedBeforeOnDevice", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in request.append(buffer) }\n    request.`requiresOnDeviceRecognition` = true\n}"),
+        // Set only in some builds, while the request is used in all of them.
+        speech("onDeviceOnlySometimes", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    #if DEBUG\n    request.requiresOnDeviceRecognition = true\n    #endif\n    task = recognizer.recognitionTask(with: request, resultHandler: handle)\n}"),
+        speech("onDeviceOnlySometimes", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    #if os(iOS)\n    request.requiresOnDeviceRecognition = true\n    #else\n    request.requiresOnDeviceRecognition = true\n    #endif\n    task = recognizer.recognitionTask(with: request, resultHandler: handle)\n}"),
+        speech("onDeviceOnlySometimes", "func start() {\n    #if DEBUG\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    #if os(iOS)\n    request.requiresOnDeviceRecognition = true\n    #endif\n    task = recognizer.recognitionTask(with: request, resultHandler: handle)\n    #endif\n}"),
         // Turned off, however it is written.
+        speech("onDeviceTurnedOff", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    request.requiresOnDeviceRecognition = true\n    clear(&request.requiresOnDeviceRecognition)\n}"),
+        speech("onDeviceTurnedOff", "extension SFSpeechRecognitionRequest {\n    func open() { clear(&`requiresOnDeviceRecognition`) }\n}"),
         speech("onDeviceTurnedOff", "request.requiresOnDeviceRecognition = false"),
         speech("onDeviceTurnedOff", "request.`requiresOnDeviceRecognition` = false"),
         speech("onDeviceTurnedOff", "request.requiresOnDeviceRecognition = !true"),
@@ -952,6 +958,9 @@ struct GuardWrongCaseTests {
         fine("let heard = request.requiresOnDeviceRecognition", file: adapter),
         // Set first, then used and kept.
         fine("func start() {\n    self.request = nil\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    request.requiresOnDeviceRecognition = true\n    request.addsPunctuation = true\n    self.request = request\n    task = recognizer.recognitionTask(with: request, resultHandler: handle)\n}",
+             file: adapter),
+        // Made and set under the same `#if`.
+        fine("func start() {\n    #if os(iOS)\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    request.requiresOnDeviceRecognition = true\n    #if DEBUG\n    request.shouldReportPartialResults = true\n    #endif\n    task = recognizer.recognitionTask(with: request, resultHandler: handle)\n    #endif\n}",
              file: adapter),
         fine("let wait: Duration = .init(secondsComponent: 1, attosecondsComponent: 0)", file: adapter),
         // Elsewhere, `.init(...)` makes what it makes; the Speech names are kept to the adapter.
