@@ -1315,18 +1315,18 @@ struct ReconFeedTests {
         let provider = CountingProvider(now: { [morning] in morning })
         provider.give([page("A sign by the Riverside pool lists a suicide prevention line. " + calm)])
         let (model, runner, _) = try cloudToday(reading: provider, transport: { maker.make() }, notes: notes)
+        let shown = PreviewLog()
+        let watch = model.cloudReview.$pending.sink { if $0 != nil { shown.note() } }
+        defer { watch.cancel() }
         #expect(model.lookInto(SampleSources.poolTopic))
         let id = try #require(runner.tasks.first?.id)
-        var sawPreview = false
+        // The summary starts on the last step. Wait for it before the card
+        // is moved on, then give the card time to finish.
         runner.advance(by: 12)
-        let deadline = ContinuousClock.now + eventuallyLimit
-        while runner.summary(for: id) == nil, ContinuousClock.now < deadline {
-            if model.cloudReview.pending != nil { sawPreview = true }
-            try await Task.sleep(for: .milliseconds(5))
-            runner.advance(by: 1)
-        }
         await runner.settleEverything()
-        #expect(!sawPreview)
+        runner.advance(by: 30)
+        await runner.settleEverything()
+        #expect(shown.count == 0)
         #expect(model.cloudReview.pending == nil)
         #expect(maker.made == 0)
         #expect(maker.wire.sent.isEmpty)

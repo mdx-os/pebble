@@ -59,7 +59,9 @@ struct TaskLedgerRunTests {
             unlocked.signal()
             #expect(publish.wait(timeout: .now() + 10) == .success)
         }
-        DispatchQueue.global().async {
+        // Its own thread. A shared queue can sit full while other tests
+        // block its threads, and then this pause is never reached.
+        Thread.detachNewThread {
             engine.advance(by: 2)
             finished.signal()
         }
@@ -99,7 +101,9 @@ struct TaskLedgerRunTests {
             unlocked.signal()
             #expect(publish.wait(timeout: .now() + 10) == .success)
         }
-        DispatchQueue.global().async {
+        // Its own thread. A shared queue can sit full while other tests
+        // block its threads, and then this pause is never reached.
+        Thread.detachNewThread {
             engine.advance(by: 2)
             finished.signal()
         }
