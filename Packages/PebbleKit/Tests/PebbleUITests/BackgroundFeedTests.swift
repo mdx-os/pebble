@@ -853,7 +853,7 @@ struct BackgroundFeedTests {
     ]
 
     /// Every source that can hold chat text, in the packages and the app,
-    /// found by what its code names, not from a list. The competitor
+    /// found by what its code names, not from a list. The public source
     /// watch never sees a chat.
     static func chatFiles() throws -> [(name: String, code: String)] {
         let root = SwiftSource.repositoryRoot(from: #filePath)
@@ -870,7 +870,7 @@ struct BackgroundFeedTests {
     /// app's packages and the app itself, found by what it names, not
     /// from a list, writes nothing to the system log, which keeps it on
     /// disk, and the one session that sends a chat to the cloud keeps no
-    /// cache. Only the competitor watch, which never sees a chat, prints.
+    /// cache. Only the public source watch, which never sees a chat, prints.
     @Test func theChatNeverReachesTheLogOrACache() throws {
         let root = SwiftSource.repositoryRoot(from: #filePath)
         let sources = root.appendingPathComponent("Packages/PebbleKit/Sources")
@@ -882,7 +882,7 @@ struct BackgroundFeedTests {
             let code = String(SwiftSource(text).code)
             let range = NSRange(code.startIndex..., in: code)
             // No logging anywhere a chat could pass through, which is every
-            // file but the competitor watch's.
+            // file but the public source watch's.
             #expect(logging.firstMatch(in: code, range: range) == nil, "logging in \(name)")
         }
         let chatFiles = try Self.chatFiles()

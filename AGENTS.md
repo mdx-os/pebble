@@ -21,7 +21,7 @@ in lint, a skill, or CI.
 - `make build-release`: Release builds for macOS and the iOS Simulator (part of verify). Anything behind `#if DEBUG`, like the showcase, must only be used behind it too
 - `make archive`: unsigned Release archives for iOS and macOS, checked for App Store Connect. `docs/RELEASE.md` covers signing and upload
 - `make privacy-check`: fails when code uses a required-reason API that `App/Resources/PrivacyInfo.xcprivacy` does not list, or network code outside the opt-in cloud client's files named in `scripts/privacy-check.sh`. `make privacy-check-test` runs it on `scripts/privacy-fixtures`
-- `make pulse`: fetch the competitor watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
+- `make pulse`: fetch the public source watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
 - `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`, plus dark shots of the
   orange fill that `scripts/check-screenshots.sh` checks. Worktrees share simulators and
   the bundle ID, so when another session runs at once pass free ones:
@@ -39,7 +39,7 @@ in lint, a skill, or CI.
 - `Packages/PebbleKit/`: shared code in layers. A layer imports only layers
   below it; `Package.swift` enforces this.
   - `PebbleCore`: plain types. No SwiftUI, no networking.
-  - `PebblePulse`: competitor watch fetching and snapshots. Imports PebbleCore.
+  - `PebblePulse`: public source watch fetching and snapshots. Imports PebbleCore.
   - `PebbleModel`: model adapter. `ModelClient`, the on-device placeholder and `CloudModel` (off by default, every request previewed and redacted by `Redactor` in PebbleCore). Imports PebbleCore. MLX and Ollama adapters plug in here.
   - `PebbleBackground`: gives the background runner time (`BGTaskScheduler` on iOS, `NSBackgroundActivityScheduler` on the Mac). Imports PebbleCore. Scheduling decisions are pure functions in `BackgroundPlan`; the runner, its store and its switch live in PebbleCore's `Background.swift`, so no platform code goes there.
   - `PebbleUI`: SwiftUI views shared by every platform. Imports PebbleCore and PebbleModel.

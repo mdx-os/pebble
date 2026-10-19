@@ -33,7 +33,7 @@ keys that never enter the repo.
     in `Config/Cloud.local.xcconfig` is for trying a server on one machine,
     never for a build that ships.
   - no key of ours. No API key, token or account of the project's goes in
-    the app. The xAI key in CI is for `make pulse`, the competitor watch,
+    the app. The xAI key in CI is for `make pulse`, the public source watch,
     which the app never links.
 
   If any build sends notes or chats to a provider using our key or our
