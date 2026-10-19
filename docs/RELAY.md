@@ -126,7 +126,9 @@ says so:
   40 code points with no `@`, `handle` at most 254. Hidden means control
   and format characters, default ignorable code points, the blank braille
   cell U+2800 and the Hangul fillers U+115F, U+1160, U+3164 and U+FFA0.
-  A joiner or emoji selector right after an emoji is fine.
+  An emoji selector U+FE0F right after an emoji is fine. The joiner
+  U+200D is never kept, so a joined emoji, such as a family, in `name` is
+  refused.
 - `summary`: one line saying what would happen.
 - `price`: required for `purchase`, for example
   `"price": { "minorUnits": 1450, "currency": "CAD" }`. `minorUnits` is a
@@ -411,6 +413,10 @@ Runs:
 - `run.invalid.target-filler-name-1160.json`: Hangul jungseong filler U+1160
 - `run.invalid.target-filler-name-ffa0.json`: halfwidth Hangul filler U+FFA0
 - `run.invalid.target-filler-handle.json`: U+3164 in `handle`
+- `run.invalid.target-joined-emoji-name.json`: a joined emoji, with
+  U+200D, in `name`
+- `run.valid.target-emoji-selector-name.json`: an emoji with its
+  selector U+FE0F in `name`
 - `run.invalid.artifact-combining-slash.json`
 - `run.invalid.artifact-combining-backslash.json`
 - `run.invalid.artifact-combining-colon.json`

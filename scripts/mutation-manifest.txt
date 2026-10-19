@@ -554,15 +554,15 @@ perl: s~terminalState: run.state~terminalState: .done~
 # and fillers in a target's name.
 test: review3UTF32WithoutBOMIsChecked
 file: scripts/private-check.swift
-perl: s~where data.count.isMultiple\(of: width\)~where width == 2~
+perl: s~\(4, \[\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)\]\)\]~(4, [])]~
 
 test: review3UTF32WithoutBOMIsChecked
 file: scripts/private-check.swift
-perl: s~\[\.utf32LittleEndian, \.utf32BigEndian\]~[.utf32BigEndian]~
+perl: s~\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)~(.utf32BigEndian, true)~
 
 test: review3UTF32WithoutBOMIsChecked
 file: scripts/private-check.swift
-perl: s~\[\.utf32LittleEndian, \.utf32BigEndian\]~[.utf32LittleEndian]~
+perl: s~\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)~(.utf32LittleEndian, false)~
 
 test: review3UTF8AfterABOMIsChecked
 file: scripts/private-check.swift
@@ -579,3 +579,27 @@ perl: s~bigEndian \? \$1 : width - 1 - \$1~\$1~
 test: review3TargetNameFillersAreRefused
 file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
 perl: s~guard !AskFirst.hasHiddenScalars\(name\) else~guard true else~
+
+# Round-4 relay review: a start that fits two BOMs, broken text without a
+# BOM, and the joiner in a target's name. The first entries put back the
+# decoding 931fe10 had.
+test: review4BOMFittingTwoReadingsIsChecked
+file: scripts/private-check.swift
+perl: s~let fitting = boms\.filter \{ data\.starts\(with: \$0\.bytes\) \}~let fitting = Array(boms.filter { data.starts(with: \$0.bytes) }.prefix(1))~
+
+test: review4BrokenTextWithoutBOMIsChecked
+file: scripts/private-check.swift
+perl: s~ \?\? lossyText\(data, width: width, bigEndian: bigEndian\)~~
+perl: s~\(4, \[\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)\]\)\] \{~(4, [(.utf32LittleEndian, false), (.utf32BigEndian, true)])] where data.count.isMultiple(of: width) {~
+
+test: review4BrokenTextWithoutBOMIsChecked
+file: scripts/private-check.swift
+perl: s~ \?\? lossyText\(data, width: width, bigEndian: bigEndian\)~~
+
+test: review4BrokenTextWithoutBOMIsChecked
+file: scripts/private-check.swift
+perl: s~\(4, \[\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)\]\)\] \{~(4, [(.utf32LittleEndian, false), (.utf32BigEndian, true)])] where data.count.isMultiple(of: width) {~
+
+test: review4JoinedEmojiNameIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/AskFirst.swift
+perl: s~\.unicodeScalars\.filter \{ !CharacterSet\.controlCharacters~.unicodeScalars.filter { \$0.value == 0x200D || !CharacterSet.controlCharacters~

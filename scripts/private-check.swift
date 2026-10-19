@@ -151,31 +151,39 @@ func lossyText(_ data: Data, width: Int, bigEndian: Bool) -> String {
 /// is in it: text decoded with the wrong one is still "valid" nonsense. So
 /// with a BOM scan its decoding, lossy if it doesn't decode, and the lossy
 /// UTF-8 too. Without a BOM the encoding can be ambiguous, so scan every
-/// valid text interpretation rather than guessing wrong and hiding a word.
-/// Valid UTF-8 is scanned even if it contains NUL.
+/// reading rather than guessing wrong and hiding a word: UTF-8, and UTF-16
+/// and UTF-32 in both byte orders, each lossy, so one bad unit or a stray
+/// byte at the end never drops a whole reading. Valid UTF-8 is scanned even
+/// if it contains NUL.
 func decodedTexts(_ data: Data) -> [String] {
     var texts: [String] = []
     func add(_ text: String?) {
         if let text, !texts.contains(text) { texts.append(text) }
     }
-    // UTF-32 LE shares UTF-16 LE's first two BOM bytes, so check it first.
+    // FF FE 00 00 is the UTF-32 LE BOM, and also the UTF-16 LE one before a
+    // NUL, so scan every reading whose BOM the start fits.
     let boms: [(bytes: [UInt8], encoding: String.Encoding, width: Int, bigEndian: Bool)] = [
         ([0xff, 0xfe, 0x00, 0x00], .utf32LittleEndian, 4, false),
         ([0x00, 0x00, 0xfe, 0xff], .utf32BigEndian, 4, true),
         ([0xff, 0xfe], .utf16LittleEndian, 2, false),
         ([0xfe, 0xff], .utf16BigEndian, 2, true),
     ]
-    if let bom = boms.first(where: { data.starts(with: $0.bytes) }) {
+    let fitting = boms.filter { data.starts(with: $0.bytes) }
+    for bom in fitting {
         let rest = data.dropFirst(bom.bytes.count)
         add(String(data: rest, encoding: bom.encoding) ?? lossyText(rest, width: bom.width, bigEndian: bom.bigEndian))
+    }
+    if !fitting.isEmpty {
         add(String(decoding: data, as: UTF8.self))
         return texts
     }
     // A stray non-UTF-8 byte must not hide otherwise readable words.
     add(String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self))
-    for (width, encodings) in [(2, [String.Encoding.utf16LittleEndian, .utf16BigEndian]),
-                               (4, [.utf32LittleEndian, .utf32BigEndian])] where data.count.isMultiple(of: width) {
-        for encoding in encodings { add(String(data: data, encoding: encoding)) }
+    for (width, encodings) in [(2, [(String.Encoding.utf16LittleEndian, false), (.utf16BigEndian, true)]),
+                               (4, [(.utf32LittleEndian, false), (.utf32BigEndian, true)])] {
+        for (encoding, bigEndian) in encodings {
+            add(String(data: data, encoding: encoding) ?? lossyText(data, width: width, bigEndian: bigEndian))
+        }
     }
     return texts
 }

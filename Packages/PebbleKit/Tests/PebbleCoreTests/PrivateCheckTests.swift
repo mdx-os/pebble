@@ -126,6 +126,57 @@ struct PrivateCheckTests {
         #expect(!result.output.lowercased().contains(Self.word))
     }
 
+    /// FF FE 00 00 starts UTF-32 LE text, or UTF-16 LE text whose first
+    /// character is NUL, so both readings are scanned.
+    @Test(arguments: [false, true])
+    func review4BOMFittingTwoReadingsIsChecked(host: Bool) throws {
+        let scratch = try Scratch()
+        let planted = host ? "relay.corp" + ".internal" : Self.word
+        let kind = host ? "a .internal or .local host" : "a private word"
+        var data = Data([0xff, 0xfe])
+        data.append(try #require("\0First line.\n\(planted)\n".data(using: .utf16LittleEndian)))
+        #expect(data.starts(with: [0xff, 0xfe, 0x00, 0x00]))
+        try FileManager.default.createDirectory(at: scratch.root.appendingPathComponent("docs"), withIntermediateDirectories: true)
+        try data.write(to: scratch.root.appendingPathComponent("docs/SETUP.md"))
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("docs/SETUP.md:2: \(kind)"), "\(result.output)")
+        // A failed expectation prints its values, so only a bool is checked.
+        let named = result.output.lowercased().contains(planted)
+        #expect(!named, "the output names what was planted")
+    }
+
+    /// Without a BOM, UTF-16 and UTF-32 in either byte order are read
+    /// lossily too: a unit that isn't a scalar, or a stray byte at the end,
+    /// keeps every whole unit before it.
+    @Test(arguments: [2, 4], [(false, false), (false, true), (true, false), (true, true)])
+    func review4BrokenTextWithoutBOMIsChecked(width: Int, ending: (bigEndian: Bool, strayByte: Bool)) throws {
+        let (bigEndian, strayByte) = ending
+        let scratch = try Scratch()
+        let host = "relay.corp" + ".internal"
+        let encoding: String.Encoding = width == 2
+            ? (bigEndian ? .utf16BigEndian : .utf16LittleEndian)
+            : (bigEndian ? .utf32BigEndian : .utf32LittleEndian)
+        let bad: [UInt8] = width == 2 ? [0xd8, 0x00] : [0x00, 0x11, 0x00, 0x00]
+        var data = try #require("First line.\n\(Self.word)\n\(host)\n".data(using: encoding))
+        #expect(![[0xff, 0xfe], [0xfe, 0xff], [0x00, 0x00, 0xfe, 0xff]].contains { data.starts(with: $0) })
+        data.append(contentsOf: strayByte ? [0x20] : bigEndian ? bad : bad.reversed())
+        if strayByte {
+            #expect(!data.count.isMultiple(of: width))
+        } else {
+            #expect(String(data: data, encoding: encoding) == nil)
+        }
+        try FileManager.default.createDirectory(at: scratch.root.appendingPathComponent("docs"), withIntermediateDirectories: true)
+        try data.write(to: scratch.root.appendingPathComponent("docs/SETUP.md"))
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("docs/SETUP.md:2: a private word"), "\(result.output)")
+        #expect(result.output.contains("docs/SETUP.md:3: a .internal or .local host"), "\(result.output)")
+        // A failed expectation prints its values, so only a bool is checked.
+        let named = result.output.lowercased().contains(Self.word) || result.output.contains(host)
+        #expect(!named, "the output names what was planted")
+    }
+
     @Test(arguments: [false, true])
     func review2SymlinkTargetsAreChecked(host: Bool) throws {
         let scratch = try Scratch()

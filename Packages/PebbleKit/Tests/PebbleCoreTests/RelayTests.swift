@@ -481,6 +481,30 @@ struct RelayRound3Tests {
     }
 }
 
+struct RelayRound4Tests {
+    static func targetName(_ fixture: String) throws -> String {
+        let object = try #require(JSONSerialization.jsonObject(with: RelayFixtureTests.data(fixture)) as? [String: Any])
+        let needsYou = try #require(object["needsYou"] as? [String: Any])
+        return try #require((needsYou["target"] as? [String: Any])?["name"] as? String)
+    }
+
+    /// Recipient never keeps a joiner, so a joined emoji in a name would
+    /// not be shown as written. RELAY.md says it is refused.
+    @Test func review4JoinedEmojiNameIsRefused() throws {
+        let name = try Self.targetName("run.invalid.target-joined-emoji-name")
+        #expect(name.unicodeScalars.filter { $0.value == 0x200D }.count == 2)
+        #expect(throws: DecodingError.self) { try RelayFixtureTests.roundTrip("run.invalid.target-joined-emoji-name") }
+    }
+
+    /// An emoji selector is kept, so the name reads as written.
+    @Test func review4EmojiSelectorNameReads() throws {
+        let name = try Self.targetName("run.valid.target-emoji-selector-name")
+        #expect(name.unicodeScalars.contains { $0.value == 0xFE0F })
+        let run = try Relay.decode(RelayRun.self, from: RelayFixtureTests.data("run.valid.target-emoji-selector-name"))
+        #expect(run.needsYou?.target.name == name)
+    }
+}
+
 struct RelayWholeRunTests {
     @Test(arguments: [RelayRunState.done, .failed, .stopped])
     func review2WholeRunUsesItsOwnContext(state: RelayRunState) throws {
