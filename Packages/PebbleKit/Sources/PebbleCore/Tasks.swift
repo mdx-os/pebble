@@ -64,6 +64,16 @@ public struct AgentTask: Identifiable, Sendable, Equatable {
     /// True while the agent may still do something on this task.
     public var isActive: Bool { !state.isFinished }
 
+    /// The same task under another id, its steps numbered as they were.
+    func with(id: String) -> AgentTask {
+        var copy = AgentTask(id: id, title: title, step: step, progress: progress, state: state,
+                             question: question, wrapUp: wrapUp, result: result, startedAt: startedAt,
+                             updatedAt: updatedAt)
+        copy.history = history
+        copy.stepsRecorded = stepsRecorded
+        return copy
+    }
+
     /// Waiting for a yes from `AskFirst`, so the card can offer Approve.
     public var waitsForApproval: Bool { state == .waitingOnYou && question != nil }
 
@@ -102,7 +112,7 @@ public enum TaskProgress: Sendable, Equatable {
     }
 }
 
-public enum TaskState: String, Sendable, Equatable, CaseIterable {
+public enum TaskState: String, Codable, Sendable, Equatable, CaseIterable {
     /// Working through its steps.
     case running
     /// Needs the person: a yes from `AskFirst`, or a choice after the
@@ -233,6 +243,9 @@ public enum TaskApproval: Sendable, Equatable {
     /// Not for this task's open question, already used, or not the question
     /// that was asked. Nothing was done.
     case refused
+    /// `AskFirst` honored it, so it is spent, but what it was for couldn't
+    /// be done and nothing was kept. The task ended, and its card says why.
+    case notKept
 }
 
 /// Does long work for the person and reports each step.
@@ -334,11 +347,70 @@ public protocol TaskEngine: AnyObject, Sendable {
     /// True when this one task is an example. The feed asks per card, so
     /// an example never makes real work look like one.
     func isSample(_ id: String) -> Bool
+
+    /// The tasks this engine can start, for Today to offer.
+    var builtIns: [TaskRequest] { get }
+
+    /// True while the engine keeps a file of its tasks on disk, so Forget
+    /// everything is offered while there is anything to erase.
+    var hasStoredFile: Bool { get }
+
+    /// Called once `note` is forgotten, or changed with `note` holding its
+    /// earlier words, so nothing the engine kept still quotes them. Says
+    /// whether every copy of those words is gone.
+    func forgetQuotes(of note: MemoryNote) -> QuotesForgotten
+
+    /// How the tasks that ended can be counted, for the morning summary.
+    var endings: TaskEndings { get }
 }
 
 extension TaskEngine {
     public var isSample: Bool { false }
     public func isSample(_ id: String) -> Bool { isSample }
+    public var builtIns: [TaskRequest] { [] }
+    public var hasStoredFile: Bool { false }
+    public func forgetQuotes(of note: MemoryNote) -> QuotesForgotten { .notQuoted }
+    public var endings: TaskEndings { .watched }
+}
+
+/// How the tasks that ended can be counted. Only states and times, never
+/// what a task held.
+public enum TaskEndings: Sendable, Equatable {
+    /// From `tasks` alone, which live in memory: only what ended while the
+    /// app was watching.
+    case watched
+    /// Every task that ended, as kept on disk, whenever the app was running.
+    case kept([TaskEnd])
+    /// Kept on disk, but the file can't be opened now, as while the device
+    /// is locked, so nothing about them is known.
+    case locked
+}
+
+/// One task that ended: how, and when. Nothing else.
+public struct TaskEnd: Codable, Sendable, Equatable {
+    public let state: TaskState
+    public let at: Date
+
+    public init(state: TaskState, at: Date) {
+        self.state = state
+        self.at = at
+    }
+}
+
+/// What became of a forgotten note's words in what a task kept, such as a
+/// weekly digest.
+public enum QuotesForgotten: Sendable, Equatable {
+    /// Nothing a task kept quoted it.
+    case notQuoted
+    /// Every copy is gone: the line was taken out, or the digest removed.
+    case forgotten
+    /// Some of its words are still in a kept note, as when the person
+    /// changed the digest or it couldn't be written just now.
+    case stayed
+    /// Some of its words may still be in a kept note: one the person
+    /// changed, or one whose lines aren't known, drew from it, and its
+    /// words weren't found there but may have been reworded.
+    case mayHaveStayed
 }
 
 /// An engine whose tasks outlive the app being closed, through `TaskStore`.
@@ -370,10 +442,15 @@ public struct ClearedTasks: Sendable, Equatable {
     public let forgotten: Int
     /// Steps the person had said yes to that were under way, so may be done.
     public let underway: Int
+    /// False when the engine's file of tasks couldn't be erased. The tasks
+    /// stopped and left the screen, but may come back next launch, so the
+    /// person is told and can try again.
+    public let erased: Bool
 
-    public init(forgotten: Int = 0, underway: Int = 0) {
+    public init(forgotten: Int = 0, underway: Int = 0, erased: Bool = true) {
         self.forgotten = forgotten
         self.underway = underway
+        self.erased = erased
     }
 
     public static let none = ClearedTasks()
@@ -425,7 +502,7 @@ public final class TaskObservation: @unchecked Sendable {
 /// moving through it. After that a new step or state is said once, with at
 /// least `minimumGap` between lines. A step that arrives too soon waits, and
 /// only the newest waiting step is said. A task that needs the person, or
-/// that ends, is said straight away.
+/// that ends, is said straight away, and so is one the person just started.
 public struct TaskAnnouncer: Sendable {
     public static let minimumGap: Duration = .seconds(4)
 
@@ -435,6 +512,8 @@ public struct TaskAnnouncer: Sendable {
     }
 
     private var heard: [String: Heard] = [:]
+    /// What was last said for each task, so a line is never said twice.
+    private var said: [String: Heard] = [:]
     private var waiting: [String: String] = [:]
     private var lastSpoken: ContinuousClock.Instant?
     private var primed = false
@@ -461,9 +540,17 @@ public struct TaskAnnouncer: Sendable {
             heard[task.id] = current
             guard primed else { continue }
             guard before != current else { continue }
+            // A task that already ended says nothing more when only its
+            // line changes because of the person's own change to their
+            // notes, as when they remove what it kept: they did it, so they
+            // know. Any other change to its line, such as the notes
+            // locking, is said.
+            if let before, before.state == task.state, task.state.isFinished,
+               Self.followsThePerson.contains(task.step) { continue }
             let line = Self.line(for: task)
             if Self.isUrgent(task.state) && before?.state != task.state {
                 waiting[task.id] = nil
+                said[task.id] = current
                 out.append(Line(text: line, urgent: true))
             } else {
                 waiting[task.id] = line
@@ -473,6 +560,7 @@ public struct TaskAnnouncer: Sendable {
         let ids = Set(tasks.map(\.id))
         waiting = waiting.filter { ids.contains($0.key) }
         heard = heard.filter { ids.contains($0.key) }
+        said = said.filter { ids.contains($0.key) }
 
         if !out.isEmpty {
             lastSpoken = now
@@ -481,9 +569,30 @@ public struct TaskAnnouncer: Sendable {
         if let lastSpoken, now - lastSpoken < Self.minimumGap { return [] }
         guard let next = tasks.first(where: { waiting[$0.id] != nil }), let text = waiting[next.id] else { return [] }
         waiting[next.id] = nil
+        said[next.id] = heard[next.id]
         lastSpoken = now
         return [Line(text: text, urgent: false)]
     }
+
+    /// The line for a task the person just started, said at once rather
+    /// than waiting its turn: the button they were on is gone, so this is
+    /// how they hear it began. Nil when that line was already said.
+    public mutating func started(_ task: AgentTask, at now: ContinuousClock.Instant) -> Line? {
+        let current = Heard(state: task.state, step: task.step)
+        heard[task.id] = current
+        waiting[task.id] = nil
+        guard said[task.id] != current else { return nil }
+        said[task.id] = current
+        lastSpoken = now
+        return Line(text: Self.line(for: task), urgent: true)
+    }
+
+    /// Lines an ended task moves to only after the person changed their
+    /// notes: removing the digest, forgetting a note it quoted, or a line
+    /// coming back once that note's line is gone.
+    static let followsThePerson: Set<String> = [
+        DigestWords.removed, DigestWords.tookOut, DigestWords.hiddenQuote, DigestWords.done, DigestWords.alreadyKept,
+    ]
 
     static func isUrgent(_ state: TaskState) -> Bool {
         state == .waitingOnYou || state.isFinished
@@ -551,6 +660,9 @@ public enum TaskWords {
     public static let yesNotUsed = "That yes didn't go through, so I didn't act on it."
     /// Approve tapped after the question timed out on screen. Nothing was done.
     public static let questionTimedOut = "That question timed out, so I didn't act on it."
+    /// Kept on Today when a task couldn't start, as while what tasks keep
+    /// still won't open. Nothing was started or kept.
+    public static let couldNotStart = "Sorry, I couldn't start that just now, so nothing was started. Please try again in a moment."
 
     /// Forgetting tasks when the notes can't be opened, so Forget everything
     /// isn't there. Honest that the notes stay.
@@ -564,6 +676,12 @@ public enum TaskWords {
     public static let forgetTasksDetail = "This stops any task still going, and removes every task and what you told me for it from this device. It can't be undone. Your notes aren't touched, and your choice about nudges stays as it is. Anything you've allowed until tonight or always stays allowed."
     /// Said and shown once the tasks are gone.
     public static let tasksForgotten = "Your tasks are forgotten."
+    /// Forgetting tasks when their file couldn't be erased. They stopped
+    /// and left the screen, but may come back, so it says so.
+    public static let forgotNotesNotTasks = "Your notes are gone. I stopped your tasks, but I couldn't erase them just now. Please try Forget everything again in a moment."
+    public static let couldNotEraseTasks = tasksStayed + " Please try Forget everything again in a moment."
+    /// The same, said within a line that already ends by asking to try again.
+    public static let tasksStayed = "I stopped your tasks, but I couldn't erase them just now."
     /// Kept on Today after forgetting, while a step the person said yes to
     /// may have happened. Names nothing the task held.
     public static func forgotUnderway(_ count: Int) -> String {

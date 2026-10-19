@@ -1,5 +1,6 @@
 import Foundation
 @testable import PebbleCore
+import SourceScan
 import Testing
 
 struct AskFirstTests {
@@ -15,6 +16,109 @@ struct AskFirstTests {
         let action = ProposedAction(kind: kind, recipient: bakery, details: "x", price: cad850)
         _ = rule.ask(action)
         #expect(rule.decide(action, approval: nil) == .stop)
+    }
+
+    /// The rule keeps only ids and times, never what it asked about: while
+    /// a question is open, once it times out, and once it is closed by a
+    /// no or a yes. So Forget everything leaves no note's words in it.
+    /// The probe walks the rule itself, every stored property and all
+    /// they hold, and is shown to reach them: it finds the very ids the
+    /// rule holds. Any text at all, or any question or action, fails.
+    @Test func theRuleKeepsOnlyIdsAndTimes() throws {
+        final class Clock: @unchecked Sendable {
+            var now = ContinuousClock.now
+        }
+        let clock = Clock()
+        let rule = AskFirst.isolated(now: { clock.now })
+        let words = ["Sam's birthday is May 14", "Door code 4417", "Dentist on Thursday at 3", "Lemon cake on Friday"]
+        func ask(_ text: String) throws -> ConfirmationRequest {
+            try #require(rule.ask(DigestTask.keep(DigestWords.heading + ".\n• " + text)))
+        }
+        // The probe does find words where they are, of each kind it reads.
+        let open = try ask(words[0])
+        #expect(StoredWords(in: open).contains(words[0]))
+        #expect(StoredWords(in: Substring(words[0])).contains(words[0]))
+        #expect(StoredWords(in: Data(words[0].utf8)).contains(words[0]))
+        #expect(StoredWords(in: words[0] as NSString).contains(words[0]))
+        #expect(StoredWords(in: Array(words[0])).contains(words[0]))
+
+        func expectNoWords(_ when: String, holding ids: [UUID]) {
+            let found = StoredWords(in: rule)
+            for id in ids { #expect(found.ids.contains(id), "\(when): the probe didn't reach \(id)") }
+            #expect(found.texts.isEmpty, "\(when): text in the rule: \(found.texts)")
+            for type in Self.questionTypes { #expect(!found.holds(type), "\(when): a \(type) is in the rule") }
+            for word in words + [DigestWords.heading, DigestTask.notes.displayName, MemoryWords.title] {
+                #expect(!found.contains(word), "\(when): \(word) is in the rule")
+            }
+        }
+
+        // Open.
+        expectNoWords("open", holding: [open.id])
+
+        // Timed out, before anything looks at it again.
+        clock.now += .seconds(AskFirst.defaultWindow + 1)
+        expectNoWords("timed out", holding: [open.id])
+        #expect(rule.isClosed(open))
+
+        // Closed by a no, and by a yes spent.
+        let declined = try ask(words[1])
+        rule.withdraw(declined)
+        #expect(rule.wasWithdrawn(declined))
+        let approved = try ask(words[2])
+        guard case .approved(let yes) = rule.sayYes(to: approved) else { Issue.record("no approval"); return }
+        expectNoWords("yes given", holding: [approved.id])
+        #expect(rule.decide(approved.action, approval: yes) == .proceed)
+        let stillOpen = try ask(words[3])
+        expectNoWords("closed", holding: [declined.id, stillOpen.id])
+        // The spent yes was reached above while it was held. Spent, not
+        // even its id is left.
+        #expect(!StoredWords(in: rule).ids.contains(approved.id))
+        #expect([declined, approved].allSatisfy(rule.isClosed))
+    }
+
+    /// An empty list of any kind is no text, so it can't stand in for
+    /// words a probe was meant to reach.
+    @Test func anEmptyListIsNoText() {
+        for value: Any in [[Int](), [UUID](), [String](), [Character]()] {
+            #expect(StoredWords(in: value).texts.isEmpty, "\(type(of: value))")
+        }
+        #expect(StoredWords(in: Array("words")).texts == ["words"])
+    }
+
+    /// Kinds of value that carry what a question was about.
+    static let questionTypes = ["ProposedAction", "ConfirmationRequest", "Approval", "Recipient"]
+
+    /// The probe above can fail: a rule that kept a question, or only its
+    /// action, in any stored property, under a lock like the real one, is
+    /// caught by its words and by its kind.
+    @Test func theProbeFindsAQuestionKeptAnywhereInARule() throws {
+        final class Leaky: @unchecked Sendable {
+            private let lock = NSLock()
+            private var pending: [UUID: ContinuousClock.Instant] = [:]
+            private var recent: [ProposedAction] = []
+            private var asked: [UUID: ConfirmationRequest] = [:]
+            init(_ request: ConfirmationRequest, keepsAction: Bool) {
+                lock.lock()
+                pending[request.id] = .now
+                if keepsAction { recent.append(request.action) } else { asked[request.id] = request }
+                lock.unlock()
+            }
+        }
+        let rule = AskFirst.isolated()
+        let request = try #require(rule.ask(DigestTask.keep(DigestWords.heading + ".\n• Door code 4417")))
+        for keepsAction in [true, false] {
+            let found = StoredWords(in: Leaky(request, keepsAction: keepsAction))
+            #expect(found.ids.contains(request.id))
+            #expect(found.contains("Door code 4417"))
+            #expect(!found.texts.isEmpty)
+            #expect(found.holds("ProposedAction"))
+            if !keepsAction { #expect(found.holds("ConfirmationRequest")) }
+        }
+        // And the real rule, holding that very question open, has none.
+        let real = StoredWords(in: rule)
+        #expect(real.ids.contains(request.id))
+        #expect(real.texts.isEmpty)
+        #expect(!Self.questionTypes.contains(where: real.holds))
     }
 
     @Test func aYesForTheAskedActionLetsItHappenOnce() {

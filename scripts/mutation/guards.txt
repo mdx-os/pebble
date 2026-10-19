@@ -1,0 +1,206 @@
+# Disable the privacy network rule.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~Rule\("privacy\.network", network\),~~
+
+# Disable the privacy urlRead rule.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~Rule\("privacy\.urlRead", urlRead\),~~
+
+# Disable the privacy transport rule.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~Rule\("privacy\.transport", transport\),~~
+
+# Disable the privacy sessionFactory rule.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~Rule\("privacy\.sessionFactory", sessionFactory\),~~
+
+# Disable the privacy requiredReason rule.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~Rule\("privacy\.requiredReason", requiredReason\),~~
+
+# Disable the privacy speech rule.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~Rule\("privacy\.speech", speech\),~~
+
+# Disable the privacy upload rule.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~Rule\("privacy\.upload", upload\),~~
+
+# Disable the privacy encryption rule.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~Rule\("privacy\.encryption", encryption\),~~
+
+# Accept a code under any category.
+test: privacyReasonCodesBelongToTheirCategories
+file: Tools/GuardKit/Sources/GuardScan/PrivacyAudit.swift
+perl: s~allowedReasons\[category\]\?\.contains\(code\) == true~allowedReasons.values.contains { \$0.contains(code) }~
+
+# Accept compiled languages the Swift parser cannot read.
+test: privacyRejectsUnreadableCompiledSources
+file: Tools/GuardKit/Sources/GuardScan/PrivacyAudit.swift
+perl: s~URL\(fileURLWithPath: path\)\.pathExtension == "swift"~true~
+
+# Disable structural consent test detection.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~Rule\("privacy\.gateTests", gateTestsPresent\),~~
+
+# Round 3. SwiftUI's web view and page and Multipeer sessions let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\n\s*"WebView", "WebPage", "MCSession", "MCBrowserViewController",~~
+
+# CFSocket and the Multipeer nearby services let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\n\s*\|\| \$0\.hasPrefix\("CFSocket"\) \|\| \$0\.hasPrefix\("MCNearbyService"\)~~
+
+# NSArray, NSAttributedString, the AV assets and NSXMLDocument read a URL unseen.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\n\s*"NSArray", "NSAttributedString", "AVURLAsset", "AVAsset", "NSXMLDocument",~~
+
+# The iCloud container lookup let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\|\| \$0 == "forUbiquityContainerIdentifier" \|\| \$0 == "ubiquityIdentityToken"~~
+
+# URL's async readers, url.lines and url.resourceBytes, let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\} else if urlReaders\.contains\(name\) \{~} else if false {~
+
+# The same readers as a key path, \.lines, let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~where urlReaders\.contains\(SyntaxSource\.name\(component\.declName\.baseName\)\)~where false~
+
+# contentsOf: read only when the call names a read type, as before: .init
+# with a type annotation is let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~where initializerCallee\(call\.calledExpression, declared\) \{~where call.calledExpression.tokens(viewMode: .sourceAccurate).map(SyntaxSource.name).contains(where: types.contains) {~
+
+# A typealias of Data not followed, so Bytes.init is let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~return found~return types~
+
+# Self.init inside an extension of Data let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~guard names\.contains\("Self"\),~guard false,~
+
+# An initializer reference named init(contentsOf:...) on another base let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\n\s*\|\| member\.declName\.argumentNames\?\.arguments\.contains\(where: \{ urlLabels\.contains\(SyntaxSource\.name\(\$0\.name\)\) \}\) == true~~
+
+# A capture list counted as inside the cloud closure.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~, closure\.statements\.id == child\.id \{~ {~
+
+# copyItem(at:to:) let by, as a call and as a reference.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~guard call\.arguments\.contains\(where: \{ \$0\.label\.map\(SyntaxSource\.name\) == "at" \}\) else \{ continue \}~continue~
+
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\} else if reference\.argumentNames\?\.arguments\.first\.map\(\{ SyntaxSource\.name\(\$0\.name\) \}\) != "atPath" \{~} else if false {~
+
+# project.yml: a single product: entry skipped.
+test: privacyProjectReadsEveryForm
+file: Tools/GuardKit/Sources/GuardScan/PrivacyProject.swift
+perl: s~case \(let single as String, nil\): products\.append\(single\)~case (let single as String, nil): _ = single~
+
+# A package: entry with no product named, which links the package's own, skipped.
+test: privacyProjectReadsEveryForm
+file: Tools/GuardKit/Sources/GuardScan/PrivacyProject.swift
+perl: s~case \(nil, nil\): products\.append\(package\)~case (nil, nil): break~
+
+# A target: dependency not followed, so its sources go unread.
+test: privacyProjectReadsEveryForm
+file: Tools/GuardKit/Sources/GuardScan/PrivacyProject.swift
+perl: s~todo\.append\(other\)~_ = other~
+
+# A source entry with keys besides path: read as if it had none.
+test: privacyProjectFailsOnFormsItCannotRead
+file: Tools/GuardKit/Sources/GuardScan/PrivacyProject.swift
+perl: s~Set\(entry\.keys\) == \["path"\]~entry.keys.contains("path")~
+
+# A kind of target the check doesn't know passed over.
+test: privacyProjectFailsOnFormsItCannotRead
+file: Tools/GuardKit/Sources/GuardScan/PrivacyProject.swift
+perl: s~\} else if !testTypes\.contains\(type\) \{~} else if false {~
+
+# Any package taken for PebbleKit.
+test: privacyProjectFailsOnFormsItCannotRead
+file: Tools/GuardKit/Sources/GuardScan/PrivacyProject.swift
+perl: s~guard package == Self\.package, \(packages\[package\] as\? \[String: Any\]\)\?\["path"\] as\? String == packagePath else \{~guard true else {~
+
+# A dependency of another kind, such as a framework, passed over.
+test: privacyProjectFailsOnFormsItCannotRead
+file: Tools/GuardKit/Sources/GuardScan/PrivacyProject.swift
+perl: s~\} else \{\n\s*throw Unreadable\("target \\\(name\) has a dependency on [^\n]*\n\s*\}~}~
+
+# Round 4. A bare call read by its case, so a lowercase alias from another
+# file, bytes(contentsOf:), is let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\} else if expression\.is\(DeclReferenceExprSyntax\.self\) \{\n(\s*)return true // A bare name, of any case\.~} else if let reference = expression.as(DeclReferenceExprSyntax.self) {\n$1name = SyntaxSource.name(reference.baseName)~
+
+# A lowercase alias this file declares, called as a member, let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~name == "init" \|\| declared\.contains\(name\) \|\|~name == "init" ||~
+
+# An initializer given url: let by unless its type is a known remote one.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\["contentsOf", "url", "byReferencing"\]~["contentsOf", "byReferencing"]~
+
+# NSImage(byReferencing:) let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\["contentsOf", "url", "byReferencing"\]~["contentsOf", "url"]~
+
+# An alias of a remote initializer, Player = AVPlayer, not followed.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~let remoteTypes = aliases\(of: remoteInitializers, in: source\)~let remoteTypes = remoteInitializers~
+
+# resourceBytes and lines with self. left off, inside an extension of URL, let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~guard let extended = ancestor\(reference, ExtensionDeclSyntax\.self\), extendsURL\(extended, urls\) else \{ continue \}~continue~
+
+# An extension of an alias of URL not taken for one of URL.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~let urls = aliases\(of: \["URL"\], in: source\)~let urls: Set<String> = ["URL"]~
+
+# A subclass made here taken for a plain type, though it may inherit an
+# initializer that loads its URL.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\.filter \{ \$0\.inheritanceClause == nil \}~~
+
+# A plain type made here, or the cloud client's request, made to need review.
+test: privacyRulesAllowReviewedContexts
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~ && !plain\.contains\(calleeName\(call\.calledExpression\)\)~~
+
+test: privacyRulesAllowReviewedContexts
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~file != cloud && !labels~!labels~
+

@@ -12,6 +12,8 @@ import SwiftUI
 @MainActor
 final class FeedModel: ObservableObject {
     @Published private(set) var feed: Feed
+    /// Tasks the engine can start that aren't going now, offered on Today.
+    @Published private(set) var offers: [TaskRequest] = []
     /// The question open in the confirmation sheet.
     @Published var reviewing: ConfirmationRequest?
     /// The result open to read.
@@ -132,9 +134,19 @@ final class FeedModel: ObservableObject {
     /// True from forgetting every task until a new one starts, so the
     /// memory screen can say the tasks are gone.
     @Published private(set) var tasksForgotten = false
+    /// Goes up by one each time the engine's file of tasks appears or
+    /// goes, so the memory screen can look again at what Forget everything
+    /// would erase. Not on every step, so a running task doesn't make it
+    /// read the notes again each time.
+    @Published private(set) var tasksSeen = 0
+    /// `tasksStored` when `tasksSeen` last went up.
+    private var storedWhenSeen = false
     /// Kept on Today after a file that couldn't be read was cleared, until
     /// the person has read it.
     @Published private(set) var clearedUnreadable: String?
+    /// Kept on Today when the engine couldn't start a task from its offer,
+    /// until the person has read it or a task starts.
+    @Published private(set) var couldNotStart: String?
     private let clock: () -> ContinuousClock.Instant
     /// Says a line to VoiceOver. Tests replace it to hear what would be said.
     var announce: @MainActor (TaskAnnouncer.Line) -> Void = FeedModel.post
@@ -197,12 +209,14 @@ final class FeedModel: ObservableObject {
             flow.store.restore(into: keeper, now: now())
         }
         feed = Feed.build(from: self.sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
+        offers = Self.offers(from: tasks)
         if store?.clearedUnreadable == true { clearedUnreadable = ReceiptWords.unreadableCleared }
         flow?.pinned(Self.pinnedTasks(in: feed), rule: needsYou.rule, from: window)
         let list = tasks?.tasks ?? []
         track(list)
         sections = Self.sections(of: feed)
         _ = announcer.lines(for: list, at: clock())
+        storedWhenSeen = tasksStored
         let hops = pendingRefreshes
         watching = tasks?.observe { [weak self, weak ledger] snapshot in
             // Record every outcome before UI dispatch can reorder or drop
@@ -261,7 +275,18 @@ final class FeedModel: ObservableObject {
         if let store, let keeper, store.hasLateTasks { store.keep(keeper, now: now()) }
         launchLedger()
         if store?.clearedUnreadable == true, clearedUnreadable == nil { clearedUnreadable = ReceiptWords.unreadableCleared }
+        followStored()
         rebuild()
+    }
+
+    /// Moves `tasksSeen` on when the file of tasks appears or goes, by the
+    /// engine's change or the store's.
+    private func followStored() {
+        let stored = tasksStored
+        if stored != storedWhenSeen {
+            storedWhenSeen = stored
+            tasksSeen += 1
+        }
     }
 
     /// The tasks whose questions are pinned in Needs you: the only ones the
@@ -425,11 +450,63 @@ final class FeedModel: ObservableObject {
         summaries = [:]
         let next = Feed.build(from: sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
         if next != feed { feed = next }
+        let offered = Self.offers(from: tasks)
+        if offered != offers { offers = offered }
         closeSummaryGone()
         followCards()
         followLedger()
         flow?.pinned(Self.pinnedTasks(in: feed), rule: rule, from: window)
     }
+
+    /// What the engine can start, less any already going, so a task is
+    /// never offered twice at once.
+    static func offers(from tasks: (any TaskEngine)?) -> [TaskRequest] {
+        guard let tasks else { return [] }
+        let going = Set(tasks.tasks.filter(\.isActive).map(\.title))
+        return tasks.builtIns.filter { !going.contains($0.title) }
+    }
+
+    /// Starts one of the engine's own tasks from its offer on Today. The
+    /// offer goes once its task is going, taking VoiceOver's place with it,
+    /// so the task's first step is said at once.
+    /// The engine reads what it keeps first, if it hasn't yet. One that
+    /// still couldn't start it leaves a line here, never silence.
+    func start(_ request: TaskRequest) {
+        guard let tasks, tasks.builtIns.contains(request) else { return }
+        let id = tasks.start(request)
+        refresh()
+        guard let task = tasks.tasks.first(where: { $0.id == id }) else {
+            couldNotStart = TaskWords.couldNotStart
+            announce(TaskAnnouncer.Line(text: TaskWords.couldNotStart, urgent: true))
+            return
+        }
+        couldNotStart = nil
+        if let line = announcer.started(task, at: clock()) { announce(line) }
+    }
+
+    /// The person has read that a task couldn't start.
+    func dismissCouldNotStart() {
+        couldNotStart = nil
+    }
+
+    /// Asks the tasks whether a forgotten or changed note's words stayed in
+    /// anything they kept. The engine follows the notes itself, and the
+    /// memory screen calls `notesChanged()` next, so nothing is read again
+    /// here.
+    func forgetQuotes(of note: MemoryNote) -> QuotesForgotten {
+        tasks?.forgetQuotes(of: note) ?? .notQuoted
+    }
+
+    /// After the memory screen changes a note. The engine has already
+    /// looked at the notes on the store's own word, so the feed is only
+    /// built again.
+    func notesChanged() {
+        rebuild()
+    }
+
+    /// True while the engine, or the store it shares, keeps a file of
+    /// tasks, so Forget everything is offered even with no notes left.
+    var tasksStored: Bool { tasks?.hasStoredFile == true || store?.hasFile == true }
 
     /// A summary open to read whose card is gone, as after Forget
     /// everything in another window, closes with it.
@@ -486,6 +563,7 @@ final class FeedModel: ObservableObject {
         // Kept at every real change, so closing the app at any moment loses
         // nothing. Only what changed is written.
         if let flow, let keeper { flow.store.keep(keeper, now: now()) }
+        followStored()
         launchLedger()
         if track(snapshot.tasks) { rebuild() } else { followLedger() }
         for line in announcer.lines(for: snapshot.tasks, at: clock()) { announce(line) }
@@ -514,6 +592,22 @@ final class FeedModel: ObservableObject {
         // So do a summary's sources and its points, and what was kept from it.
         let before = taskIDs
         closeSummaries { before.contains($0) && !ids.contains($0) }
+        // A result open to read whose words are gone closes too, as when the
+        // note it showed is forgotten. One whose words changed, as when a
+        // forget took one line of a digest, shows the words as they are now.
+        if let reading, let task = list.first(where: { $0.id == reading.id }) {
+            if let result = task.result {
+                if reading.action != .open(result) { open(task) }
+            } else {
+                self.reading = nil
+            }
+        }
+        // A question its task let go of, as when a note it drew from
+        // changed, closes its sheet too.
+        if let reviewing, let id = taskAsked[reviewing.id],
+           list.first(where: { $0.id == id })?.question?.id != reviewing.id {
+            self.reviewing = nil
+        }
         taskIDs = ids
         if !ids.isEmpty && tasksForgotten { tasksForgotten = false }
         let next = list.map(\.card)
@@ -857,8 +951,12 @@ final class FeedModel: ObservableObject {
         // Every task's ledger goes with it, with or without an engine.
         ledger?.forget()
         let line = Self.forgetLine(cleared.underwayLine, inCloud: inCloud)
-        let what = NeedsYouFlow.Forgotten(something: cleared.forgotten > 0 || hadReceipts || hadLedgers,
-                                            underway: line)
+        // Said forgotten only once the file has gone too, so nothing says
+        // they are forgotten while they may come back. A kept ledger is
+        // something to forget on its own, as in another window.
+        let what = NeedsYouFlow.Forgotten(
+            something: ((cleared.forgotten > 0 || hadReceipts) && cleared.erased) || hadLedgers,
+            underway: line)
         if let flow { flow.forget(what) } else { forgotten(what) }
         refresh()
         if let line {
@@ -933,7 +1031,7 @@ final class FeedModel: ObservableObject {
             // and if one of them may have reached the cloud, the line says so.
             let inCloud = (recon?.summariesPastAYes ?? 0) > 0
             let cleared = tasks.clear()
-            if cleared.forgotten > 0 { something = true }
+            if cleared.forgotten > 0 && cleared.erased { something = true }
             let own = Self.forgetLine(cleared.underwayLine, inCloud: inCloud)
             if let own, underway?.contains(own) != true {
                 underway = [underway, own].compactMap { $0 }.joined(separator: " ")
@@ -996,6 +1094,11 @@ final class FeedModel: ObservableObject {
                 // Kept now, not at the next change: if the app closes in
                 // between, the step is known to be under way and is never
                 // asked about or run again.
+                if let flow, let keeper { flow.store.keep(keeper, now: now()) }
+            case .notKept:
+                // Spent, so a second tap is quiet too. The card says why
+                // nothing was kept.
+                usedYes.insert(approval.id)
                 if let flow, let keeper { flow.store.keep(keeper, now: now()) }
             case .refused: refusedBy = id
             case .timedOut: break
@@ -1169,6 +1272,11 @@ struct FeedView: View {
                                              identifier: "clearedUnreadable")
                             .transition(Motion.arrival(reduceMotion: reduceMotion))
                     }
+                    if let line = model.couldNotStart {
+                        ForgotUnderwayNotice(line: line, onDismiss: model.dismissCouldNotStart,
+                                             identifier: "couldNotStart")
+                            .transition(Motion.arrival(reduceMotion: reduceMotion))
+                    }
                     if model.feed.isEmpty {
                         empty
                             .transition(.opacity)
@@ -1194,6 +1302,10 @@ struct FeedView: View {
                                 items: model.feed.working, columns: columns)
                             .accessibilityElement(children: .contain)
                             .accessibilityIdentifier("working")
+                            .transition(Motion.arrival(reduceMotion: reduceMotion))
+                    }
+                    if !model.offers.isEmpty {
+                        offers(columns: columns)
                             .transition(Motion.arrival(reduceMotion: reduceMotion))
                     }
                     ForEach(model.feed.groups) { group in
@@ -1304,6 +1416,28 @@ struct FeedView: View {
                 }
             }
         }
+    }
+
+    /// What the engine can start, one card each.
+    private func offers(columns: [GridItem]) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(DigestWords.offerHeading)
+                    .font(Theme.TypeScale.displayTitle3)
+                    .accessibilityAddTraits(.isHeader)
+                Text(DigestWords.offerDetail)
+                    .font(Theme.TypeScale.subheadline)
+                    .foregroundStyle(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            LazyVGrid(columns: columns, alignment: .leading, spacing: Self.cardSpacing) {
+                ForEach(model.offers, id: \.title) { request in
+                    TaskOfferCard(request: request) { model.start(request) }
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("offers")
     }
 
     private var empty: some View {
@@ -1429,6 +1563,61 @@ struct FeedCard: View {
     }
 }
 
+/// A task the agent can start, offered on Today. One button: VoiceOver
+/// hears the title, then that it starts.
+struct TaskOfferCard: View {
+    let request: TaskRequest
+    let start: () -> Void
+
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+    }
+
+    var body: some View {
+        Button(action: start) {
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
+                // The section above says what this is, so the card leads
+                // with the task itself.
+                Label {
+                    Text(request.title)
+                        .font(Theme.TypeScale.displayHeadline)
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "sparkles")
+                        .font(Theme.TypeScale.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.accentSymbol)
+                }
+                Text(DigestWords.startTitle)
+                    .font(Theme.TypeScale.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.accentText)
+                    .padding(.horizontal, Theme.Space.m)
+                    .padding(.vertical, Theme.Space.xs)
+                    .background(Theme.accent.opacity(Theme.accentWash), in: Capsule())
+                    .padding(.top, 2)
+            }
+            .padding(Theme.Space.m)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .feedCardSurface()
+            .contentShape(shape)
+        }
+        .buttonStyle(SoftPressStyle())
+        .pointerHover(in: shape)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(request.title)
+        .accessibilityHint(DigestWords.startHint)
+        // Voice Control users can say the title they see. "Start" alone
+        // would name every offer once there is more than one.
+        .accessibilityInputLabels([Text(request.title), Text(DigestWords.startInputLabel(request.title))])
+        // Not redundant: `children: .ignore` makes a new element without
+        // the button's trait. Without it the UI tests can't find the offer
+        // as a button.
+        .accessibilityAddTraits(.isButton)
+        .accessibilityIdentifier("offer")
+    }
+}
+
 /// Brings a task's card into view when its nudge is opened, and VoiceOver
 /// with it, then lets go.
 struct FocusScroller: View {
@@ -1460,8 +1649,9 @@ struct FocusScroller: View {
 }
 
 /// What stays on Today after Forget everything, while a step the person
-/// said yes to may have happened, or after a file that couldn't be read
-/// was cleared. One plain line and a way to put it away.
+/// said yes to may have happened, after a file that couldn't be read was
+/// cleared, or when a task couldn't start. One plain line and a way to put
+/// it away.
 struct ForgotUnderwayNotice: View {
     let line: String
     let onDismiss: () -> Void

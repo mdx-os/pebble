@@ -13,3 +13,4 @@ Packages/PebbleKit/Sources/PebbleCore/IdeaDraft.swift: String.init
 Packages/PebbleKit/Sources/PebbleCore/IdeaDraft.swift: String.init
 Packages/PebbleKit/Sources/PebbleCore/IdeaDraft.swift: String.init
 Packages/PebbleKit/Sources/PebbleCore/SnapshotDiff.swift: String.init
+Packages/PebbleKit/Sources/PebbleModel/DeviceTaskEngine.swift: plan.lines

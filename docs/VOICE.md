@@ -105,8 +105,12 @@ its own review.
 ## Asking before acting
 
 Before the agent sends, buys or shares anything, it asks, unless a yes the
-person made last longer (below) covers that exact step. The question
-names exactly what will happen, to whom, and for how much. The buttons say
+person made last longer (below) covers that exact step. It asks too
+before it keeps something new in the person's notes that they didn't type,
+such as the weekly digest ("Keep this in What I remember?"). The question
+names exactly what will happen, to whom, and for how much. A digest line
+ends with where its note came from, in the same words as the note's own
+label ("(From Calendar)", "(You told me)"), so nothing is relabelled. The buttons say
 what they do ("Yes, go ahead" and "Not now", from `ProposedAction.yesTitle`
 and `noTitle`; `CopyDashTests` checks they match), and the promise underneath
 says the yes counts once, for exactly what is shown.
@@ -190,7 +194,18 @@ so on the card, so a tap is never met with silence, and so does an
 Approve tapped after its question timed out. Forget everything says it
 stops tasks still going. If a step said yes to was under way, a short line
 stays on Today to say it may be done, naming nothing the task held. A
-scripted task's card says "Example", like every other example.
+scripted task's card says "Example", like every other example. A real
+task that was going when the app closed comes back stopped and says so
+("I stopped when the app closed, so I didn't finish this."), never done.
+A digest whose notes change before it is kept stops and says so ("One of
+the notes I was tidying changed, so I stopped. Nothing was kept."), since a
+yes would be for other words. Forgetting a note never says "Gone" while a
+digest the person changed may still hold its words: the line says they are
+still there when they are found, and that they may be when they aren't but
+could have been reworded. A digest the agent takes out of the notes itself,
+because every note it quoted went, says so ("I took the weekly digest out
+of your notes, because the notes it quoted are gone or changed."), never
+that the person removed it.
 
 A done card shows what backs it, as small chips under the result: the
 title of a supplied source, the name of something found on this device,
@@ -256,7 +271,11 @@ of Today, under Needs you") and from when it counted. A summary made late
 says why, once: "I waited until you unlocked, so this came later than
 planned." What is waiting is open now, so it is always said when Needs you
 can be seen. A count it couldn't know, because nothing could be counted or the
-app wasn't running for the whole time, is left out, never said as zero. It
+app wasn't running for the whole time, is left out, never said as zero.
+What finished is read from where the tasks are kept, so it is known even
+after a night with the app closed; when that is locked away with the
+screen, the summary says so ("Your tasks stay locked away while your screen
+is locked, so I couldn't count what finished.") rather than leave it out. It
 says "overnight" only for one night, and "since Tuesday" for longer. With
 tasks to count, a morning that never ran gets its own card that names the
 day and the reason, and promises nothing about the next one; several missed
