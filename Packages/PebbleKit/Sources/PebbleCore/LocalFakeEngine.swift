@@ -49,13 +49,18 @@ public struct TaskScript: Sendable, Equatable {
     public let doneLine: String
     /// The finished result to read.
     public let result: String?
+    /// What the finished task says shows its result. Scripted, so nothing
+    /// here was really read or made.
+    public let proofs: [TaskProof]
 
-    public init(title: String, steps: [Step], determinate: Bool = true, doneLine: String, result: String? = nil) {
+    public init(title: String, steps: [Step], determinate: Bool = true, doneLine: String, result: String? = nil,
+                proofs: [TaskProof] = []) {
         self.title = title
         self.steps = steps
         self.determinate = determinate
         self.doneLine = doneLine
         self.result = result
+        self.proofs = proofs
     }
 }
 
@@ -130,6 +135,9 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
         /// For a question picked up after the app closed: how long ago it
         /// was first asked, so it is asked again with the deadline it had.
         var askedAgo: TimeInterval?
+        /// A snapshot with this task ended has reached every observer, so
+        /// retention may let it go.
+        var endTold = false
     }
 
     /// A question to put to `AskFirst` once the lock is let go.
@@ -166,6 +174,16 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
     /// Receipts made and not yet taken by `takeReceipts`.
     private var receiptsMade: [Receipt] = []
     #if DEBUG
+    private var publicationHook: (@Sendable () -> Void)?
+
+    /// Pauses one mutation after its first unlock, before any publication.
+    /// Taken under the run lock, so a concurrent mutation cannot reuse it.
+    func beforeNextPublication(_ hook: @escaping @Sendable () -> Void) {
+        lockRuns()
+        publicationHook = hook
+        unlockRuns()
+    }
+
     /// For tests: calls to `AskFirst`, and how many came while this
     /// engine's lock was held. The second must stay zero.
     private let countLock = NSLock()
@@ -630,6 +648,7 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
             end(&run, as: .done, line: run.script.doneLine,
                 wrapUp: run.notDone.isEmpty ? nil : TaskWrapUp(kept: run.kept, notDone: run.notDone))
             run.task.result = run.script.result
+            run.task.proofs = run.script.proofs
             run.task.progress = .fraction(1)
             return
         }
@@ -813,7 +832,11 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
         run.task.progress = .fraction(max(shown, min(1, next)))
     }
 
-    /// Runs a change inside the lock, then tells observers once.
+    /// Runs a change inside the lock, then tells observers. Retention is a
+    /// separate change, and lets go only of ends a delivered snapshot told.
+    /// An end still on its way, in this mutation or one running beside it,
+    /// is kept, and the mutation that tells it trims after. So retention
+    /// never waits for a quiet moment that steady work may never give.
     ///
     /// `AskFirst` is told and asked only with the lock let go, so if it ever
     /// calls out, and someone calls back in, nothing deadlocks. An answer
@@ -824,7 +847,14 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
         let before = runs.map(\.task)
         let value = change()
         var work = takeRuleWork()
+        #if DEBUG
+        let hook = publicationHook
+        publicationHook = nil
+        #endif
         unlockRuns()
+        #if DEBUG
+        hook?()
+        #endif
         while !work.withdrawals.isEmpty || !work.asks.isEmpty || !work.ended.isEmpty {
             for request in work.withdrawals { withRule { $0.withdraw(request) } }
             // Straight to the book, which never calls back in. A rule with
@@ -851,7 +881,6 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
             unlockRuns()
         }
         lockRuns()
-        dropOldEnded()
         let after = runs.map(\.task)
         let changed = before != after
         if changed { sequence += 1 }
@@ -859,15 +888,41 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
         let listeners = changed ? Array(observers.values) : []
         unlockRuns()
         for listener in listeners { listener(snapshot) }
+        lockRuns()
+        if changed { markEndsTold(in: snapshot) }
+        let trim = !oldEnded().isEmpty
+        unlockRuns()
+        if trim {
+            // Everyone has heard those outcomes. Publish retention as its
+            // own change, so the feed also receives the bounded list of cards.
+            mutate { dropOldEnded() }
+        }
         return value
     }
 
-    /// Keeps at most `endedLimit` ended tasks, the newest.
-    private func dropOldEnded() {
-        // Runs are oldest first.
+    /// Every observer there was has heard the ends in `snapshot`.
+    private func markEndsTold(in snapshot: TaskSnapshot) {
+        let ended = Set(snapshot.tasks.filter { !$0.isActive }.map(\.id))
+        for index in runs.indices where ended.contains(runs[index].task.id) && !runs[index].task.isActive {
+            runs[index].endTold = true
+        }
+    }
+
+    /// Ended tasks past the `endedLimit` that ended last, whose ends have
+    /// been told. A task that ends now outlasts those that ended before it,
+    /// whenever it began.
+    private func oldEnded() -> [Int] {
+        // Runs are oldest first, so a tie goes to the one begun first.
         let ended = runs.indices.filter { !runs[$0].task.isActive }
-        guard ended.count > Self.endedLimit else { return }
-        for index in ended.prefix(ended.count - Self.endedLimit).reversed() { runs.remove(at: index) }
+            .sorted { (runs[$0].task.updatedAt, $0) < (runs[$1].task.updatedAt, $1) }
+        guard ended.count > Self.endedLimit else { return [] }
+        return ended.prefix(ended.count - Self.endedLimit).filter { runs[$0].endTold }
+    }
+
+    /// Keeps at most `endedLimit` ended tasks, the ones that ended last,
+    /// past which only an end not told yet stays, until it is told.
+    private func dropOldEnded() {
+        for index in oldEnded().sorted().reversed() { runs.remove(at: index) }
     }
 
     /// For a request no script covers: a few plain steps.
@@ -915,8 +970,18 @@ public enum SampleTasks {
             Maple Dental  Saturdays 9 to 2, a ten minute walk. People say they are gentle with nervous patients.
             Harbour Smiles  Saturdays 10 to 4. Easy parking.
             Elm Street Dental  Every other Saturday, 9 to 1.
-            """
+            """,
+        // Reserved names, so the example never points at a real site.
+        proofs: [
+            .source(title: "Maple Dental hours", url: URL(string: "https://mapledental.example/hours")!),
+            .source(title: "Harbour Smiles visits", url: URL(string: "https://harboursmiles.example/visit")!),
+            .artifact(name: "Saturday dentists", kind: .list, reference: dentistListReference),
+        ]
     )
+
+    /// Where the dentist search's list would be kept, for a ledger that
+    /// knows it. Nothing is really written there.
+    public static let dentistListReference = "made/saturday-dentists.json"
 
     public static let plan = TaskScript(
         title: planTitle,

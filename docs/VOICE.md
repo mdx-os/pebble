@@ -192,6 +192,22 @@ stops tasks still going. If a step said yes to was under way, a short line
 stays on Today to say it may be done, naming nothing the task held. A
 scripted task's card says "Example", like every other example.
 
+A done card shows what backs it, as small chips under the result: the
+title of a supplied source, the name of something found on this device,
+or a supplied check result. VoiceOver reads each as "Source: Maple Dental
+hours", "Made: Saturday dentists" or "Checked: All three open on
+Saturdays". Sources and checks are supplied evidence; their shape is checked,
+not whether the page was read or the check ran. With no accepted evidence,
+the card's visible and spoken status is "Finished", and it says plainly:
+"Finished, but I couldn't check the result." It never calls that done. A
+task that goes quiet says so on its own, naming its last step ("Still on
+it: reading the third page."), and after half an hour of nothing new says
+it hasn't moved forward and that the person can stop it, with Stop right
+there. When a task that was going is absent after restoration, its ledger
+records "This stopped when the app closed." That outcome is recorded only;
+an orphan card or an offer to start again is not wired into the feed yet.
+The words live in `LedgerWords`.
+
 ### Looking into something
 
 When the person asks the agent to look into something, the chat offers
