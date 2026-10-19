@@ -125,7 +125,7 @@ mkdir -p "$PRIVACY_DESCRIBE_CACHE" "$scratch/fixtures" "$scratch/clean/Packages"
 cp "$repo/project.yml" "$scratch/clean/"
 cp -R "$repo/App" "$scratch/clean/App"
 rsync -a --exclude .build --exclude .swiftpm "$repo/Packages/PebbleKit" "$scratch/clean/Packages/"
-cp "$repo/scripts/privacy-file-reads.txt" "$scratch/clean/scripts/"
+cp "$repo/scripts/privacy-file-reads.txt" "$repo/scripts/privacy-encryption.txt" "$scratch/clean/scripts/"
 
 cp -R "$scratch/clean" "$scratch/unchanged"
 if ! (cd "$scratch/unchanged" && sh "${PRIVACY_CHECK_SCRIPT:-$repo/scripts/privacy-check.sh}") > "$scratch/out" 2>&1; then

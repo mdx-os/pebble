@@ -22,7 +22,8 @@ public enum PrivacyAudit {
         public var errors: [String] = []
         public var networkFiles: [String] = []
     }
-    public static func check(files: [String], manifest: [String: Any], reviewedReads: [String]) throws -> Result {
+    public static func check(files: [String], manifest: [String: Any], reviewedReads: [String],
+                             reviewedEncryption: [String] = []) throws -> Result {
         var result = Result()
         var declared: Set<String> = []
         if manifest["NSPrivacyTracking"] as? Bool != false
@@ -51,6 +52,7 @@ public enum PrivacyAudit {
         }
         var used: Set<String> = []
         var remainingReads = reviewedReads
+        var unusedEncryption = Set(reviewedEncryption)
         for file in files.sorted() {
             guard readableSource(file) else {
                 result.errors.append("cannot read compiled source \(file); add a parser and fixtures before shipping this source type")
@@ -72,6 +74,8 @@ public enum PrivacyAudit {
                     } else {
                         result.errors.append("\(file):\(hit.line): a read by contents of a URL that no one has checked: \(key)")
                     }
+                } else if hit.rule == "privacy.encryption", reviewedEncryption.contains(file) {
+                    unusedEncryption.remove(file)
                 } else {
                     result.errors.append(hit.report(in: file))
                 }
@@ -81,6 +85,7 @@ public enum PrivacyAudit {
             result.errors.append("manifest declares \(category), but no code uses it. Remove the entry.")
         }
         for read in remainingReads { result.errors.append("reviewed URL read no longer matches any code: \(read)") }
+        for file in unusedEncryption.sorted() { result.errors.append("reviewed encryption no longer matches any code: \(file)") }
         for file in [PrivacyRules.cloud, PrivacyRules.gate] where !files.contains(file) {
             result.errors.append("\(file) is named here but the app no longer ships it")
         }

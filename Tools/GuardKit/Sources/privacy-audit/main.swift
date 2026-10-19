@@ -23,7 +23,9 @@ do {
     }
     let reads = try String(contentsOfFile: "scripts/privacy-file-reads.txt", encoding: .utf8)
         .split(separator: "\n").map(String.init).filter { !$0.hasPrefix("#") && !$0.isEmpty }
-    let result = try PrivacyAudit.check(files: files, manifest: manifest, reviewedReads: reads)
+    let encryption = try String(contentsOfFile: "scripts/privacy-encryption.txt", encoding: .utf8)
+        .split(separator: "\n").map(String.init).filter { !$0.hasPrefix("#") && !$0.isEmpty }
+    let result = try PrivacyAudit.check(files: files, manifest: manifest, reviewedReads: reads, reviewedEncryption: encryption)
     for error in result.errors { print("privacy-check: \(error)") }
     guard result.errors.isEmpty else { exit(1) }
     if arguments[2] == "--network-files" { for file in result.networkFiles { print(file) } }

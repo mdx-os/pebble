@@ -60,8 +60,9 @@ keys that never enter the repo.
   read fail until a parser and fixtures are added.
 - **Required-reason APIs:** `UserDefaults`, with reason `CA92.1`
   (the app's own settings, read only by the app), and file timestamps,
-  with reason `C617.1` (`lstat` on the grants file and its marker in the
-  app's container, only to learn whether each is there). The check scans `App/`
+  with reason `C617.1` (`lstat` on the grants file and its marker, the
+  task ledger's file and the checkpoint file in the app's container, only
+  to learn whether each is there). The check scans `App/`
   and every PebbleKit target the app links, with their dependencies.
 - **Encryption:** the system's file protection on notes
   (`.completeFileProtection`) and HTTPS through `URLSession` in the cloud
@@ -73,7 +74,14 @@ keys that never enter the repo.
   does not by itself prove that encryption is nonexempt. CryptoKit is a
   system framework too. Review the actual use, the App Store Connect
   questions and any reporting obligations before keeping or changing
-  the answer.
+  the answer. A file reviewed for this goes in
+  `scripts/privacy-encryption.txt`, one path each; a hit anywhere else
+  still fails, and so does an entry no code needs any more.
+  The one there now is `PebbleCore/Relay.swift`, which uses CryptoKit's
+  `SHA256` and `Curve25519` only to check relay receipt hashes and
+  signatures (`docs/RELAY.md`) and encrypts nothing. Its export review
+  answer is still open: answer it, and keep or change
+  `ITSAppUsesNonExemptEncryption`, before any store upload.
 - **Mac sandbox:** Release asks for `com.apple.security.network.client`
   (outgoing connections) and nothing else. `release-check` reads
   `ENABLE_APP_SANDBOX` and the entitlements from the Release build settings,
