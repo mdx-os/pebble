@@ -37,6 +37,7 @@ in lint, a skill, or CI.
 - `Packages/PebbleKit/`: shared code in layers. A layer imports only layers
   below it; `Package.swift` enforces this.
   - `PebbleCore`: plain types. No SwiftUI, no networking.
+    The retry and resume kit (backoff, step limits, idempotency keys, the checkpointed runner) is `RetryKit.swift` and `CheckpointRunner.swift` there, with `RetryResumeTests`; see `docs/RETRY.md`.
   - `PebblePulse`: public source watch fetching and snapshots. Imports PebbleCore.
   - `PebbleModel`: model adapter. `ModelClient`, the on-device placeholder and `CloudModel` (off by default, every request previewed and redacted by `Redactor` in PebbleCore). Imports PebbleCore. MLX and Ollama adapters plug in here.
   - `PebbleBackground`: gives the background runner time (`BGTaskScheduler` on iOS, `NSBackgroundActivityScheduler` on the Mac). Imports PebbleCore. Scheduling decisions are pure functions in `BackgroundPlan`; the runner, its store and its switch live in PebbleCore's `Background.swift`, so no platform code goes there.
