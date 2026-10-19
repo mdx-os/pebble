@@ -1,0 +1,37 @@
+{
+  "receipts" : [
+    {
+      "at" : "2026-10-18T09:00:00Z",
+      "hash" : "6B4E20CC1DD6100017B597DF54885ED695622B6E7F4E6453B4FC4FF222529D5D",
+      "kind" : "run.started",
+      "prevHash" : "0000000000000000000000000000000000000000000000000000000000000000",
+      "seq" : 1
+    },
+    {
+      "at" : "2026-10-18T09:00:05Z",
+      "contentSha256" : "cec2d5fabb4a3845bceb8a0cb9b90ea16f6981287d8ad4a5e391874603884427",
+      "hash" : "2fddf780d05f52e81ffe5d296b296813d3c660971238410a9c4422f71067e660",
+      "kind" : "tool.used",
+      "prevHash" : "6b4e20cc1dd6100017b597df54885ed695622b6e7f4e6453b4fc4ff222529d5d",
+      "seq" : 2,
+      "tool" : "web.search"
+    }
+  ],
+  "retryAfterSeconds" : 10,
+  "runId" : "r9Q1",
+  "state" : "working",
+  "steps" : [
+    {
+      "state" : "done",
+      "words" : "Planning a few questions"
+    },
+    {
+      "state" : "working",
+      "words" : "Reading the sources"
+    },
+    {
+      "state" : "waiting",
+      "words" : "Putting it together"
+    }
+  ]
+}

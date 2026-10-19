@@ -1,13 +1,13 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test repeat-test mutation-check build build-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-config-check graph-check graph-check-test secrets-check pulse clean
+.PHONY: verify generate test repeat-test mutation-check build build-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-config-check private-check hash-private-words graph-check graph-check-test secrets-check pulse clean
 
 ## verify: everything CI runs. Run this before every PR. The graph check
 ## runs once the builds have made the project, so it reads that too. The
 ## screenshots are made after every other step and then checked against the
 ## working tree. Both are the recipe, so even with -j nothing runs beside
 ## them that could change the tree between the stamp and the check.
-verify: brand-check local-config-check screenshots-check-test graph-check-test test build build-release
+verify: brand-check local-config-check private-check screenshots-check-test graph-check-test test build build-release
 	$(MAKE) graph-check
 	$(MAKE) screenshots
 	sh scripts/screenshot-stamp.sh check build/screenshots
@@ -111,6 +111,18 @@ graph-check-test:
 ## local-config-check: fail if Config/Cloud.local.xcconfig is tracked by git
 local-config-check:
 	sh scripts/local-config-check.sh
+
+## private-check: fail on any file in git with a word whose hash is in
+## Config/private-words.sha256, printing the file and line, never the word.
+## In docs/, Config/ and Packages/ also fail on a hosting provider's
+## hostname, a .internal or .local host, or an IP address
+private-check:
+	swift scripts/private-check.swift check
+
+## hash-private-words: make Config/private-words.sha256 from the plain list
+## in Config/private-words.local.txt, which git ignores and only the owner has
+hash-private-words:
+	swift scripts/private-check.swift hash
 
 ## secrets-check: scan git history for leaked secrets, and fail if the
 ## one-machine Config/Cloud.local.xcconfig is ever tracked

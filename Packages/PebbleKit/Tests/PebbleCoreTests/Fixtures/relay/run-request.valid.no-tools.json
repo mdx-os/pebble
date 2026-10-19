@@ -1,0 +1,13 @@
+{
+  "brief" : "Look into the pool's new Sunday hours and tell me when it opens.",
+  "clientRunId" : "c7Run42",
+  "kind" : "build",
+  "limits" : {
+    "maxMinutes" : 20,
+    "maxSteps" : 30
+  },
+  "tools" : [
+
+  ],
+  "version" : 1
+}

@@ -1,0 +1,162 @@
+{
+  "receipts" : [
+    {
+      "at" : "2026-10-18T09:00:00Z",
+      "hash" : "6b4e20cc1dd6100017b597df54885ed695622b6e7f4e6453b4fc4ff222529d5d",
+      "kind" : "run.started",
+      "prevHash" : "0000000000000000000000000000000000000000000000000000000000000000",
+      "seq" : 1
+    },
+    {
+      "at" : "2026-10-18T09:00:05Z",
+      "contentSha256" : "cec2d5fabb4a3845bceb8a0cb9b90ea16f6981287d8ad4a5e391874603884427",
+      "hash" : "2fddf780d05f52e81ffe5d296b296813d3c660971238410a9c4422f71067e660",
+      "kind" : "tool.used",
+      "prevHash" : "6b4e20cc1dd6100017b597df54885ed695622b6e7f4e6453b4fc4ff222529d5d",
+      "seq" : 2,
+      "tool" : "web.search"
+    },
+    {
+      "at" : "2026-10-18T09:02:00Z",
+      "hash" : "b3c396318f87d30d3eabcc968bdec40e0c79426368513dc749ac923eed961abd",
+      "kind" : "step.done",
+      "prevHash" : "2fddf780d05f52e81ffe5d296b296813d3c660971238410a9c4422f71067e660",
+      "seq" : 3
+    },
+    {
+      "at" : "2026-10-18T09:02:10Z",
+      "hash" : "df5ab56672c39e5d258574bb240c872c46636a2d1c7ec35b45706e22c97268de",
+      "kind" : "needsYou.asked",
+      "prevHash" : "b3c396318f87d30d3eabcc968bdec40e0c79426368513dc749ac923eed961abd",
+      "seq" : 4
+    },
+    {
+      "at" : "2026-10-18T09:03:00Z",
+      "hash" : "ccf20a7da9f3ad3b44507e00e04381a155d768eb610dbca526c7a4911bdbc70a",
+      "kind" : "needsYou.answered",
+      "prevHash" : "df5ab56672c39e5d258574bb240c872c46636a2d1c7ec35b45706e22c97268de",
+      "seq" : 5
+    },
+    {
+      "at" : "2026-10-18T09:04:00Z",
+      "hash" : "42a2207158f8010ec6074381e187ca0098d3ca8e49d13df9c7da77e9703c83c0",
+      "kind" : "run.done",
+      "prevHash" : "ccf20a7da9f3ad3b44507e00e04381a155d768eb610dbca526c7a4911bdbc70a",
+      "seq" : 6,
+      "signature" : "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+    }
+  ],
+  "result" : {
+    "artifacts" : [
+      {
+        "bytesBase64" : "IyBQb29sIGhvdXJzCgpPcGVuIG9uIFN1bmRheXMgZnJvbSA5IHRvIDUuCg==",
+        "kind" : "markdown",
+        "name" : "pool-hours.md",
+        "sha256" : "4903e9cb4f5c695525c0119a553bcbbaf1ed349dfb66e9e3c78fd7d04fe70e55"
+      }
+    ],
+    "sources" : [
+      {
+        "title" : "Page 1",
+        "url" : "https://example.com/1"
+      },
+      {
+        "title" : "Page 2",
+        "url" : "https://example.com/2"
+      },
+      {
+        "title" : "Page 3",
+        "url" : "https://example.com/3"
+      },
+      {
+        "title" : "Page 4",
+        "url" : "https://example.com/4"
+      },
+      {
+        "title" : "Page 5",
+        "url" : "https://example.com/5"
+      },
+      {
+        "title" : "Page 6",
+        "url" : "https://example.com/6"
+      },
+      {
+        "title" : "Page 7",
+        "url" : "https://example.com/7"
+      },
+      {
+        "title" : "Page 8",
+        "url" : "https://example.com/8"
+      },
+      {
+        "title" : "Page 9",
+        "url" : "https://example.com/9"
+      },
+      {
+        "title" : "Page 10",
+        "url" : "https://example.com/10"
+      },
+      {
+        "title" : "Page 11",
+        "url" : "https://example.com/11"
+      },
+      {
+        "title" : "Page 12",
+        "url" : "https://example.com/12"
+      },
+      {
+        "title" : "Page 13",
+        "url" : "https://example.com/13"
+      },
+      {
+        "title" : "Page 14",
+        "url" : "https://example.com/14"
+      },
+      {
+        "title" : "Page 15",
+        "url" : "https://example.com/15"
+      },
+      {
+        "title" : "Page 16",
+        "url" : "https://example.com/16"
+      },
+      {
+        "title" : "Page 17",
+        "url" : "https://example.com/17"
+      },
+      {
+        "title" : "Page 18",
+        "url" : "https://example.com/18"
+      },
+      {
+        "title" : "Page 19",
+        "url" : "https://example.com/19"
+      },
+      {
+        "title" : "Page 20",
+        "url" : "https://example.com/20"
+      },
+      {
+        "title" : "Page 21",
+        "url" : "https://example.com/21"
+      }
+    ],
+    "text" : "The pool opens on Sundays from 9 to 5, starting next week."
+  },
+  "runId" : "r9Q1",
+  "state" : "done",
+  "steps" : [
+    {
+      "state" : "done",
+      "words" : "Planning a few questions"
+    },
+    {
+      "state" : "done",
+      "words" : "Reading the sources"
+    },
+    {
+      "state" : "done",
+      "words" : "Putting it together"
+    }
+  ]
+}

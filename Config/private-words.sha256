@@ -1,0 +1,7 @@
+# The private words check (make private-check) fails on any file in git
+# with a word whose hash is below. The words themselves live only in
+# Config/private-words.local.txt, which git ignores. Make this file again
+# with make hash-private-words. Each line after the salt is the SHA-256
+# of "<salt>:<word>", the word in lowercase.
+salt 5f3410d12fec8e41533ace7af62aa6d1
+787f9efdf1e6cef0c897ace292af1164d346e875c9bac89013948b6c1bce1d49

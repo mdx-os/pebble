@@ -30,6 +30,12 @@ in lint, a skill, or CI.
 - `make mutation-check`: break each entry of `scripts/mutation-manifest.txt` on a copy in
   `build/mutation` and require its tests to fail. `ONLY=` runs the entries whose tests match
 - `make secrets-check`: gitleaks over git history
+- `make private-check`: fail on any file in git holding a word whose salted hash is in
+  `Config/private-words.sha256` (prints file and line, never the word), and on a hosting
+  provider hostname, a `.internal` or `.local` host or an IP address in `docs/`, `Config/`
+  or `Packages/` (part of verify). The owner fills the plain list in the git ignored
+  `Config/private-words.local.txt` and runs `make hash-private-words`; the hash file
+  committed now is built from a made up placeholder word
 
 ## Layout and layers
 
@@ -53,6 +59,8 @@ in lint, a skill, or CI.
   entry that turns it off. Rules compare names through `SyntaxSource.name`,
   never a token's `text`, so a name in backticks is still the name.
   swift-syntax is pinned to an exact version and only GuardScan uses it.
+- The relay protocol lives in `docs/RELAY.md`. This repo holds only a generic
+  client and the protocol, never a relay's addresses, keys or internals.
 - `PromiseWords` (the device promise phrases and the allow list) and
   `SourceScan` are PebbleKit products only so GuardKit can read them. The
   app never links them.

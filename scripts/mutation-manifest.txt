@@ -335,3 +335,101 @@ perl: s~guard called \|\| reached, !source\.context\(of: reference\)\.inPreview 
 test: diagnosticsCountCharacters
 file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
 perl: s~let column = String\(decoding: bytes\[start\.\.<min\(max\(start, offset\), bytes\.count\)\], as: UTF8\.self\)\.count \+ 1~let column = String(decoding: bytes[start..<min(max(start, offset), bytes.count)], as: UTF8.self).utf16.count + 1~
+
+# The relay protocol (docs/RELAY.md). Each refusal is turned off on its own,
+# and a conformance vector or a test of its own must then be let by.
+
+# An id with more than letters and digits.
+test: idsArePlainLettersAndDigits anInvalidFixtureIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~text\.utf8\.allSatisfy\(isLetterOrDigit\)~true~
+
+test: anInvalidFixtureIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard \(1\.\.\.Relay\.maxMinutes\)\.contains\(maxMinutes\) else~guard true else~
+
+test: anInvalidFixtureIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard \(state == \.needsYou\) == \(needsYou != nil\) else~guard true else~
+
+test: anInvalidFixtureIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard Relay\.hex\(SHA256\.hash\(data: bytes\)\) == sha256 else~guard true else~
+
+# A handle the approval sheet wouldn't show as the relay sent it.
+test: anInvalidFixtureIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard recipient\.handle == handle else~guard true else~
+
+test: anInvalidFixtureIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard kind\.isFinal == \(signature != nil\) else~guard true else~
+
+test: oneLineFieldsRefuseWhatIsNotOneLine
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~return scalars\.allSatisfy \{ !isControl\(\$0\) && \$0 != "\\u\{2028\}" && \$0 != "\\u\{2029\}" \}~return true~
+
+test: timesAreUTCInWholeSeconds
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~formatter\.string\(from: date\) == text~true~
+
+test: aBodyPastTheLimitIsRefusedUnread
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard data\.count <= maxBodyBytes else~guard true else~
+
+# The receipt chain: each check of RelayReceipts.verify on its own.
+test: anInvalidFixtureIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard receipt\.seq == index \+ 1 else \{ throw \.seq\(index: index\) \}~~
+
+test: aReorderedPairWithSeqRenumberedFails anInvalidFixtureIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard receipt\.prevHash == prevHash else \{ throw \.prevHash\(index: index\) \}~~
+
+test: aChangedFieldFails anInvalidFixtureIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard receipt\.hash == own else \{ throw \.hash\(index: index\) \}~~
+
+test: aWrongKeyFails aChangedFieldWithEveryHashRemadeFails
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~publicKey\.isValidSignature\(signature, for: signed\)~signed.count == 32~
+
+test: anUnfinishedChainFailsButItsLinksHold
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard let last = receipts\.last, last\.kind\.isFinal else~guard let last = receipts.last else~
+
+test: nothingComesAfterTheEnd
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~if receipt\.kind\.isFinal, index != receipts\.count - 1 \{ throw \.kind\(index: index\) \}~~
+
+# A canonical form that drifts from the one the page writes.
+test: theCanonicalFormIsSevenLines theFixtureChainsLink
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~"relay-receipt/1",~"relay-receipt/2",~
+
+# The private words check (scripts/private-check.swift).
+test: aPlantedWordFailsWithItsPlaceButNotTheWord
+file: scripts/private-check.swift
+perl: s~                if listed \{~                if false {~
+
+# A listed word inside a camel case name is let by.
+test: aPlantedWordFailsWithItsPlaceButNotTheWord
+file: scripts/private-check.swift
+perl: s~found\.insert\(part\.lowercased\(\)\)\n\s*part = ""~part = ""~
+
+# The word printed with its place.
+test: aPlantedWordFailsWithItsPlaceButNotTheWord
+file: scripts/private-check.swift
+perl: s~: a private word"\)~: a private word \\(word)")~
+
+test: aPlantedHostFailsWithItsPlaceButNotTheHost
+file: scripts/private-check.swift
+perl: s~guard checkHosts else \{ continue \}~continue~
+
+test: hostsAreLookedForWhereTheyCouldShip
+file: scripts/private-check.swift
+perl: s~let checkHosts = hostFolders\.contains \{ file\.hasPrefix\(\$0\) \}~let checkHosts = !hostFolders.isEmpty~
+
+test: aTrackedPlainListFails
+file: scripts/private-check.swift
+perl: s~guard git\(repo, \["ls-files", "--cached", "--", plainList\]\)\.isEmpty else~guard true else~
