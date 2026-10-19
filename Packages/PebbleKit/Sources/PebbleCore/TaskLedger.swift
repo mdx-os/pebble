@@ -137,7 +137,8 @@ public struct TaskLedgerEntry: Codable, Sendable, Equatable {
         case stillWorking(step: String)
         /// Can't move on: why, and what happens next.
         case stuck(reason: String, next: String)
-        /// Finished, with what shows it. Never empty.
+        /// Finished, with the supplied evidence that was accepted. Never
+        /// empty. Only artifacts are confirmed on this device.
         case done(proofs: [TaskProof])
         /// Finished, with nothing that showed it.
         case finishedUnchecked
@@ -497,8 +498,8 @@ public final class TaskLedgerFileStore: TaskLedgerStoring, @unchecked Sendable {
 /// `QuietWatch`, and kept through a `TaskLedgerStoring`.
 ///
 /// The rule it keeps: no task ever ends silently. Each ends with one line
-/// that says how, a done only with proof, and a task that goes quiet says
-/// so on its own.
+/// that says how, a done only with accepted supplied evidence, and a task
+/// that goes quiet says so on its own.
 ///
 /// While the store can't be read, as before the device is first unlocked,
 /// lines are kept in memory and nothing is written. Once it can be read,
@@ -552,6 +553,14 @@ public final class TaskLedgerBook: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         loadIfNeeded()
         return kept
+    }
+
+    /// True while Forget everything has anything here to take: a ledger, or
+    /// a store not read or not erased yet, which may still hold some. Never
+    /// reads the store, so it is cheap to ask while drawing.
+    public var holdsSomething: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return !loaded || !kept.isEmpty
     }
 
     /// The newest ledger for a task id.

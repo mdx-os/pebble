@@ -652,8 +652,41 @@ perl: s~        if let ledger, let store, let keeper \{\n            store\.keep
 # An unchanged concurrent refresh cannot trim between mutation and publication.
 test: concurrentRefreshCannotTrimUnpublishedCompletions
 file: Packages/PebbleKit/Sources/PebbleCore/LocalFakeEngine.swift
-perl: s~        pendingPublications \+= 1\n~~
-perl: s~        let listeners = changed \? Array\(observers.values\) : \[\]~$&\n        pendingPublications += 1~
+perl: s~if changed \{ markEndsTold\(in: snapshot\) \}~markEndsTold(in: snapshot)~
+
+# Retention lets go only of ends a delivered snapshot told.
+test: concurrentRefreshCannotTrimUnpublishedCompletions
+file: Packages/PebbleKit/Sources/PebbleCore/LocalFakeEngine.swift
+perl: s~\.filter \{ runs\[\$0\]\.endTold \}~.filter { _ in true }~
+
+# Retention runs after each telling, never waiting for a quiet moment.
+test: retentionDoesNotWaitForAQuietMoment
+file: Packages/PebbleKit/Sources/PebbleCore/LocalFakeEngine.swift
+perl: s~let trim = !oldEnded\(\)\.isEmpty~let trim = false~
+
+# The ledger hears restoration, so ends the engine trims at once still reach it.
+test: thirteenEndingsOnRestoreAllKeepTheirFinish
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~let restoring = ledger\.flatMap \{ ledger in tasks\.map \{ ledger\.follow\(\$0\) \} \}~let restoring: TaskObservation? = nil~
+
+# A kept ledger, or one not read yet, is something to forget.
+test: aLedgerOnlyRelaunchOffersForgetEverything
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~ \|\| ledger\?\.holdsSomething == true\n~\n~
+
+test: aLedgerOnlyRelaunchOffersForgetEverything
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~return !loaded \|\| !kept\.isEmpty~return !kept.isEmpty~
+
+# Forgetting only ledgers still says the tasks went.
+test: aLedgerOnlyRelaunchOffersForgetEverything
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~ \|\| hadLedgers,~,~
+
+# A root reached through a link of its own is compared as it resolves.
+test: aFolderRejectsSymlinksOutsideItsRoot
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~let resolvedRoot = root\.resolvingSymlinksInPath\(\)~let resolvedRoot = root~
 
 # The initial observation records restored outcomes before the launch sweep.
 test: finalQuestionExpiringWhileClosedKeepsItsFinish

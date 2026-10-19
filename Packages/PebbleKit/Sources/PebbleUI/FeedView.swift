@@ -177,6 +177,13 @@ final class FeedModel: ObservableObject {
         self.calendar = calendar
         self.now = now
         self.clock = clock
+        // The ledger hears restoration as it happens. Many tasks may end at
+        // once as their questions expired while closed, and the engine lets
+        // the oldest ended ones go as soon as their ends are told, so a
+        // ledger that started listening afterwards would miss them. The
+        // watch below takes over once restoration is done; orphans still
+        // wait for it.
+        let restoring = ledger.flatMap { ledger in tasks.map { ledger.follow($0) } }
         // Tasks kept while the app was closed come back first, before
         // anything is shown. A question is asked again with the deadline it
         // had; a yes is never brought back.
@@ -205,6 +212,7 @@ final class FeedModel: ObservableObject {
                 hops.add { self?.tasksChanged(snapshot) }
             }
         }
+        restoring?.cancel()
         // The initial observation records outcomes produced by restore
         // before orphan detection. Also reconcile when there is no engine.
         launchLedger()
@@ -344,9 +352,10 @@ final class FeedModel: ObservableObject {
     var hasTasks: Bool { !taskIDs.isEmpty }
 
     /// True while Forget everything has anything here to take: a task, a
-    /// receipt, or a task kept from before with no engine to pick it up.
+    /// receipt, a task kept from before with no engine to pick it up, or a
+    /// ledger, kept or in a store not read yet.
     var hasSomethingToForget: Bool {
-        hasTasks || store?.holdsSomething == true
+        hasTasks || store?.holdsSomething == true || ledger?.holdsSomething == true
     }
 
     /// True only while this task's question is pinned in Needs you, the one
@@ -829,6 +838,7 @@ final class FeedModel: ObservableObject {
     @discardableResult
     func forgetTasks() -> ClearedTasks {
         let hadReceipts = store?.holdsSomething == true
+        let hadLedgers = ledger?.holdsSomething == true
         // Asked before clearing: a summary going through the cloud may have
         // sent what it read already, and that can't be called back. Only
         // one past the person's yes: one still reading, taking details out
@@ -841,7 +851,8 @@ final class FeedModel: ObservableObject {
         // Every task's ledger goes with it, with or without an engine.
         ledger?.forget()
         let line = Self.forgetLine(cleared.underwayLine, inCloud: inCloud)
-        let what = NeedsYouFlow.Forgotten(something: cleared.forgotten > 0 || hadReceipts, underway: line)
+        let what = NeedsYouFlow.Forgotten(something: cleared.forgotten > 0 || hadReceipts || hadLedgers,
+                                            underway: line)
         if let flow { flow.forget(what) } else { forgotten(what) }
         refresh()
         if let line {

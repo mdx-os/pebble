@@ -132,6 +132,9 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
         /// For a question picked up after the app closed: how long ago it
         /// was first asked, so it is asked again with the deadline it had.
         var askedAgo: TimeInterval?
+        /// A snapshot with this task ended has reached every observer, so
+        /// retention may let it go.
+        var endTold = false
     }
 
     /// A question to put to `AskFirst` once the lock is let go.
@@ -157,10 +160,6 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
     private var made = 0
     /// Goes up with every change observers hear about.
     private var sequence = 0
-    /// Mutations awaiting publication or still reaching observers. Counted
-    /// before the first unlock, including rule work and observer callbacks.
-    /// Retention cannot discard an outcome until this count reaches zero.
-    private var pendingPublications = 0
     /// Questions to withdraw once the lock is let go.
     private var withdrawals: [ConfirmationRequest] = []
     /// Receipts made and not yet taken by `takeReceipts`.
@@ -793,7 +792,10 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
     }
 
     /// Runs a change inside the lock, then tells observers. Retention is a
-    /// separate change after every observer has received the outcomes.
+    /// separate change, and lets go only of ends a delivered snapshot told.
+    /// An end still on its way, in this mutation or one running beside it,
+    /// is kept, and the mutation that tells it trims after. So retention
+    /// never waits for a quiet moment that steady work may never give.
     ///
     /// `AskFirst` is told and asked only with the lock let go, so if it ever
     /// calls out, and someone calls back in, nothing deadlocks. An answer
@@ -804,7 +806,6 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
         let before = runs.map(\.task)
         let value = change()
         var work = takeRuleWork()
-        pendingPublications += 1
         #if DEBUG
         let hook = publicationHook
         publicationHook = nil
@@ -835,26 +836,40 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
         unlockRuns()
         for listener in listeners { listener(snapshot) }
         lockRuns()
-        pendingPublications -= 1
-        let trim = pendingPublications == 0 && runs.filter { !$0.task.isActive }.count > Self.endedLimit
+        if changed { markEndsTold(in: snapshot) }
+        let trim = !oldEnded().isEmpty
         unlockRuns()
         if trim {
-            // Everyone has heard the outcomes. Publish retention as its own
-            // change, so the feed also receives the bounded list of cards.
-            mutate { if pendingPublications == 0 { dropOldEnded() } }
+            // Everyone has heard those outcomes. Publish retention as its
+            // own change, so the feed also receives the bounded list of cards.
+            mutate { dropOldEnded() }
         }
         return value
     }
 
-    /// Keeps at most `endedLimit` ended tasks, the ones that ended last. A
-    /// task that ends now outlasts those that ended before it, whenever it
-    /// began. Called only after outcome delivery, even for simultaneous ends.
-    private func dropOldEnded() {
+    /// Every observer there was has heard the ends in `snapshot`.
+    private func markEndsTold(in snapshot: TaskSnapshot) {
+        let ended = Set(snapshot.tasks.filter { !$0.isActive }.map(\.id))
+        for index in runs.indices where ended.contains(runs[index].task.id) && !runs[index].task.isActive {
+            runs[index].endTold = true
+        }
+    }
+
+    /// Ended tasks past the `endedLimit` that ended last, whose ends have
+    /// been told. A task that ends now outlasts those that ended before it,
+    /// whenever it began.
+    private func oldEnded() -> [Int] {
         // Runs are oldest first, so a tie goes to the one begun first.
         let ended = runs.indices.filter { !runs[$0].task.isActive }
             .sorted { (runs[$0].task.updatedAt, $0) < (runs[$1].task.updatedAt, $1) }
-        guard ended.count > Self.endedLimit else { return }
-        for index in ended.prefix(ended.count - Self.endedLimit).sorted().reversed() { runs.remove(at: index) }
+        guard ended.count > Self.endedLimit else { return [] }
+        return ended.prefix(ended.count - Self.endedLimit).filter { runs[$0].endTold }
+    }
+
+    /// Keeps at most `endedLimit` ended tasks, the ones that ended last,
+    /// past which only an end not told yet stays, until it is told.
+    private func dropOldEnded() {
+        for index in oldEnded().sorted().reversed() { runs.remove(at: index) }
     }
 
     /// For a request no script covers: a few plain steps.

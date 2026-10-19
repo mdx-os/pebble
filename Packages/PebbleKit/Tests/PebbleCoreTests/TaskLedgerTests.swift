@@ -594,6 +594,17 @@ struct TaskLedgerTests {
         let folder = FolderArtifacts(root: root)
         #expect(!folder.resolves("link/note.txt"))
         #expect(!folder.resolves("file.txt"))
+        // A link that stays inside still resolves, and so does a root
+        // reached through a link of its own.
+        try Data("[]".utf8).write(to: root.appendingPathComponent("list.json"))
+        try manager.createSymbolicLink(at: root.appendingPathComponent("same.json"),
+                                      withDestinationURL: root.appendingPathComponent("list.json"))
+        #expect(folder.resolves("same.json"))
+        let alias = base.appendingPathComponent("alias")
+        try manager.createSymbolicLink(at: alias, withDestinationURL: root)
+        let throughAlias = FolderArtifacts(root: alias)
+        #expect(throughAlias.resolves("list.json"))
+        #expect(!throughAlias.resolves("link/note.txt"))
     }
 
     @Test(.scratchFiles, .fileModesHoldOrCI, .failsAsRoot, arguments: [false, true])

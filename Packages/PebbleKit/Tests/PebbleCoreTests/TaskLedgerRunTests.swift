@@ -78,6 +78,51 @@ struct TaskLedgerRunTests {
         }
     }
 
+    /// One mutation is held between its change and its publication while
+    /// more tasks end. Each later snapshot carries every task, the held end
+    /// too, so once it is delivered retention lets the oldest go at once
+    /// rather than wait for the held mutation to finish.
+    @Test func retentionDoesNotWaitForAQuietMoment() throws {
+        let engine = LocalFakeEngine(rule: .isolated(), scripts: [])
+        let book = TaskLedgerBook(store: InMemoryTaskLedgerStore(), clock: { engine.currentDate })
+        let following = book.follow(engine)
+        defer { following.cancel() }
+        func short(_ title: String) -> TaskScript {
+            TaskScript(title: title, steps: [.init("Reading", duration: 1, todo: "read")],
+                       doneLine: "Ready.", proofs: [.check("Read the note")])
+        }
+        let held = engine.start(short("Held"))
+        let unlocked = DispatchSemaphore(value: 0)
+        let publish = DispatchSemaphore(value: 0)
+        let finished = DispatchSemaphore(value: 0)
+        engine.beforeNextPublication {
+            unlocked.signal()
+            #expect(publish.wait(timeout: .now() + 10) == .success)
+        }
+        DispatchQueue.global().async {
+            engine.advance(by: 2)
+            finished.signal()
+        }
+        defer { publish.signal() }
+        try #require(unlocked.wait(timeout: .now() + 10) == .success)
+        // The held task has ended but its own snapshot hasn't gone out.
+        // Twenty more start and end while it waits.
+        #expect(book.ledger(held)?.end == nil)
+        let told = (0..<20).map { engine.start(short("Told \($0)")) }
+        engine.advance(by: 2)
+        #expect(engine.tasks.filter { !$0.isActive }.count == LocalFakeEngine.endedLimit,
+                "trimmed while the held mutation is still going")
+        for id in [held] + told {
+            #expect(book.ledger(id)?.end?.kind == .done(proofs: [.check("Read the note")]), "\(id)")
+        }
+        publish.signal()
+        try #require(finished.wait(timeout: .now() + 10) == .success)
+        #expect(engine.tasks.filter { !$0.isActive }.count == LocalFakeEngine.endedLimit)
+        for id in [held] + told {
+            #expect(book.ledger(id)?.end?.kind == .done(proofs: [.check("Read the note")]), "\(id)")
+        }
+    }
+
     enum Outcome: CaseIterable {
         case doneWithProof, doneWithoutProof, doneWithFalseProof, fails, stalls, stuck, stopped, closedMidTask, quiet
     }

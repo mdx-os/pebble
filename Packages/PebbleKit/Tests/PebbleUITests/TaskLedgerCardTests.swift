@@ -84,6 +84,84 @@ struct TaskLedgerCardTests {
         #expect(swept.allSatisfy { $0.first { $0.taskID == id }?.end?.kind == expected })
     }
 
+    /// More tasks end at once on restore than the engine keeps ended. The
+    /// ledger hears each end before the engine lets the oldest go, so none
+    /// is swept as stopped when the app closed.
+    @Test func thirteenEndingsOnRestoreAllKeepTheirFinish() throws {
+        let origin = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        let proofs: [TaskProof] = [.check("Read the note")]
+        let scripts = (0..<13).map { index in
+            TaskScript(title: "Read and share note \(index)", steps: [
+                .init("Reading", duration: 1, kept: "the note", todo: "read"),
+                .init("Sharing", kind: .ask(SampleTasks.holdVisit, askLine: "May I share it?"), todo: "share"),
+            ], doneLine: "Ready.", proofs: proofs)
+        }
+        let before = LocalFakeEngine(rule: .isolated(), scripts: scripts, origin: origin)
+        let ids = scripts.map { before.start($0) }
+        before.advance(by: 2)
+        #expect(ids.allSatisfy { before.task($0)?.state == .waitingOnYou })
+        let store = TaskStore.inMemory()
+        store.keep(before, now: before.currentDate)
+        let disk = LaunchWrites()
+        TaskLedgerBook(store: disk, clock: { before.currentDate }).record(TaskSnapshot(sequence: 1, tasks: before.tasks))
+        let reopenedAt = before.currentDate + before.rule.questionWindow + 1
+        let engine = LocalFakeEngine(rule: .isolated(), scripts: scripts, origin: reopenedAt)
+        let book = TaskLedgerBook(store: disk, clock: { reopenedAt })
+        let flow = NeedsYouFlow(store: store, notifier: nil, agentName: { "Pip" })
+        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: engine.rule), tasks: engine, ledger: book,
+                              place: .onDevice, flow: flow, now: { reopenedAt })
+        #expect(engine.tasks.count == LocalFakeEngine.endedLimit, "the engine let one go")
+        for id in ids {
+            #expect(book.ledger(id)?.end?.kind == .done(proofs: proofs), "\(id)")
+        }
+        #expect(book.takeStoppedAtLaunch().isEmpty)
+        #expect(disk.read()?.allSatisfy { $0.end?.kind == .done(proofs: proofs) } == true)
+        for task in engine.tasks { #expect(model.finish(task) == .proven(proofs)) }
+    }
+
+    /// Tasks finished before the app closed, with no receipt and nothing
+    /// kept, leave only their ledgers. Forget everything is still offered,
+    /// on both memory screens, and takes the stored history.
+    @Test(arguments: [false, true])
+    func aLedgerOnlyRelaunchOffersForgetEverything(unreadable: Bool) throws {
+        let disk = LaunchWrites()
+        let before = LocalFakeEngine(rule: .isolated(), scripts: [])
+        let earlier = ledger(before)
+        let following = earlier.follow(before)
+        let id = before.start(TaskScript(title: "Read the note", steps: [.init("Reading", duration: 1, todo: "read")],
+                                         doneLine: "Ready.", proofs: [.check("Read the note")]))
+        before.advance(by: 2)
+        following.cancel()
+        _ = disk.write(earlier.ledgers)
+        #expect(disk.read()?.first?.taskID == id)
+        let store: any TaskLedgerStoring = unreadable ? Unreadable(disk) : disk
+        let engine = LocalFakeEngine(rule: .isolated(), scripts: [])
+        let book = TaskLedgerBook(store: store, clock: { engine.currentDate })
+        let flow = NeedsYouFlow(store: TaskStore.inMemory(), notifier: nil, agentName: { "Pip" })
+        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: engine.rule), tasks: engine, ledger: book,
+                              place: .onDevice, flow: flow, now: { ShowcaseScene.morning })
+        #expect(!model.hasTasks)
+        #expect(flow.store.holdsSomething == false)
+        #expect(model.hasSomethingToForget, "the ledger is something to forget")
+        #expect(MemoryView.showsForgetEverything(hasNotes: false, mayHaveWords: false,
+                                                 holdsMore: model.hasSomethingToForget))
+        let fallback = MemoryUnavailableView(hasTasks: model.hasSomethingToForget, onForgetTasks: { model.forgetTasks() })
+        fallback.forgetTasks()
+        #expect(disk.read()?.isEmpty == true)
+        #expect(book.ledgers.isEmpty)
+        #expect(!model.hasSomethingToForget)
+        #expect(model.tasksForgotten, "the screen can say it went")
+    }
+
+    /// A ledger store that can't be read yet, as before the first unlock.
+    private final class Unreadable: TaskLedgerStoring, @unchecked Sendable {
+        let inner: LaunchWrites
+        init(_ inner: LaunchWrites) { self.inner = inner }
+        func read() -> [TaskLedger]? { nil }
+        func write(_ ledgers: [TaskLedger]) -> Bool { false }
+        func erase() -> Bool { inner.erase() }
+    }
+
     @Test func backgroundCompletionsSurviveANewerMainThreadSnapshot() async throws {
         let engine = LocalFakeEngine(rule: .isolated(), scripts: [])
         let book = ledger(engine)
