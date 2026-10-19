@@ -173,6 +173,9 @@ public enum MemoryWords {
     public static let couldNotForget = "Sorry, I couldn't erase that just now. Please try again in a moment."
     /// A note read fine but couldn't be written just now. Nothing changed.
     public static let couldNotSave = "Sorry, I couldn't save that just now. Please try again in a moment."
+    /// The note being edited changed or went elsewhere, so the edit was put
+    /// away unsaved rather than write back words that may be forgotten.
+    public static let changedWhileEditing = "This note changed while you were editing it, so I didn't save your change. Please take another look."
     /// Forget everything when the tasks went but the notes couldn't be erased.
     public static let couldNotForgetNotes = "I forgot your tasks, but I couldn't erase your notes just now. Please try again in a moment."
     /// How a Forget everything line opens when the summaries' file stayed:
@@ -442,9 +445,12 @@ public final class MemoryStore: @unchecked Sendable {
         return added
     }
 
-    /// Replace a note's words. The old words do not stay in storage.
+    /// Replace a note's words. The old words do not stay in storage. With
+    /// `earlier`, the note is changed only while it still holds those
+    /// words, and is otherwise `.notFound`, so an edit begun before another
+    /// window changed the note never writes over that change.
     @discardableResult
-    public func edit(_ id: UUID, to proposed: String) throws -> Decision {
+    public func edit(_ id: UUID, to proposed: String, ifStill earlier: String? = nil) throws -> Decision {
         let decision = try locked { () throws -> Decision in
             var all = try load()
             let text: String
@@ -453,6 +459,7 @@ public final class MemoryStore: @unchecked Sendable {
             case .failure(let refusal): return refusal.decision
             }
             guard let index = all.firstIndex(where: { $0.id == id }) else { return .notFound }
+            if let earlier, all[index].text != earlier { return .notFound }
             // Editing keeps where the note came from.
             let old = all[index]
             let note = MemoryNote(id: id, text: text, savedAt: old.savedAt, source: old.source)

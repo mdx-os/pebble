@@ -1,6 +1,6 @@
 import Foundation
 
-/// Turns the competitor-watch digest text into idea cards.
+/// Turns the public source watch digest text into idea cards.
 ///
 /// The only input is `modelInput`. Snapshots, pages, and ratings that never
 /// reached that text cannot become a card.

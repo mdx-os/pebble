@@ -1,5 +1,6 @@
 import Foundation
 @testable import PebbleCore
+import PromiseWords
 import SourceScan
 import TestScratch
 import Testing

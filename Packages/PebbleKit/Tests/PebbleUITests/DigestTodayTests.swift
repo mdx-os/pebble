@@ -207,6 +207,67 @@ struct DigestTodayTests {
         #expect(open.action == .open(DigestWords.heading + ".\n• Dentist on Thursday at 3 (You told me)"))
     }
 
+    /// A kept digest open to edit in one window while a note it quotes is
+    /// forgotten through another: saving the first, before it has heard,
+    /// never writes the forgotten words back.
+    @Test func aStaleDigestEditNeverSavesForgottenWords() throws {
+        try notes.remember("Sam's birthday is May 14", at: Date() - 7_200, source: .toldMe)
+        _ = try keepDigest()
+        let first = memoryScreen()
+        let second = memoryScreen()
+        let digest = try #require(digestNote(first))
+        #expect(digest.text.contains("Sam's birthday"))
+        first.beginEdit(digest)
+        first.editDraft = digest.text + "\n• Bring flowers"
+        second.forget(try #require(second.notes.first { $0.text.hasPrefix("Sam's") }))
+        #expect(second.status == MemoryWords.forgotten)
+        first.saveEdit()
+        #expect(!notes.notes().contains { $0.text.contains("Sam's birthday") })
+        #expect(!notes.notes().contains { $0.text.contains("Bring flowers") })
+        #expect(first.status == MemoryWords.changedWhileEditing)
+        #expect(first.editingID == nil)
+        #expect(first.editDraft.isEmpty)
+    }
+
+    /// The same edit with nothing changed underneath it, only a new note
+    /// added in the other window, saves as asked.
+    @Test func aDigestEditWithNothingChangedUnderneathSaves() throws {
+        try notes.remember("Sam's birthday is May 14", at: Date() - 7_200, source: .toldMe)
+        _ = try keepDigest()
+        let first = memoryScreen()
+        let second = memoryScreen()
+        let digest = try #require(digestNote(first))
+        first.beginEdit(digest)
+        first.editDraft = digest.text + "\n• Bring flowers"
+        second.newNote = "The plumber comes Friday"
+        second.add()
+        first.saveEdit()
+        #expect(first.status == MemoryWords.saved(.onDevice))
+        #expect(notes.notes().contains { $0.text.contains("Sam's birthday") && $0.text.contains("Bring flowers") })
+    }
+
+    /// Once the first window hears of the change, its list shows the digest
+    /// as it is now, and the edit and any forget question about a note that
+    /// changed or went are put away.
+    @Test func aWindowPutsAwayAnEditOnceItHearsTheNoteChanged() async throws {
+        try notes.remember("Sam's birthday is May 14", at: Date() - 7_200, source: .toldMe)
+        _ = try keepDigest()
+        let first = memoryScreen()
+        let second = memoryScreen()
+        let digest = try #require(digestNote(first))
+        let sam = try #require(first.notes.first { $0.text.hasPrefix("Sam's") })
+        first.beginEdit(digest)
+        first.editDraft = digest.text + "\n• Bring flowers"
+        first.pendingForget = sam
+        second.forget(sam)
+        for _ in 0..<100 where first.editingID != nil { await Task.yield() }
+        #expect(first.editingID == nil)
+        #expect(first.editDraft.isEmpty)
+        #expect(first.pendingForget == nil)
+        #expect(first.status == MemoryWords.changedWhileEditing)
+        #expect(!first.notes.contains { $0.text.contains("Sam's birthday") })
+    }
+
     /// Keeps a digest through the sheet, as a tap would.
     func keepDigest() throws -> AgentTask {
         let task = try startAndAsk()

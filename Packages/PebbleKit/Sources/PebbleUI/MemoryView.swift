@@ -754,6 +754,9 @@ final class MemoryModel: ObservableObject {
     @Published var newNote = ""
     @Published var editingID: UUID?
     @Published var editDraft = ""
+    /// The note's words when the edit began, so a change made meanwhile,
+    /// such as a line forgotten in another window, is never written over.
+    private var editingFrom: String?
     @Published var askForgetEverything = false
     /// What to say about the last thing that happened. Every new line,
     /// even one the same as before, bumps statusCount so it is spoken again.
@@ -781,6 +784,9 @@ final class MemoryModel: ObservableObject {
     /// them.
     private let forgetQuotes: @MainActor (MemoryNote) -> QuotesForgotten
     private var watchingOthers: AnyCancellable?
+    /// This model's watch on `store`, so a note changed or forgotten in
+    /// another window shows here, and an edit of it stops.
+    private var notesWatch: TaskObservation?
 
     /// Background work, whose switch sits on this screen. Nil hides it.
     let background: BackgroundRunner?
@@ -836,6 +842,9 @@ final class MemoryModel: ObservableObject {
         refresh()
         watchingOthers = othersChanged?.sink { [weak self] in
             MainActor.assumeIsolated { self?.refresh() }
+        }
+        notesWatch = store.observeChanges { [weak self] in
+            Task { @MainActor in self?.refresh() }
         }
         backgroundWatch = background?.observe { [weak self] in
             Task { @MainActor in self?.refreshBackground() }
@@ -893,6 +902,7 @@ final class MemoryModel: ObservableObject {
         switch store.contents() {
         case .notes(let all):
             notes = all; isUnreadable = false; isUnavailable = false
+            dropStale()
         case .unreadable:
             notes = []; isUnreadable = true; isUnavailable = false
         case .unavailable:
@@ -901,6 +911,19 @@ final class MemoryModel: ObservableObject {
         hasStoredFile = store.hasStoredFile || othersStored()
         // Forget everything turns background work off, so the switch follows.
         refreshBackground()
+    }
+
+    /// An edit or a forget question about a note that changed or went since
+    /// it opened is put away, so words another window took out never show
+    /// here again or go back in.
+    private func dropStale() {
+        if let id = editingID, notes.first(where: { $0.id == id })?.text != editingFrom {
+            cancelEdit()
+            status = MemoryWords.changedWhileEditing
+        }
+        if let asked = pendingForget, notes.first(where: { $0.id == asked.id }) != asked {
+            pendingForget = nil
+        }
     }
 
     /// False while the saved notes can't be read or opened, so they stay untouched.
@@ -921,18 +944,29 @@ final class MemoryModel: ObservableObject {
 
     func beginEdit(_ note: MemoryNote) {
         editDraft = note.text
+        editingFrom = note.text
         editingID = note.id
     }
 
     func cancelEdit() {
         editingID = nil
+        editingFrom = nil
         editDraft = ""
     }
 
+    /// Saves only over the words the edit began from. A note changed or
+    /// forgotten meanwhile, even in a window this one hasn't heard from
+    /// yet, is left as it is now and the edit is put away.
     func saveEdit() {
-        guard let id = editingID else { return }
+        guard let id = editingID, let from = editingFrom else { return }
         let earlier = notes.first { $0.id == id }
-        report(try store.edit(id, to: editDraft)) { note in
+            .map { MemoryNote(id: id, text: from, savedAt: $0.savedAt, source: $0.source) }
+        var changed = false
+        report(try {
+            let decision = try store.edit(id, to: editDraft, ifStill: from)
+            changed = decision == .notFound
+            return decision
+        }()) { note in
             self.cancelEdit()
             // The earlier words go from anything that quoted them, such as
             // a kept digest, or the line says plainly where they stayed.
@@ -945,6 +979,7 @@ final class MemoryModel: ObservableObject {
             }
             self.onNotesChanged()
         }
+        if changed { status = MemoryWords.changedWhileEditing }
     }
 
     func forget(_ note: MemoryNote) {

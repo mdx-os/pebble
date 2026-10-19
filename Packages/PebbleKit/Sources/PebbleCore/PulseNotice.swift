@@ -36,7 +36,7 @@ public enum PulseNotice {
     public static func markdown(for digest: PulseDigest) -> String {
         guard hasRealChanges(digest) else { return "" }
         var lines: [String] = [
-            "# Competitor watch",
+            "# Public source watch",
             "",
             timestamp(digest.generatedAt),
             "",
