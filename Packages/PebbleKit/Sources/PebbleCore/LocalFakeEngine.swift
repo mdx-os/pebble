@@ -122,6 +122,9 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
         /// What the person said yes to, and when, for the step's receipt.
         var approvedAction: ProposedAction?
         var approvedAt: Date?
+        /// When the grant that let the step go ahead was given, for its
+        /// receipt. Nil when the person said yes to this question.
+        var grantedAt: Date?
         /// When the open question was first asked, as the card's clock tells it.
         var askedAt: Date?
         /// For a question picked up after the app closed: how long ago it
@@ -154,6 +157,12 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
     private var sequence = 0
     /// Questions to withdraw once the lock is let go.
     private var withdrawals: [ConfirmationRequest] = []
+    /// Tasks that ended, by key, to tell the rule once the lock is let go,
+    /// so their task grants end too.
+    private var endedKeys: [String] = []
+    /// Makes each task's key unique to this engine, so a task with the same
+    /// id in another window never shares a grant for this task.
+    private let instance = UUID()
     /// Receipts made and not yet taken by `takeReceipts`.
     private var receiptsMade: [Receipt] = []
     #if DEBUG
@@ -342,7 +351,10 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
     @discardableResult
     public func clear() -> ClearedTasks {
         mutate {
-            for index in runs.indices { withdrawQuestion(&runs[index]) }
+            for index in runs.indices {
+                withdrawQuestion(&runs[index])
+                endedKeys.append(key(runs[index].task.id))
+            }
             let cleared = ClearedTasks(forgotten: runs.count,
                                        underway: runs.filter { $0.approved && $0.task.isActive }.count)
             runs.removeAll()
@@ -430,6 +442,7 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
                              askedAt: phase == .waiting ? run.askedAt : nil,
                              approvedAt: phase == .approved ? run.approvedAt : nil,
                              approvedAction: phase == .approved ? run.approvedAction.map(SavedAction.init) : nil,
+                             grantedAt: phase == .approved ? run.grantedAt : nil,
                              kept: run.kept, notDone: run.notDone,
                              history: run.task.history.map { .init(text: $0.text, mark: $0.mark, at: $0.at, undone: $0.undone) },
                              startedAt: run.task.startedAt)
@@ -488,6 +501,7 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
                     if let action = entry.approvedAction?.action {
                         run.approvedAction = action
                         run.approvedAt = entry.approvedAt ?? date
+                        run.grantedAt = entry.grantedAt
                         run.approved = true
                         makeReceipt(run, outcome: .mayBeDone)
                     }
@@ -513,7 +527,7 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
     private func makeReceipt(_ run: Run, outcome: Receipt.Outcome) {
         guard let action = run.approvedAction else { return }
         receiptsMade.append(Receipt(action: action, taskTitle: run.task.title, approvedAt: run.approvedAt ?? date,
-                                    endedAt: date, outcome: outcome, isSample: isSample))
+                                    endedAt: date, outcome: outcome, isSample: isSample, grantedAt: run.grantedAt))
     }
 
     // MARK: The state machine. Everything below runs inside the lock, except
@@ -609,6 +623,7 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
         run.approved = false
         run.approvedAction = nil
         run.approvedAt = nil
+        run.grantedAt = nil
         run.askedAt = nil
         guard run.index < run.script.steps.count else {
             run.phase = .ended
@@ -645,6 +660,7 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
     }
 
     private func end(_ run: inout Run, as state: TaskState, line: String, wrapUp: TaskWrapUp?) {
+        if run.task.isActive { endedKeys.append(key(run.task.id)) }
         run.phase = .ended
         run.task.state = state
         run.task.step = line
@@ -662,9 +678,14 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
 
     /// Hands over what `AskFirst` must be told, and claims each question
     /// waiting to be asked, so no one else asks it too.
-    private func takeRuleWork() -> (withdrawals: [ConfirmationRequest], asks: [PendingAsk]) {
+    /// The key a task asks with: its id, made unique to this engine.
+    private func key(_ id: String) -> String { instance.uuidString + "/" + id }
+
+    private func takeRuleWork() -> (withdrawals: [ConfirmationRequest], asks: [PendingAsk], ended: [String]) {
         let out = withdrawals
         withdrawals = []
+        let ended = endedKeys
+        endedKeys = []
         var asks: [PendingAsk] = []
         for index in runs.indices where runs[index].phase == .toAsk {
             guard case .ask(let action, _) = runs[index].script.steps[runs[index].index].kind else { continue }
@@ -673,13 +694,33 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
                                    askedAgo: runs[index].askedAgo))
             runs[index].askedAgo = nil
         }
-        return (out, asks)
+        return (out, asks, ended)
     }
 
     /// `AskFirst`'s answer to a question asked outside the lock. A run that
     /// moved on meanwhile (stopped, redirected, cleared) has its question
-    /// withdrawn at once.
-    private func asked(_ ask: PendingAsk, _ request: ConfirmationRequest?) {
+    /// withdrawn at once. A step a grant covered goes ahead as after a
+    /// yes: it is committed, and its receipt names the grant.
+    private func asked(_ ask: PendingAsk, _ answer: AskFirst.Asked) {
+        let request: ConfirmationRequest?
+        switch answer {
+        case .asking(let asked): request = asked
+        case .cannotAsk: request = nil
+        case .granted(let granted):
+            guard let index = runs.firstIndex(where: { $0.task.id == ask.id }),
+                  runs[index].phase == .asking, runs[index].index == ask.index else { return }
+            runs[index].task.record(TaskStep(GrantWords.wentAhead, mark: .approved, at: date))
+            runs[index].task.question = nil
+            runs[index].task.state = .running
+            runs[index].task.step = runs[index].script.steps[ask.index].text
+            runs[index].task.updatedAt = date
+            runs[index].phase = .working(attempt: 0, since: elapsed)
+            runs[index].approved = true
+            runs[index].approvedAction = granted.action
+            runs[index].approvedAt = date
+            runs[index].grantedAt = granted.grant.createdAt
+            return
+        }
         guard let index = runs.firstIndex(where: { $0.task.id == ask.id }),
               runs[index].phase == .asking, runs[index].index == ask.index else {
             if let request { withdrawals.append(request) }
@@ -784,12 +825,24 @@ public final class LocalFakeEngine: KeepsTasks, @unchecked Sendable {
         let value = change()
         var work = takeRuleWork()
         unlockRuns()
-        while !work.withdrawals.isEmpty || !work.asks.isEmpty {
+        while !work.withdrawals.isEmpty || !work.asks.isEmpty || !work.ended.isEmpty {
             for request in work.withdrawals { withRule { $0.withdraw(request) } }
+            // Straight to the book, which never calls back in. A rule with
+            // no grants has nothing to end.
+            if !work.ended.isEmpty, let grants = rule.grants {
+                for ended in work.ended { grants.taskEnded(ended) }
+            }
             let answers = work.asks.map { ask in
-                (ask, withRule { rule in
-                    // A question picked up after the app closed keeps its deadline.
-                    ask.askedAgo.map { rule.askAgain(ask.action, askedAgo: $0) } ?? rule.ask(ask.action)
+                (ask, withRule { rule -> AskFirst.Asked in
+                    // A question picked up after the app closed keeps its
+                    // deadline, and is asked again, not covered by a grant.
+                    // It keeps its task, so the sheet still offers a yes
+                    // for this task.
+                    if let age = ask.askedAgo {
+                        return rule.askAgain(ask.action, askedAgo: age, forTask: key(ask.id))
+                            .map(AskFirst.Asked.asking) ?? .cannotAsk
+                    }
+                    return rule.ask(ask.action, forTask: key(ask.id))
                 })
             }
             lockRuns()

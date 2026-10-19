@@ -42,13 +42,17 @@ public struct SavedTask: Codable, Sendable, Equatable {
     /// nothing else, so a script changed by an update never puts words in
     /// a receipt that the person never saw.
     public let approvedAction: SavedAction?
+    /// When the grant that let the step go ahead was given, kept only while
+    /// the phase is `.approved` and a grant, not a yes, let it go. Its
+    /// receipt names the grant. Never the grant itself.
+    public let grantedAt: Date?
     public let kept: [String]
     public let notDone: [String]
     public let history: [Step]
     public let startedAt: Date
 
     public init(id: String, title: String, step: Int, phase: Phase, askedAt: Date? = nil, approvedAt: Date? = nil,
-                approvedAction: SavedAction? = nil,
+                approvedAction: SavedAction? = nil, grantedAt: Date? = nil,
                 kept: [String] = [], notDone: [String] = [], history: [Step] = [], startedAt: Date) {
         self.id = id
         self.title = title
@@ -57,6 +61,7 @@ public struct SavedTask: Codable, Sendable, Equatable {
         self.askedAt = askedAt
         self.approvedAt = approvedAt
         self.approvedAction = approvedAction
+        self.grantedAt = grantedAt
         self.kept = kept
         self.notDone = notDone
         self.history = history
@@ -130,9 +135,13 @@ public struct Receipt: Codable, Sendable, Equatable, Identifiable {
     public let outcome: Outcome
     /// From a scripted example, so the card says so.
     public let isSample: Bool
+    /// When the grant that let it go ahead was given. Nil when the person
+    /// said yes to this one question.
+    public let grantedAt: Date?
 
     public init(id: UUID = UUID(), action: ProposedAction, taskTitle: String, approvedAt: Date, endedAt: Date,
-                outcome: Outcome, isSample: Bool) {
+                outcome: Outcome, isSample: Bool, grantedAt: Date? = nil) {
+        self.grantedAt = grantedAt
         self.id = id
         self.taskTitle = taskTitle
         self.kind = action.kind
@@ -156,8 +165,12 @@ public struct Receipt: Codable, Sendable, Equatable, Identifiable {
     /// "Your details for Maple Dental".
     public var title: String { ReceiptWords.title(kind, recipientName) }
 
-    /// What came of it.
-    public var line: String { outcome == .done ? ReceiptWords.done : ReceiptWords.mayBeDone }
+    /// What came of it. A step a grant let go ahead says so, and when.
+    public var line: String {
+        guard let grantedAt else { return outcome == .done ? ReceiptWords.done : ReceiptWords.mayBeDone }
+        guard outcome == .done else { return GrantWords.receiptMayBeDone }
+        return GrantWords.receiptLine(kind, sameDay: Calendar.current.isDate(grantedAt, inSameDayAs: endedAt))
+    }
 
     /// "Clear your details for Maple Dental", for VoiceOver.
     public var clearLabel: String { ReceiptWords.clearLabel(kind, recipientName) }

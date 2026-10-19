@@ -820,14 +820,74 @@ struct GuardWrongCaseTests {
         }
     }
 
+    // MARK: The grant issuer
+
+    static func issuer(_ text: String, file: String = "PebbleUI/FeedView.swift") -> WrongCase {
+        WrongCase(rule: "grant.issuerOutsideSheet", text: text, file: file)
+    }
+
+    static let grantWrong: [WrongCase] = [
+        issuer("let grant = GrantIssuer().issue(.always, for: approval, now: Date())"),
+        issuer("let grant = `GrantIssuer`().issue(.always, for: approval, now: Date())"),
+        issuer("let make = GrantIssuer.init\nlet grant = make().issue(.always, for: approval, now: Date())"),
+        issuer("typealias Maker = GrantIssuer"),
+        issuer("func widen(_ issuer: GrantIssuer) {}", file: "PebbleCore/LocalFakeEngine.swift"),
+        issuer("let grant = GrantIssuer().issue(.always, for: approval, now: Date())", file: "PebbleUI/ChatView.swift"),
+        issuer("let grant = GrantIssuer().issue(.always, for: approval, now: Date())", file: "PebbleUI/ShowcaseScene.swift"),
+        issuer("let grant = PebbleCore.GrantIssuer().issue(.always, for: approval, now: Date())",
+               file: "PebbleModel/Conversation.swift"),
+        granting("let s = ConfirmationState(request: r, rule: rule, onApprove: { _ in }, onGrant: { book.add($0) }, onDecline: {})\ns.choose(.always)\ns.tapPrimary()"),
+        granting("let s = `ConfirmationState`(request: r, rule: rule, onApprove: { _ in }, onGrant: { book.add($0) }, onDecline: {})"),
+        granting("let s = PebbleUI.ConfirmationState(request: r, rule: rule, onApprove: { _ in }, onGrant: { _ in }, onDecline: {})"),
+        granting("let s = ConfirmationState(request: r, rule: rule) { _ in } onGrant: { book.add($0) } onDecline: {}"),
+        granting("let s = ConfirmationState.init(request: r, rule: rule, onApprove: { _ in }, onGrant: { _ in }, onDecline: {})"),
+        granting("let make = ConfirmationState.init"),
+        granting("typealias Sheet = ConfirmationState"),
+        granting("func answer(_ state: ConfirmationState) { state.choose(.always); state.tapPrimary() }"),
+        granting("func other() { _ = ConfirmationState(request: r, rule: rule, onApprove: { _ in }, onGrant: { _ in }, onDecline: {}) }",
+                 file: "PebbleUI/ShowcaseScene.swift"),
+        granting("func sampleGrants() { _ = ConfirmationState(request: r, rule: rule, onApprove: { _ in }, onGrant: { _ in }, onDecline: {}) }",
+                 file: "PebbleUI/HomeView.swift"),
+    ]
+
+    static func granting(_ text: String, file: String = "PebbleUI/FeedView.swift") -> WrongCase {
+        WrongCase(rule: "grant.grantingStateOutsideSheet", text: text, file: file)
+    }
+
+    static let grantRight: [RightCase] = [
+        fine("let grant = GrantIssuer().issue(choice, for: approval, now: wallClock())",
+             file: "PebbleUI/ConfirmationSheet.swift"),
+        fine("public struct GrantIssuer: Sendable {}", file: "PebbleCore/Grants.swift"),
+        fine("// GrantIssuer, in a comment"),
+        fine("let note = \"GrantIssuer, in words\""),
+        fine("let issuers = GrantIssuers()"),
+        fine("let s = ConfirmationState(request: r, rule: rule, onApprove: { _ in }, onDecline: {})\ns.tapPrimary()",
+             file: "PebbleUI/ShowcaseScene.swift"),
+        fine("_ = PebbleUI.ConfirmationState(request: r, rule: rule, onApprove: { _ in }, onDecline: {})"),
+        fine("_ = ConfirmationState(request: r, rule: rule, onApprove: { _ in }, onGrant: onGrant, onDecline: {})",
+             file: "PebbleUI/ConfirmationSheet.swift"),
+        fine("static func sampleGrants(at now: Date) -> GrantBook {\n    let s = ConfirmationState(request: r, rule: rule, onApprove: { _ in }, onGrant: { book.add($0) }, onDecline: {})\n    s.choose(.always)\n    s.tapPrimary()\n}",
+             file: "PebbleUI/ShowcaseScene.swift"),
+        fine("ConfirmationSheet(request: r, rule: rule, onApprove: { _ in }, onGrant: { _ in }, onDecline: {})"),
+        fine("// ConfirmationState, in a comment"),
+        fine("let note = \"ConfirmationState, in words\""),
+    ]
+
+    @Test func theGrantIssuerGuardCatchesEveryWrongCase() {
+        check(Self.grantWrong, Self.grantRight, rules: GrantIssuerGate.rules.map(\.name)) {
+            GrantIssuerGate.problems(in: $0, file: $1)
+        }
+    }
+
     // MARK: The suite itself
 
     /// Every rule of every guard has a wrong case here, so none can be
     /// added, or stop working, unseen.
     @Test func everyRuleHasAWrongCase() {
         let all = Self.promiseWrong + Self.contrastWrong + Self.accentWrong + Self.tokenWrong + Self.platformWrong
+            + Self.grantWrong
         let rules = PromiseRules.allRuleNames + ContrastLint.rules.map(\.name) + TokenLint.rules.map(\.name)
-            + PlatformGate.rules.map(\.name)
+            + PlatformGate.rules.map(\.name) + GrantIssuerGate.rules.map(\.name)
         #expect(Set(rules).count == rules.count, "each rule has its own name")
         for rule in rules {
             #expect(all.contains { $0.rule == rule }, "no wrong case for \(rule)")
