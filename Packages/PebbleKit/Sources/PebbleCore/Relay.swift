@@ -339,6 +339,7 @@ public struct RelayQuestion: Codable, Sendable, Equatable {
         action = try container.decode(ConsequentialAction.self, forKey: .action)
         price = try container.decodeIfPresent(RelayPrice.self, forKey: .price)
         guard action != .purchase || price != nil else { throw refused("a purchase needs a price", decoder) }
+        guard action == .purchase || price == nil else { throw refused("only a purchase may have a price", decoder) }
         target = try container.decode(RelayTarget.self, forKey: .target)
         summary = try container.decode(String.self, forKey: .summary)
         expiresAt = try container.decode(String.self, forKey: .expiresAt)
@@ -398,7 +399,7 @@ public struct RelayArtifact: Codable, Sendable, Equatable {
         kind = try container.decode(RelayArtifactKind.self, forKey: .kind)
         sha256 = try container.decode(String.self, forKey: .sha256)
         bytesBase64 = try container.decode(String.self, forKey: .bytesBase64)
-        guard Relay.isLine(name, limit: Relay.maxArtifactNameLength), !name.hasPrefix("."),
+        guard Relay.isLine(name, limit: Relay.maxArtifactNameLength), name.unicodeScalars.first != ".",
               !name.unicodeScalars.contains(where: { "/\\:".unicodeScalars.contains($0) }) else {
             throw refused("name isn't a plain file name", decoder)
         }
@@ -737,6 +738,15 @@ public enum RelayReceipts {
             guard receipt.hash == own else { throw .hash(index: index) }
             prevHash = own
         }
+    }
+
+    /// Verify a finished run using its own identity and state. The client ID
+    /// must come from the device's original request, not from the receipts.
+    /// The caller must also match run.runId to the requested run when polling.
+    public static func verify(_ run: RelayRun, clientRunId: String,
+                              publicKey: Curve25519.Signing.PublicKey) throws(Problem) {
+        try verify(run.receipts, runId: run.runId, clientRunId: clientRunId,
+                   terminalState: run.state, publicKey: publicKey)
     }
 
     /// A finished chain: its links, a final receipt at the end, and that

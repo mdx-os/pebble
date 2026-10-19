@@ -442,3 +442,43 @@ struct RelayReviewTests {
         }
     }
 }
+
+struct RelayRound2Tests {
+    @Test func review2LeadingDotIsAScalar() throws {
+        #expect(throws: DecodingError.self) {
+            try RelayFixtureTests.roundTrip("run.invalid.artifact-combining-dot")
+        }
+    }
+
+    @Test func review2NonPurchaseRefusesPrice() throws {
+        #expect(throws: DecodingError.self) {
+            try RelayFixtureTests.roundTrip("run.invalid.non-purchase-price")
+        }
+    }
+}
+
+struct RelayWholeRunTests {
+    @Test(arguments: [RelayRunState.done, .failed, .stopped])
+    func review2WholeRunUsesItsOwnContext(state: RelayRunState) throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let kind: RelayReceiptKind = state == .done ? .runDone : state == .failed ? .runFailed : .runStopped
+        let receipts = try RelayReceiptTests.chain(key, kinds: [.runStarted, kind])
+        let result: RelayResult? = state == .done ? RelayResult(text: "Finished.", sources: [], artifacts: []) : nil
+        let run = RelayRun(runId: "r1", state: state, steps: [], result: result, receipts: receipts)
+        try RelayReceipts.verify(run, clientRunId: "c1", publicKey: key.publicKey)
+        let replay = RelayRun(runId: "r2", state: state, steps: [], result: result, receipts: receipts)
+        #expect(throws: RelayReceipts.Problem.identity(index: 0)) {
+            try RelayReceipts.verify(replay, clientRunId: "c1", publicKey: key.publicKey)
+        }
+        #expect(throws: RelayReceipts.Problem.identity(index: 0)) {
+            try RelayReceipts.verify(run, clientRunId: "c2", publicKey: key.publicKey)
+        }
+        let wrongState = RelayRun(runId: "r1", state: .working, steps: [], receipts: receipts)
+        #expect(throws: RelayReceipts.Problem.terminalState) {
+            try RelayReceipts.verify(wrongState, clientRunId: "c1", publicKey: key.publicKey)
+        }
+        #expect(throws: RelayReceipts.Problem.signature) {
+            try RelayReceipts.verify(run, clientRunId: "c1", publicKey: Curve25519.Signing.PrivateKey().publicKey)
+        }
+    }
+}

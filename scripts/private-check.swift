@@ -54,7 +54,7 @@ let hostRules: [(String, NSRegularExpression)] = [
     ("an IPv6 address", pattern(
         #"\[(?=[0-9a-f:.]*[0-9a-f])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f.]*\]"#
             + #"|(?<![\w:])(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}(?![\w:])"#
-            + #"|(?<![\w:])(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?(?![\w:])(?<=[0-9a-f])"#)),
+            + #"|(?<![\w:])(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?(?![\w:])(?<=[0-9a-f]|[0-9a-f]::)"#)),
 ]
 
 func fail(_ message: String) -> Never {
@@ -136,10 +136,17 @@ func words(_ line: Substring) -> Set<String> {
     return found
 }
 
-/// A BOM fixes the UTF-16 byte order. Without a BOM the encoding can be
+/// A BOM fixes the UTF-16 or UTF-32 byte order. Without a BOM the encoding can be
 /// ambiguous, so scan every valid text interpretation rather than guessing
 /// wrong and hiding a word. Valid UTF-8 is scanned even if it contains NUL.
 func decodedTexts(_ data: Data) -> [String] {
+    // UTF-32 LE shares UTF-16 LE's first two BOM bytes, so check it first.
+    if data.starts(with: [0xff, 0xfe, 0x00, 0x00]) {
+        return String(data: data.dropFirst(4), encoding: .utf32LittleEndian).map { [$0] } ?? []
+    }
+    if data.starts(with: [0x00, 0x00, 0xfe, 0xff]) {
+        return String(data: data.dropFirst(4), encoding: .utf32BigEndian).map { [$0] } ?? []
+    }
     if data.starts(with: [0xff, 0xfe]) {
         return String(data: data.dropFirst(2), encoding: .utf16LittleEndian).map { [$0] } ?? []
     }
@@ -147,7 +154,12 @@ func decodedTexts(_ data: Data) -> [String] {
         return String(data: data.dropFirst(2), encoding: .utf16BigEndian).map { [$0] } ?? []
     }
     var texts: [String] = []
-    if let text = String(data: data, encoding: .utf8) { texts.append(text) }
+    if let text = String(data: data, encoding: .utf8) {
+        texts.append(text)
+    } else {
+        // A stray non-UTF-8 byte must not hide otherwise readable words.
+        texts.append(String(decoding: data, as: UTF8.self))
+    }
     if data.count.isMultiple(of: 2) {
         for encoding in [String.Encoding.utf16LittleEndian, .utf16BigEndian] {
             if let text = String(data: data, encoding: encoding), !texts.contains(text) {
@@ -191,9 +203,16 @@ func check(_ repo: URL) {
     var problems = 0
     for file in files {
         let url = repo.appendingPathComponent(file)
-        guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
-              values.isRegularFile == true, values.isSymbolicLink != true,
-              let data = try? Data(contentsOf: url) else { continue }
+        guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]) else { continue }
+        let data: Data
+        if values.isSymbolicLink == true {
+            // Git stores the target text, not the file it points to. Never follow it.
+            guard let target = try? FileManager.default.destinationOfSymbolicLink(atPath: url.path) else { continue }
+            data = Data(target.utf8)
+        } else {
+            guard values.isRegularFile == true, let contents = try? Data(contentsOf: url) else { continue }
+            data = contents
+        }
         let path = diagnosticPath(file, salt: salt, hashes: hashes)
         let checkHosts = hostFolders.contains { file.hasPrefix($0) }
         for text in decodedTexts(data) {

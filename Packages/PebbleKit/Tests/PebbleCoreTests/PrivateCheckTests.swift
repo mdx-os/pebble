@@ -65,6 +65,74 @@ struct PrivateCheckTests {
 
 
     @Test(arguments: [false, true], [false, true])
+    func review2UTF32IsChecked(bigEndian: Bool, host: Bool) throws {
+        let scratch = try Scratch()
+        let planted = host ? "relay.corp" + ".internal" : Self.word
+        let kind = host ? "a .internal or .local host" : "a private word"
+        try scratch.write("docs/SETUP.md", "")
+        var data = Data(bigEndian ? [0x00, 0x00, 0xfe, 0xff] : [0xff, 0xfe, 0x00, 0x00])
+        data.append(try #require("First line.\n\(planted)\n".data(using: bigEndian ? .utf32BigEndian : .utf32LittleEndian)))
+        try data.write(to: scratch.root.appendingPathComponent("docs/SETUP.md"))
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("docs/SETUP.md:2: \(kind)"))
+        #expect(!result.output.contains(planted))
+    }
+
+    @Test(arguments: [false, true])
+    func review2SymlinkTargetsAreChecked(host: Bool) throws {
+        let scratch = try Scratch()
+        let planted = host ? "relay.corp" + ".internal" : Self.word
+        let kind = host ? "a .internal or .local host" : "a private word"
+        let path = "docs/\(planted)/link"
+        try scratch.write("docs/\(planted)/README.md", "Safe.")
+        // A dangling target is still committed text. Sensitive link paths are redacted too.
+        try FileManager.default.createSymbolicLink(atPath: scratch.root.appendingPathComponent(path).path,
+                                                   withDestinationPath: "../\(planted)/missing")
+        #expect(try scratch.git("add", path) == 0)
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("docs/[redacted]/link:1: \(kind)"))
+        #expect(!result.output.contains(planted))
+    }
+
+    @Test func review2SymlinkDestinationIsNotRead() throws {
+        let scratch = try Scratch()
+        try scratch.write(".gitignore", "Config/private-words.local.txt\nignored.txt\n")
+        try scratch.write("ignored.txt", Self.word)
+        try FileManager.default.createSymbolicLink(atPath: scratch.root.appendingPathComponent("link.txt").path,
+                                                   withDestinationPath: "ignored.txt")
+        #expect(try scratch.git("add", "link.txt") == 0)
+        let result = try scratch.run()
+        #expect(result.status == 0, "\(result.output)")
+    }
+
+    @Test(arguments: ["2001:db8:" + ":", ":" + ":1", "2001:db8:" + ":1"])
+    func review2CompressedIPv6IsChecked(address: String) throws {
+        let scratch = try Scratch()
+        try scratch.write("docs/SETUP.md", "First line.\nAddress: \(address)\n")
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("docs/SETUP.md:2: an IPv6 address"))
+        #expect(!result.output.contains(address))
+    }
+
+    @Test(arguments: [false, true])
+    func review2LossyUTF8IsChecked(even: Bool) throws {
+        let scratch = try Scratch()
+        var data = Data("First line.\n".utf8)
+        data.append(0xe9)
+        data.append(Data(" \(Self.word)\n".utf8))
+        if data.count.isMultiple(of: 2) != even { data.append(0x20) }
+        #expect(data.count.isMultiple(of: 2) == even)
+        try data.write(to: scratch.root.appendingPathComponent("README.md"))
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("README.md:2: a private word"))
+        #expect(!result.output.contains(Self.word))
+    }
+
+    @Test(arguments: [false, true], [false, true])
     func reviewUTF16PrivateWordsAreChecked(bigEndian: Bool, bom: Bool) throws {
         let scratch = try Scratch()
         let encoding: String.Encoding = bigEndian ? .utf16BigEndian : .utf16LittleEndian

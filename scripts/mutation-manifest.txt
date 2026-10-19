@@ -492,3 +492,45 @@ perl: s~let path = diagnosticPath\(file, salt: salt, hashes: hashes\)~let path =
 test: reviewFixedDiagnosticPathsAreRedacted
 file: scripts/private-check.swift
 perl: s~return diagnosticPath\(path, salt: salt, hashes: Set\(lines.dropFirst\(\)\)\)~return path~
+
+
+# Round-2 relay review: keep encoding, link text and scalar refusals covered.
+test: review2LeadingDotIsAScalar
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~name.unicodeScalars.first != "\."~!name.hasPrefix(".")~
+
+test: review2NonPurchaseRefusesPrice
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard action == \.purchase \|\| price == nil else~guard true else~
+
+test: review2UTF32IsChecked
+file: scripts/private-check.swift
+perl: s~if data.starts\(with: \[0xff, 0xfe, 0x00, 0x00\]\)~if false~
+
+test: review2UTF32IsChecked
+file: scripts/private-check.swift
+perl: s~if data.starts\(with: \[0x00, 0x00, 0xfe, 0xff\]\)~if false~
+
+test: review2SymlinkTargetsAreChecked
+file: scripts/private-check.swift
+perl: s~data = Data\(target.utf8\)~data = Data()~
+
+test: review2SymlinkDestinationIsNotRead
+file: scripts/private-check.swift
+perl: s~data = Data\(target.utf8\)~data = (try? Data(contentsOf: url)) ?? Data(target.utf8)~
+
+test: review2CompressedIPv6IsChecked
+file: scripts/private-check.swift
+perl: s~\(\?<\=\[0-9a-f\]\|\[0-9a-f\]::\)~(?<=[0-9a-f])~
+
+test: review2LossyUTF8IsChecked
+file: scripts/private-check.swift
+perl: s~texts.append\(String\(decoding: data, as: UTF8.self\)\)~~
+
+test: review2WholeRunUsesItsOwnContext
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~runId: run.runId~runId: run.receipts.first?.runId ?? ""~
+
+test: review2WholeRunUsesItsOwnContext
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~terminalState: run.state~terminalState: .done~

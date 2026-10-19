@@ -3,8 +3,8 @@
 Some tasks are too big for the device: research across many pages, several
 steps with tools, or building something. The app can hand such a task to a
 relay, a server the person chooses to use, after they have seen exactly
-what goes. This page is the whole protocol, version 1. Any server that does
-what it says can serve the app.
+what goes. This page is the draft protocol, version 1. The sign-in part is incomplete
+until the cloud policy change lands.
 
 This repository holds only the app's side: the message types in
 `PebbleCore/Relay.swift` and this page. It never holds a relay's address,
@@ -25,8 +25,10 @@ exactly what is sent.
 
 Every path is under the configured cloud address. Signing in is the same
 hop as for the cloud, and every call carries the same `Cloud-Session`
-header, exactly as the cloud sign-in contract (docs/CLOUD.md, landing with the cloud policy change) describes. A call without a valid
-session gets `signInNeeded`.
+header. The sign-in part is incomplete until the cloud policy change lands
+with its authentication contract in `docs/CLOUD.md`. This draft does not yet
+specify how sessions are issued or validated. A call without a valid session
+gets `signInNeeded`.
 
 Bodies are JSON in UTF-8, sent with `Content-Type: application/json`. No
 body may be over 8,388,608 bytes; the device refuses a bigger one before
@@ -130,8 +132,8 @@ says so:
   an uppercase ISO 4217 code in Foundation's common ISO currency list;
   unknown codes and case or whitespace corrections are refused. This maps
   exactly to AskFirst's `Price`, and `RelayQuestion.proposedAction` carries
-  that price into the device's approval sheet. A supplied price is validated
-  for every action; a purchase without one is refused.
+  that price into the device's approval sheet. A purchase without a price is
+  refused, as is a price on any other action.
 - `expiresAt`: after this the relay takes the answer as no.
 
 The device asks with its own approval sheet, built from these fields. The
@@ -329,6 +331,12 @@ terminal state as well as the public key. For completed chains checked
 with `verify`, a changed field, a dropped receipt or a reordered pair each
 fails, as does replaying a valid chain for another run or terminal state.
 
+The overload `RelayReceipts.verify(run, clientRunId:publicKey:)` checks a
+whole `RelayRun`, using its own `runId` and `state` as the expected receipt
+context. The client ID must come from the device's original request. When
+polling, the caller must also match the response's `runId` to the requested
+run. Decoding a run alone does not authenticate its receipts.
+
 While a run is going, `checkLinks` checks steps 1 to 5 on the chain so far.
 It cannot detect truncation or authenticate the chain. Those guarantees
 require `verify` on a completed chain with the expected context.
@@ -380,6 +388,8 @@ Run requests:
 
 Runs:
 
+- `run.invalid.artifact-combining-dot.json`
+- `run.invalid.non-purchase-price.json`
 - `run.invalid.purchase-price-missing.json`
 - `run.valid.purchase.json`
 - `run.invalid.purchase-price-zero.json`
