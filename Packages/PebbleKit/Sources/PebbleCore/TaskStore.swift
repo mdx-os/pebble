@@ -496,6 +496,14 @@ public final class TaskStore: @unchecked Sendable {
         keep(engine, now: now)
     }
 
+    /// After `restore` or `keep` returns, whether the file has been read
+    /// and all recovered tasks handed to the engine. An unreadable store
+    /// is unresolved, even when its in-memory task list is empty.
+    public var restorationComplete: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return loaded && arrivedLate.isEmpty
+    }
+
     /// True while a late read found tasks no engine has picked up. The
     /// next `keep` picks them up.
     public var hasLateTasks: Bool {

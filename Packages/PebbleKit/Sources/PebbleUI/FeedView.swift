@@ -185,7 +185,8 @@ final class FeedModel: ObservableObject {
         }
         // Then a task the ledger has going that no engine picked up says
         // it stopped when the app closed, rather than sit there.
-        ledger?.launch(live: tasks?.tasks ?? [])
+        ledger?.launch(live: tasks?.tasks ?? [],
+                       restorationComplete: keeper == nil || store?.restorationComplete != false)
         feed = Feed.build(from: self.sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
         if store?.clearedUnreadable == true { clearedUnreadable = ReceiptWords.unreadableCleared }
         flow?.pinned(Self.pinnedTasks(in: feed), rule: needsYou.rule, from: window)
@@ -194,7 +195,10 @@ final class FeedModel: ObservableObject {
         sections = Self.sections(of: feed)
         _ = announcer.lines(for: list, at: clock())
         let hops = pendingRefreshes
-        watching = tasks?.observe { [weak self] snapshot in
+        watching = tasks?.observe { [weak self, weak ledger] snapshot in
+            // Record every outcome before UI dispatch can reorder or drop
+            // snapshots. The book takes its own lock on the engine's thread.
+            ledger?.record(snapshot)
             // Engines tell us on whatever thread they run. Hop to the main
             // one, without a wait when already there. `tasksChanged` drops a
             // snapshot older than one it took. A hop joins the same chain as
@@ -242,6 +246,7 @@ final class FeedModel: ObservableObject {
     /// yes to that was under way still gets its card and its receipt.
     private func storeChanged() {
         if let store, let keeper, store.hasLateTasks { store.keep(keeper, now: now()) }
+        launchLedger()
         if store?.clearedUnreadable == true, clearedUnreadable == nil { clearedUnreadable = ReceiptWords.unreadableCleared }
         rebuild()
     }
@@ -361,6 +366,12 @@ final class FeedModel: ObservableObject {
     /// background work that is due runs, with the person here.
     func refresh() {
         tasks?.refresh()
+        // A recovered empty store may publish no change. Resolve it here
+        // too, so genuine orphans can end even without a restored task.
+        if let ledger, let store, let keeper {
+            store.keep(keeper, now: now())
+            ledger.launch(live: tasks?.tasks ?? [], restorationComplete: store.restorationComplete)
+        }
         ledger?.watch()
         if inFront { background?.runDue(now: now(), conditions: .foreground) }
         rebuild()
@@ -458,12 +469,19 @@ final class FeedModel: ObservableObject {
         guard snapshot.sequence > seen else { return }
         seen = snapshot.sequence
         summaries = [:]
-        ledger?.record(snapshot)
         // Kept at every real change, so closing the app at any moment loses
         // nothing. Only what changed is written.
         if let flow, let keeper { flow.store.keep(keeper, now: now()) }
+        launchLedger()
         if track(snapshot.tasks) { rebuild() } else { followLedger() }
         for line in announcer.lines(for: snapshot.tasks, at: clock()) { announce(line) }
+    }
+
+    /// Orphan detection waits until the current engine has received every
+    /// saved task. Repeated calls after that first reconciliation do nothing.
+    private func launchLedger() {
+        ledger?.launch(live: tasks?.tasks ?? [],
+                       restorationComplete: keeper == nil || store?.restorationComplete != false)
     }
 
     /// Moves each card's live progress along. True when anything but

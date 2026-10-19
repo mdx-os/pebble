@@ -612,3 +612,39 @@ perl: s~Text\(statusLabel\)~Text(task.state.label)~
 test: anUncheckedCardSaysSoInPlainWords
 file: Packages/PebbleKit/Sources/PebbleUI/TaskCard.swift
 perl: s~"", statusLabel, task\.title~"", task.state.label, task.title~
+
+# Completion recording must precede the UI hop and its sequence guard.
+test: backgroundCompletionsSurviveANewerMainThreadSnapshot
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~            ledger\?\.record\(snapshot\)\n~~
+perl: s~        summaries = \[:\]\n        // Kept~        summaries = [:]\n        ledger?.record(snapshot)\n        // Kept~
+
+# A failed directory lookup must not declare the ledger loaded and empty.
+test: directoryReadFailurePreservesHistoryAfterRecovery
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~if Self\.isMissing\(fileURL\) \{ return \[\] \}~guard FileManager.default.fileExists(atPath: fileURL.path) else { return [] }~
+
+# A deferred sweep uses the incoming restored snapshot before reading disk.
+test: delayedLaunchUsesTheCurrentSnapshot
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~        sweep\?\.live = here\n~~
+
+# Unknown task restoration cannot authorize orphan detection.
+test: restoredRunningTaskCompletesAfterStoresRecover anEmptyRecoveredTaskStoreResolvesOrphans
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~guard restorationComplete, !launched~guard !launched~
+
+# An unreadable task file is unresolved even with no tasks in memory.
+test: restoredRunningTaskCompletesAfterStoresRecover anEmptyRecoveredTaskStoreResolvesOrphans
+file: Packages/PebbleKit/Sources/PebbleCore/TaskStore.swift
+perl: s~return loaded && arrivedLate\.isEmpty~return arrivedLate.isEmpty~
+
+# Feed launch and later retries must pass the store's restoration state.
+test: restoredRunningTaskCompletesAfterStoresRecover anEmptyRecoveredTaskStoreResolvesOrphans
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~restorationComplete: keeper == nil \|\| store\?\.restorationComplete != false~restorationComplete: true~g
+
+# Recovery of an empty task file has no engine change to trigger a sweep.
+test: anEmptyRecoveredTaskStoreResolvesOrphans
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~        if let ledger, let store, let keeper \{\n            store\.keep\(keeper, now: now\(\)\)\n            ledger\.launch\(live: tasks\?\.tasks \?\? \[\], restorationComplete: store\.restorationComplete\)\n        \}\n~~

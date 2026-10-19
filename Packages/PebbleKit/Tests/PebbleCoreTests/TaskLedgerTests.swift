@@ -631,6 +631,45 @@ struct TaskLedgerTests {
         #expect(!manager.fileExists(atPath: file.path))
     }
 
+    @Test(.scratchFiles, .fileModesHoldOrCI, .failsAsRoot)
+    func directoryReadFailurePreservesHistoryAfterRecovery() throws {
+        let base = try #require(Scratch.folder)
+        let folder = base.appendingPathComponent("hidden")
+        let manager = FileManager.default
+        try manager.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent("ledger.json")
+        let store = TaskLedgerFileStore(fileURL: file, forgetMarker: base.appendingPathComponent("erase-owed"))
+        Self.book(store, clock: LedgerClock()).record(TaskSnapshot(sequence: 1, tasks: [
+            Self.task("original", state: .done, proofs: [Self.page]),
+        ]))
+        let original = try #require(store.read()?.first)
+        try manager.setAttributes([.posixPermissions: 0o000], ofItemAtPath: folder.path)
+        defer { try? manager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+        #expect(store.read() == nil)
+        let book = Self.book(store, clock: LedgerClock())
+        book.record(TaskSnapshot(sequence: 1, tasks: [Self.task("new")]))
+        try manager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+        book.record(TaskSnapshot(sequence: 2, tasks: [Self.task("new", state: .done, proofs: [Self.page])]))
+        #expect(book.ledger("original") == original)
+        #expect(store.read()?.first { $0.taskID == "original" } == original)
+        #expect(store.read()?.count == 2)
+    }
+
+    @Test func delayedLaunchUsesTheCurrentSnapshot() throws {
+        let clock = LedgerClock()
+        let store = InMemoryTaskLedgerStore()
+        Self.book(store, clock: clock).record(TaskSnapshot(sequence: 1, tasks: [Self.task()]))
+        store.locked = true
+        let book = Self.book(store, clock: clock)
+        book.launch(live: [])
+        store.locked = false
+        book.record(TaskSnapshot(sequence: 1, tasks: [Self.task()]))
+        #expect(book.ledger("task:1")?.isEnded == false)
+        book.record(TaskSnapshot(sequence: 2, tasks: [Self.task(state: .done, proofs: [Self.page])]))
+        #expect(book.ledger("task:1")?.finish == .proven([Self.page]))
+        #expect(book.takeStoppedAtLaunch().isEmpty)
+    }
+
     // MARK: The file
 
     @Test(.scratchFiles) func theFileIsKeptBesideTheTasksAndReadBackAsWritten() throws {

@@ -5,6 +5,7 @@ import PebbleModel
 import SwiftUI
 import SourceScan
 import Testing
+import TestScratch
 @testable import PebbleUI
 
 /// A task card shows how its ledger says the task finished: what shows it,
@@ -25,6 +26,120 @@ struct TaskLedgerCardTests {
     private func ledger(_ engine: LocalFakeEngine, store: InMemoryTaskLedgerStore = InMemoryTaskLedgerStore(),
                         artifacts: any TaskArtifactResolving = NoArtifacts()) -> TaskLedgerBook {
         TaskLedgerBook(store: store, artifacts: artifacts, clock: { [engine] in engine.currentDate })
+    }
+
+    @Test func backgroundCompletionsSurviveANewerMainThreadSnapshot() async throws {
+        let engine = LocalFakeEngine(rule: .isolated(), scripts: [])
+        let book = ledger(engine)
+        let model = model(engine, ledger: book)
+        let ids = (0..<13).map { index in
+            engine.start(TaskScript(title: "Short \(index)",
+                                    steps: [.init("Reading", duration: 1, todo: "read")],
+                                    doneLine: "Ready.", proofs: [.check("Read the note")]))
+        }
+        // Hold the main actor until both background snapshots have queued
+        // their UI work, then overtake them with a main-thread mutation.
+        let delivered = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            engine.advance(by: 2)
+            delivered.signal()
+        }
+        func waitForDelivery() -> DispatchTimeoutResult { delivered.wait(timeout: .now() + 10) }
+        #expect(waitForDelivery() == .success)
+        engine.start(TaskScript(title: "Next", steps: [.init("Reading", duration: 60, todo: "read")],
+                                doneLine: "Ready."))
+        await model.settled()
+        for id in ids {
+            #expect(try #require(book.ledger(id)).end?.kind == .done(proofs: [.check("Read the note")]))
+        }
+    }
+
+    @Test(.scratchFiles, .fileModesHoldOrCI, .failsAsRoot, arguments: [0, 1, 2])
+    func restoredRunningTaskCompletesAfterStoresRecover(ledgerRecovery: Int) async throws {
+        let folder = try #require(Scratch.folder)
+        let taskFile = folder.appendingPathComponent("tasks.json")
+        let ledgerFile = folder.appendingPathComponent("ledger.json")
+        let marker = folder.appendingPathComponent("tasks-forgotten")
+        let ledgerMarker = folder.appendingPathComponent("ledger-forgotten")
+        let script = TaskScript(title: "Read the note", steps: [.init("Reading", duration: 10, todo: "read")],
+                                doneLine: "Ready.", proofs: [.check("Read the note")])
+        let before = LocalFakeEngine(rule: .isolated(), scripts: [script])
+        let id = before.start(script)
+        TaskStore(fileURL: taskFile, forgetMarker: marker).keep(before)
+        let disk = TaskLedgerFileStore(fileURL: ledgerFile, forgetMarker: ledgerMarker)
+        let earlier = TaskLedgerBook(store: disk, clock: { before.currentDate })
+        earlier.record(TaskSnapshot(sequence: 1, tasks: before.tasks + [
+            AgentTask(id: "orphan", title: "Old work", step: "Reading", startedAt: before.currentDate),
+        ]))
+        let original = try #require(earlier.ledger(id)).entries
+        let manager = FileManager.default
+        for file in ledgerRecovery == 2 ? [taskFile] : [taskFile, ledgerFile] {
+            try manager.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+        }
+        defer {
+            for file in [taskFile, ledgerFile] {
+                try? manager.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+            }
+        }
+        let store = TaskStore(fileURL: taskFile, forgetMarker: marker)
+        let flow = NeedsYouFlow(store: store, notifier: nil, agentName: { "Pip" })
+        let engine = LocalFakeEngine(rule: .isolated(), scripts: [script])
+        let book = TaskLedgerBook(store: disk, clock: { engine.currentDate })
+        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: engine.rule), tasks: engine, ledger: book,
+                              place: .onDevice, flow: flow)
+        #expect(engine.tasks.isEmpty)
+        try manager.setAttributes([.posixPermissions: 0o644], ofItemAtPath: ledgerFile.path)
+        if ledgerRecovery != 0 {
+            // A ledger read or watch must not resolve an unknown task store.
+            book.watch()
+            #expect(book.ledger(id)?.isEnded == false)
+            #expect(book.takeStoppedAtLaunch().isEmpty)
+        }
+        try manager.setAttributes([.posixPermissions: 0o644], ofItemAtPath: taskFile.path)
+        _ = store.tasks
+        await model.settled()
+        await model.settled()
+        #expect(engine.task(id)?.state == .running)
+        #expect(book.ledger(id)?.isEnded == false)
+        engine.advance(by: 11)
+        await model.settled()
+        let finished = try #require(book.ledger(id))
+        #expect(finished.end?.kind == .done(proofs: script.proofs))
+        #expect(Array(finished.entries.prefix(original.count)) == original)
+        #expect(book.takeStoppedAtLaunch().map(\.taskID) == ["orphan"])
+        #expect(book.ledger("orphan")?.end?.kind == .stopped(why: LedgerWords.stoppedWhenClosed))
+        #expect(book.takeStoppedAtLaunch().isEmpty)
+        #expect(disk.read()?.first { $0.taskID == id } == finished)
+    }
+
+    @Test(.scratchFiles, .fileModesHoldOrCI, .failsAsRoot)
+    func anEmptyRecoveredTaskStoreResolvesOrphans() async throws {
+        let folder = try #require(Scratch.folder)
+        let file = folder.appendingPathComponent("tasks.json")
+        let marker = folder.appendingPathComponent("tasks-forgotten")
+        // Keep a real, readable empty file rather than a missing path.
+        try JSONEncoder().encode(TaskStore.State()).write(to: file)
+        let manager = FileManager.default
+        #expect(manager.fileExists(atPath: file.path))
+        try manager.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+        defer { try? manager.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path) }
+        let disk = InMemoryTaskLedgerStore()
+        let before = LocalFakeEngine(rule: .isolated())
+        let id = before.start(SampleTasks.plan)
+        ledger(before, store: disk).record(TaskSnapshot(sequence: 1, tasks: before.tasks))
+        let engine = LocalFakeEngine(rule: .isolated())
+        let book = ledger(engine, store: disk)
+        let store = TaskStore(fileURL: file, forgetMarker: marker)
+        let flow = NeedsYouFlow(store: store, notifier: nil, agentName: { "Pip" })
+        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: engine.rule), tasks: engine, ledger: book,
+                              place: .onDevice, flow: flow)
+        #expect(book.ledger(id)?.isEnded == false)
+        try manager.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+        model.refresh()
+        await model.settled()
+        #expect(engine.tasks.isEmpty)
+        #expect(book.takeStoppedAtLaunch().map(\.taskID) == [id])
+        #expect(book.ledger(id)?.end?.kind == .stopped(why: LedgerWords.stoppedWhenClosed))
     }
 
     @Test func aProvenCardShowsEachProofAndSaysWhatItIs() throws {

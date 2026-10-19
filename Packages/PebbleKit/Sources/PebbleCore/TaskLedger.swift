@@ -229,8 +229,9 @@ public struct TaskLedger: Codable, Sendable, Equatable, Identifiable {
     }
 
     /// The same lines written again, one by one, as `append` would, so a
-    /// file changed by hand can't put a line after an end or a done with
-    /// nothing real behind it.
+    /// file changed by hand can't put a line after an end or a done without
+    /// accepted supplied evidence. Source addresses and check text are
+    /// checked for shape; they are not authenticated execution records.
     public func replayed(artifacts: any TaskArtifactResolving) -> TaskLedger {
         var ledger = TaskLedger(key: key)
         for entry in entries { ledger.append(entry.kind, at: entry.at, watched: entry.watched, artifacts: artifacts) }
@@ -425,8 +426,7 @@ public final class TaskLedgerFileStore: TaskLedgerStoring, @unchecked Sendable {
     public func read() -> [TaskLedger]? {
         lock.lock(); defer { lock.unlock() }
         guard eraseIfOwed() else { return nil }
-        let manager = FileManager.default
-        guard manager.fileExists(atPath: fileURL.path) else { return [] }
+        if Self.isMissing(fileURL) { return [] }
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
         guard let ledgers = try? JSONDecoder().decode([TaskLedger].self, from: data) else {
             // Nothing could ever read it back, so it goes as an erase would.
@@ -524,8 +524,8 @@ public final class TaskLedgerBook: @unchecked Sendable {
     private var seen = -1
     /// What each task was doing at the last snapshot, by ledger.
     private var last: [TaskLedger.Key: Seen] = [:]
-    /// The launch's sweep, owed until the store can be read: when it was,
-    /// and the tasks an engine had going then.
+    /// The launch's sweep, owed until the store can be read: when it was
+    /// requested, and the engine's most recently reported tasks.
     private var sweep: (at: Date, live: Set<TaskLedger.Key>)?
     private var launched = false
     /// Ledgers that ended at launch since the last `takeStoppedAtLaunch`.
@@ -579,9 +579,12 @@ public final class TaskLedgerBook: @unchecked Sendable {
         defer { lock.unlock() }
         guard snapshot.sequence > seen else { return }
         seen = snapshot.sequence
+        let here = Set(snapshot.tasks.map(Self.key))
+        // A delayed disk read must use the tasks the engine has now,
+        // including restored tasks and outcomes not yet written below.
+        sweep?.live = here
         loadIfNeeded()
         let now = clock()
-        let here = Set(snapshot.tasks.map(Self.key))
         // Oldest first, so the ledgers go in in the order the tasks began.
         for task in snapshot.tasks.reversed() { record(task, at: now) }
         for index in kept.indices where !kept[index].isEnded && last[kept[index].key] != nil
@@ -615,15 +618,16 @@ public final class TaskLedgerBook: @unchecked Sendable {
 
     /// At launch: any task with no end and no engine going on it ends as
     /// stopped, saying it stopped when the app closed. `live` is every task
-    /// an engine has going now. Runs once for this book; while the store
-    /// can't be read it waits, and runs as soon as it can.
+    /// an engine has going now. If task restoration is unresolved, call
+    /// again after it finishes. Runs once for this book; while the ledger
+    /// can't be read it waits, using subsequent snapshots for the live set.
     ///
     /// Each one stopped here is handed over once by `takeStoppedAtLaunch`,
     /// for an offer to pick it up again.
-    public func launch(live: [AgentTask]) {
+    public func launch(live: [AgentTask], restorationComplete: Bool = true) {
         lock.lock()
         defer { lock.unlock() }
-        guard !launched else { return }
+        guard restorationComplete, !launched else { return }
         launched = true
         let keys = Set(live.filter(\.isActive).map(Self.key))
         if loaded {

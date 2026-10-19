@@ -157,6 +157,9 @@ Things no test here can reach. Check each on a real iPhone before a release.
 - An engine lets go of ended tasks by when they ended, never by when they
   began. A task dropped in the same change that ends it never tells its
   ledger how it ended. `TaskLedgerRunTests` guards this.
+- Record ledger outcomes before dispatching snapshots to the UI, whose
+  sequence guard can drop older completions. Launch orphan detection waits
+  for task restoration to resolve. `TaskLedgerCardTests` guards both.
 
 ## Never
 
