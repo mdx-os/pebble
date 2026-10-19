@@ -1334,3 +1334,31 @@ perl: s~changed \|\| all != grantsBefore \|\| unsavedNow~changed || unsavedNow~
 test: aMarkerThatCannotBeRemovedNeverSilentlyLosesANewGrant
 file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
 perl: s~dirty \|\| !addedWhileUnread\.isEmpty \?~dirty ?~
+
+# Round-9 relay review: a listed word in a path is a problem whatever the
+# file holds, in a folder or file name, in camel case parts and in either
+# Unicode spelling. Each entry skips the path check one way.
+test: review9AWordInAPathFailsWhateverTheFileHolds review9AWordInAPathFailsWhenTheFileIsNotRead review9EitherSpellingOfAWordInAPathFails
+file: scripts/private-check.swift
+perl: s~if file\.split\(separator: "/"\)\.contains\(where:~if false, file.split(separator: "/").contains(where:~
+
+# Only the file name is checked, never its folders.
+test: review9AWordInAPathFailsWhateverTheFileHolds review9EitherSpellingOfAWordInAPathFails
+file: scripts/private-check.swift
+perl: s~if file\.split\(separator: "/"\)\.contains\(where:~if file.split(separator: "/").suffix(1).contains(where:~
+
+# The path is checked only for a file whose contents can be read and
+# hold something.
+test: review9AWordInAPathFailsWhateverTheFileHolds review9AWordInAPathFailsWhenTheFileIsNotRead review9EitherSpellingOfAWordInAPathFails
+file: scripts/private-check.swift
+perl: s~(\n\s*)(if file\.split\(separator: "/"\)\.contains\(where:)~$1guard (try? Data(contentsOf: repo.appendingPathComponent(file)))?.isEmpty == false else { continue }$1$2~
+
+# The path is printed but not counted, so the check still passes.
+test: review9AWordInAPathFailsWhateverTheFileHolds review9AWordInAPathFailsWhenTheFileIsNotRead review9EitherSpellingOfAWordInAPathFails
+file: scripts/private-check.swift
+perl: s~(a private word in its path"\)\n\s*)problems \+= 1~$1~
+
+# A name is read whole, without its camel case parts.
+test: review9AWordInAPathFailsWhateverTheFileHolds review9EitherSpellingOfAWordInAPathFails
+file: scripts/private-check.swift
+perl: s~contains\(where: \{ holdsPrivateWord\(\$0, salt: salt, hashes: hashes\) \}\)~contains(where: { \$0.split(separator: ".").contains { hashes.contains(hash(salt, key(\$0))) } })~

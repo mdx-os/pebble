@@ -542,6 +542,86 @@ struct PrivateCheckTests {
         #expect(result.output.contains("1 found."), "\(result.output)")
     }
 
+    /// A listed word in a path is a problem on its own, whatever the file
+    /// holds, since git publishes the name: a file named with the word,
+    /// empty or clean, a folder named with it, and the word in camel case
+    /// parts inside a file name. The path is printed redacted.
+    @Test(arguments: [
+        ("docs/%.md", "", "docs/[redacted]"),
+        ("docs/%.md", "Nothing to see here.\n", "docs/[redacted]"),
+        ("docs/%/notes.md", "Nothing to see here.\n", "docs/[redacted]/notes.md"),
+        ("Sources/Open#Relay.swift", "struct Plain {}\n", "Sources/[redacted]"),
+        ("Sources/#.swift", "", "Sources/[redacted]"),
+    ])
+    func review9AWordInAPathFailsWhateverTheFileHolds(name: String, contents: String, shown: String) throws {
+        let scratch = try Scratch()
+        let path = name.replacingOccurrences(of: "%", with: Self.word)
+            .replacingOccurrences(of: "#", with: Self.inParts("%"))
+        try scratch.write(path, contents)
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("private-check: \(shown): a private word in its path"), "\(result.output)")
+        #expect(result.output.contains("1 found."), "\(result.output)")
+        let named = result.output.lowercased().contains(Self.word)
+        #expect(!named, "the output names what was planted")
+    }
+
+    /// A file a listed word names is a problem even when its contents are
+    /// never read: binary, or a link that goes nowhere.
+    @Test(arguments: [false, true])
+    func review9AWordInAPathFailsWhenTheFileIsNotRead(link: Bool) throws {
+        let scratch = try Scratch()
+        let url = scratch.root.appendingPathComponent("docs/\(Self.word).bin")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if link {
+            try FileManager.default.createSymbolicLink(atPath: url.path, withDestinationPath: "missing")
+        } else {
+            try Data([0xff, 0x00, 0x80]).write(to: url)
+        }
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("private-check: docs/[redacted]: a private word in its path"), "\(result.output)")
+        let named = result.output.lowercased().contains(Self.word)
+        #expect(!named, "the output names what was planted")
+    }
+
+    /// A name in the other Unicode spelling of a listed word is found too,
+    /// in a folder and in a file name. Git on a Mac makes file names
+    /// precomposed unless told not to, so the scratch repository keeps them
+    /// as written.
+    @Test(arguments: [false, true])
+    func review9EitherSpellingOfAWordInAPathFails(listDecomposed: Bool) throws {
+        let listed = Self.accented(decomposed: listDecomposed)
+        let written = Self.accented(decomposed: !listDecomposed)
+        let scratch = try Scratch(listed: listed.capitalized)
+        #expect(try scratch.git("config", "core.precomposeunicode", "false") == 0)
+        try scratch.writeKeepingNames("docs/\(written)/notes.md", "")
+        try scratch.writeKeepingNames("notes/Open\(written.capitalized)Relay.md", "")
+        let names = try FileManager.default.contentsOfDirectory(atPath: scratch.root.path + "/docs")
+        #expect(names.map { Array($0.utf8) } == [Array(written.utf8)], "the folder name kept its spelling")
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("private-check: docs/[redacted]/notes.md: a private word in its path"), "\(result.output)")
+        #expect(result.output.contains("private-check: notes/[redacted]: a private word in its path"), "\(result.output)")
+        #expect(result.output.contains("2 found."), "\(result.output)")
+        let named = Self.namesAccented(result.output)
+        #expect(!named, "the output names what was planted")
+    }
+
+    /// Ordinary names pass: a name that only starts or ends with the word,
+    /// or holds its parts apart, is another name, and so are everyday ones.
+    @Test func review9OrdinaryPathsPass() throws {
+        let scratch = try Scratch()
+        let apart = Self.word.prefix(6) + "_" + Self.word.dropFirst(6)
+        try scratch.write("docs/\(apart)/notes.md", "")
+        try scratch.write("docs/\(Self.word)s2.md", "Nothing to see here.\n")
+        try scratch.write("Sources/Open\(Self.word.uppercased())SRelay.swift", "")
+        try scratch.write("Sources/PebbleCore/RelayTests.swift", "struct RelayTests {}\n")
+        try scratch.write("Config/Brand.xcconfig", "")
+        let result = try scratch.run()
+        #expect(result.status == 0, "\(result.output)")
+    }
+
     @Test(arguments: [
         ("relay.example" + ".herokuapp.com", "a hosting provider's hostname"),
         ("https://run-" + "abc.fly" + ".dev/v1", "a hosting provider's hostname"),

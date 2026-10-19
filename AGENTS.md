@@ -31,7 +31,8 @@ in lint, a skill, or CI.
   `build/mutation` and require its tests to fail. `ONLY=` runs the entries whose tests match
 - `make secrets-check`: gitleaks over git history
 - `make private-check`: fail on any file in git holding a word whose salted hash is in
-  `Config/private-words.sha256` (prints file and line, never the word), and on a hosting
+  `Config/private-words.sha256`, or with one in a folder or file name of its path (prints
+  file and line with such names redacted, never the word), and on a hosting
   provider hostname, a `.internal` or `.local` host or an IP address in `docs/`, `Config/`
   or `Packages/` (part of verify). A camel case name is also read in its parts and in
   every run of up to 8 parts joined, within that one name only. The owner fills the plain list in the git ignored

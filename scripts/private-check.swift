@@ -4,7 +4,9 @@
 //
 // check: fails on any file in git (tracked, or new and not ignored) with a
 // word whose salted hash is in Config/private-words.sha256. It prints the
-// file and line, never the word. In docs/, Config/ and Packages/ it also
+// file and line, never the word. A listed word in a folder or file name is
+// a problem too, whatever the file holds, and its path is printed with
+// that name redacted. In docs/, Config/ and Packages/ it also
 // fails on a hosting provider's hostname, a .internal or .local host and
 // an IP address, printing what kind of thing it found, never the thing.
 // It fails too if the plain list, Config/private-words.local.txt, is
@@ -21,7 +23,11 @@
 // a name such as fooBarRelay, FOORelay or FOOs is found, and so are runs of
 // up to 8 of its parts joined, so a listed foobar in OpenFooBarRelay is
 // found too. A join only counts when it is itself a listed word, and parts
-// of different names (foo_bar, foo bar) never join. Each line of the
+// of different names (foo_bar, foo bar) never join. So, by design, a
+// listed foobar written with a separator (foo_bar, foo-bar, Foo Bar) or
+// inside a run with no case change (openfoobarrelay) is not found. Where
+// that matters, list each part, or each run it can hide in, as a word of
+// its own. Each line of the
 // hash file after the salt is the lowercase hex SHA-256 of "<salt>:<word>",
 // the word in lowercase NFC.
 import CryptoKit
@@ -232,12 +238,18 @@ func decodedTexts(_ data: Data) -> [String] {
     return texts
 }
 
+/// Whether one segment of a path holds a listed word, read as a line of
+/// text is: either Unicode spelling, camel case parts and their joins.
+func holdsPrivateWord(_ segment: Substring, salt: String, hashes: Set<String>) -> Bool {
+    words(segment).contains { hashes.contains(hash(salt, $0)) }
+}
+
 /// Redact the whole segment, including extensions and camel-case names.
 /// Host rules apply here even outside the folders whose contents we scan.
 func diagnosticPath(_ path: String, salt: String, hashes: Set<String>) -> String {
     path.split(separator: "/", omittingEmptySubsequences: false).map { segment in
         let text = String(segment)
-        let privateWord = words(segment).contains { hashes.contains(hash(salt, $0)) }
+        let privateWord = holdsPrivateWord(segment, salt: salt, hashes: hashes)
         let host = hostRules.contains { $0.1.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil }
         return privateWord || host ? "[redacted]" : text
     }.joined(separator: "/")
@@ -264,6 +276,14 @@ func check(_ repo: URL) {
     var seen: [String: Bool] = [:]
     var problems = 0
     for file in files {
+        let path = diagnosticPath(file, salt: salt, hashes: hashes)
+        // Git publishes a file's path as much as what it holds, so a listed
+        // word in any folder or file name is a problem, whatever the file
+        // holds: empty, binary, or not read at all.
+        if file.split(separator: "/").contains(where: { holdsPrivateWord($0, salt: salt, hashes: hashes) }) {
+            print("private-check: \(path): a private word in its path")
+            problems += 1
+        }
         let url = repo.appendingPathComponent(file)
         guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]) else { continue }
         let data: Data
@@ -275,7 +295,6 @@ func check(_ repo: URL) {
             guard values.isRegularFile == true, let contents = try? Data(contentsOf: url) else { continue }
             data = contents
         }
-        let path = diagnosticPath(file, salt: salt, hashes: hashes)
         let checkHosts = hostFolders.contains { file.hasPrefix($0) }
         // Two readings can decode the same line. It is one problem.
         var reported: Set<String> = []
