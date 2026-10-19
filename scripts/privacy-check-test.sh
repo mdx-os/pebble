@@ -12,6 +12,8 @@
 #   link: <target>   with into: a new folder under Sources, make it a target
 #                    that PebbleModel depends on, so only a dependency reaches it
 #   filename: <name> optional source name, including a non-Swift extension
+#   project: <perl>  edit project.yml with this substitution, which must
+#                    change it; on its own or with one of the above
 #   reason: <code>   replace the first manifest entry's reason code
 #   category: <name> replace its category
 #   remove-category: <name> remove that manifest entry
@@ -52,14 +54,23 @@ if ! run_check; then
 fi
 
 count=0
-for fixture in "$fixtures"/*.swift; do
+# PRIVACY_FIXTURES picks some by name, such as r3-*, to try them on an
+# older checker named by PRIVACY_CHECK_SCRIPT and PRIVACY_AUDIT_BIN.
+for fixture in "$fixtures"/${PRIVACY_FIXTURES:-*}.swift; do
   name="$(basename "$fixture" .swift)"
   header() { sed -n "s#^// $1: *##p" "$fixture" | head -n 1; }
   into="$(header into)"; append="$(header append)"; empty="$(header empty)"
-  link="$(header link)"; expect="$(header expect)"
+  link="$(header link)"; expect="$(header expect)"; project="$(header project)"
   filename="$(header filename)"; reason="$(header reason)"; remove_category="$(header remove-category)"; category="$(header category)"
   [ -n "$expect" ] || { echo "privacy-check-test: $name has no expect: line"; failures=1; continue; }
   fresh
+  if [ -n "$project" ]; then
+    cp "$scratch/tree/project.yml" "$scratch/project.before"
+    perl -0pi -e "$project" "$scratch/tree/project.yml"
+    if cmp -s "$scratch/project.before" "$scratch/tree/project.yml"; then
+      echo "privacy-check-test: $name's project: change no longer applies to project.yml"; failures=1; continue
+    fi
+  fi
   if [ -n "$into" ]; then
     mkdir -p "$scratch/tree/$into"
     cp "$fixture" "$scratch/tree/$into/${filename:-Fixture$(echo "$name" | tr -d -- '-').swift}"
@@ -75,7 +86,7 @@ for fixture in "$fixtures"/*.swift; do
   elif [ -n "$empty" ]; then
     [ -f "$scratch/tree/$empty" ] || { echo "privacy-check-test: $name empties $empty, which is gone"; failures=1; continue; }
     : > "$scratch/tree/$empty"
-  else
+  elif [ -z "$project" ]; then
     echo "privacy-check-test: $name has no into:, append: or empty: line"; failures=1; continue
   fi
   python3 -I - "$scratch/tree/App/Resources/PrivacyInfo.xcprivacy" "$reason" "$remove_category" "$category" <<'MANIFEST'

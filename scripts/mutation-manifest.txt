@@ -417,3 +417,103 @@ perl: s~URL\(fileURLWithPath: path\)\.pathExtension == "swift"~true~
 test: privacyRulesCatchEveryWrongCase
 file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
 perl: s~Rule\("privacy\.gateTests", gateTestsPresent\),~~
+
+# Round 3. SwiftUI's web view and page and Multipeer sessions let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\n\s*"WebView", "WebPage", "MCSession", "MCBrowserViewController",~~
+
+# CFSocket and the Multipeer nearby services let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\n\s*\|\| \$0\.hasPrefix\("CFSocket"\) \|\| \$0\.hasPrefix\("MCNearbyService"\)~~
+
+# NSArray, NSAttributedString, the AV assets and NSXMLDocument read a URL unseen.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\n\s*"NSArray", "NSAttributedString", "AVURLAsset", "AVAsset", "NSXMLDocument",~~
+
+# The iCloud container lookup let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\|\| \$0 == "forUbiquityContainerIdentifier" \|\| \$0 == "ubiquityIdentityToken"~~
+
+# URL's async readers, url.lines and url.resourceBytes, let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\} else if urlReaders\.contains\(name\) \{~} else if false {~
+
+# The same readers as a key path, \.lines, let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~where urlReaders\.contains\(SyntaxSource\.name\(component\.declName\.baseName\)\)~where false~
+
+# contentsOf: read only when the call names a read type, as before: .init
+# with a type annotation is let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~&& initializerCallee\(call\.calledExpression\)~&& call.calledExpression.tokens(viewMode: .sourceAccurate).map(SyntaxSource.name).contains(where: types.contains)~
+
+# A typealias of Data not followed, so Bytes.init is let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~return found~return types~
+
+# Self.init inside an extension of Data let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~guard names\.contains\("Self"\),~guard false,~
+
+# An initializer reference named init(contentsOf:...) on another base let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\n\s*\|\| member\.declName\.argumentNames\?\.arguments\.contains\(where: \{ SyntaxSource\.name\(\$0\.name\) == "contentsOf" \}\) == true~~
+
+# A capture list counted as inside the cloud closure.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~, closure\.statements\.id == child\.id \{~ {~
+
+# copyItem(at:to:) let by, as a call and as a reference.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~guard call\.arguments\.contains\(where: \{ \$0\.label\.map\(SyntaxSource\.name\) == "at" \}\) else \{ continue \}~continue~
+
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\} else if reference\.argumentNames\?\.arguments\.first\.map\(\{ SyntaxSource\.name\(\$0\.name\) \}\) != "atPath" \{~} else if false {~
+
+# project.yml: a single product: entry skipped.
+test: privacyProjectReadsEveryForm
+file: Tools/GuardKit/Sources/GuardScan/PrivacyProject.swift
+perl: s~case \(let single as String, nil\): products\.append\(single\)~case (let single as String, nil): _ = single~
+
+# A package: entry with no product named, which links the package's own, skipped.
+test: privacyProjectReadsEveryForm
+file: Tools/GuardKit/Sources/GuardScan/PrivacyProject.swift
+perl: s~case \(nil, nil\): products\.append\(package\)~case (nil, nil): break~
+
+# A target: dependency not followed, so its sources go unread.
+test: privacyProjectReadsEveryForm
+file: Tools/GuardKit/Sources/GuardScan/PrivacyProject.swift
+perl: s~todo\.append\(other\)~_ = other~
+
+# A source entry with keys besides path: read as if it had none.
+test: privacyProjectFailsOnFormsItCannotRead
+file: Tools/GuardKit/Sources/GuardScan/PrivacyProject.swift
+perl: s~Set\(entry\.keys\) == \["path"\]~entry.keys.contains("path")~
+
+# A kind of target the check doesn't know passed over.
+test: privacyProjectFailsOnFormsItCannotRead
+file: Tools/GuardKit/Sources/GuardScan/PrivacyProject.swift
+perl: s~\} else if !testTypes\.contains\(type\) \{~} else if false {~
+
+# Any package taken for PebbleKit.
+test: privacyProjectFailsOnFormsItCannotRead
+file: Tools/GuardKit/Sources/GuardScan/PrivacyProject.swift
+perl: s~guard package == Self\.package, \(packages\[package\] as\? \[String: Any\]\)\?\["path"\] as\? String == packagePath else \{~guard true else {~
+
+# A dependency of another kind, such as a framework, passed over.
+test: privacyProjectFailsOnFormsItCannotRead
+file: Tools/GuardKit/Sources/GuardScan/PrivacyProject.swift
+perl: s~\} else \{\n\s*throw Unreadable\("target \\\(name\) has a dependency on [^\n]*\n\s*\}~}~

@@ -42,13 +42,16 @@ keys that never enter the repo.
   Content entries before it ships.
 - **Network code** lives only in `Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift`,
   and its transport is made only in `CloudHelpView.swift`, inside the
-  closure `ModelChoice.model` calls with the cloud setting on.
-  `make privacy-check` fails on network code anywhere else, in `App/` or
-  any PebbleKit target the app reaches, and if the gate or its tests
+  closure `ModelChoice.model` calls with the cloud setting on, in its body
+  and not its capture list.
+  `make privacy-check` fails on network code anywhere else, in `App/`,
+  any source folder `project.yml` compiles, or any PebbleKit target the
+  app reaches. It reads `project.yml` through `xcodegen dump` and fails on
+  a dependency or source it can't read. It fails if the gate or its tests
   (`offByDefaultMakesNoTransportAndKeepsChatsOnDevice`,
   `anEmptyAddressMeansDisabledEvenIfSavedOn`) go away. It also fails on
   system APIs that send the person's data to Apple: `CLGeocoder`,
-  `MKLocalSearch`, and speech recognition outside the reserved
+  `MKLocalSearch`, the iCloud container, and speech recognition outside the reserved
   `PebbleModel/OnDeviceSpeech.swift` helper named `recognizeOnDevice`.
   No speech helper ships today. Adding it requires reviewing the exact
   request passed to recognition and tests that keep recognition on device.

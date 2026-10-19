@@ -2,7 +2,9 @@
 # Keeps App/Resources/PrivacyInfo.xcprivacy, the export answer and the
 # promise that personal content stays on the device true to the code.
 #
-# Enumerates App sources and all transitively linked package targets. GuardScan
+# Enumerates every source folder project.yml compiles, all of App, and all
+# transitively linked package targets, read from project.yml as XcodeGen
+# resolves it, so a form the check can't read fails. GuardScan
 # parses Swift once per file, ignoring comments and literal text. Non-Swift
 # compiled sources fail closed until a reader and fixtures are added.
 # Validates manifest categories and reason codes, network confinement, URL
@@ -24,9 +26,23 @@ plutil -lint -s "$manifest" || { echo "privacy-check: $manifest is not a valid p
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-# The products the app links, from project.yml.
-products="$(sed -n 's/^ *products: *\[\(.*\)\]/\1/p' project.yml | tr -d ' ' | tr ',' ' ')"
-[ -n "$products" ] || { echo "privacy-check: no package products found in project.yml"; exit 1; }
+# The Swift rules live in GuardScan, isolated from the app package graph.
+# Fixture tests build once and pass that exact executable to every scratch tree.
+if [ -n "${PRIVACY_AUDIT_BIN:-}" ]; then
+  audit="$PRIVACY_AUDIT_BIN"
+else
+  swift build --package-path Tools/GuardKit --product privacy-audit --quiet >&2
+  bin="$(swift build --package-path Tools/GuardKit --show-bin-path)"
+  audit="$bin/privacy-audit"
+fi
+
+# The products the app links and the folders it compiles, from project.yml
+# as XcodeGen resolves it. PrivacyProject fails on any form it can't read.
+xcodegen dump --spec project.yml --type json --no-env --quiet --file "$work/spec.json" \
+  || { echo "privacy-check: xcodegen could not read project.yml"; exit 1; }
+"$audit" --project "$work/spec.json" > "$work/linked" || { cat "$work/linked"; exit 1; }
+products="$(sed -n 's/^product //p' "$work/linked" | tr '\n' ' ')"
+[ -n "$products" ] || { echo "privacy-check: project.yml links no package products"; exit 1; }
 
 # Every source file of those products' targets and everything they depend
 # on. A dependency on another package can't be read here, so it fails.
@@ -60,21 +76,19 @@ while todo:
         print(path)
 print(" ".join(sorted(seen)), file=sys.stderr)
 ' "$work/package.json" "$package" $products > "$work/files" 2> "$work/targets" || { cat "$work/targets"; exit 1; }
-# Include all Xcode compiled source types, plus headers that could contain
-# inline code. Unsupported languages fail closed in PrivacyAudit.
-find App -type f \( -iname '*.swift' -o -iname '*.m' -o -iname '*.mm' -o -iname '*.c' -o -iname '*.cc' -o -iname '*.cpp' -o -iname '*.cxx' -o -iname '*.c++' -o -iname '*.metal' -o -iname '*.h' -o -iname '*.hpp' -o -iname '*.s' \) | sort >> "$work/files"
+# Every source folder or file project.yml compiles, and all of App. Include
+# all Xcode compiled source types, plus headers that could contain inline
+# code. Unsupported languages fail closed in PrivacyAudit.
+sed -n 's/^root //p' "$work/linked" > "$work/roots"
+echo App >> "$work/roots"
+while IFS= read -r root; do
+  [ -e "$root" ] || { echo "privacy-check: project.yml compiles $root, which is not there"; exit 1; }
+  find "$root" -type f \( -iname '*.swift' -o -iname '*.m' -o -iname '*.mm' -o -iname '*.c' -o -iname '*.cc' -o -iname '*.cpp' -o -iname '*.cxx' -o -iname '*.c++' -o -iname '*.metal' -o -iname '*.h' -o -iname '*.hpp' -o -iname '*.s' \) >> "$work/files"
+done < "$work/roots"
+sort -u "$work/files" -o "$work/files"
 
-# The Swift rules live in GuardScan, isolated from the app package graph.
-# Fixture tests build once and pass that exact executable to every scratch tree.
-if [ -n "${PRIVACY_AUDIT_BIN:-}" ]; then
-  audit="$PRIVACY_AUDIT_BIN"
-else
-  swift build --package-path Tools/GuardKit --product privacy-audit --quiet >&2
-  bin="$(swift build --package-path Tools/GuardKit --show-bin-path)"
-  audit="$bin/privacy-audit"
-fi
 "$audit" "$work/files" "${1:-check}" || status=1
 if [ "${1:-}" != --network-files ] && [ "$status" -eq 0 ]; then
-  echo "privacy-check: ok ($manifest matches $(wc -l < "$work/files" | tr -d ' ') files in App and $(cat "$work/targets"); network code only in $cloud_files)"
+  echo "privacy-check: ok ($manifest matches $(wc -l < "$work/files" | tr -d ' ') files in $(tr '\n' ' ' < "$work/roots")and $(cat "$work/targets"); network code only in $cloud_files)"
 fi
 exit "$status"
