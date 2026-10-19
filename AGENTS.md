@@ -17,16 +17,17 @@ in lint, a skill, or CI.
 
 - `make verify`: everything CI runs (brand check, tests, builds, screenshots)
 - `make test`: package unit tests (Swift Testing), PebbleKit's and then the source guards' in `Tools/GuardKit`
+- `make model-test`: the tests that run MLX itself (`OnDeviceLoadTests`), on the Mac through `xcodebuild` (part of verify). `swift test` builds MLX without its graphics chip programs, where it can't even make an array, so they skip there
 - `make graph-check`: fail if swift-syntax can reach PebbleKit or the app project, named or through a dependency (part of verify). `make graph-check-test` is its self-test
 - `make build-release`: Release builds for macOS and the iOS Simulator (part of verify). Anything behind `#if DEBUG`, like the showcase, must only be used behind it too
-- `make pulse`: fetch the competitor watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
+- `make pulse`: fetch the public source watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
 - `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`, plus dark shots of the
   orange fill that `scripts/check-screenshots.sh` checks. Worktrees share simulators and
   the bundle ID, so when another session runs at once pass free ones:
   `make verify PEBBLE_IPAD="iPad Air 13-inch (M4)" PEBBLE_IPHONE="iPhone 17e"`
 - The screenshots also get a `STAMP` with the commit and the working tree's hash. `make verify` makes them and then fails with "screenshots are stale, rerun make screenshots" if the stamp is missing or the tree has changed since. The tree hash is the contract: the same files make the same screenshots, so committing or amending them with nothing changed keeps them fresh. The commit line is only there to read. Screenshots always show the code as it is now
 - `make screenshots-check`: that check alone, and `make screenshots-check-test` its self-test
-- `make local-only-check`: no network client in the app, PebbleCore, PebbleBackground or PebbleModel, except `URLSession` in `ModelDownload.swift` and `CloudModel.swift`, named by exact path. `make local-only-check-test` is its self-test
+- `make local-only-check`: no network client in the app, PebbleCore, PebbleBackground, PebbleModel or `Packages/MLXLM`, except `URLSession` in `ModelDownload.swift` and `CloudModel.swift`, named by exact path. `make local-only-check-test` is its self-test
 - Building MLX needs Xcode's Metal Toolchain (`xcodebuild -downloadComponent MetalToolchain`). Without it `make build` fails in mlx-swift with "missing Metal Toolchain", whatever the change
 - `make generate`: regenerate `Pebble.xcodeproj` after editing `project.yml`
 - `make mutation-check`: break each entry of `scripts/mutation-manifest.txt` on a copy in
@@ -39,8 +40,8 @@ in lint, a skill, or CI.
 - `Packages/PebbleKit/`: shared code in layers. A layer imports only layers
   below it; `Package.swift` enforces this.
   - `PebbleCore`: plain types. No SwiftUI, no networking.
-  - `PebblePulse`: competitor watch fetching and snapshots. Imports PebbleCore.
-  - `PebbleModel`: model adapter. `ModelClient`, the on-device placeholder, `MLXChatModel` with its pinned download (`PinnedModel`, `ModelInstaller`, network only in `ModelDownload.swift`), the app's one `OnDeviceChat`, and `CloudModel` (off by default, every request previewed and redacted by `Redactor` in PebbleCore). Imports PebbleCore. `MLXLLM` and `MLXLMCommon` come from the local `Packages/MLXLM` copy of mlx-swift-lm 3.32.3, without its macro. An Ollama adapter plugs in here.
+  - `PebblePulse`: public source watch fetching and snapshots. Imports PebbleCore.
+  - `PebbleModel`: model adapter. `ModelClient`, the on-device placeholder, `MLXChatModel` with its pinned download (`PinnedModel`, `ModelInstaller`, network only in `ModelDownload.swift`) and its load on the processor alone (`OnDeviceLoad`, so leaving the app mid-load sends the graphics chip nothing), the app's one `OnDeviceChat`, and `CloudModel` (off by default, every request previewed and redacted by `Redactor` in PebbleCore). Imports PebbleCore. `MLXLLM` and `MLXLMCommon` come from the local `Packages/MLXLM` copy of mlx-swift-lm 3.32.3, without its macro. An Ollama adapter plugs in here.
   - `PebbleBackground`: gives the background runner time (`BGTaskScheduler` on iOS, `NSBackgroundActivityScheduler` on the Mac). Imports PebbleCore. Scheduling decisions are pure functions in `BackgroundPlan`; the runner, its store and its switch live in PebbleCore's `Background.swift`, so no platform code goes there.
   - `PebbleUI`: SwiftUI views shared by every platform. Imports PebbleCore and PebbleModel.
 - New code goes in a package, not in `App/`. New layers get added to
@@ -106,7 +107,8 @@ in lint, a skill, or CI.
 
 ## Manual checks before release
 
-Things no test here can reach. Check each on a real iPhone before a release.
+Things no test here can reach. Check each by hand on a real device before
+a release, and note the result in the release PR.
 
 - `BackgroundStore.shutError` is `EPERM`. With "Work while you're away" on,
   restart the phone in the evening and leave it locked, never unlocked,
@@ -118,10 +120,23 @@ Things no test here can reach. Check each on a real iPhone before a release.
 - Peak memory of the on-device model on a real iPhone 17e is still to be
   measured, during a cold load and a reply that fills the context. Download
   it from What I remember, open the chat, and send that long line. Before
-  the first reply the row says the model is downloaded, not "Ready". After
-  a reply comes from the model, the row says "Ready". The 1 GB reserve
-  (`OnDeviceModel.headroomBytes`) is an admission estimate from a short Mac
-  chat that peaked 0.49 GB over the weights. It is not a measured fit.
+  the first reply the row says the model is downloaded, not "Ready". Once
+  the weights have loaded for that reply, the row says "Ready". The 1 GB
+  reserve (`OnDeviceModel.headroomBytes`) is an admission estimate from a
+  short Mac chat that peaked 0.49 GB over the weights. It is not a
+  measured fit.
+- The model never uses the graphics chip in the background. On a real
+  iPhone with Xcode's console open, go home while the model loads for the
+  first time (right after the download, at the first line sent), and again
+  while a long line is being read and while a reply is being written. Open
+  the app again each time. It must not have crashed, the console must not
+  show `kIOGPUCommandBufferCallbackErrorBackgroundExecutionNotPermitted`,
+  and going home must not stall. The next line sent must not load the
+  model again.
+- **Done's focus ring on the Mac:** turn on Full Keyboard Access, open a sheet, and Tab to Done. Exactly one ring shows around it, in light and in dark. If the system draws a second ring, add `.focusEffectDisabled()` to the button.
+- **Done's focus ring on iPad:** with a hardware keyboard, Tab to Done. The ring shows in light and in dark.
+- **Done's pointer hover on iPad:** with a trackpad or mouse, hover over Done. It shows the hover effect.
+- **Today's count on the Mac:** with something waiting and another row chosen, turn on VoiceOver and move to Today in the sidebar. It says the count as "3 waiting for you", not just "3". If it says only the number, the system badge is dropping the label.
 
 ## The name
 
@@ -184,12 +199,3 @@ Things no test here can reach. Check each on a real iPhone before a release.
 - Run untrusted PR code on a self-hosted runner. PR checks use GitHub's runners.
 - Copy code from MDx without reading it first; MDx carries enterprise
   assumptions and internal names that do not belong here.
-
-## Manual checks before release
-
-Some things can't be proven by an automated test. Check these by hand before a release and note the result in the release PR:
-
-- **Done's focus ring on the Mac:** turn on Full Keyboard Access, open a sheet, and Tab to Done. Exactly one ring shows around it, in light and in dark. If the system draws a second ring, add `.focusEffectDisabled()` to the button.
-- **Done's focus ring on iPad:** with a hardware keyboard, Tab to Done. The ring shows in light and in dark.
-- **Done's pointer hover on iPad:** with a trackpad or mouse, hover over Done. It shows the hover effect.
-- **Today's count on the Mac:** with something waiting and another row chosen, turn on VoiceOver and move to Today in the sidebar. It says the count as "3 waiting for you", not just "3". If it says only the number, the system badge is dropping the label.

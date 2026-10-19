@@ -127,6 +127,39 @@ private struct PrefillGenerator: OnDeviceGenerating {
     }
 }
 
+/// Stands in for MLX in its two parts, as `MLXEngine` has them: a load on
+/// the processor that takes a while and minds no stop, as MLX's evaluation
+/// of the weights doesn't, then the reply on the graphics chip. Writes
+/// down each step, and whether the app was away when the chip was used.
+private struct StepEngine: OnDeviceEngine {
+    let events: Events
+    let runner: OnDeviceRunner
+
+    func preflight(_ directory: URL) throws {}
+
+    func load(_ directory: URL) async throws -> String {
+        for step in 1...3 {
+            events.add("load \(step)")
+            Self.work()
+        }
+        return "weights"
+    }
+
+    func reply(to lines: [OnDeviceTranscriptLine], with loaded: String) async throws -> String {
+        events.add(runner.isAway ? "graphics chip while away" : "graphics chip")
+        return lines.last?.text ?? ""
+    }
+
+    func drain() {
+        events.add("drained")
+    }
+
+    /// Blocks, as a step of the load does.
+    private static func work() {
+        Thread.sleep(forTimeInterval: 0.2)
+    }
+}
+
 struct OnDeviceRunnerTests {
     private let folder = URL(fileURLWithPath: "/tmp/no-such-model", isDirectory: true)
 
@@ -220,6 +253,36 @@ struct OnDeviceRunnerTests {
         events.add("background done")
         await #expect(throws: MLXChatModelError.interrupted) { try await under.value }
         #expect(events.list == ["start under way", "drained", "background done"])
+    }
+
+    /// Leaving during the first load, as the app turns inactive, returns
+    /// without waiting for the load, and nothing reaches the graphics chip.
+    /// The load ends on the processor and is kept, and back in front the
+    /// next reply uses it.
+    @Test func leavingDuringTheFirstLoadNeverReachesTheGraphicsChip() async throws {
+        let events = Events()
+        let runner = OnDeviceRunner()
+        let model = MLXChatModel(directory: folder, runner: runner,
+                                 generator: MLXGenerator(directory: folder,
+                                                         engine: StepEngine(events: events, runner: runner),
+                                                         onLoaded: { _ in events.add("loaded") }))
+        let first = Task { try await model.reply(to: turns("first")) }
+        await events.waitFor("load 1")
+        runner.closeGate()
+        await runner.drained()
+        events.add("background done")
+        await #expect(throws: MLXChatModelError.interrupted) { try await first.value }
+        await events.waitFor("loaded")
+        let list = events.list
+        #expect(list.last == "loaded")
+        let left = try #require(list.firstIndex(of: "background done"))
+        #expect(left < (list.firstIndex(of: "load 3") ?? 0))
+        #expect(!list.contains { $0.hasPrefix("graphics chip") || $0 == "drained" })
+
+        runner.returnToForeground()
+        #expect(try await model.reply(to: turns("back")) == "back")
+        #expect(events.list.suffix(2) == ["graphics chip", "drained"])
+        #expect(events.list.filter { $0.hasPrefix("load ") }.count == 3)
     }
 
     /// Once the gate is closed nothing is let onto the model, even a reply

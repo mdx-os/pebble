@@ -88,6 +88,9 @@ for package in $packages; do
   mkdir -p "$work/$package"
   rsync -a --delete --exclude .build --exclude .swiftpm "$root/$package/" "$work/$package/"
 done
+# PebbleKit reads the copied MLX libraries by path. Nothing breaks them.
+mkdir -p "$work/Packages/MLXLM"
+rsync -a --delete --exclude .build --exclude .swiftpm "$root/Packages/MLXLM/" "$work/Packages/MLXLM/"
 for part in scripts Config App AppUITests .github docs; do
   rsync -a --delete "$root/$part/" "$work/$part/"
 done

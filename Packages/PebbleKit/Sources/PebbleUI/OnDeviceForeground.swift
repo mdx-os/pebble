@@ -37,11 +37,11 @@ struct OnDeviceScenes: Equatable {
 /// Ties on-device replies to the app being in front, on iPhone and iPad.
 ///
 /// There the system refuses work on the graphics chip from the background,
-/// and the model can end the app over it. The weight load ignores a stop
-/// and can still evaluate after it was cancelled, so leaving does not
-/// return until that work has finished and the chip is synchronized.
-/// A stopped reply's message stays in the chat, ready to send again. On
-/// the Mac replies go on as before.
+/// and the model can end the app over it. Leaving stops the reply under
+/// way and does not return until its work on the chip has drained. The
+/// weight load runs on the processor, so leaving does not wait for it, and
+/// it goes on and is kept. A stopped reply's message stays in the chat,
+/// ready to send again. On the Mac replies go on as before.
 @MainActor
 public final class OnDeviceForeground {
     private let runner: OnDeviceRunner
@@ -77,9 +77,9 @@ public final class OnDeviceForeground {
     }
 
     /// The app moved. Leaving closes the runner's gate and does not return
-    /// until the reply under way, including a load that ignores the stop,
-    /// has finished and its work on the graphics chip has drained. Coming
-    /// back opens the gate.
+    /// until the reply under way has stopped and its work on the graphics
+    /// chip has drained. A reply waiting for the first load stops at once,
+    /// with nothing sent to the chip. Coming back opens the gate.
     public func moved(to next: AppPlace) {
         guard stopsInBackground, next != place else { return }
         place = next
@@ -118,7 +118,7 @@ public final class OnDeviceForeground {
         sceneWatch = SceneWatch { [weak self] note, activate in
             guard let scene = note.object as? UIScene else { return }
             let id = ObjectIdentifier(scene)
-            let run = {
+            let run: @MainActor () -> Void = {
                 guard let self else { return }
                 if activate {
                     self.sceneActivated(id)

@@ -50,9 +50,10 @@ App/                  the app target (one target for Mac, iPhone and iPad)
 Config/Brand.xcconfig the product name, set once
 Packages/PebbleKit/   shared code, in layers
   PebbleCore            plain types, no UI, no networking
-  PebblePulse           competitor watch fetching and snapshots
+  PebblePulse           public source watch fetching and snapshots
   PebbleModel           model adapter, the on-device placeholder, MLX and its download
   PebbleUI              SwiftUI views
+Packages/MLXLM/       the two mlx-swift-lm libraries the model adapter uses, copied
 pulse/                source list and snapshots
 scripts/              build helpers
 ```
@@ -66,6 +67,15 @@ The chat asks a `ModelClient` for each reply. The app makes one,
 holds `LocalStubModel`, which says plainly that the model isn't ready and how
 to get it, instead of pretending to answer. Tests, screenshots, and CI use the
 placeholder, so they never download or load a model and need no GPU.
+
+The first reply loads the weights on the processor (`OnDeviceLoad`), so a
+load never uses the graphics chip, which iOS refuses to an app in the
+background. On iPhone and iPad, leaving the app stops the reply under way
+and waits for its work on the graphics chip to finish before the app goes
+inactive. A load under way goes on and is kept for the next reply.
+`MLXLLM` and `MLXLMCommon` come from `Packages/MLXLM`, an unchanged copy of
+those two libraries from mlx-swift-lm 3.32.3 under its MIT license, without
+the macro that would bring swift-syntax into the app's graph.
 
 Getting the model is always the person's choice: What I remember, then
 Download on-device model, about 2.3 GB. Nothing is fetched at launch or on its

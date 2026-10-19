@@ -170,7 +170,8 @@ public final class MLXChatModel: ModelClient, Sendable {
     public convenience init(directory: URL, runner: OnDeviceRunner = .shared) {
         let loads = LoadSignal()
         self.init(directory: directory, runner: runner,
-                  generator: MLXGenerator(directory: directory, onLoaded: { loads.didLoad($0) }),
+                  generator: MLXGenerator(directory: directory, engine: MLXEngine(),
+                                          onLoaded: { loads.didLoad($0) }),
                   loads: loads)
     }
 
@@ -191,7 +192,7 @@ public final class MLXChatModel: ModelClient, Sendable {
     }
 
     /// Records a successful load. The real load calls this; tests do too,
-    /// because opening the weights needs the graphics chip.
+    /// because `swift test` builds MLX without the programs a load needs.
     func noteLoaded() {
         loads.didLoad(directory)
     }
@@ -217,41 +218,187 @@ public final class MLXChatModel: ModelClient, Sendable {
     }
 }
 
-/// Loads the folder once, on the first reply, and answers with MLX.
-///
-/// A failed load is remembered. The next reply throws the same error and
-/// does not load the folder again. A load stopped part way is not a
-/// failure, and the next reply loads again.
-actor MLXGenerator: OnDeviceGenerating {
-    private let directory: URL
-    private let onLoaded: @Sendable (URL) -> Void
-    private var loaded: ModelContainer?
-    private var loadFailure: MLXChatModelError?
-    /// True once MLX was asked to load, so there may be work to wait for.
-    private var touchedModel = false
+/// What `MLXGenerator` runs: a load that never uses the graphics chip, and
+/// a reply that does. Tests stand in for it.
+protocol OnDeviceEngine: Sendable {
+    associatedtype Loaded: Sendable
+    /// Confirms the folder can be loaded, before anything touches MLX.
+    func preflight(_ directory: URL) throws
+    /// Loads the folder, on the processor only.
+    func load(_ directory: URL) async throws -> Loaded
+    /// Reads the prompt and writes the reply, on the graphics chip.
+    func reply(to lines: [OnDeviceTranscriptLine], with loaded: Loaded) async throws -> String
+    /// Waits for every piece of work already sent to the graphics chip.
+    func drain()
+}
 
-    init(directory: URL, onLoaded: @escaping @Sendable (URL) -> Void = { _ in }) {
+/// Loads the folder once, on the first reply, and answers with its engine.
+///
+/// The load runs on its own, on the processor, and is never stopped. A
+/// reply stopped while it waits for the load, as when the app leaves, ends
+/// at once without having sent the graphics chip anything, and the load
+/// goes on and is kept for the next reply. A failed load is remembered.
+/// The next reply throws the same error and does not load the folder again.
+actor MLXGenerator<Engine: OnDeviceEngine>: OnDeviceGenerating {
+    private let directory: URL
+    private let engine: Engine
+    private let onLoaded: @Sendable (URL) -> Void
+    private var loaded: Engine.Loaded?
+    private var loading: Task<Engine.Loaded, Error>?
+    private var loadFailure: MLXChatModelError?
+    /// True once a reply has sent work to the graphics chip, so there may be work to wait for.
+    private var usedChip = false
+
+    init(directory: URL, engine: Engine, onLoaded: @escaping @Sendable (URL) -> Void = { _ in }) {
         self.directory = directory
+        self.engine = engine
         self.onLoaded = onLoaded
     }
 
-    /// A stop while the prompt is read throws before its last evaluation,
-    /// and the weights' evaluation runs on through a stopped load, so work
-    /// can still be on the graphics chip when `reply` ends. Waits for it.
     func drain() {
-        guard touchedModel else { return }
-        MLX.Stream.gpu.synchronize()
-        MLX.Stream.cpu.synchronize()
+        guard usedChip else { return }
+        engine.drain()
     }
 
     func reply(to transcript: [ChatTurn]) async throws -> String {
-        let container = try await container()
+        let loaded = try await container()
+        // The gate closing as the app leaves stops the reply here, before
+        // anything is sent to the graphics chip.
         try Task.checkCancellation()
-        let lines = try await Self.fitted(OnDeviceTranscript.lines(for: transcript), in: container)
+        usedChip = true
+        return try await engine.reply(to: OnDeviceTranscript.lines(for: transcript), with: loaded)
+    }
+
+    /// The loaded folder, waiting for a load under way, or starting one.
+    /// A stop ends the wait, not the load.
+    private func container() async throws -> Engine.Loaded {
+        if let loaded {
+            return loaded
+        }
+        if let loadFailure {
+            throw loadFailure
+        }
+        if let loading {
+            return try await StopWaiting.value(of: loading)
+        }
+        do {
+            try engine.preflight(directory)
+        } catch {
+            let failure = error as? MLXChatModelError ?? .unavailable
+            loadFailure = failure
+            throw failure
+        }
+        let engine = engine
+        let directory = directory
+        let load = Task.detached {
+            let result: Result<Engine.Loaded, Error>
+            do {
+                result = .success(try await engine.load(directory))
+            } catch {
+                result = .failure(error)
+            }
+            return try await self.finished(result)
+        }
+        loading = load
+        return try await StopWaiting.value(of: load)
+    }
+
+    /// Keeps a finished load, or remembers why it failed.
+    private func finished(_ result: Result<Engine.Loaded, Error>) throws -> Engine.Loaded {
+        loading = nil
+        switch result {
+        case .success(let container):
+            loaded = container
+            onLoaded(directory)
+            return container
+        case .failure(let error):
+            let failure = error as? MLXChatModelError ?? .unavailable
+            loadFailure = failure
+            throw failure
+        }
+    }
+}
+
+/// Waits for a task unless the waiting task is stopped first. The task
+/// itself goes on either way.
+enum StopWaiting {
+    static func value<T: Sendable>(of task: Task<T, Error>) async throws -> T {
+        let once = ResumeOnce<T>()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                once.set(continuation)
+                Task.detached { once.resume(with: await task.result) }
+            }
+        } onCancel: {
+            once.resume(with: .failure(CancellationError()))
+        }
+    }
+
+    /// Resumes one continuation once, with whichever result comes first,
+    /// even one that comes before the continuation does.
+    private final class ResumeOnce<T: Sendable>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<T, Error>?
+        private var early: Result<T, Error>?
+        private var done = false
+
+        func set(_ continuation: CheckedContinuation<T, Error>) {
+            let early: Result<T, Error>? = lock.withLock {
+                guard let early = self.early else {
+                    self.continuation = continuation
+                    return nil
+                }
+                done = true
+                return early
+            }
+            if let early { continuation.resume(with: early) }
+        }
+
+        func resume(with result: Result<T, Error>) {
+            let waiting: CheckedContinuation<T, Error>? = lock.withLock {
+                guard !done else { return nil }
+                guard let continuation else {
+                    if early == nil { early = result }
+                    return nil
+                }
+                done = true
+                self.continuation = nil
+                return continuation
+            }
+            waiting?.resume(with: result)
+        }
+    }
+}
+
+/// The real engine: MLX, with the folder loaded on the processor by
+/// `OnDeviceLoad`.
+struct MLXEngine: OnDeviceEngine {
+    func preflight(_ directory: URL) throws {
+        try Self.check(directory)
+    }
+
+    func load(_ directory: URL) async throws -> ModelContainer {
+        Memory.cacheLimit = MLXChatModel.cacheLimitBytes
+        return try await OnDeviceLoad.container(from: directory, tokenizerLoader: LocalDirectoryTokenizerLoader())
+    }
+
+    func reply(to lines: [OnDeviceTranscriptLine], with container: ModelContainer) async throws -> String {
+        let lines = try await Self.fitted(lines, in: container)
         try Task.checkCancellation()
         return try await container.perform { context in
             try await Self.generate(lines, context: context)
         }
+    }
+
+    /// A stop while the prompt is read throws before its last evaluation,
+    /// so work can still be on the graphics chip when a reply ends. Waits
+    /// for it. Only the global streams are synchronized: the copy of
+    /// mlx-swift-lm in `Packages/MLXLM` generates on them. Generation run
+    /// under `Stream.withNewDefaultStream` would need its own stream
+    /// synchronized here.
+    func drain() {
+        MLX.Stream.gpu.synchronize()
+        MLX.Stream.cpu.synchronize()
     }
 
     /// Reads the prompt and generates the reply. When cancelled, stops
@@ -283,40 +430,8 @@ actor MLXGenerator: OnDeviceGenerating {
         }
     }
 
-    private func container() async throws -> ModelContainer {
-        if let loaded {
-            return loaded
-        }
-        if let loadFailure {
-            throw loadFailure
-        }
-        do {
-            let container = try await performLoad()
-            loaded = container
-            onLoaded(directory)
-            return container
-        } catch let error as MLXChatModelError {
-            loadFailure = error
-            throw error
-        } catch {
-            if Task.isCancelled { throw CancellationError() }
-            loadFailure = .unavailable
-            throw MLXChatModelError.unavailable
-        }
-    }
-
-    private func performLoad() async throws -> ModelContainer {
-        try preflight()
-        touchedModel = true
-        Memory.cacheLimit = MLXChatModel.cacheLimitBytes
-        return try await LLMModelFactory.shared.loadContainer(
-            from: directory,
-            using: LocalDirectoryTokenizerLoader()
-        )
-    }
-
     /// Confirms the folder can be loaded before MLX reads the weights.
-    private func preflight() throws {
+    private static func check(_ directory: URL) throws {
         let configURL = directory.appendingPathComponent("config.json")
         guard FileManager.default.fileExists(atPath: configURL.path) else {
             throw MLXChatModelError.unavailable
@@ -392,7 +507,7 @@ private struct ModelTypeProbe: Decodable {
 }
 
 /// Reads tokenizer files from the model directory. Does not download them.
-private struct LocalDirectoryTokenizerLoader: TokenizerLoader {
+struct LocalDirectoryTokenizerLoader: TokenizerLoader {
     func load(from directory: URL) async throws -> any MLXLMCommon.Tokenizer {
         let tokenizerData = try Self.readConfig(named: "tokenizer.json", in: directory)
         let tokenizerConfig = try Self.tokenizerConfig(in: directory)

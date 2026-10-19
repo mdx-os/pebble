@@ -4,12 +4,12 @@ import PackageDescription
 // Layers, lowest first. A layer may import only the layers below it,
 // and SwiftPM enforces that through the dependency lists here.
 //   PebbleCore   plain types. No SwiftUI, no networking.
-//   PebblePulse  competitor watch: fetching and snapshots. Imports PebbleCore.
+//   PebblePulse  public source watch: fetching and snapshots. Imports PebbleCore.
 //   PebbleModel  model adapter. ModelClient, the on-device placeholder,
 //                CloudModel (off by default) and the MLX adapter. Imports
-//                PebbleCore. MLX loads a model directory already on the
-//                device. It does not download weights.
-//                An Ollama adapter can live here later.
+//                PebbleCore. It downloads the pinned model's weights, with
+//                the network only in ModelDownload.swift, and MLX loads
+//                them from the device. An Ollama adapter can live here later.
 //   PebbleBackground  gives the background runner time: BGTaskScheduler on
 //                iPhone and iPad, NSBackgroundActivityScheduler on the Mac.
 //                Imports PebbleCore. Scheduling decisions are pure

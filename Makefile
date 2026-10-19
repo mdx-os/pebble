@@ -1,13 +1,13 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test repeat-test mutation-check build build-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-only-check local-only-check-test resolved-check local-config-check graph-check graph-check-test secrets-check pulse clean
+.PHONY: verify generate test model-test repeat-test mutation-check build build-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-only-check local-only-check-test resolved-check local-config-check graph-check graph-check-test secrets-check pulse clean
 
 ## verify: everything CI runs. Run this before every PR. The graph check
 ## runs once the builds have made the project, so it reads that too. The
 ## screenshots are made after every other step and then checked against the
 ## working tree. Both are the recipe, so even with -j nothing runs beside
 ## them that could change the tree between the stamp and the check.
-verify: brand-check local-only-check local-only-check-test resolved-check local-config-check screenshots-check-test graph-check-test test build build-release
+verify: brand-check local-only-check local-only-check-test resolved-check local-config-check screenshots-check-test graph-check-test test model-test build build-release
 	$(MAKE) graph-check
 	$(MAKE) screenshots
 	sh scripts/screenshot-stamp.sh check build/screenshots
@@ -25,6 +25,15 @@ test:
 	swift test --package-path Packages/PebbleKit --disable-automatic-resolution --quiet
 	swift test --package-path Tools/GuardKit --disable-automatic-resolution --quiet
 
+## model-test: the tests that run MLX itself, on the Mac through xcodebuild,
+## since `swift test` builds MLX without its programs for the graphics chip
+## and MLX can't make an array there. They load a tiny model folder and
+## prove each step of a load runs on the processor
+model-test:
+	cd Packages/PebbleKit && TEST_RUNNER_MLX_MODEL_TEST=1 xcodebuild test -quiet -scheme PebbleKit-Package \
+		-destination 'platform=macOS,arch=arm64' -derivedDataPath ../../build/DerivedDataKit \
+		-onlyUsePackageVersionsFromResolvedFile -only-testing:PebbleModelTests/OnDeviceLoadTests
+
 ## repeat-test: run the package tests N times (default 30) to catch a flaky
 ## test. FILTER= narrows the run; without it the whole suite runs each time.
 repeat-test:
@@ -37,7 +46,7 @@ repeat-test:
 mutation-check:
 	sh scripts/mutation-check.sh scripts/mutation-manifest.txt "$(ONLY)"
 
-## pulse: fetch the competitor watch and write a digest of real changes.
+## pulse: fetch the public source watch and write a digest of real changes.
 ## When something changed, also write build/pulse/notify.md and build/pulse/summary.json.
 pulse:
 	swift run --package-path Packages/PebbleKit pulse -- --root "$(CURDIR)"

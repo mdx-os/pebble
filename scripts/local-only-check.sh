@@ -1,6 +1,7 @@
 #!/bin/sh
-# Fails if the app, the plain types, the background runner or the model
-# adapter names a network client.
+# Fails if the app, the plain types, the background runner, the model
+# adapter or the MLX libraries it copies in (Packages/MLXLM) names a
+# network client.
 #
 # Two files may name URLSession, each by its exact path:
 #   PebbleModel/ModelDownload.swift  fetches the pinned model files, only
@@ -20,7 +21,7 @@ set -eu
 root="${1:-.}"
 cd "$root"
 
-dirs="App Packages/PebbleKit/Sources/PebbleCore Packages/PebbleKit/Sources/PebbleModel Packages/PebbleKit/Sources/PebbleBackground"
+dirs="App Packages/PebbleKit/Sources/PebbleCore Packages/PebbleKit/Sources/PebbleModel Packages/PebbleKit/Sources/PebbleBackground Packages/MLXLM/Sources"
 allowed="Packages/PebbleKit/Sources/PebbleModel/ModelDownload.swift Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift"
 
 for dir in $dirs; do
@@ -42,7 +43,7 @@ done
 banned='HubClient|InferenceClient|snapshot\([[:space:]]*from|from\(pretrained:|import Network|NWConnection|NWPathMonitor'
 # shellcheck disable=SC2086
 if hits="$(grep -RInE -e "$banned" $dirs)"; then
-  echo "local-only-check: a network client is mentioned in the app, the plain types, the background runner or the model adapter:"
+  echo "local-only-check: a network client is mentioned in the app, the plain types, the background runner, the model adapter or its MLX libraries:"
   echo "$hits"
   exit 1
 fi

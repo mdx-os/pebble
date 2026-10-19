@@ -8,9 +8,10 @@ check="$(pwd)/scripts/local-only-check.sh"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-mkdir -p "$work/Packages/PebbleKit"
+mkdir -p "$work/Packages/PebbleKit" "$work/Packages/MLXLM"
 cp -R App "$work/App"
 cp -R Packages/PebbleKit/Sources "$work/Packages/PebbleKit/Sources"
+cp -R Packages/MLXLM/Sources "$work/Packages/MLXLM/Sources"
 
 failures=0
 
@@ -56,6 +57,9 @@ fails_with Packages/PebbleKit/Sources/PebbleModel/ModelDownload.swift 'try await
 fails_with Packages/PebbleKit/Sources/PebbleModel/MLXChatModel.swift 'let folder = try await hub.snapshot( from: repo, matching: ["*.json"])'
 fails_with Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift 'let model = try await from(pretrained: id)'
 fails_with Packages/PebbleKit/Sources/PebbleCore/Leak.swift 'import Network'
+# The copied MLX libraries ship in the app too.
+fails_with Packages/MLXLM/Sources/MLXLMCommon/Leak.swift 'let session = URLSession.shared'
+fails_with Packages/MLXLM/Sources/MLXLLM/Leak.swift 'let hub = HubClient()'
 
 passes "the tree with every planted line taken out"
 
