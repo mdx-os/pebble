@@ -29,29 +29,58 @@ final class ConfirmationState: ObservableObject {
     @Published private(set) var screen: Screen = .asking
     /// Changes each time the person must hear something new.
     @Published private(set) var spoken: String?
+    /// How long the yes is for. Just this once until the person picks another.
+    @Published private(set) var choice: GrantChoice = .standard
 
     let request: ConfirmationRequest
+    /// The choices this question offers, in order. One means there is
+    /// nothing to choose, so none are shown.
+    let choices: [GrantChoice]
     private let rule: AskFirst
     private let now: () -> ContinuousClock.Instant
+    private let wallClock: () -> Date
     private let onApprove: (Approval) -> Void
+    private let onGrant: ((Grant) -> Void)?
     private let onDecline: () -> Void
     private var timedOutAt: ContinuousClock.Instant?
 
+    /// `onGrant` gets the grant for a yes wider than once, just before
+    /// `onApprove` gets the approval. Without it, no choice is offered.
     init(
         request: ConfirmationRequest,
         rule: AskFirst,
         now: @escaping () -> ContinuousClock.Instant = { ContinuousClock.now },
+        wallClock: @escaping () -> Date = { Date() },
         onApprove: @escaping (Approval) -> Void,
+        onGrant: ((Grant) -> Void)? = nil,
         onDecline: @escaping () -> Void
     ) {
         self.request = request
         self.rule = rule
         self.now = now
+        self.wallClock = wallClock
         self.onApprove = onApprove
+        self.onGrant = onGrant
         self.onDecline = onDecline
+        choices = onGrant == nil ? [.standard] : GrantChoice.offered(for: request.action.kind, task: request.task)
     }
 
-    var footnote: String { ConfirmationSheet.footnote(expired: screen == .timedOut) }
+    /// True while there is a choice to make.
+    var showsChoices: Bool { choices.count > 1 && screen == .asking }
+
+    /// Picks how long the yes is for. Only a choice this question offers,
+    /// and only while it is still being asked.
+    func choose(_ next: GrantChoice) {
+        guard screen == .asking, choices.contains(next) else { return }
+        choice = next
+    }
+
+    var footnote: String {
+        guard screen != .timedOut, let handle = request.action.recipient.handle else {
+            return ConfirmationSheet.footnote(expired: screen == .timedOut)
+        }
+        return GrantWords.promise(choice, kind: request.action.kind, handle: handle)
+    }
     var primaryTitle: String { screen == .timedOut ? ConfirmationWords.closeTitle : ProposedAction.yesTitle }
     var showsNotNow: Bool { screen != .timedOut }
 
@@ -97,6 +126,12 @@ final class ConfirmationState: ObservableObject {
         switch rule.sayYes(to: request) {
         case .approved(let approval):
             screen = .answered
+            // The one place a grant is made: from this yes, for exactly
+            // what it approved. Just this once is the approval itself.
+            if choice != .justThisOnce, let onGrant,
+               let grant = GrantIssuer().issue(choice, for: approval, now: wallClock()) {
+                onGrant(grant)
+            }
             onApprove(approval)
             return .approved
         case .timedOut:
@@ -123,7 +158,8 @@ final class ConfirmationState: ObservableObject {
 /// The question asked before the agent sends, buys or shares anything.
 ///
 /// This is the only place an `Approval` is made. "Yes" approves exactly what
-/// is on screen, once.
+/// is on screen, once, and a `Grant` is made here alone, when the person
+/// picks a yes that lasts longer.
 public struct ConfirmationSheet: View {
     let look: AgentLook
     /// True for a sample question, so the sheet says it is an example.
@@ -147,15 +183,15 @@ public struct ConfirmationSheet: View {
         rule: AskFirst = .shared,
         isExample: Bool = false,
         onApprove: @escaping (Approval) -> Void,
+        onGrant: ((Grant) -> Void)? = nil,
         onDecline: @escaping () -> Void
     ) {
         self.look = look
         self.isExample = isExample
         _state = StateObject(wrappedValue: ConfirmationState(
-            request: request, rule: rule, onApprove: onApprove, onDecline: onDecline
+            request: request, rule: rule, onApprove: onApprove, onGrant: onGrant, onDecline: onDecline
         ))
     }
-
     /// Over the details: what is shared when it is the person's own
     /// details, else what goes out.
     static func detailsLabel(_ kind: ConsequentialAction) -> String {
@@ -264,6 +300,9 @@ public struct ConfirmationSheet: View {
             }
             .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
+            if state.showsChoices {
+                choicePicker
+            }
             Text(state.footnote)
                 .font(.footnote)
                 .foregroundStyle(Theme.secondaryText)
@@ -289,6 +328,54 @@ public struct ConfirmationSheet: View {
         .padding(Theme.gutter)
         .frame(maxWidth: 480)
         .frame(maxWidth: .infinity)
+    }
+
+    /// How long the yes is for, one row per choice, Just this once chosen
+    /// until the person picks another.
+    private var choicePicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(GrantWords.choiceHeading)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(Theme.secondaryText)
+                .accessibilityAddTraits(.isHeader)
+            VStack(spacing: 0) {
+                ForEach(Array(state.choices.enumerated()), id: \.element) { index, choice in
+                    if index > 0 { Divider().overlay(Theme.hairline(scheme)) }
+                    choiceRow(choice)
+                }
+            }
+            .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
+        }
+    }
+
+    private func choiceRow(_ choice: GrantChoice) -> some View {
+        let chosen = state.choice == choice
+        return Button { state.choose(choice) } label: {
+            HStack(spacing: 12) {
+                Image(systemName: chosen ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(chosen ? AnyShapeStyle(Theme.accentSymbol) : AnyShapeStyle(Theme.secondaryText))
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(choice.title(for: action.recipient))
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.primary)
+                    Text(GrantWords.choiceDetail(choice))
+                        .font(.footnote)
+                        .foregroundStyle(Theme.secondaryText)
+                }
+                .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(chosen ? [.isSelected] : [])
+        .accessibilityIdentifier("grantChoice." + choice.rawValue)
     }
 
     /// The sheet's rows, each a label and its value: who, where, what goes

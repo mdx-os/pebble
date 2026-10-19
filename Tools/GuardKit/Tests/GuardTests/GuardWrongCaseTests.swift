@@ -777,13 +777,47 @@ struct GuardWrongCaseTests {
         }
     }
 
+    // MARK: The grant issuer
+
+    static func issuer(_ text: String, file: String = "PebbleUI/FeedView.swift") -> WrongCase {
+        WrongCase(rule: "grant.issuerOutsideSheet", text: text, file: file)
+    }
+
+    static let grantWrong: [WrongCase] = [
+        issuer("let grant = GrantIssuer().issue(.always, for: approval, now: Date())"),
+        issuer("let grant = `GrantIssuer`().issue(.always, for: approval, now: Date())"),
+        issuer("let make = GrantIssuer.init\nlet grant = make().issue(.always, for: approval, now: Date())"),
+        issuer("typealias Maker = GrantIssuer"),
+        issuer("func widen(_ issuer: GrantIssuer) {}", file: "PebbleCore/LocalFakeEngine.swift"),
+        issuer("let grant = GrantIssuer().issue(.always, for: approval, now: Date())", file: "PebbleUI/ChatView.swift"),
+        issuer("let grant = GrantIssuer().issue(.always, for: approval, now: Date())", file: "PebbleUI/ShowcaseScene.swift"),
+        issuer("let grant = PebbleCore.GrantIssuer().issue(.always, for: approval, now: Date())",
+               file: "PebbleModel/Conversation.swift"),
+    ]
+
+    static let grantRight: [RightCase] = [
+        fine("let grant = GrantIssuer().issue(choice, for: approval, now: wallClock())",
+             file: "PebbleUI/ConfirmationSheet.swift"),
+        fine("public struct GrantIssuer: Sendable {}", file: "PebbleCore/Grants.swift"),
+        fine("// GrantIssuer, in a comment"),
+        fine("let note = \"GrantIssuer, in words\""),
+        fine("let issuers = GrantIssuers()"),
+    ]
+
+    @Test func theGrantIssuerGuardCatchesEveryWrongCase() {
+        check(Self.grantWrong, Self.grantRight, rules: GrantIssuerGate.rules.map(\.name)) {
+            GrantIssuerGate.problems(in: $0, file: $1)
+        }
+    }
+
     // MARK: The suite itself
 
     /// Every rule of every guard has a wrong case here, so none can be
     /// added, or stop working, unseen.
     @Test func everyRuleHasAWrongCase() {
-        let all = Self.promiseWrong + Self.contrastWrong + Self.accentWrong + Self.platformWrong
+        let all = Self.promiseWrong + Self.contrastWrong + Self.accentWrong + Self.platformWrong + Self.grantWrong
         let rules = PromiseRules.allRuleNames + ContrastLint.rules.map(\.name) + PlatformGate.rules.map(\.name)
+            + GrantIssuerGate.rules.map(\.name)
         #expect(Set(rules).count == rules.count, "each rule has its own name")
         for rule in rules {
             #expect(all.contains { $0.rule == rule }, "no wrong case for \(rule)")

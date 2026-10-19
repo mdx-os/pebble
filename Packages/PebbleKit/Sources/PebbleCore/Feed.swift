@@ -301,19 +301,21 @@ public final class NeedsYou: FeedSource, @unchecked Sendable {
     /// still held open by the rule counts. Anything else does nothing.
     /// Turning a request into an `Approval` is package only, and inside the
     /// package only `AskFirst.sayYes` does it (`AskFirstGateTests`), so the
-    /// sheet's yes is the only way to make one.
-    public func approved(_ approval: Approval) {
+    /// sheet's yes is the only way to make one. True when it was handed on.
+    @discardableResult
+    public func approved(_ approval: Approval) -> Bool {
         lock.lock()
         guard let index = waiting.firstIndex(where: { $0.request.id == approval.id }),
               waiting[index].request.action == approval.action,
               !rule.isClosed(waiting[index].request) else {
             lock.unlock()
-            return
+            return false
         }
         let answered = waiting.remove(at: index)
         lock.unlock()
         answered.onApprove?(approval)
         didChange()
+        return true
     }
 
     /// The sheet closed without a yes. The sheet has already withdrawn the

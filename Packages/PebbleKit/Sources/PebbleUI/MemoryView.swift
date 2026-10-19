@@ -28,10 +28,14 @@ public struct MemoryView: View {
     /// what it forgot, so the status line can be honest about it.
     ///
     /// `background` puts its switch here, off until the person turns it on.
+    ///
+    /// `grants` puts the list of what the agent may do without asking
+    /// here, each with Remove.
     public init(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp? = nil, background: BackgroundRunner? = nil,
+                grants: GrantBook? = nil,
                 onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) {
         _model = StateObject(wrappedValue: MemoryModel(store: store, place: place, alsoForget: Self.alsoForget(cloud),
-                                                       background: background,
+                                                       background: background, grants: grants,
                                                        onForgetEverything: onForgetEverything))
         self.place = place
         self.cloud = cloud
@@ -118,6 +122,10 @@ public struct MemoryView: View {
                             }
                         }
                     }
+                    if model.grants != nil {
+                        AllowedSection(grants: model.allowed, now: model.currentDate) { model.removeGrant($0) }
+                            .padding(.top, 8)
+                    }
                     if model.background != nil {
                         BackgroundRow(isOn: Binding(get: { model.backgroundOn }, set: { model.setBackground($0) }),
                                       detail: model.backgroundDetail, nextDue: model.backgroundNext)
@@ -189,11 +197,12 @@ public struct MemoryView: View {
             // may be private words to erase.
             CloudWatcher(help: cloud) { help in
                 forgetEverythingButton(shown: Self.showsForgetEverything(
-                    hasNotes: model.hasSomethingToForget, mayHaveWords: help.mayHavePrivateWords, holdsMore: holdsMore))
+                    hasNotes: model.hasSomethingToForget, mayHaveWords: help.mayHavePrivateWords,
+                    holdsMore: holdsMore || !model.allowed.isEmpty))
             }
         } else {
             forgetEverythingButton(shown: Self.showsForgetEverything(
-                hasNotes: model.hasSomethingToForget, mayHaveWords: false, holdsMore: holdsMore))
+                hasNotes: model.hasSomethingToForget, mayHaveWords: false, holdsMore: holdsMore || !model.allowed.isEmpty))
         }
     }
 
@@ -426,6 +435,76 @@ struct MemoryUnavailableView: View {
 
 /// The switch for background work: what it does in a plain line, and when
 /// the next summary is due while it is on.
+/// What the agent may do without asking each time, in plain words: who,
+/// where exactly, and for how long, each with Remove.
+struct AllowedSection: View {
+    let grants: [Grant]
+    let now: Date
+    let onRemove: (Grant) -> Void
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(GrantWords.listTitle)
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+            Text(GrantWords.listDetail)
+                .font(.footnote)
+                .foregroundStyle(Theme.secondaryText)
+            VStack(spacing: 0) {
+                if grants.isEmpty {
+                    Text(GrantWords.listEmpty)
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.secondaryText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                }
+                ForEach(Array(grants.enumerated()), id: \.element.id) { index, grant in
+                    if index > 0 { Divider().overlay(Theme.hairline(scheme)) }
+                    row(grant)
+                }
+            }
+            .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
+        }
+    }
+
+    private func row(_ grant: Grant) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(grant.title)
+                    .font(.body.weight(.medium))
+                // The exact handle on a line of its own, never in a sentence
+                // with the name, which is free text.
+                if let handle = grant.target.handle {
+                    Text(handle)
+                        .font(.footnote)
+                        .foregroundStyle(Theme.secondaryText)
+                }
+                Text(grant.scopeLine(now: now))
+                    .font(.footnote)
+                    .foregroundStyle(Theme.secondaryText)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("grantRow")
+            Spacer(minLength: 0)
+            Button(role: .destructive) { onRemove(grant) } label: {
+                Text(GrantWords.removeTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.dangerText)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(GrantWords.removeLabel(grant.action, grant.target.displayName))
+            .accessibilityIdentifier("removeGrant")
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 8)
+        .padding(.vertical, 10)
+    }
+}
+
 struct BackgroundRow: View {
     @Binding var isOn: Bool
     /// What the switch does, from `MemoryModel.backgroundDetail`.
@@ -770,6 +849,15 @@ final class MemoryModel: ObservableObject {
     /// Forgets what lives outside the memory file, such as tasks.
     private let onForgetEverything: @MainActor () -> ClearedTasks
 
+    /// The person's grants, listed on this screen, each with Remove. Nil
+    /// hides the list.
+    let grants: GrantBook?
+    /// Every grant in force, newest first, as the list shows them.
+    @Published private(set) var allowed: [Grant] = []
+    /// This model's watch on `grants`, so a grant given in Today, or every
+    /// grant gone with Forget everything, shows here at once.
+    private var grantsWatch: GrantBook.Observation?
+
     /// Background work, whose switch sits on this screen. Nil hides it.
     let background: BackgroundRunner?
     @Published private(set) var backgroundOn = false
@@ -790,6 +878,9 @@ final class MemoryModel: ObservableObject {
     /// Forget everything shows while there is anything for it to remove.
     var hasSomethingToForget: Bool { hasStoredFile || hasBackgroundToForget }
 
+    /// The time the list's lines are told against.
+    var currentDate: Date { now() }
+
     /// Whether the question before Forget everything names work while away:
     /// only while it is on or has summaries to erase, so it promises only
     /// what this tap will do.
@@ -803,22 +894,43 @@ final class MemoryModel: ObservableObject {
     }
 
     init(store: MemoryStore, place: PrivacyPlace, alsoForget: (@MainActor () throws -> CloudHelp.Forgot)? = nil,
-         background: BackgroundRunner? = nil, now: @escaping () -> Date = { Date() },
+         background: BackgroundRunner? = nil, grants: GrantBook? = nil, now: @escaping () -> Date = { Date() },
          onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) {
         self.store = store
         self.place = place
         self.alsoForget = alsoForget
         self.background = background
+        self.grants = grants
         self.now = now
         self.onForgetEverything = onForgetEverything
         refresh()
         backgroundWatch = background?.observe { [weak self] in
             Task { @MainActor in self?.refreshBackground() }
         }
+        grantsWatch = grants?.observe { [weak self] in
+            Task { @MainActor in self?.refreshGrants() }
+        }
     }
 
     deinit {
         if let backgroundWatch { background?.stopObserving(backgroundWatch) }
+        if let grantsWatch { grants?.stopObserving(grantsWatch) }
+    }
+
+    func refreshGrants() {
+        let now = grants?.grants ?? []
+        if allowed != now { allowed = now }
+    }
+
+    /// Takes one grant away. It counts at once, for a task already going
+    /// too: the next step it would have covered asks first.
+    func removeGrant(_ grant: Grant) {
+        let removed = grants?.remove(grant.id) == true
+        refreshGrants()
+        if removed {
+            forgottenCount += 1
+            announce(GrantWords.removed)
+        }
     }
 
     /// Turns background work on or off. On, the summary is due the next
@@ -876,6 +988,7 @@ final class MemoryModel: ObservableObject {
         hasStoredFile = store.hasStoredFile
         // Forget everything turns background work off, so the switch follows.
         refreshBackground()
+        refreshGrants()
     }
 
     /// False while the saved notes can't be read or opened, so they stay untouched.

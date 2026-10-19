@@ -110,6 +110,15 @@ what they do ("Yes, go ahead" and "Not now", from `ProposedAction.yesTitle`
 and `noTitle`; `CopyDashTests` checks they match), and the promise underneath
 says the yes counts once, for exactly what is shown.
 
+The person can make a yes last longer, in plain words (`GrantWords`): "Just
+this once", the choice the sheet starts on, "For this task", "Until tonight"
+and "Always for Sam". Spending and sharing their details offer only the
+first two. Any longer yes changes the promise to say what it allows, to the
+exact handle, and that anything else is asked first. Each lasting yes is
+listed under "What I'm allowed to do" with a Remove, and a step it lets go
+ahead still gets its receipt, which says so: "Sent with your OK from
+earlier today."
+
 ## Patterns
 
 ### Errors

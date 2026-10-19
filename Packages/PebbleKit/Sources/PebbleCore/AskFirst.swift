@@ -154,10 +154,13 @@ public struct Approval: Sendable, Equatable {
     /// Same as the request it answers. Tapping yes twice gives the same id.
     public let id: UUID
     public let action: ProposedAction
+    /// The asking task's key, as the question had it. Nil when no task asked.
+    public let task: String?
 
     fileprivate init(request: ConfirmationRequest) {
         self.id = request.id
         self.action = request.action
+        self.task = request.task
     }
 }
 
@@ -166,10 +169,14 @@ public struct Approval: Sendable, Equatable {
 public struct ConfirmationRequest: Sendable, Equatable, Identifiable {
     public let id: UUID
     public let action: ProposedAction
+    /// The key of the task that asked, unique to that task and its engine,
+    /// so the sheet can offer a yes for this task. Nil when no task asked.
+    public let task: String?
 
-    fileprivate init(action: ProposedAction) {
+    fileprivate init(action: ProposedAction, task: String? = nil) {
         self.id = UUID()
         self.action = action
+        self.task = task
     }
 
     /// Called by the confirmation sheet when the person taps yes. A test in
@@ -181,9 +188,11 @@ public struct ConfirmationRequest: Sendable, Equatable, Identifiable {
 
 /// The rule: the agent asks before it sends, buys or shares, every time.
 ///
-/// There is no "always allow" and no setting that turns this off. There is
-/// one rule for the app. It honors only approvals for questions it asked,
-/// for the identical action, once.
+/// There is no setting that turns this off. There is one rule for the app.
+/// It honors only approvals for questions it asked, for the identical
+/// action, once. A yes that lasts longer is a `Grant`, which only the
+/// question sheet's answer can make, and the rule alone decides when one
+/// covers a step (`ask(_:forTask:)`, through `GrantGate`).
 public final class AskFirst: @unchecked Sendable {
     public enum Outcome: Sendable, Equatable {
         case proceed
@@ -219,22 +228,69 @@ public final class AskFirst: @unchecked Sendable {
     /// Changing the date and time in Settings can't move it, so it can't
     /// bring a timed out question back.
     private let now: @Sendable () -> ContinuousClock.Instant
+    /// The person's grants. Nil, as for every rule until the app gives it
+    /// its book, means the rule asks every time, exactly as it always has.
+    private var book: GrantBook?
 
     private init(
         window: TimeInterval = AskFirst.defaultWindow,
-        now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
+        now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now },
+        grants: GrantBook? = nil
     ) {
         self.window = .milliseconds(Int64((window * 1000).rounded()))
         self.now = now
+        self.book = grants
     }
 
     /// A separate rule for tests, so they don't share state. Tests can pass
-    /// a clock to move time forward.
+    /// a clock to move time forward, and a book of grants.
     package static func isolated(
         window: TimeInterval = AskFirst.defaultWindow,
-        now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
+        now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now },
+        grants: GrantBook? = nil
     ) -> AskFirst {
-        AskFirst(window: window, now: now)
+        AskFirst(window: window, now: now, grants: grants)
+    }
+
+    /// The grants this rule consults before it asks, if any.
+    public var grants: GrantBook? {
+        lock.lock()
+        defer { lock.unlock() }
+        return book
+    }
+
+    /// Gives the rule its book of grants, once, as the app starts. A later
+    /// call changes nothing, so the book can't be swapped for another.
+    public func keepGrants(in grants: GrantBook) {
+        lock.lock()
+        if book == nil { book = grants }
+        lock.unlock()
+    }
+
+    /// What `ask(_:forTask:)` decided.
+    public enum Asked: Sendable, Equatable {
+        /// A grant covers the step: it goes ahead without a question, and
+        /// its receipt names the grant.
+        case granted(GrantedStep)
+        /// No grant covers it: the question to show the person.
+        case asking(ConfirmationRequest)
+        /// It can't be asked, so it must not happen.
+        case cannotAsk
+    }
+
+    /// Asks about a task's step, after `GrantGate` looks at the grants
+    /// first. `task` is the task's key, unique to that task and its engine.
+    /// With no grant that covers it, this is `ask(_:)`, with the key on the
+    /// question so the sheet can offer a yes for this task.
+    public func ask(_ action: ProposedAction, forTask task: String) -> Asked {
+        guard Self.canAsk(action) else { return .cannotAsk }
+        if let step = grants?.use(action, task: task) { return .granted(step) }
+        return ask(action, askedAgo: .zero, task: task).map(Asked.asking) ?? .cannotAsk
+    }
+
+    /// A task ended, so its task grants end too.
+    public func taskEnded(_ task: String) {
+        grants?.taskEnded(task)
     }
 
     /// Record a question to show the person. Nil when the question can't say
@@ -265,14 +321,21 @@ public final class AskFirst: @unchecked Sendable {
         return ask(action, askedAgo: .milliseconds(Int64((age * 1000).rounded(.up))))
     }
 
-    private func ask(_ action: ProposedAction, askedAgo age: Duration) -> ConfirmationRequest? {
-        guard action.recipient.handle != nil else { return nil }
+    /// False when a question about `action` can't say exactly where it
+    /// goes, or for a purchase how much, so it must not be asked.
+    static func canAsk(_ action: ProposedAction) -> Bool {
+        guard action.recipient.handle != nil else { return false }
         // What is shown must read the same as what goes out: no hidden or
         // reordering characters in the details or the outcome.
-        if Self.hasHiddenScalars(action.details) { return nil }
-        if let outcome = action.outcome, Self.hasHiddenScalars(outcome) { return nil }
-        if action.kind == .purchase, action.price == nil { return nil }
-        let request = ConfirmationRequest(action: action)
+        if hasHiddenScalars(action.details) { return false }
+        if let outcome = action.outcome, hasHiddenScalars(outcome) { return false }
+        if action.kind == .purchase, action.price == nil { return false }
+        return true
+    }
+
+    private func ask(_ action: ProposedAction, askedAgo age: Duration, task: String? = nil) -> ConfirmationRequest? {
+        guard Self.canAsk(action) else { return nil }
+        let request = ConfirmationRequest(action: action, task: task)
         lock.lock()
         let time = now()
         pending = pending.filter { isOpen($0.value) || isFreshYes($0.value) }
