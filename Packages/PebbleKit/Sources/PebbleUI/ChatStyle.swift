@@ -5,25 +5,38 @@ import SwiftUI
 
 /// The chat's own look: bubble shapes and how they group, the floating
 /// composer, the suggestion chips and the character's calm presence. It
-/// builds on `Theme` and never changes its colors, so every pair of words
-/// and background here is one `Theme.textPairs` already holds.
+/// builds on `Theme`'s tokens and never changes its colors, so every pair
+/// of words and background here is one `Theme.textPairs` already holds.
+/// Only values that belong to the chat alone live here, and each comes
+/// from a `Theme` token where one fits.
 enum ChatStyle {
-    /// The round of a bubble's corners.
-    static let bubbleCorner: CGFloat = 20
-    /// The corner a bubble points from, at the foot of its group: a soft tail.
+    /// The round of a bubble's corners: a card's.
+    static let bubbleCorner = Theme.Radius.card
+    /// The corner a bubble points from, at the foot of its group: a soft
+    /// tail, tighter than any of Theme's corners.
     static let tailCorner: CGFloat = 6
     /// The corners on the speaker's side between lines of one group, so a
     /// run of lines reads as one thought.
-    static let groupedCorner: CGFloat = 8
+    static let groupedCorner = Theme.Space.xs
     /// The space between lines from the same speaker, and between speakers.
-    static let groupedSpacing: CGFloat = 4
-    static let speakerSpacing: CGFloat = 14
+    static let groupedSpacing = Theme.Space.xxs
+    static let speakerSpacing = Theme.Space.s
+    /// A little air between the lines of one bubble.
+    static let lineSpacing: CGFloat = 2
+    /// How far lines fade as they scroll up under the chat's fixed header.
+    static let headerFade = Theme.Space.l
 
-    /// The composer's floating bar.
-    static let composerCorner: CGFloat = 26
-    /// The round accent send button inside it, before Dynamic Type: the
-    /// smallest target a finger needs.
+    /// The character in the chat's header: larger on a new chat, smaller
+    /// once talking so the conversation has the room.
+    static let greetingFace: CGFloat = 88
+    static let talkingFace: CGFloat = 64
+
+    /// The round accent send button inside the composer, before Dynamic
+    /// Type: the smallest target a finger needs.
     static let sendSize: CGFloat = 44
+    /// The composer's floating bar: its corners follow the send button's
+    /// round, one step of the spacing grid out.
+    static let composerCorner = sendSize / 2 + Theme.Space.xxs
 
     /// Replies, sends and the composer settle with a soft spring.
     static let spring = Animation.spring(response: 0.42, dampingFraction: 0.8)
@@ -155,7 +168,7 @@ extension View {
 /// Lays chips out in rows, wrapping to the next row when one is full. At
 /// the largest text sizes each chip takes a row of its own.
 struct FlowRows: Layout {
-    var spacing: CGFloat = 8
+    var spacing = Theme.Space.xs
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let rows = arrange(width: proposal.width ?? .infinity, subviews: subviews)
@@ -218,7 +231,7 @@ struct SendButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.body.weight(.bold))
+            .font(Theme.TypeScale.body.weight(.bold))
             .foregroundStyle(isEnabled ? AnyShapeStyle(Theme.onAccent) : AnyShapeStyle(Theme.secondaryText))
             .frame(width: size, height: size)
             .background(isEnabled ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.primary.opacity(Theme.disabledTint)),

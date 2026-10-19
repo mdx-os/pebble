@@ -38,7 +38,7 @@ struct Composer: View {
 
     var body: some View {
         let bar = RoundedRectangle(cornerRadius: ChatStyle.composerCorner, style: .continuous)
-        HStack(alignment: .bottom, spacing: 6) {
+        HStack(alignment: .bottom, spacing: Theme.Space.xxs) {
             // Return sends and Shift Return starts a new line.
             // The system placeholder gray is too faint to read, so the
             // placeholder is drawn in the quieter words color.
@@ -50,8 +50,8 @@ struct Composer: View {
                 .accessibilityHint(hint.map { Text($0) } ?? Text(verbatim: ""))
                 // Keyboards are reported a moment after first asking, so ask early.
                 .onAppear { _ = Self.shiftIsDown }
-                .padding(.leading, 14)
-                .padding(.vertical, 11)
+                .padding(.leading, Theme.Space.s)
+                .padding(.vertical, Theme.Space.s)
                 // One send path per platform: the draft binding reads a lone
                 // Return as Send on iOS, and onKeyPress handles it on the Mac.
                 #if os(macOS)
@@ -76,7 +76,7 @@ struct Composer: View {
             .keyboardShortcut(keyboardSends ? KeyboardShortcut(.return, modifiers: .command) : nil)
             .disabled(!canSend)
         }
-        .padding(3)
+        .padding(Theme.Space.xxs)
         // A floating bar on a soft material, tinted like a field so the
         // words and placeholder sit on the pair `Theme.textPairs` checks.
         // Reduce Transparency makes the material solid.

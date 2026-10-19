@@ -53,13 +53,13 @@ public struct OnboardingView: View {
                 ScrollView {
                     VStack(spacing: 0) {
                         progress
-                            .padding(.top, 16)
-                        Spacer(minLength: 24)
+                            .padding(.top, Theme.Space.m)
+                        Spacer(minLength: Theme.Space.xl)
                         CharacterView(look: model.look, size: model.page == .hello ? 140 : 100,
                                       isCheerful: model.page == .ideas)
                             .opacity(characterShown ? 1 : 0)
                             .scaleEffect(characterShown || reduceMotion ? 1 : 0.86)
-                            .offset(y: characterShown || reduceMotion ? 0 : 16)
+                            .offset(y: characterShown || reduceMotion ? 0 : Theme.Space.m)
                             .animation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.75), value: model.page)
                             .animation(reduceMotion ? nil : .easeInOut(duration: 0.35), value: model.look)
                         content
@@ -68,7 +68,7 @@ public struct OnboardingView: View {
                                 insertion: .move(edge: .trailing).combined(with: .opacity),
                                 removal: .move(edge: .leading).combined(with: .opacity)
                             ))
-                        Spacer(minLength: 32)
+                        Spacer(minLength: Theme.Space.xxl)
                     }
                     .padding(.horizontal, Theme.gutter)
                     .frame(maxWidth: Theme.readableWidth)
@@ -90,7 +90,7 @@ public struct OnboardingView: View {
     private var progress: some View {
         let pages = model.visiblePages
         let index = pages.firstIndex(of: model.page) ?? 0
-        return HStack(spacing: 6) {
+        return HStack(spacing: Theme.Space.xs) {
             ForEach(pages.indices, id: \.self) { i in
                 Capsule()
                     .fill(i <= index ? Theme.accent : Theme.hairline(scheme))
@@ -113,51 +113,50 @@ public struct OnboardingView: View {
     }
 
     private func heading(_ title: String, _ detail: String) -> some View {
-        VStack(spacing: 12) {
+        VStack(spacing: Theme.Space.s) {
             Text(title)
-                .font(.system(.largeTitle, design: .rounded).weight(.bold))
+                .font(Theme.TypeScale.displayLarge)
                 .multilineTextAlignment(.center)
                 .accessibilityAddTraits(.isHeader)
             if !detail.isEmpty {
                 Text(detail)
-                    .font(.body)
+                    .font(Theme.TypeScale.body)
                     .foregroundStyle(Theme.secondaryText)
                     .multilineTextAlignment(.center)
-                    .lineSpacing(2)
+                    .lineSpacing(ChatStyle.lineSpacing)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(.top, 28)
-        .padding(.bottom, 4)
+        .padding(.top, Theme.Space.xl)
+        .padding(.bottom, Theme.Space.xxs)
     }
 
     private var hello: some View {
-        VStack(spacing: 32) {
+        VStack(spacing: Theme.Space.xxl) {
             heading(FirstRunWords.hello, FirstRunWords.helloDetail(place))
             Button(FirstRunWords.beginTitle) { model.advance() }
                 .buttonStyle(PrimaryButtonStyle())
-                .padding(.top, 16)
+                .padding(.top, Theme.Space.m)
         }
     }
 
     private var naming: some View {
-        VStack(spacing: 22) {
+        VStack(spacing: Theme.Space.xl) {
             heading(FirstRunWords.nameQuestion, FirstRunWords.nameDetail)
             TextField(FirstConversation.namePlaceholder, text: $model.draftName)
-                .font(.system(.title2, design: .rounded).weight(.semibold))
+                .font(Theme.TypeScale.displayTitle.weight(.semibold))
                 .multilineTextAlignment(.center)
                 .textFieldStyle(.plain)
-                .padding(.vertical, 16)
-                .padding(.horizontal, 20)
-                .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
+                .padding(.vertical, Theme.Space.m)
+                .padding(.horizontal, Theme.Space.l)
+                .cardSurface()
                 .focused($nameFocused)
                 .submitLabel(.continue)
                 .onSubmit { model.commitName() }
                 .accessibilityLabel(FirstRunWords.nameQuestion)
             if let hint = model.hint {
                 Text(hint)
-                    .font(.subheadline)
+                    .font(Theme.TypeScale.subheadline)
                     .foregroundStyle(Theme.accentText)
                     .transition(.opacity)
             }
@@ -170,26 +169,26 @@ public struct OnboardingView: View {
     }
 
     private var lookPicker: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: Theme.Space.xl) {
             heading(FirstRunWords.lookQuestion, FirstRunWords.lookDetail)
-            HStack(spacing: 12) {
+            HStack(spacing: Theme.Space.s) {
                 ForEach(AgentLook.allCases, id: \.self) { look in
                     Button { model.look = look } label: {
-                        VStack(spacing: 6) {
+                        VStack(spacing: Theme.Space.xs) {
                             CharacterView(look: look, size: 44)
                                 .frame(width: 64, height: 64)
                             Text(look.title)
-                                .font(.caption.weight(.medium))
+                                .font(Theme.TypeScale.caption.weight(.medium))
                                 .foregroundStyle(model.look == look ? AnyShapeStyle(.primary) : AnyShapeStyle(Theme.secondaryText))
                         }
-                        .padding(.vertical, 10)
+                        .padding(.vertical, Theme.Space.s)
                         .frame(maxWidth: .infinity)
                         .background(
-                            RoundedRectangle(cornerRadius: Theme.smallCorner, style: .continuous)
+                            RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous)
                                 .fill(model.look == look ? Theme.card(scheme) : .clear)
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: Theme.smallCorner, style: .continuous)
+                            RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous)
                                 .stroke(model.look == look ? Theme.accent : .clear, lineWidth: 2)
                         )
                         .pointerHover()
@@ -206,18 +205,18 @@ public struct OnboardingView: View {
 
     /// Shown only when more than one choice is honored.
     private var proactivity: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: Theme.Space.m) {
             heading(OnboardingWords.proactivityQuestion, "")
             ForEach(Proactivity.offered, id: \.self) { choice in
                 Button { model.choose(choice) } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(choice.title).font(.headline)
-                        Text(choice.detail).font(.subheadline).foregroundStyle(Theme.secondaryText)
+                    VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                        Text(choice.title).font(Theme.TypeScale.headline)
+                        Text(choice.detail).font(Theme.TypeScale.subheadline).foregroundStyle(Theme.secondaryText)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(16)
-                    .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
-                    .pointerHover(in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
+                    .padding(Theme.Space.m)
+                    .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+                    .pointerHover(in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
                 }
                 .buttonStyle(.plain)
             }
@@ -225,9 +224,9 @@ public struct OnboardingView: View {
     }
 
     private var ideas: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: Theme.Space.l) {
             heading(FirstRunWords.greeting(named: model.displayName), FirstRunWords.ideasDetail)
-            VStack(spacing: 12) {
+            VStack(spacing: Theme.Space.s) {
                 ForEach(Array(model.starters.enumerated()), id: \.element.id) { index, job in
                     IdeaCardButton(job: job, index: index) { model.pick(job) }
                 }
@@ -243,7 +242,6 @@ struct IdeaCardButton: View {
     let job: StarterJob
     let index: Int
     let action: () -> Void
-    @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.holdsStill) private var holdsStill
     @State private var shown = false
@@ -254,27 +252,24 @@ struct IdeaCardButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 14) {
+            HStack(spacing: Theme.Space.m) {
                 Image(systemName: symbol)
-                    .font(.title3)
+                    .font(Theme.TypeScale.title3)
                     .foregroundStyle(Theme.accentSymbol)
                     .frame(width: 40, height: 40)
                     .background(Theme.accent.opacity(Theme.accentWash), in: Circle())
                 Text(job.title)
-                    .font(.body.weight(.semibold))
+                    .font(Theme.TypeScale.body.weight(.semibold))
                     .foregroundStyle(.primary)
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
+                    .font(Theme.TypeScale.footnote.weight(.semibold))
                     .foregroundStyle(Theme.secondaryText)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
-            // A soft lift, so each idea sits a touch above the backdrop.
-            .shadow(color: .black.opacity(scheme == .dark ? 0.25 : 0.05), radius: 10, y: 3)
-            .pointerHover(in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
+            .padding(Theme.Space.m)
+            // Raised, so each idea sits a touch above the backdrop.
+            .cardSurface()
+            .pointerHover(in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(job.title)

@@ -87,20 +87,20 @@ public struct ChatView: View {
         VStack(spacing: 0) {
             if !headerScrolls {
                 header
-                    .padding(.top, 28)
-                    .padding(.bottom, 20)
+                    .padding(.top, Theme.Space.xxl)
+                    .padding(.bottom, Theme.Space.l)
                     .readableColumn(columnWidth)
             }
             ScrollViewReader { scroller in
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: Theme.Space.m) {
                     if headerScrolls {
                         header
-                            .padding(.top, 12)
-                            .padding(.bottom, 8)
+                            .padding(.top, Theme.Space.s)
+                            .padding(.bottom, Theme.Space.xs)
                     }
                     transcript
-                        .padding(.top, headerScrolls ? 0 : 4)
+                        .padding(.top, headerScrolls ? 0 : Theme.Space.xxs)
                     if let offer = controller.reconOffer {
                         ReconOfferButtons(question: controller.conversation.turns.first { $0.id == offer.turnID }?.text,
                                           onYes: { controller.acceptReconOffer() },
@@ -122,7 +122,7 @@ public struct ChatView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.bottom, 12)
+                .padding(.bottom, Theme.Space.s)
                 .readableColumn(columnWidth)
                 .animation(ChatStyle.animation(reduceMotion: reduceMotion), value: controller.isReplying)
             }
@@ -132,7 +132,7 @@ public struct ChatView: View {
             .mask {
                 VStack(spacing: 0) {
                     LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                        .frame(height: headerScrolls ? 0 : 18)
+                        .frame(height: headerScrolls ? 0 : ChatStyle.headerFade)
                     Color.black
                 }
             }
@@ -180,8 +180,8 @@ public struct ChatView: View {
             // and rises with the keyboard.
             composer
                 .zIndex(1)
-                .padding(.top, 8)
-                .padding(.bottom, 12)
+                .padding(.top, Theme.Space.xs)
+                .padding(.bottom, Theme.Space.s)
                 .readableColumn(columnWidth)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -211,11 +211,11 @@ public struct ChatView: View {
     }
 
     private var header: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Theme.Space.xs) {
             // A new chat greets with a larger face; once talking, it steps
             // back a little so the conversation has the room.
             if let look {
-                CharacterView(look: look, size: controller.conversation.isWaitingForPerson ? 88 : 64,
+                CharacterView(look: look, size: controller.conversation.isWaitingForPerson ? ChatStyle.greetingFace : ChatStyle.talkingFace,
                               isThinking: controller.isReplying)
                     .animation(ChatStyle.animation(reduceMotion: reduceMotion),
                                value: controller.conversation.isWaitingForPerson)
@@ -223,15 +223,15 @@ public struct ChatView: View {
                 AvatarView(initial: controller.displayName.initial)
             }
             Text(controller.displayName.text)
-                .font(.system(.title, design: .rounded).weight(.semibold))
+                .font(Theme.TypeScale.title.weight(.semibold))
                 .multilineTextAlignment(.center)
             Text(FirstConversation.presence(controller.privacyPlace))
-                .font(.subheadline)
+                .font(Theme.TypeScale.subheadline)
                 .foregroundStyle(Theme.secondaryText)
                 .multilineTextAlignment(.center)
             if controller.showsNameInvitation {
                 Text(FirstConversation.nameInvitation)
-                    .font(.subheadline)
+                    .font(Theme.TypeScale.subheadline)
                     .foregroundStyle(Theme.secondaryText)
                     .multilineTextAlignment(.center)
             }
@@ -243,7 +243,7 @@ public struct ChatView: View {
     @ViewBuilder
     private var renameControl: some View {
         if controller.isChoosingName {
-            VStack(spacing: 8) {
+            VStack(spacing: Theme.Space.xs) {
                 TextField(
                     FirstConversation.namePlaceholder,
                     text: Binding(
@@ -253,20 +253,20 @@ public struct ChatView: View {
                 )
                 .textFieldStyle(.plain)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+                .padding(.horizontal, Theme.Space.m)
+                .padding(.vertical, Theme.Space.s)
+                .background(Color.primary.opacity(Theme.fieldTint), in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
                 .frame(maxWidth: 280)
                 .focused($nameFieldFocused)
                 .onAppear { nameFieldFocused = true }
                 .onSubmit { controller.commitName() }
                 if let nameHint = controller.nameHint {
                     Text(nameHint)
-                        .font(.subheadline)
+                        .font(Theme.TypeScale.subheadline)
                         .foregroundStyle(Theme.secondaryText)
                         .multilineTextAlignment(.center)
                 }
-                HStack(spacing: 8) {
+                HStack(spacing: Theme.Space.xs) {
                     Button(FirstConversation.cancelNameTitle) {
                         controller.cancelRename()
                     }
@@ -416,14 +416,14 @@ public struct ChatView: View {
         let shape = ChatStyle.bubbleShape(turn.speaker, grouping)
         return HStack(alignment: .bottom, spacing: 0) {
             if turn.speaker == .person {
-                Spacer(minLength: 48)
+                Spacer(minLength: Theme.Space.xxxl)
             }
             Text(turn.text)
-                .font(.body)
-                .lineSpacing(2)
+                .font(Theme.TypeScale.body)
+                .lineSpacing(ChatStyle.lineSpacing)
                 .multilineTextAlignment(.leading)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 11)
+                .padding(.horizontal, Theme.Space.m)
+                .padding(.vertical, Theme.Space.s)
                 .background(bubbleFill(for: turn.speaker), in: shape)
                 // With Increase Contrast, each bubble gets an edge too.
                 .overlay {
@@ -433,7 +433,7 @@ public struct ChatView: View {
                 }
                 .frame(maxWidth: bubbleWidth, alignment: turn.speaker == .agent ? .leading : .trailing)
             if turn.speaker == .agent {
-                Spacer(minLength: 48)
+                Spacer(minLength: Theme.Space.xxxl)
             }
         }
     }
@@ -452,13 +452,13 @@ public struct ChatView: View {
     /// composer, with the cursor there; nothing is sent until the person
     /// sends it.
     private var starterJobs: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             Text(FirstConversation.startersHeading)
-                .font(.subheadline.weight(.medium))
+                .font(Theme.TypeScale.subheadline.weight(.medium))
                 .foregroundStyle(Theme.secondaryText)
                 .accessibilityAddTraits(.isHeader)
-                .padding(.top, 10)
-            FlowRows(spacing: 8) {
+                .padding(.top, Theme.Space.s)
+            FlowRows(spacing: Theme.Space.xs) {
                 ForEach(Array(FirstConversation.jobs.enumerated()), id: \.element.id) { index, job in
                     StarterChip(title: job.title, symbol: ChatStyle.symbol(forStarter: job.id), index: index) {
                         controller.draft = ChatStyle.draft(filling: controller.draft, with: job.prompt)
@@ -961,8 +961,8 @@ struct ReconOfferButtons: View {
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) { buttons }
-            VStack(alignment: .leading, spacing: 8) { buttons }
+            HStack(spacing: Theme.Space.xs) { buttons }
+            VStack(alignment: .leading, spacing: Theme.Space.xs) { buttons }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("reconOffer")
@@ -1027,18 +1027,18 @@ struct StarterChip: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
+            HStack(spacing: Theme.Space.xs) {
                 Image(systemName: symbol)
-                    .font(.subheadline.weight(.semibold))
+                    .font(Theme.TypeScale.subheadline.weight(.semibold))
                     .foregroundStyle(Theme.accentSymbol)
                     .accessibilityHidden(true)
                 Text(title)
-                    .font(.subheadline.weight(.medium))
+                    .font(Theme.TypeScale.subheadline.weight(.medium))
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 11)
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.vertical, Theme.Space.s)
             .frame(minHeight: 44)
             .background(Theme.accent.opacity(Theme.accentWash), in: Capsule())
             .contentShape(Capsule())
@@ -1071,7 +1071,7 @@ struct AvatarView: View {
             .frame(width: 88, height: 88)
             .overlay {
                 Text(initial)
-                    .font(.system(size: 40, weight: .semibold, design: .rounded))
+                    .font(Theme.TypeScale.avatarInitial)
                     .foregroundStyle(Theme.onAccent)
             }
             .accessibilityHidden(true)
