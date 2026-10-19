@@ -10,7 +10,7 @@ import Testing
 /// and one Forget everything takes recons, receipts and kept tasks together,
 /// in every window.
 @MainActor
-@Suite(.timeLimit(.minutes(1)))
+@Suite(.timeLimit(.minutes(3)))
 struct ReconNeedsYouTests {
     static let morning = ShowcaseScene.morning
 

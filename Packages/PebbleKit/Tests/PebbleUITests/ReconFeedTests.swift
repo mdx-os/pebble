@@ -13,9 +13,10 @@ import Testing
 /// an on-device chat's promise kept, updates landing on the main thread,
 /// a clock that moves only while something is live, and the card's words.
 /// A limit for the whole suite, so an await that never ends fails rather
-/// than hanging CI.
+/// than hanging CI. It counts the wait behind the run's other main-actor
+/// tests too, so it leaves room for a 60 s `eventually` after that.
 @MainActor
-@Suite(.timeLimit(.minutes(1)))
+@Suite(.timeLimit(.minutes(3)))
 struct ReconFeedTests {
     let brand = Brand(name: "Nova")
     let endpoint = URL(string: "https://cloud.example.com")!
@@ -575,7 +576,7 @@ struct ReconFeedTests {
 
     // MARK: Updates land on the main thread
 
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(3)))
     func aSummaryFinishedOffTheMainThreadReachesTheFeedOnIt() async throws {
         let (model, engine, runner) = feed()
         let gate = Gate()
@@ -605,7 +606,7 @@ struct ReconFeedTests {
 
     /// A summarizer that comes back on a background queue, as a cloud reply
     /// does: every change Today publishes still happens on the main thread.
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(3)))
     func aSummaryLandingOnABackgroundQueuePublishesOnlyOnTheMainThread() async throws {
         let (model, engine, runner) = feed()
         let mark = ThreadMark()
@@ -716,7 +717,7 @@ struct ReconFeedTests {
     /// while the summary is on its way to the preview, before it shows:
     /// no yes was asked for, so no line says anything may have gone, no
     /// connection is made and nothing is sent.
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(3)))
     func forgettingJustBeforeTodaysPreviewSaysNothingWent() async throws {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
