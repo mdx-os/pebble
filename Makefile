@@ -1,13 +1,13 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test repeat-test mutation-check build build-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-config-check graph-check graph-check-test secrets-check pulse clean
+.PHONY: verify generate test repeat-test mutation-check mutation-manifest-check mutation-manifest-check-test buildbuild-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-config-check graph-check graph-check-test secrets-check pulse clean
 
 ## verify: everything CI runs. Run this before every PR. The graph check
 ## runs once the builds have made the project, so it reads that too. The
 ## screenshots are made after every other step and then checked against the
 ## working tree. Both are the recipe, so even with -j nothing runs beside
 ## them that could change the tree between the stamp and the check.
-verify: brand-check local-config-check screenshots-check-test graph-check-test test build build-release
+verify: brand-check local-config-check mutation-manifest-check mutation-manifest-check-test screenshots-check-test graph-check-test test build build-release
 	$(MAKE) graph-check
 	$(MAKE) screenshots
 	sh scripts/screenshot-stamp.sh check build/screenshots
@@ -28,11 +28,21 @@ repeat-test:
 	sh scripts/repeat-test.sh $(or $(N),30) "$(FILTER)"
 
 ## mutation-check: prove the tests can fail. Each entry in
-## scripts/mutation-manifest.txt breaks one thing, such as one source guard
-## rule, on a copy in build/mutation, and its tests must then fail. The
-## working tree is never touched. ONLY= runs the entries whose tests match.
+## scripts/mutation-manifest.txt and scripts/mutation/*.txt breaks one thing,
+## such as one source guard rule, on a copy in build/mutation, and its tests
+## must then fail. The working tree is never touched. ONLY= runs the entries
+## whose tests match.
 mutation-check:
-	sh scripts/mutation-check.sh scripts/mutation-manifest.txt "$(ONLY)"
+	sh scripts/mutation-check.sh "" "$(ONLY)"
+
+## mutation-manifest-check: fail on a mutation entry shaped wrong (no test:,
+## no file: or no perl: line, a file that is gone, two entries run together)
+mutation-manifest-check:
+	sh scripts/mutation-manifest-check.sh
+
+## mutation-manifest-check-test: self-test for that check, in a scratch tree
+mutation-manifest-check-test:
+	sh scripts/mutation-manifest-check-test.sh
 
 ## pulse: fetch the public source watch and write a digest of real changes.
 ## When something changed, also write build/pulse/notify.md and build/pulse/summary.json.

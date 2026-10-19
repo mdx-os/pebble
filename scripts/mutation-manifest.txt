@@ -3,6 +3,8 @@
 # delimiter. An entry that needs several changes gives each its own perl:
 # line, and each must apply.
 #
+# New entries go in scripts/mutation/<area>.txt, not here: see its README.
+#
 # The source guards. Each rule in GuardScan (Tools/GuardKit) is turned off
 # on its own, and the wrong-case suite for its guard must fail: no rule can
 # stop catching its cases unseen. Then the scanner's own reading is broken,
