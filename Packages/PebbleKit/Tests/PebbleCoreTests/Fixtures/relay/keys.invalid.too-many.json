@@ -1,0 +1,24 @@
+{
+  "keys" : [
+    {
+      "ed25519" : "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "id" : "k1"
+    },
+    {
+      "ed25519" : "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "id" : "k2"
+    },
+    {
+      "ed25519" : "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "id" : "k3"
+    },
+    {
+      "ed25519" : "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "id" : "k4"
+    },
+    {
+      "ed25519" : "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "id" : "k5"
+    }
+  ]
+}

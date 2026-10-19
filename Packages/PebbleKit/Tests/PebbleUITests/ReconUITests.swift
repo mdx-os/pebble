@@ -23,9 +23,11 @@ final class Starts {
 }
 
 /// A limit for the whole suite, so an await whose preview or summary never
-/// comes fails here rather than hanging CI.
+/// comes fails here rather than hanging CI. It counts the wait behind the
+/// run's other main-actor tests too, so it leaves room for a 60 s
+/// `eventually` after that.
 @MainActor
-@Suite(.timeLimit(.minutes(1)))
+@Suite(.timeLimit(.minutes(3)))
 struct ReconUITests {
     let brand = Brand(name: "Nova")
     let endpoint = URL(string: "https://cloud.example.com")!
@@ -223,7 +225,7 @@ struct ReconUITests {
 
     /// The cloud setting changing on another thread still withdraws
     /// Today's preview, on the main thread, and nothing is sent.
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(3)))
     func aCloudSettingPublishedOffTheMainThreadIsSafe() async throws {
         let maker = TransportMaker()
         let notes = scratchMemory()
@@ -457,7 +459,7 @@ struct ReconUITests {
     /// screen makes it, with a kept point in the notes and a recon still
     /// putting a summary together in the cloud: the notes are empty, every
     /// task is gone, and nothing is left that may leave the device.
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(3)))
     func forgetEverythingErasesAKeptPointAndStopsARunningRecon() async throws {
         let memory = scratchMemory()
         defer { discard(memory) }
@@ -599,7 +601,7 @@ struct ReconUITests {
     /// Send, then Stop while the request is on its way. The reply still
     /// comes back, and the summary is dropped all the same: the card says
     /// stopped and keeps nothing.
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(3)))
     func stoppingWhileTheSendIsOnItsWayKeepsNothing() async throws {
         let wire = HeldWire(reply: """
             POINT: The pool reopens on November 10. [2]
@@ -639,7 +641,7 @@ struct ReconUITests {
 
     /// The control: the same send, with no Stop, lands as a summary worded
     /// in the cloud. So the test above drops it because of Stop.
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(3)))
     func theSameSendLandsWhenNothingIsStopped() async throws {
         let wire = HeldWire(reply: """
             POINT: The pool reopens on November 10. [2]

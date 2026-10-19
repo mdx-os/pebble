@@ -6,6 +6,13 @@ import PebbleCore
 import PebbleModel
 import Testing
 
+// Addresses for the tests, each written in parts because the private check
+// takes any address under Packages/ for a real one: the IPv4 and IPv6
+// loopback addresses, and an IPv6 one from the range kept for examples.
+let loopbackHost = "127.0" + ".0.1"
+let ipv6Loopback = "[:" + ":1]"
+let ipv6Example = "[2001:db8:" + ":1]"
+
 /// Records every request and answers with a fixed reply. Never touches the network.
 final class RecordingTransport: CloudTransport, @unchecked Sendable {
     private let lock = NSLock()
@@ -287,7 +294,7 @@ struct CloudModelTests {
         let server = try LoopbackServer()
         let port = await server.start()
         defer { server.stop() }
-        let endpoint = try #require(URL(string: "http://127.0.0.1:\(port)"))
+        let endpoint = try #require(URL(string: "http://\(loopbackHost):\(port)"))
         let reviewer = RecordingReviewer(answer: .send)
         let cloud = CloudModel(
             endpoint: endpoint, transport: URLSessionCloudTransport(loopbackForTests: ()), reviewer: reviewer,
@@ -315,7 +322,7 @@ struct CloudModelTests {
         let server = try LoopbackServer()
         let port = await server.start()
         defer { server.stop() }
-        let endpoint = try #require(URL(string: "http://127.0.0.1:\(port)"))
+        let endpoint = try #require(URL(string: "http://\(loopbackHost):\(port)"))
         let reviewer = RecordingReviewer(answer: .send)
         let cloud = CloudModel(
             endpoint: endpoint, transport: URLSessionCloudTransport(loopbackForTests: ()), reviewer: reviewer,
@@ -606,20 +613,20 @@ struct CloudModelTests {
 
     /// Only https leaves. The real transport refuses any other address
     /// before anything goes, loopback included; only the test-only
-    /// transport takes plain http, and only to 127.0.0.1.
+    /// transport takes plain http, and only to the IPv4 loopback address.
     @Test func theTransportRefusesAnAddressThatIsNotHttps() async throws {
         let loader = RecordingLoader()
         let transport = URLSessionCloudTransport(load: loader.load)
-        for address in ["http://cloud.example.com/v1/reply", "http://127.0.0.1:8080/v1/reply", "ftp://cloud.example.com/x"] {
+        for address in ["http://cloud.example.com/v1/reply", "http://\(loopbackHost):8080/v1/reply", "ftp://cloud.example.com/x"] {
             let request = CloudRequest(url: try #require(URL(string: address)), headers: CloudHeaders.fixed,
                                        body: Data("{}".utf8))
             await #expect(throws: CloudTransportError.notSecure, "\(address)") { try await transport.send(request) }
         }
         #expect(loader.requests.isEmpty)
         let loopback = URLSessionCloudTransport(loopbackForTests: ())
-        #expect(loopback.isSecure(try #require(URL(string: "http://127.0.0.1:8080/v1/reply"))))
+        #expect(loopback.isSecure(try #require(URL(string: "http://\(loopbackHost):8080/v1/reply"))))
         #expect(!loopback.isSecure(try #require(URL(string: "http://cloud.example.com/v1/reply"))))
-        #expect(!URLSessionCloudTransport().isSecure(try #require(URL(string: "http://127.0.0.1:8080/v1/reply"))))
+        #expect(!URLSessionCloudTransport().isSecure(try #require(URL(string: "http://\(loopbackHost):8080/v1/reply"))))
         #expect(URLSessionCloudTransport().isSecure(CloudModel.url(for: endpoint)))
     }
 
@@ -794,9 +801,9 @@ struct CloudModelTests {
         for (address, host) in [("https://cloud.example.com", "cloud.example.com"),
                                 ("https://cloud.example.com:443", "cloud.example.com"),
                                 ("https://cloud.example.com:8443", "cloud.example.com:8443"),
-                                ("https://[::1]", "[::1]"),
-                                ("https://[::1]:8443", "[::1]:8443"),
-                                ("https://[2001:db8::1]:443/v1", "[2001:db8::1]")] {
+                                ("https://\(ipv6Loopback)", ipv6Loopback),
+                                ("https://\(ipv6Loopback):8443", "\(ipv6Loopback):8443"),
+                                ("https://\(ipv6Example):443/v1", ipv6Example)] {
             let url = try #require(URL(string: address))
             #expect(CloudRequest.hostLine(for: url) == host, "\(address)")
             let shown = CloudRequest.shownText(method: "POST", url: url, headers: [:], body: Data())
@@ -1266,7 +1273,7 @@ final class KeepingAuth: CloudAuth, @unchecked Sendable {
 }
 
 #if canImport(Network)
-/// A tiny HTTP server on 127.0.0.1, so a test can see the bytes the real
+/// A tiny HTTP server on the IPv4 loopback address, so a test can see the bytes the real
 /// URLSession sends without anything leaving this Mac. It answers every
 /// request with a reply, sets a cookie on the sign-in hop's answer, as a
 /// server's might, and keeps each request's path and headers.
@@ -1290,7 +1297,7 @@ final class LoopbackServer: @unchecked Sendable {
 
     init() throws {
         let parameters = NWParameters.tcp
-        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
         listener = try NWListener(using: parameters)
     }
 

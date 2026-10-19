@@ -39,6 +39,14 @@ in lint, a skill, or CI.
   Merge conflicts in these files are resolved by hand, never with a union merge: two
   entries with the same `test:` and `file:` lines would fold into one and hide a survivor
 - `make secrets-check`: gitleaks over git history
+- `make private-check`: fail on any file in git holding a word whose salted hash is in
+  `Config/private-words.sha256`, or with one in a folder or file name of its path (prints
+  file and line with such names redacted, never the word), and on a hosting
+  provider hostname, a `.internal` or `.local` host or an IP address in `docs/`, `Config/`
+  or `Packages/` (part of verify). A camel case name is also read in its parts and in
+  every run of up to 8 parts joined, within that one name only. The owner fills the plain list in the git ignored
+  `Config/private-words.local.txt` and runs `make hash-private-words`; the hash file
+  committed now is built from a made up placeholder word
 
 ## Layout and layers
 
@@ -49,6 +57,7 @@ in lint, a skill, or CI.
   - `PebblePulse`: public source watch fetching and snapshots. Imports PebbleCore.
   - `PebbleModel`: model adapter. `ModelClient`, the on-device placeholder and `CloudModel` (off by default, every request previewed and redacted by `Redactor` in PebbleCore). Imports PebbleCore. MLX and Ollama adapters plug in here. The on-device task engine lives here too, made only by `OnDeviceTasks` from a key the compiler keeps private.
   - `PebbleBackground`: gives the background runner time (`BGTaskScheduler` on iOS, `NSBackgroundActivityScheduler` on the Mac). Imports PebbleCore. Scheduling decisions are pure functions in `BackgroundPlan`; the runner, its store and its switch live in PebbleCore's `Background.swift`, so no platform code goes there.
+  - `PebbleConnectors`: read only connectors to what the person keeps in other apps (calendar and reminders through EventKit). Imports none of our layers; reading never asks, and `ConnectorGate` keeps it free of network, files and logs. See `docs/CONNECTORS.md`.
   - `PebbleUI`: SwiftUI views shared by every platform. Imports PebbleCore and PebbleModel.
 - Where work is done (kept context, a framework, the relay, a remote run,
   then the person) is decided only by `FallbackRouter` in PebbleCore.
@@ -65,6 +74,8 @@ in lint, a skill, or CI.
   entry that turns it off. Rules compare names through `SyntaxSource.name`,
   never a token's `text`, so a name in backticks is still the name.
   swift-syntax is pinned to an exact version and only GuardScan uses it.
+- The relay protocol lives in `docs/RELAY.md`. This repo holds only a generic
+  client and the protocol, never a relay's addresses, keys or internals.
 - `PromiseWords` (the device promise phrases and the allow list) and
   `SourceScan` are PebbleKit products only so GuardKit can read them. The
   app never links them.
@@ -223,6 +234,13 @@ Things no test here can reach. Check each on a real iPhone before a release.
   sweeps the sources is `nonisolated`, never on the main actor, and a
   limit on work that needs the main actor is about 60 s, never 20.
   `BackgroundServiceTests` and `finishes` in `CloudHelpTests` follow this.
+- A check made off the main actor can go stale before the main actor acts on
+  it. A cloud preview asks whether the cloud is on again where it goes on
+  screen, on the main actor, where the switch is turned off.
+  `aSwitchOffJustAfterTheCheckNeverShowsAPreview` guards this.
+- The Recon UI tests' `eventually` waits up to 60 s and their suites allow 3
+  minutes: main-actor tests queue behind each other, about 16 s on a fast Mac
+  and past 30 s on CI.
 
 ## Never
 

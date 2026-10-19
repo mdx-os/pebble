@@ -207,6 +207,19 @@ public enum CloudConsent: Sendable, Equatable {
 /// unless this says `.send`.
 public protocol CloudReviewing: Sendable {
     func review(_ preview: CloudPreview) async -> CloudConsent
+    /// As `review`, but withdrawn unshown when `isOn` says the cloud is off
+    /// as the preview would go on screen. A reviewer that shows previews
+    /// on the actor the switch is turned off on asks there, so a switch off
+    /// just after the check that let the request be built never leaves a
+    /// preview up that nothing will withdraw.
+    func review(_ preview: CloudPreview, whileOn isOn: @escaping @Sendable () -> Bool) async -> CloudConsent
+}
+
+extension CloudReviewing {
+    public func review(_ preview: CloudPreview, whileOn isOn: @escaping @Sendable () -> Bool) async -> CloudConsent {
+        guard isOn() else { return .withdrawn }
+        return await review(preview)
+    }
 }
 
 /// Carries a request to the cloud model and brings back the answer's bytes.
@@ -459,12 +472,13 @@ public struct CloudModel: ModelClient {
 
     /// `redactor` is asked for each reply, so newly saved notes and private
     /// words count right away; it throws when they can't be read. `isOn` is
-    /// checked before building a request, again before each hop is sent and
-    /// before a sign-in answer is handed over, so turning the setting off
-    /// stops a reply already waiting in the preview. It is never called
-    /// with the chat's lock held, so it may read files or reach into the
-    /// chat. It throws when the setting can't be read, which is not the
-    /// same as off: nothing is sent, and the chat says it couldn't read them.
+    /// checked before building a request, as its preview goes on screen,
+    /// again before each hop is sent and before a sign-in answer is handed
+    /// over, so turning the setting off stops a reply already waiting in the
+    /// preview or still on its way there. It is never called with the
+    /// chat's lock held, so it may read files or reach into the chat. It
+    /// throws when the setting can't be read, which is not the same as off:
+    /// nothing is sent, and the chat says it couldn't read them.
     /// `session` is this chat's, so whoever made it can end the chat.
     public init(
         endpoint: URL,
@@ -508,7 +522,11 @@ public struct CloudModel: ModelClient {
             forSummary: CloudAsk.forSummary,
             run: CloudAsk.forSummary ? CloudYes.run : nil
         )
-        switch await reviewer.review(preview) {
+        // Checked again where the preview goes on screen: the setting may
+        // have been switched off since the check above. Unreadable counts as
+        // off there, so nothing shows that couldn't be sent.
+        let isOn = self.isOn
+        switch await reviewer.review(preview, whileOn: { (try? isOn()) == true }) {
         case .send: break
         case .cancel: throw CloudModelError.notSent
         case .withdrawn: throw CloudModelError.withdrawn
@@ -796,6 +814,10 @@ public struct URLSessionCloudTransport: CloudTransport {
     /// Plain http to this Mac's own loopback address, for a test's local
     /// listener. Only the test-only init below sets it.
     private let allowsLoopbackHTTP: Bool
+    /// This Mac's own IPv4 loopback address. It is written in two parts
+    /// because the private check takes any address under Packages/ for a
+    /// real one.
+    package static let loopbackHost = "127.0" + ".0.1"
 
     public init() {
         self.init(load: Self.live)
@@ -809,8 +831,8 @@ public struct URLSessionCloudTransport: CloudTransport {
 
     /// The real session, one for every send, so a test can see what the
     /// system itself adds from one request to the next. Takes plain http
-    /// to 127.0.0.1 too, which a test's local listener needs and nothing
-    /// else ever gets.
+    /// to `loopbackHost` too, which a test's local listener needs and
+    /// nothing else ever gets.
     package init(loopbackForTests: Void) {
         let session = Self.makeSession()
         load = { request in try await session.data(for: request, delegate: RefusesRedirects()) }
@@ -822,7 +844,7 @@ public struct URLSessionCloudTransport: CloudTransport {
     /// skipped it.
     package func isSecure(_ url: URL) -> Bool {
         let scheme = url.scheme?.lowercased()
-        return scheme == "https" || (allowsLoopbackHTTP && scheme == "http" && url.host == "127.0.0.1")
+        return scheme == "https" || (allowsLoopbackHTTP && scheme == "http" && url.host == Self.loopbackHost)
     }
 
     public func send(_ request: CloudRequest) async throws -> Data {

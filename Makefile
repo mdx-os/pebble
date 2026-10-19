@@ -1,6 +1,6 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify verify-ci generate test release-test repeat-test mutation-check mutation-manifest-check mutation-manifest-check-test build build-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-config-check graph-check graph-check-test comment-lint hash-names secrets-check pulse clean
+.PHONY: verify verify-ci generate test release-test repeat-test mutation-check mutation-manifest-check mutation-manifest-check-test build build-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-config-check private-check hash-private-words graph-check graph-check-test comment-lint hash-names secrets-check pulse clean
 
 ## verify: everything CI runs. Run this before every PR. It is verify-ci and
 ## then the full mutation check, which CI runs as a job of its own beside
@@ -13,7 +13,7 @@ verify: verify-ci mutation-check
 ## and then checked against the working tree. Both are the recipe, so even
 ## with -j nothing runs beside them that could change the tree between the
 ## stamp and the check.
-verify-ci: brand-check local-config-check mutation-manifest-check mutation-manifest-check-test comment-lint screenshots-check-test graph-check-test test release-test build build-release
+verify-ci: brand-check local-config-check private-check mutation-manifest-check mutation-manifest-check-test comment-lint screenshots-check-test graph-check-test test release-test build build-release
 	$(MAKE) graph-check
 	$(MAKE) screenshots
 	sh scripts/screenshot-stamp.sh check build/screenshots
@@ -152,6 +152,18 @@ comment-lint:
 ## Config/comment-lint-names.local.txt, keeping its salt
 hash-names:
 	sh scripts/comment-lint.sh --hash-names
+
+## private-check: fail on any file in git with a word whose hash is in
+## Config/private-words.sha256, printing the file and line, never the word.
+## In docs/, Config/ and Packages/ also fail on a hosting provider's
+## hostname, a .internal or .local host, or an IP address
+private-check:
+	swift scripts/private-check.swift check
+
+## hash-private-words: make Config/private-words.sha256 from the plain list
+## in Config/private-words.local.txt, which git ignores and only the owner has
+hash-private-words:
+	swift scripts/private-check.swift hash
 
 ## secrets-check: scan git history for leaked secrets, and fail if the
 ## one-machine Config/Cloud.local.xcconfig is ever tracked

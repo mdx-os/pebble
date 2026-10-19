@@ -1,0 +1,58 @@
+{
+  "receipts" : [
+    {
+      "at" : "2026-10-18T09:00:00Z",
+      "clientRunId" : "c1",
+      "hash" : "aa48d6140375a6e1b85af36816d8dbbbcc209414e3524ac854640b397d3c5c01",
+      "kind" : "run.started",
+      "prevHash" : "0000000000000000000000000000000000000000000000000000000000000000",
+      "runId" : "r9Q1",
+      "seq" : 1
+    },
+    {
+      "at" : "2026-10-18T09:00:05Z",
+      "clientRunId" : "c1",
+      "contentSha256" : "cec2d5fabb4a3845bceb8a0cb9b90ea16f6981287d8ad4a5e391874603884427",
+      "hash" : "15fddf08bb136885eb3a97e5f1a2cd5ada531f42f6c360c41cdc2a0e42063e50",
+      "kind" : "tool.used",
+      "prevHash" : "aa48d6140375a6e1b85af36816d8dbbbcc209414e3524ac854640b397d3c5c01",
+      "runId" : "r9Q1",
+      "seq" : 2,
+      "tool" : "web.search"
+    }
+  ],
+  "result" : {
+    "artifacts" : [
+      {
+        "bytesBase64" : "IyBQb29sIGhvdXJzCgpPcGVuIG9uIFN1bmRheXMgZnJvbSA5IHRvIDUuCg==",
+        "kind" : "markdown",
+        "name" : "pool-hours.md",
+        "sha256" : "4903e9cb4f5c695525c0119a553bcbbaf1ed349dfb66e9e3c78fd7d04fe70e55"
+      }
+    ],
+    "sources" : [
+      {
+        "title" : "Pool hours",
+        "url" : "https://example.com/pool/hours"
+      }
+    ],
+    "text" : "The pool opens on Sundays from 9 to 5, starting next week."
+  },
+  "retryAfterSeconds" : 10,
+  "runId" : "r9Q1",
+  "state" : "working",
+  "steps" : [
+    {
+      "state" : "done",
+      "words" : "Planning a few questions"
+    },
+    {
+      "state" : "working",
+      "words" : "Reading the sources"
+    },
+    {
+      "state" : "waiting",
+      "words" : "Putting it together"
+    }
+  ]
+}

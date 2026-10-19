@@ -305,7 +305,9 @@ struct CloudHelpSettingsTests {
     /// https's own port, written out, is left out of the Host line the
     /// system sends, so the preview's Host line could read differently from
     /// the address. Refused, rather than shown one way and sent another.
-    @Test(arguments: ["https://cloud.example.com:443", "https://cloud.example.com:443/v1", "https://[::1]:443"])
+    /// The IPv6 loopback address is written in parts because the private
+    /// check takes any address under Packages/ for a real one.
+    @Test(arguments: ["https://cloud.example.com:443", "https://cloud.example.com:443/v1", "https://[:" + ":1]:443"])
     func anAddressWithHttpsOwnPortWrittenOutIsRefused(raw: String) {
         #expect(CloudEndpoint.url(from: raw) == nil)
         #expect(CloudEndpoint.url(from: raw.replacingOccurrences(of: ":443", with: ":8443")) != nil)

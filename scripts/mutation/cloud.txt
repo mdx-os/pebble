@@ -277,7 +277,7 @@ perl: s~\(isSignIn\(\$0\.name, \$0\.value\) \? signInMask : \$0\.value\)~\$0.val
 # Sign-in is a hop in the same preview, sent only by its yes.
 test: signInNeverGoesWithoutAYesToThePreviewThatShowsIt turningOnSendsNothingAndSignInWaitsForThePreviewsYes
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
-perl: s~(\n\s*switch await reviewer\.review\(preview\) \{)~\n        if let early = preview.signIn { auth.signedIn(try await session.send(early, through: transport)) }$1~
+perl: s~(\n\s*switch await reviewer\.review\(preview, whileOn: )~\n        if let early = preview.signIn { auth.signedIn(try await session.send(early, through: transport)) }$1~
 
 test: theYesSendsTheSignInHopThenTheMessageExactlyAsShown turningOnSendsNothingAndSignInWaitsForThePreviewsYes
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
@@ -612,7 +612,7 @@ perl: s~self\.load = load\n(\s*)allowsLoopbackHTTP = false~self.load = load\n$1a
 
 test: theTransportRefusesAnAddressThatIsNotHttps
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
-perl: s~ && url\.host == "127\.0\.0\.1"\)~)~
+perl: s~ && url\.host == Self\.loopbackHost\)~)~
 
 # The routing gate holds a yes to its own address.
 test: aYesForAnotherAddressOrNoneRoutesNothingToTheCloud
@@ -737,3 +737,10 @@ perl: s~underway: tasks\.underwayLine, hadNotes: hadNotes, sent: sent\)~underway
 test: forgetEverythingAfterSendingSaysTheTasksStayedAndTheCloudCopy
 file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
 perl: s~summaries: summaries,\n(\s*)hadNotes: hadNotes, sent: sent\)~summaries: summaries,\n$1hadNotes: hadNotes)~
+
+# The preview no longer asks whether the cloud is still on as it goes on
+# screen, so a switch off just after the reply's own check leaves a preview
+# up that nothing withdraws.
+test: aSwitchOffJustAfterTheCheckNeverShowsAPreview
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~if Task\.isCancelled \|\| !isOn\(\) \{ return \.withdrawn \}~if Task.isCancelled { return .withdrawn }~
