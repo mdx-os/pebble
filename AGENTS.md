@@ -181,6 +181,11 @@ Things no test here can reach. Check each on a real iPhone before a release.
   for task restoration to resolve and its outcomes to be recorded. Only
   tasks absent from the reconciled snapshot are orphans, including when
   restoration ends a task. `TaskLedgerCardTests` guards this.
+- A test that blocks waits only on a thread of its own, never on
+  `DispatchQueue.global()` or the cooperative pool, and always with a
+  generous limit (about 60 s). The pool starves on a busy runner, and a wait
+  with no limit turns a regression into a hung run instead of a failure.
+  `TaskLedgerRunTests` and `TaskLedgerCardTests` follow this.
 
 ## Never
 
