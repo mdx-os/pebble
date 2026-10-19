@@ -1,0 +1,693 @@
+#if canImport(SwiftUI)
+import Combine
+import Foundation
+import PebbleCore
+import PebbleModel
+import TestScratch
+import Testing
+@testable import PebbleUI
+
+/// The real task engine on Today and in Forget everything, as the app
+/// wires it: the offer starts the digest, its question opens the same
+/// sheet as any other, and Forget everything erases its tasks and file.
+@MainActor
+struct DigestTodayTests {
+    let folder: URL
+    let notes: MemoryStore
+    let rule = AskFirst.isolated()
+    let store: TaskStore
+    let engine: DeviceTaskEngine
+    let feed: FeedModel
+
+    init() throws {
+        folder = FileManager.default.temporaryDirectory.appendingPathComponent("digest-today-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        notes = MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
+        try notes.remember("Dentist on Thursday at 3", at: Date() - 3_600, source: .toldMe)
+        store = Self.openStore(in: folder)
+        engine = OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: store, rule: rule, pace: nil)
+        feed = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: rule), tasks: engine, place: .onDevice)
+    }
+
+    var tasksFile: URL { folder.appendingPathComponent("tasks.json") }
+
+    /// The app's one task store, over the file in `folder`.
+    static func openStore(in folder: URL) -> TaskStore {
+        TaskStore(fileURL: folder.appendingPathComponent("tasks.json"),
+                  forgetMarker: folder.appendingPathComponent("pending/tasks-forgotten"))
+    }
+
+    /// Starts the digest from Today's offer and runs it to its question.
+    func startAndAsk() throws -> AgentTask {
+        #expect(feed.offers == [DigestTask.request])
+        feed.start(DigestTask.request)
+        for _ in 0..<3 { engine.runPending() }
+        feed.refresh()
+        return try #require(feed.feed.needsYou.compactMap(\.task).first)
+    }
+
+    @Test func todayOffersTheDigestAndShowsItsCard() throws {
+        let task = try startAndAsk()
+        #expect(task.title == DigestTask.title)
+        #expect(feed.canApprove(task))
+        // Not offered again while it is going, and not an example.
+        #expect(feed.offers.isEmpty)
+        #expect(!feed.isSample)
+        #expect(!feed.isSample(FeedItem(id: task.id, kind: .task, time: Date(), title: "", body: "")))
+    }
+
+    @Test func approveOpensTheRealSheetAndOnlyItsYesSaves() throws {
+        let before = notes.notes()
+        let task = try startAndAsk()
+        feed.review(task)
+        let request = try #require(feed.reviewing)
+        #expect(!feed.isSample(request))
+        #expect(notes.notes() == before)
+        // The yes goes through the sheet's own state, as a tap would.
+        let sheet = ConfirmationState(request: request, rule: rule, onApprove: { feed.approved($0) }, onDecline: {})
+        sheet.tapPrimary()
+        #expect(notes.notes().count == before.count + 1)
+        #expect(engine.tasks.first?.state == .done)
+        #expect(feed.offers == [DigestTask.request])
+    }
+
+    @Test func notNowInTheSheetSavesNothing() throws {
+        let before = notes.notes()
+        let task = try startAndAsk()
+        feed.review(task)
+        let request = try #require(feed.reviewing)
+        let sheet = ConfirmationState(request: request, rule: rule, onApprove: { feed.approved($0) },
+                                      onDecline: { feed.closedQuestion(request) })
+        sheet.cancel()
+        #expect(notes.notes() == before)
+        #expect(engine.tasks.first?.step == TaskWords.declined(DigestTask.saveTodo))
+    }
+
+    @Test func stopFromTheCardStopsTheTask() throws {
+        feed.start(DigestTask.request)
+        let task = try #require(engine.tasks.first)
+        feed.stop(task)
+        for _ in 0..<3 { engine.runPending() }
+        #expect(engine.tasks.first?.state == .stopped)
+        #expect(engine.tasks.first?.question == nil)
+    }
+
+    /// Forget everything: the tasks and their file go, the notes go, and
+    /// the line says so. Each part goes whatever happens to the others.
+    @Test func forgetEverythingErasesTheTasksAndTheirFile() throws {
+        let task = try startAndAsk()
+        feed.review(task)
+        let request = try #require(feed.reviewing)
+        let memory = MemoryModel(store: notes, place: .onDevice, onForgetEverything: { feed.forgetTasks() },
+                                 othersStored: { feed.tasksStored })
+        memory.forgetEverything()
+        #expect(engine.tasks.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: tasksFile.path))
+        #expect(!notes.hasStoredFile)
+        #expect(feed.reviewing == nil)
+        #expect(rule.isClosed(request))
+        #expect(memory.status == MemoryWords.forgotten)
+        #expect(!memory.hasStoredFile)
+    }
+
+    /// With the notes gone one by one, the tasks' file still holds a card,
+    /// so Forget everything stays on offer until it is erased.
+    @Test func forgetEverythingStaysWhileOnlyTheTaskFileIsLeft() throws {
+        _ = try startAndAsk()
+        for note in notes.notes() { _ = try notes.forget(note.id) }
+        #expect(!notes.hasStoredFile)
+        let memory = MemoryModel(store: notes, place: .onDevice, onForgetEverything: { feed.forgetTasks() },
+                                 othersStored: { feed.tasksStored })
+        #expect(memory.hasStoredFile)
+        memory.forgetEverything()
+        #expect(!memory.hasStoredFile)
+    }
+
+    /// Start takes the offer, and VoiceOver's place, away, so the first
+    /// step is said at once, even right after another line, and only once.
+    @Test func startSaysTheFirstStepAtOnce() throws {
+        var heard: [TaskAnnouncer.Line] = []
+        feed.announce = { heard.append($0) }
+        // Something was just said: a task asking, then stopping.
+        let first = try startAndAsk()
+        feed.stop(first)
+        #expect(!heard.isEmpty)
+        heard.removeAll()
+        feed.start(DigestTask.request)
+        let reading = TaskAnnouncer.Line(text: DigestTask.title + ". " + DigestWords.reading, urgent: true)
+        #expect(heard == [reading])
+        feed.refresh()
+        #expect(heard == [reading])
+    }
+
+    /// The memory screen looks again as tasks change elsewhere, so Forget
+    /// everything shows once a task's file is made, with no other nudge.
+    @Test func theMemoryScreenFollowsTheTasks() throws {
+        for note in notes.notes() { _ = try notes.forget(note.id) }
+        let memory = MemoryModel(store: notes, place: .onDevice, othersStored: { feed.tasksStored },
+                                 othersChanged: feed.$tasksSeen.map { _ in () }.eraseToAnyPublisher())
+        #expect(!memory.hasStoredFile)
+        feed.start(DigestTask.request)
+        #expect(memory.hasStoredFile)
+    }
+
+    /// The memory screen is told only when the task file comes or goes,
+    /// not at every step, so a running task doesn't make it read the notes
+    /// again each time.
+    @Test func theMemoryScreenLooksAgainOnlyWhenTheTaskFileComesOrGoes() throws {
+        var looks = 0
+        let watch = feed.$tasksSeen.dropFirst().sink { _ in looks += 1 }
+        defer { watch.cancel() }
+        feed.start(DigestTask.request)
+        #expect(looks == 1)
+        for _ in 0..<3 { engine.runPending() }
+        feed.refresh()
+        #expect(feed.feed.needsYou.compactMap(\.task).count == 1)
+        #expect(looks == 1)
+        _ = feed.forgetTasks()
+        #expect(looks == 2)
+    }
+
+    /// Forgetting the kept digest on the memory screen takes its words
+    /// off Today's card, and closes them if they are open.
+    @Test func forgettingTheDigestNoteTakesItsWordsOffToday() throws {
+        let task = try startAndAsk()
+        feed.review(task)
+        let request = try #require(feed.reviewing)
+        ConfirmationState(request: request, rule: rule, onApprove: { feed.approved($0) }, onDecline: {}).tapPrimary()
+        let done = try #require(engine.tasks.first)
+        #expect(done.result != nil)
+        feed.open(done)
+        #expect(feed.reading != nil)
+        let memory = MemoryModel(store: notes, place: .onDevice, onNotesChanged: { feed.refresh() })
+        let digest = try #require(memory.notes.first { $0.text.hasPrefix(DigestWords.heading) })
+        memory.forget(digest)
+        let card = try #require(feed.feed.groups.flatMap(\.items).compactMap(\.task).first { $0.id == done.id })
+        #expect(card.result == nil)
+        #expect(card.step == DigestWords.removed)
+        #expect(feed.reading == nil)
+    }
+
+    /// A digest open to read in one window, with a note it quoted
+    /// forgotten through another: the reader shows the digest as it is
+    /// now, without the forgotten words and with the rest.
+    @Test func anOpenDigestLosesALineForgottenInAnotherWindow() throws {
+        try notes.remember("Sam's birthday is May 14", at: Date() - 7_200, source: .toldMe)
+        let done = try keepDigest()
+        let reader = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: rule), tasks: engine,
+                               place: .onDevice)
+        reader.open(try #require(engine.tasks.first { $0.id == done.id }))
+        #expect(reader.reading?.action == .open(try #require(done.result)))
+        let memory = memoryScreen()
+        let sam = try #require(memory.notes.first { $0.text.hasPrefix("Sam's") })
+        memory.forget(sam)
+        #expect(memory.status == MemoryWords.forgotten)
+        let open = try #require(reader.reading)
+        #expect(open.id == done.id)
+        #expect(open.action == .open(DigestWords.heading + ".\n• Dentist on Thursday at 3 (You told me)"))
+    }
+
+    /// A kept digest open to edit in one window while a note it quotes is
+    /// forgotten through another: saving the first, before it has heard,
+    /// never writes the forgotten words back.
+    @Test func aStaleDigestEditNeverSavesForgottenWords() throws {
+        try notes.remember("Sam's birthday is May 14", at: Date() - 7_200, source: .toldMe)
+        _ = try keepDigest()
+        let first = memoryScreen()
+        let second = memoryScreen()
+        let digest = try #require(digestNote(first))
+        #expect(digest.text.contains("Sam's birthday"))
+        first.beginEdit(digest)
+        first.editDraft = digest.text + "\n• Bring flowers"
+        second.forget(try #require(second.notes.first { $0.text.hasPrefix("Sam's") }))
+        #expect(second.status == MemoryWords.forgotten)
+        first.saveEdit()
+        #expect(!notes.notes().contains { $0.text.contains("Sam's birthday") })
+        #expect(!notes.notes().contains { $0.text.contains("Bring flowers") })
+        #expect(first.status == MemoryWords.changedWhileEditing)
+        #expect(first.editingID == nil)
+        #expect(first.editDraft.isEmpty)
+    }
+
+    /// The same edit with nothing changed underneath it, only a new note
+    /// added in the other window, saves as asked.
+    @Test func aDigestEditWithNothingChangedUnderneathSaves() throws {
+        try notes.remember("Sam's birthday is May 14", at: Date() - 7_200, source: .toldMe)
+        _ = try keepDigest()
+        let first = memoryScreen()
+        let second = memoryScreen()
+        let digest = try #require(digestNote(first))
+        first.beginEdit(digest)
+        first.editDraft = digest.text + "\n• Bring flowers"
+        second.newNote = "The plumber comes Friday"
+        second.add()
+        first.saveEdit()
+        #expect(first.status == MemoryWords.saved(.onDevice))
+        #expect(notes.notes().contains { $0.text.contains("Sam's birthday") && $0.text.contains("Bring flowers") })
+    }
+
+    /// Once the first window hears of the change, its list shows the digest
+    /// as it is now, and the edit and any forget question about a note that
+    /// changed or went are put away.
+    @Test func aWindowPutsAwayAnEditOnceItHearsTheNoteChanged() async throws {
+        try notes.remember("Sam's birthday is May 14", at: Date() - 7_200, source: .toldMe)
+        _ = try keepDigest()
+        let first = memoryScreen()
+        let second = memoryScreen()
+        let digest = try #require(digestNote(first))
+        let sam = try #require(first.notes.first { $0.text.hasPrefix("Sam's") })
+        first.beginEdit(digest)
+        first.editDraft = digest.text + "\n• Bring flowers"
+        first.pendingForget = sam
+        second.forget(sam)
+        for _ in 0..<100 where first.editingID != nil { await Task.yield() }
+        #expect(first.editingID == nil)
+        #expect(first.editDraft.isEmpty)
+        #expect(first.pendingForget == nil)
+        #expect(first.status == MemoryWords.changedWhileEditing)
+        #expect(!first.notes.contains { $0.text.contains("Sam's birthday") })
+    }
+
+    /// Keeps a digest through the sheet, as a tap would.
+    func keepDigest() throws -> AgentTask {
+        let task = try startAndAsk()
+        feed.review(task)
+        let request = try #require(feed.reviewing)
+        ConfirmationState(request: request, rule: rule, onApprove: { feed.approved($0) }, onDecline: {}).tapPrimary()
+        return try #require(engine.tasks.first { $0.id == task.id && $0.result != nil })
+    }
+
+    /// The memory screen as the app wires it to Today.
+    func memoryScreen() -> MemoryModel {
+        HomeView.memoryModel(store: notes, place: .onDevice, onForgetEverything: { feed.forgetTasks() },
+                             othersStored: { feed.tasksStored }, onNotesChanged: { feed.notesChanged() },
+                             forgetQuotes: { feed.forgetQuotes(of: $0) })
+    }
+
+    /// The digest note on the memory screen.
+    func digestNote(_ memory: MemoryModel) -> MemoryNote? {
+        memory.notes.first { $0.text.hasPrefix(DigestWords.heading) }
+    }
+
+    /// A digest the person changed keeping only part of a note: the screen
+    /// never guesses the rest went, and says the words are still there.
+    @Test func aDigestKeepingPartOfANoteIsSaidToStillHoldIt() throws {
+        try notes.remember("Sam's birthday is May 14. Loves lemon cake.", at: Date() - 7_200, source: .toldMe)
+        _ = try keepDigest()
+        let memory = memoryScreen()
+        let digest = try #require(digestNote(memory))
+        memory.beginEdit(digest)
+        memory.editDraft = DigestWords.heading + ".\n• Sam's birthday is May 14 (You told me)\n• Dentist on Thursday at 3 (You told me)"
+        memory.saveEdit()
+        let sam = try #require(memory.notes.first { $0.text.hasPrefix("Sam's") })
+        memory.forget(sam)
+        #expect(memory.status == DigestWords.stillInDigest)
+        #expect(digestNote(memory)?.text.contains("Sam's birthday is May 14") == true)
+    }
+
+    /// Changing a note the digest quoted takes its earlier words out of the
+    /// digest, and the screen says only that it saved.
+    @Test func changingAQuotedNoteTakesItsEarlierWordsOutOfTheDigest() throws {
+        try notes.remember("Sam's birthday is May 14", at: Date() - 7_200, source: .toldMe)
+        let done = try keepDigest()
+        let memory = memoryScreen()
+        let sam = try #require(memory.notes.first { $0.text.hasPrefix("Sam's") })
+        memory.beginEdit(sam)
+        memory.editDraft = "Sam's birthday is May 15"
+        memory.saveEdit()
+        #expect(memory.status == MemoryWords.saved(.onDevice))
+        #expect(!notes.notes().contains { $0.text.contains("May 14") })
+        #expect(todayCards.first { $0.id == done.id }?.result == DigestWords.heading + ".\n• Dentist on Thursday at 3 (You told me)")
+    }
+
+    /// When a digest the person changed keeps a changed note's earlier
+    /// words, the screen says so plainly.
+    @Test func earlierWordsLeftInAChangedDigestAreSaidSo() throws {
+        _ = try keepDigest()
+        let memory = memoryScreen()
+        let digest = try #require(digestNote(memory))
+        memory.beginEdit(digest)
+        memory.editDraft = "Busy week. Dentist on Thursday at 3, then rest."
+        memory.saveEdit()
+        let dentist = try #require(memory.notes.first { $0.text.hasPrefix("Dentist") })
+        memory.beginEdit(dentist)
+        memory.editDraft = "Dentist on Friday at 4"
+        memory.saveEdit()
+        #expect(memory.status == DigestWords.earlierWordsInDigest)
+        #expect(notes.notes().contains { $0.text.contains("Thursday at 3") })
+    }
+
+    /// A note forgotten while its digest's question is open in the sheet:
+    /// the sheet goes, the task says why it stopped, and a yes from the
+    /// sheet left behind keeps nothing.
+    @Test func forgettingANoteUnderAnOpenQuestionClosesIt() throws {
+        let task = try startAndAsk()
+        feed.review(task)
+        let request = try #require(feed.reviewing)
+        let sheet = ConfirmationState(request: request, rule: rule, onApprove: { feed.approved($0) },
+                                      onDecline: { feed.closedQuestion(request) })
+        let memory = memoryScreen()
+        var heard: [TaskAnnouncer.Line] = []
+        feed.announce = { heard.append($0) }
+        let dentist = try #require(memory.notes.first { $0.text.hasPrefix("Dentist") })
+        memory.forget(dentist)
+        #expect(memory.status == MemoryWords.forgotten)
+        #expect(feed.reviewing == nil)
+        // The sheet VoiceOver was in is gone, so the stop is said at once.
+        #expect(heard == [TaskAnnouncer.Line(text: DigestTask.title + ". " + DigestWords.noteChanged, urgent: true)])
+        let card = try #require(todayCards.first { $0.id == task.id })
+        #expect(card.step == DigestWords.noteChanged)
+        #expect(card.question == nil)
+        #expect(!feed.canApprove(card))
+        sheet.tapPrimary()
+        #expect(notes.notes().isEmpty)
+        #expect(feed.offers == [DigestTask.request])
+    }
+
+    var todayCards: [AgentTask] { feed.feed.groups.flatMap(\.items).compactMap(\.task) }
+
+    /// Forgetting a note on the memory screen forgets it everywhere: its
+    /// line leaves the kept digest note, Today shows the rest, and only
+    /// then does the screen say it is gone.
+    @Test func forgettingAQuotedNoteForgetsItEverywhere() throws {
+        try notes.remember("Sam's birthday is May 14", at: Date() - 7_200, source: .toldMe)
+        let done = try keepDigest()
+        let memory = memoryScreen()
+        let sam = try #require(memory.notes.first { $0.text.hasPrefix("Sam's") })
+        memory.forget(sam)
+        #expect(memory.status == MemoryWords.forgotten)
+        #expect(!notes.notes().contains { $0.text.contains("Sam's birthday") })
+        #expect(!memory.notes.contains { $0.text.contains("Sam's birthday") })
+        let card = try #require(todayCards.first { $0.id == done.id })
+        #expect(card.result == DigestWords.heading + ".\n• Dentist on Thursday at 3 (You told me)")
+
+        // The last line it quoted goes, and the digest goes with it.
+        let dentist = try #require(memory.notes.first { $0.text.hasPrefix("Dentist") })
+        memory.forget(dentist)
+        #expect(memory.status == MemoryWords.forgotten)
+        #expect(notes.notes().isEmpty)
+        // Taken out here, so the card never says the person removed it.
+        #expect(todayCards.first { $0.id == done.id }?.step == DigestWords.tookOut)
+    }
+
+    /// A kept digest whose card was put away on Today still loses a note
+    /// forgotten on the memory screen, which then says it is gone.
+    @Test func forgettingANoteAfterTheCardWasPutAwayForgetsItEverywhere() throws {
+        try notes.remember("Sam's birthday is May 14", at: Date() - 7_200, source: .toldMe)
+        let done = try keepDigest()
+        feed.dismiss(done)
+        #expect(!todayCards.contains { $0.id == done.id })
+        let memory = memoryScreen()
+        let sam = try #require(memory.notes.first { $0.text.hasPrefix("Sam's") })
+        memory.forget(sam)
+        #expect(memory.status == MemoryWords.forgotten)
+        #expect(!notes.notes().contains { $0.text.contains("Sam's birthday") })
+        #expect(digestNote(memory)?.text == DigestWords.heading + ".\n• Dentist on Thursday at 3 (You told me)")
+    }
+
+    /// With a task file that can't be read, a forgotten note's line still
+    /// leaves a plain digest, matched word for word. The memory screen
+    /// never says a note is gone while a digest may hold it: with no task
+    /// knowing the digest's lines, it says the words may be there; found
+    /// in a digest changed past matching, that they are.
+    @Test func aDigestFromATaskFileThatCantBeReadLosesTheLine() throws {
+        try notes.remember("Sam's birthday is May 14", at: Date() - 7_200, source: .toldMe)
+        // Kept by an engine before this one, whose file can't be read now.
+        let week = DigestTask.thisWeek(notes.notes(), now: Date())
+        try notes.remember(DigestTask.write(week, now: Date()).text, source: .inferred)
+        try Data("not tasks".utf8).write(to: tasksFile)
+        let engine = OnDeviceTasks.engine(model: LocalStubModel(), notes: notes,
+                                          store: Self.openStore(in: folder), rule: rule, pace: nil)
+        let feed = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: rule), tasks: engine, place: .onDevice)
+        let memory = HomeView.memoryModel(store: notes, place: .onDevice, onNotesChanged: { feed.notesChanged() },
+                                          forgetQuotes: { feed.forgetQuotes(of: $0) })
+        let sam = try #require(memory.notes.first { $0.text.hasPrefix("Sam's") })
+        memory.forget(sam)
+        #expect(memory.status == DigestWords.mayStillBeInDigest)
+        #expect(digestNote(memory)?.text == DigestWords.heading + ".\n• Dentist on Thursday at 3 (You told me)")
+        #expect(!notes.notes().contains { $0.text.contains("Sam's birthday") })
+        // Changed by the person, it is theirs: nothing is taken out.
+        let digest = try #require(digestNote(memory))
+        memory.beginEdit(digest)
+        memory.editDraft = "My week: Dentist on Thursday at 3."
+        memory.saveEdit()
+        let dentist = try #require(memory.notes.first { $0.text.hasPrefix("Dentist") })
+        memory.forget(dentist)
+        #expect(memory.status == DigestWords.stillInDigest)
+        #expect(notes.notes().contains { $0.text == "My week: Dentist on Thursday at 3." })
+    }
+
+    /// A digest the person changed that no longer has a note's line: the
+    /// screen says its words may be there, never that they are.
+    @Test func aLineThePersonTookOutIsSaidToMaybeStay() throws {
+        try notes.remember("Sam's birthday is May 14", at: Date() - 7_200, source: .toldMe)
+        _ = try keepDigest()
+        let memory = memoryScreen()
+        let digest = try #require(digestNote(memory))
+        memory.beginEdit(digest)
+        memory.editDraft = DigestWords.heading + ".\n• Dentist on Thursday at 3 (You told me)"
+        memory.saveEdit()
+        let sam = try #require(memory.notes.first { $0.text.hasPrefix("Sam's") })
+        memory.beginEdit(sam)
+        memory.editDraft = "Sam's birthday is May 15"
+        memory.saveEdit()
+        #expect(memory.status == DigestWords.earlierWordsMayBeInDigest)
+        let dentist = try #require(memory.notes.first { $0.text.hasPrefix("Dentist") })
+        memory.beginEdit(try #require(digestNote(memory)))
+        memory.editDraft = "Quiet week."
+        memory.saveEdit()
+        memory.forget(dentist)
+        #expect(memory.status == DigestWords.mayStillBeInDigest)
+    }
+
+    /// While a digest the person changed still holds the note's words, the
+    /// screen never says it is all gone, and Today says why it shows none.
+    @Test func aNoteLeftInAChangedDigestIsSaidSo() throws {
+        let done = try keepDigest()
+        let memory = memoryScreen()
+        let digest = try #require(memory.notes.first { $0.text.hasPrefix(DigestWords.heading) })
+        memory.beginEdit(digest)
+        memory.editDraft = "Busy week. Dentist on Thursday at 3, then rest."
+        memory.saveEdit()
+        let dentist = try #require(memory.notes.first { $0.text.hasPrefix("Dentist") })
+        memory.forget(dentist)
+        #expect(memory.status == DigestWords.stillInDigest)
+        #expect(memory.status != MemoryWords.forgotten)
+        #expect(todayCards.first { $0.id == done.id }?.step == DigestWords.hiddenQuote)
+    }
+
+    /// When the person removes a kept digest themselves, its card says
+    /// nothing more to VoiceOver: they did it.
+    @Test func removingTheDigestSaysNothingMore() throws {
+        final class Clock { var now = ContinuousClock.now }
+        let clock = Clock()
+        let feed = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: rule), tasks: engine,
+                             place: .onDevice, clock: { clock.now })
+        feed.start(DigestTask.request)
+        for _ in 0..<3 { engine.runPending() }
+        feed.refresh()
+        let task = try #require(feed.feed.needsYou.compactMap(\.task).first)
+        feed.review(task)
+        let request = try #require(feed.reviewing)
+        ConfirmationState(request: request, rule: rule, onApprove: { feed.approved($0) }, onDecline: {}).tapPrimary()
+        #expect(engine.tasks.first?.result != nil)
+        var heard: [TaskAnnouncer.Line] = []
+        feed.announce = { heard.append($0) }
+        // Long after the last line, so nothing waits its turn.
+        clock.now += .seconds(60)
+        let memory = MemoryModel(store: notes, place: .onDevice, forgetQuotes: { feed.forgetQuotes(of: $0) })
+        let digest = try #require(memory.notes.first { $0.text.hasPrefix(DigestWords.heading) })
+        memory.forget(digest)
+        #expect(engine.tasks.first?.step == DigestWords.removed)
+        clock.now += .seconds(60)
+        feed.refresh()
+        #expect(heard.isEmpty)
+    }
+
+    /// Today is told after a change that was kept, and not after one the
+    /// store refused.
+    @Test func onlyAKeptEditTellsToday() throws {
+        var told = 0
+        let memory = MemoryModel(store: notes, place: .onDevice, onNotesChanged: { told += 1 })
+        let note = try #require(memory.notes.first)
+        memory.beginEdit(note)
+        memory.editDraft = "   "
+        memory.saveEdit()
+        #expect(memory.status == MemoryWords.needsWords)
+        #expect(told == 0)
+        memory.editDraft = "Dentist on Friday at 3"
+        memory.saveEdit()
+        #expect(told == 1)
+    }
+
+    /// An edit the store couldn't write tells Today nothing, and says so
+    /// plainly, without calling the notes unreadable.
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
+    func anEditThatCantBeWrittenTellsTodayNothing() throws {
+        var told = 0
+        let memory = MemoryModel(store: notes, place: .onDevice, onNotesChanged: { told += 1 })
+        let note = try #require(memory.notes.first)
+        memory.beginEdit(note)
+        memory.editDraft = "Dentist on Friday at 3"
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+        memory.saveEdit()
+        #expect(told == 0)
+        #expect(memory.status == MemoryWords.couldNotSave)
+        #expect(memory.savedCount == 0)
+        #expect(notes.notes().first?.text == note.text)
+    }
+
+    /// Tasks whose file couldn't be erased are never said to be gone.
+    @Test func theLineIsHonestWhenTheTaskFileStays() {
+        let stayed = ClearedTasks(forgotten: 1, underway: 0, erased: false)
+        let line = { MemoryModel.forgotLineWithTasks(notesGone: $0, rest: $1, cleared: $2) }
+        #expect(line(true, nil, stayed) == TaskWords.forgotNotesNotTasks)
+        #expect(line(false, nil, stayed)
+            == "Sorry, I couldn't erase that just now. " + TaskWords.tasksStayed + " Please try again in a moment.")
+        // The summaries that stayed are said too, and the ask to try again
+        // comes once, last.
+        let both = MemoryModel.forgotLineWithTasks(notesGone: false, rest: nil, cleared: stayed, summaries: .stayed)
+        #expect(both.contains(MemoryWords.summariesStayed))
+        #expect(both.contains(TaskWords.tasksStayed))
+        #expect(both.components(separatedBy: "again in a moment").count == 2, "\(both)")
+        #expect(both.hasSuffix("again in a moment."))
+        let gone = ClearedTasks(forgotten: 1, underway: 0, erased: true)
+        #expect(line(true, nil, gone) == MemoryWords.forgotten)
+        #expect(line(false, nil, gone) == MemoryWords.couldNotForgetNotes)
+    }
+
+    @Test(.fileModesHoldOrCI, .failsAsRoot)
+    func aTaskFileThatStaysIsSaidSo() throws {
+        _ = try startAndAsk()
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+        let memory = MemoryModel(store: notes, place: .onDevice, onForgetEverything: { feed.forgetTasks() },
+                                 othersStored: { feed.tasksStored })
+        memory.forgetEverything()
+        #expect(engine.tasks.isEmpty)
+        #expect(!feed.tasksForgotten)
+        #expect(memory.status?.contains(TaskWords.tasksStayed) == true)
+        #expect(memory.hasStoredFile)
+    }
+
+    // MARK: With the Needs you flow, as the app wires it
+
+    /// The digest's question is the one step that needs a yes, and it
+    /// waits in Needs you like any other: pinned there, nudged about while
+    /// the app is away, and its nudge taken back once it is answered.
+    @Test func theDigestsQuestionAsksThroughTheNeedsYouFlow() throws {
+        let notifier = DigestNotifier()
+        store.setNudges(.allowed)
+        let flow = NeedsYouFlow(store: store, notifier: notifier, agentName: { "Pip" })
+        let feed = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: rule), tasks: engine,
+                             place: .onDevice, flow: flow)
+        feed.start(DigestTask.request)
+        for _ in 0..<3 { engine.runPending() }
+        feed.refresh()
+        let task = try #require(FeedModel.pinnedTasks(in: feed.feed).first)
+        #expect(task.title == DigestTask.title)
+        #expect(feed.canApprove(task))
+        let question = try #require(task.question)
+        feed.scene(isActive: false)
+        #expect(notifier.posted.map(\.taskID) == [task.id])
+        #expect(notifier.posted.map(\.title) == [NudgeWords.question("Pip")])
+        feed.scene(isActive: true)
+        feed.review(task)
+        let request = try #require(feed.reviewing)
+        #expect(request == question)
+        ConfirmationState(request: request, rule: rule, onApprove: { feed.approved($0) }, onDecline: {}).tapPrimary()
+        feed.refresh()
+        #expect(FeedModel.pinnedTasks(in: feed.feed).isEmpty)
+        #expect(notifier.live.isEmpty)
+        #expect(engine.tasks.first?.state == .done)
+    }
+
+    /// One store and one forget. A kept digest, a digest still asking, and
+    /// the Needs you flow's ask and receipt all sit in the same file, and
+    /// Forget everything takes every one of them at once, with nothing left
+    /// for a relaunch to find.
+    @Test func forgetEverythingTakesTheDigestTheAskAndTheReceiptInOneForget() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("digest-forget-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let notes = MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
+        try notes.remember("Dentist on Thursday at 3", at: Date() - 3_600, source: .toldMe)
+        // Left by an earlier launch: a question still waiting, and a receipt.
+        let now = Date()
+        let ask = SavedTask(id: "task:dentist", title: "Find a dentist near you open Saturdays", step: 1,
+                            phase: .waiting, askedAt: now - 60, startedAt: now - 120)
+        let receipt = Receipt(action: ProposedAction(kind: .sharePersonalInfo,
+                                                     recipient: Recipient(id: "maple", displayName: "Maple Dental",
+                                                                          handle: "hello@mapledental.example"),
+                                                     details: "Your name and phone number"),
+                              taskTitle: ask.title, approvedAt: now - 600, endedAt: now - 590, outcome: .done,
+                              isSample: false)
+        let file = folder.appendingPathComponent("tasks.json")
+        try JSONEncoder().encode(TaskStore.State(tasks: [ask], receipts: [receipt])).write(to: file)
+
+        let store = Self.openStore(in: folder)
+        let engine = OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: store, rule: rule, pace: nil)
+        let flow = NeedsYouFlow(store: store, notifier: DigestNotifier(), agentName: { "Pip" })
+        let feed = FeedModel(sources: [EmptyFeedSource()], needsYou: NeedsYou(rule: rule), tasks: engine,
+                             place: .onDevice, flow: flow)
+        // A digest kept, then another waiting on its yes.
+        let first = engine.start(DigestTask.request)
+        for _ in 0..<3 { engine.runPending() }
+        let asked = try #require(engine.tasks.first { $0.id == first }?.question)
+        guard case .approved(let approval) = rule.sayYes(to: asked) else { Issue.record("no approval"); return }
+        #expect(engine.resume(first, with: approval) == .proceeding)
+        let second = engine.start(DigestTask.request)
+        for _ in 0..<3 { engine.runPending() }
+        let waiting = try #require(engine.tasks.first { $0.id == second }?.question)
+        feed.refresh()
+
+        let onDisk = try JSONDecoder().decode(TaskStore.State.self, from: Data(contentsOf: file))
+        #expect(onDisk.tasks.map(\.id) == [ask.id])
+        #expect(onDisk.receipts.map(\.id) == [receipt.id])
+        #expect(Set(onDisk.device?.tasks.map(\.id) ?? []) == [first, second])
+        #expect(feed.hasSomethingToForget)
+        let files = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { !$0.hasPrefix(".") }
+        #expect(Set(files) == ["memory.json", "tasks.json"], "one task file")
+
+        let memory = MemoryModel(store: notes, place: .onDevice, onForgetEverything: { feed.forgetTasks() },
+                                 othersStored: { feed.tasksStored })
+        memory.forgetEverything()
+        #expect(memory.status == MemoryWords.forgotten)
+        #expect(engine.tasks.isEmpty)
+        #expect(store.tasks.isEmpty)
+        #expect(store.receipts.isEmpty)
+        #expect(store.deviceTasks()?.file == nil)
+        #expect(rule.isClosed(waiting))
+        #expect(notes.notes().isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        #expect(!feed.hasSomethingToForget)
+        // Nothing comes back on the next launch.
+        let reopened = Self.openStore(in: folder)
+        #expect(reopened.tasks.isEmpty)
+        #expect(reopened.receipts.isEmpty)
+        let again = OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: reopened, rule: rule, pace: nil)
+        #expect(again.tasks.isEmpty)
+        #expect(!again.hasStoredFile)
+    }
+}
+
+/// Stands in for the system's notifications, writing down what it is told.
+private final class DigestNotifier: QuestionNotifying, @unchecked Sendable {
+    private let lock = NSLock()
+    private var nudges: [QuestionNudge] = []
+    private var shown: [String] = []
+    var posted: [QuestionNudge] { lock.lock(); defer { lock.unlock() }; return nudges }
+    /// Nudges posted and not taken away since.
+    var live: [String] { lock.lock(); defer { lock.unlock() }; return shown }
+
+    func permission() async -> NudgePermission { .allowed }
+    func requestPermission() async -> Bool { true }
+    func post(_ nudge: QuestionNudge, after delay: TimeInterval) {
+        lock.lock(); nudges.append(nudge); shown.append(nudge.id); lock.unlock()
+    }
+    func remove(_ ids: [String]) { lock.lock(); shown.removeAll { ids.contains($0) }; lock.unlock() }
+    func removeAll() { lock.lock(); shown = []; lock.unlock() }
+    func forget() { removeAll() }
+    func onOpen(_ handler: @escaping @MainActor @Sendable (String) -> Void) {}
+}
+#endif

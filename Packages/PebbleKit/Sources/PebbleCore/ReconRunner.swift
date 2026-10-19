@@ -697,9 +697,25 @@ public final class ReconRunner: TaskEngine, @unchecked Sendable {
 
     public func refresh() { engine.refresh() }
 
-    /// Moves a scripted engine's clock, for the showcase and tests.
+    /// What the engine can start. A recon is never one: it starts only
+    /// from a tap on Look into it.
+    public var builtIns: [TaskRequest] { engine.builtIns }
+
+    public var hasStoredFile: Bool { engine.hasStoredFile }
+
+    /// A recon quotes no note, so only the engine's tasks are asked.
+    public func forgetQuotes(of note: MemoryNote) -> QuotesForgotten { engine.forgetQuotes(of: note) }
+
+    public var endings: TaskEndings { engine.endings }
+
+    /// Moves a scripted engine's clock, for the showcase and tests, and
+    /// the scripted one beside the device's own engine.
     public func advance(by seconds: TimeInterval) {
-        (engine as? LocalFakeEngine)?.advance(by: seconds)
+        if let joined = engine as? JoinedTasks {
+            joined.advance(by: seconds)
+        } else {
+            (engine as? LocalFakeEngine)?.advance(by: seconds)
+        }
     }
 
     /// Every task now, numbered. A change takes the next number; a first

@@ -3,6 +3,8 @@
 # delimiter. An entry that needs several changes gives each its own perl:
 # line, and each must apply.
 #
+# New entries go in scripts/mutation/<area>.txt, not here: see its README.
+#
 # The source guards. Each rule in GuardScan (Tools/GuardKit) is turned off
 # on its own, and the wrong-case suite for its guard must fail: no rule can
 # stop catching its cases unseen. Then the scanner's own reading is broken,
@@ -351,6 +353,29 @@ test: diagnosticsCountCharacters
 file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
 perl: s~let column = String\(decoding: bytes\[start\.\.<min\(max\(start, offset\), bytes\.count\)\], as: UTF8\.self\)\.count \+ 1~let column = String(decoding: bytes[start..<min(max(start, offset), bytes.count)], as: UTF8.self).utf16.count + 1~
 
+# A note edit open in one window while another changes the note. The save
+# writes over whatever the note holds now, so words forgotten meanwhile
+# come back.
+test: aStaleDigestEditNeverSavesForgottenWords
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~store\.edit\(id, to: editDraft, ifStill: from\)~store.edit(id, to: editDraft, ifStill: nil)~
+
+# The store changes the note whatever it holds now.
+test: aStaleDigestEditNeverSavesForgottenWords
+file: Packages/PebbleKit/Sources/PebbleCore/Memory.swift
+perl: s~if let earlier, all\[index\]\.text != earlier \{ return \.notFound \}~~
+
+# The memory screen never hears a note changed in another window, so the
+# edit and the forget question stay open over words that went.
+test: aWindowPutsAwayAnEditOnceItHearsTheNoteChanged
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~Task \{ \@MainActor in self\?\.refresh\(\) \}\n        \}\n        backgroundWatch~Task { \@MainActor in _ = self }\n        }\n        backgroundWatch~
+
+# The screen hears, but keeps the edit and the question open.
+test: aWindowPutsAwayAnEditOnceItHearsTheNoteChanged
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~(private func dropStale\(\) \{)~$1\n        if true { return }~
+
 # The task ledger (PebbleCore/TaskLedger.swift). Every task ends with one
 # line that says how, a done only with proof, and a task that goes quiet
 # says so on its own. Each rule is broken on its own, and its tests must fail.
@@ -539,7 +564,7 @@ perl: s~        ledger\?\.watch\(\)\n~~
 # Today: a task no engine picked up at launch says it stopped.
 test: atLaunchATaskNoEngineHasSaysItStopped
 file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
-perl: s~        ledger\?\.launch\(live: tasks\?\.tasks \?\? \[\]\)\n~~
+perl: s~        ledger\?\.launch\(live: tasks\?\.tasks \?\? \[\],\n                       restorationComplete: keeper == nil \|\| store\?\.restorationComplete != false\)\n~~
 
 # Today: Forget everything takes the ledger, here and in another window.
 test: forgetEverythingEmptiesTheLedger
@@ -1032,67 +1057,28 @@ test: aMarkerThatCannotBeRemovedNeverSilentlyLosesANewGrant
 file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
 perl: s~dirty \|\| !addedWhileUnread\.isEmpty \?~dirty ?~
 
-# The calendar connector. Events that only touch, one ending as the next
-# begins, never clash.
-test: clashes
-file: Packages/PebbleKit/Sources/PebbleConnectors/CalendarDay.swift
-perl: s~if start < end \{~if start <= end {~
+# The fallback router. A leaving hop never goes without a grant for that
+# exact action and target: without one it asks first.
+test: fallbackAsksFirstWithoutAGrantForThatExactActionAndTarget
+file: Packages/PebbleKit/Sources/PebbleCore/FallbackRouter.swift
+perl: s~covered\.map\(RouteClearance\.granted\) \?\? \.askFirst~covered.map(RouteClearance.granted) ?? .ready~
 
-# All day events never clash.
-test: clashes anAllDayEventIsCountedButNeverClashes
-file: Packages/PebbleKit/Sources/PebbleConnectors/CalendarDay.swift
-perl: s~let timed = events\.filter \{ !\$0\.isAllDay \}\.sorted~let timed = events.sorted~
+# A leaving hop always carries the preview of what goes.
+test: fallbackLeavingHopsAlwaysShowThePreview
+file: Packages/PebbleKit/Sources/PebbleCore/FallbackRouter.swift
+perl: s~preview: hop\.leavesDevice \? action\.map\(RoutePreview\.init\) : nil~preview: nil~
 
-# Reading never asks the person; only requestAccess does.
-test: readingNeverAsksThePerson
-file: Packages/PebbleKit/Sources/PebbleConnectors/Calendar.swift
-perl: s~let access = store\.access\(\.events\)~let access = await store.requestAccess(.events)~
-perl: s~let access = store\.access\(\.reminders\)~let access = await store.requestAccess(.reminders)~
+# The hops are tried in one fixed order.
+test: fallbackTriesTheHopsInTheirFixedOrder
+file: Packages/PebbleKit/Sources/PebbleCore/FallbackRouter.swift
+perl: s~\[\.deviceContext, \.deviceFramework, \.relayFetch, \.remoteRun, \.askPerson\]~[.deviceContext, .deviceFramework, .remoteRun, .relayFetch, .askPerson]~
 
-# A no gives its reason, never an empty list that reads as an empty calendar.
-test: aClosedCalendarSaysWhyAndIsNeverEmpty sayingNoWhenAskedIsKept
-file: Packages/PebbleKit/Sources/PebbleConnectors/Calendar.swift
-perl: s~case \.denied: self\.init\(kind: kind, why: \.denied\)~case .denied: return nil~
+# Outside help off skips both leaving hops, and the decision says so.
+test: fallbackOutsideHelpOffSkipsLeavingHopsAndSaysSo
+file: Packages/PebbleKit/Sources/PebbleCore/FallbackRouter.swift
+perl: s~ *guard context\.outsideHelp\.isOn else \{ return \.failure\(\.outsideOff\) \}\n~~g
 
-# So does a setting that keeps the calendar closed.
-test: aClosedCalendarSaysWhyAndIsNeverEmpty
-file: Packages/PebbleKit/Sources/PebbleConnectors/Calendar.swift
-perl: s~case \.restricted: self\.init\(kind: kind, why: \.restricted\)~case .restricted: return nil~
-
-# A choice already made is never asked again.
-test: aChoiceMadeIsNeverAskedAgain
-file: Packages/PebbleKit/Sources/PebbleConnectors/Calendar.swift
-perl: s~guard now == \.notDetermined else \{ return now \}~~
-
-# The morning summary's day runs midnight to midnight in the calendar's
-# time zone, 23 or 25 hours when the clocks change, never a fixed 24.
-test: aDayWithTwentyFiveHours aDayWithTwentyThreeHours
-file: Packages/PebbleKit/Sources/PebbleConnectors/CalendarDay.swift
-perl: s~calendar\.dateInterval\(of: \.day, for: now\) \?\? ~~
-
-# A reminder due on a day with no time is overdue only once the day is over.
-test: aReminderWithNoTimeIsOverdueTheDayAfter
-file: Packages/PebbleKit/Sources/PebbleConnectors/Calendar.swift
-perl: s~return calendar\.compare\(due, to: now, toGranularity: \.day\) == \.orderedAscending~return due < now~
-
-# The connector gate: each rule turned off on its own.
-test: theConnectorGateCatchesEveryWrongCase
-file: Tools/GuardKit/Sources/GuardScan/ConnectorRules.swift
-perl: s~Rule\("connector\.import", importOutsideList\)~Rule("connector.import", { _, _ in [] })~
-
-test: theConnectorGateCatchesEveryWrongCase
-file: Tools/GuardKit/Sources/GuardScan/ConnectorRules.swift
-perl: s~Rule\("connector\.network", network\)~Rule("connector.network", { _, _ in [] })~
-
-test: theConnectorGateCatchesEveryWrongCase
-file: Tools/GuardKit/Sources/GuardScan/ConnectorRules.swift
-perl: s~Rule\("connector\.keep", keep\)~Rule("connector.keep", { _, _ in [] })~
-
-test: theConnectorGateCatchesEveryWrongCase
-file: Tools/GuardKit/Sources/GuardScan/ConnectorRules.swift
-perl: s~Rule\("connector\.log", log\)~Rule("connector.log", { _, _ in [] })~
-
-# The connector layer depends on none of the package's others.
-test: theConnectorLayerDependsOnNothingOfOurs
-file: Packages/PebbleKit/Package.swift
-perl: s~\.target\(name: "PebbleConnectors"\),~.target(name: "PebbleConnectors", dependencies: ["PebbleCore"]),~
+# Every decision is written to the task's ledger.
+test: fallbackWritesEachDecisionToTheLedger
+file: Packages/PebbleKit/Sources/PebbleCore/FallbackRouter.swift
+perl: s~ledger\.append\(\.working\(step: decision\.ledgerLine\), at: time, artifacts: artifacts\)~true~

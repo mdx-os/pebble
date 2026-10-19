@@ -1,3 +1,4 @@
+import Combine
 import PebbleCore
 #if canImport(SwiftUI)
 import SwiftUI
@@ -910,6 +911,9 @@ final class MemoryModel: ObservableObject {
     @Published var newNote = ""
     @Published var editingID: UUID?
     @Published var editDraft = ""
+    /// The note's words when the edit began, so a change made meanwhile,
+    /// such as a line forgotten in another window, is never written over.
+    private var editingFrom: String?
     @Published var askForgetEverything = false
     /// What to say about the last thing that happened. Every new line,
     /// even one the same as before, bumps statusCount so it is spoken again.
@@ -926,6 +930,20 @@ final class MemoryModel: ObservableObject {
 
     /// Forgets what lives outside the memory file, such as tasks.
     private let onForgetEverything: @MainActor () -> ClearedTasks
+    /// True while something else Forget everything erases is on disk, such
+    /// as the task engine's file, so the button stays while it is there.
+    private let othersStored: @MainActor () -> Bool
+    /// Runs after a note is changed or forgotten, so anything showing its
+    /// words, such as a kept digest on Today, looks again.
+    private let onNotesChanged: @MainActor () -> Void
+    /// Runs after a note is forgotten, or changed with its earlier words,
+    /// and says whether anything else, such as a kept digest, still holds
+    /// them.
+    private let forgetQuotes: @MainActor (MemoryNote) -> QuotesForgotten
+    private var watchingOthers: AnyCancellable?
+    /// This model's watch on `store`, so a note changed or forgotten in
+    /// another window shows here, and an edit of it stops.
+    private var notesWatch: TaskObservation?
 
     /// The person's grants, listed on this screen, each with Remove. Nil
     /// hides the list.
@@ -973,9 +991,16 @@ final class MemoryModel: ObservableObject {
                                       countsTasks: background?.tasks != nil)
     }
 
+    /// With `othersChanged`, the screen looks again each time it fires, as
+    /// when a task elsewhere makes or erases its file, so Forget everything
+    /// shows while there is anything to erase.
     init(store: MemoryStore, place: PrivacyPlace, alsoForget: (@MainActor () throws -> CloudHelp.Forgot)? = nil,
          background: BackgroundRunner? = nil, grants: GrantBook? = nil, now: @escaping () -> Date = { Date() },
-         onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) {
+         onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none },
+         othersStored: @escaping @MainActor () -> Bool = { false },
+         othersChanged: AnyPublisher<Void, Never>? = nil,
+         onNotesChanged: @escaping @MainActor () -> Void = {},
+         forgetQuotes: @escaping @MainActor (MemoryNote) -> QuotesForgotten = { _ in .notQuoted }) {
         self.store = store
         self.place = place
         self.alsoForget = alsoForget
@@ -983,7 +1008,16 @@ final class MemoryModel: ObservableObject {
         self.grants = grants
         self.now = now
         self.onForgetEverything = onForgetEverything
+        self.othersStored = othersStored
+        self.onNotesChanged = onNotesChanged
+        self.forgetQuotes = forgetQuotes
         refresh()
+        watchingOthers = othersChanged?.sink { [weak self] in
+            MainActor.assumeIsolated { self?.refresh() }
+        }
+        notesWatch = store.observeChanges { [weak self] in
+            Task { @MainActor in self?.refresh() }
+        }
         backgroundWatch = background?.observe { [weak self] in
             Task { @MainActor in self?.refreshBackground() }
         }
@@ -1065,15 +1099,29 @@ final class MemoryModel: ObservableObject {
         switch store.contents() {
         case .notes(let all):
             notes = all; isUnreadable = false; isUnavailable = false
+            dropStale()
         case .unreadable:
             notes = []; isUnreadable = true; isUnavailable = false
         case .unavailable:
             notes = []; isUnreadable = false; isUnavailable = true
         }
-        hasStoredFile = store.hasStoredFile
+        hasStoredFile = store.hasStoredFile || othersStored()
         // Forget everything turns background work off, so the switch follows.
         refreshBackground()
         refreshGrants()
+    }
+
+    /// An edit or a forget question about a note that changed or went since
+    /// it opened is put away, so words another window took out never show
+    /// here again or go back in.
+    private func dropStale() {
+        if let id = editingID, notes.first(where: { $0.id == id })?.text != editingFrom {
+            cancelEdit()
+            status = MemoryWords.changedWhileEditing
+        }
+        if let asked = pendingForget, notes.first(where: { $0.id == asked.id }) != asked {
+            pendingForget = nil
+        }
     }
 
     /// False while the saved notes can't be read or opened, so they stay untouched.
@@ -1089,22 +1137,47 @@ final class MemoryModel: ObservableObject {
             status = isUnavailable ? MemoryWords.unavailable : MemoryWords.unreadable
             return
         }
-        report(try store.remember(newNote, source: .toldMe)) { self.newNote = "" }
+        report(try store.remember(newNote, source: .toldMe)) { _ in self.newNote = "" }
     }
 
     func beginEdit(_ note: MemoryNote) {
         editDraft = note.text
+        editingFrom = note.text
         editingID = note.id
     }
 
     func cancelEdit() {
         editingID = nil
+        editingFrom = nil
         editDraft = ""
     }
 
+    /// Saves only over the words the edit began from. A note changed or
+    /// forgotten meanwhile, even in a window this one hasn't heard from
+    /// yet, is left as it is now and the edit is put away.
     func saveEdit() {
-        guard let id = editingID else { return }
-        report(try store.edit(id, to: editDraft)) { self.cancelEdit() }
+        guard let id = editingID, let from = editingFrom else { return }
+        let earlier = notes.first { $0.id == id }
+            .map { MemoryNote(id: id, text: from, savedAt: $0.savedAt, source: $0.source) }
+        var changed = false
+        report(try {
+            let decision = try store.edit(id, to: editDraft, ifStill: from)
+            changed = decision == .notFound
+            return decision
+        }()) { note in
+            self.cancelEdit()
+            // The earlier words go from anything that quoted them, such as
+            // a kept digest, or the line says plainly where they stayed.
+            if let earlier, earlier.text != note.text {
+                switch self.forgetQuotes(earlier) {
+                case .stayed: self.status = DigestWords.earlierWordsInDigest
+                case .mayHaveStayed: self.status = DigestWords.earlierWordsMayBeInDigest
+                case .notQuoted, .forgotten: break
+                }
+            }
+            self.onNotesChanged()
+        }
+        if changed { status = MemoryWords.changedWhileEditing }
     }
 
     func forget(_ note: MemoryNote) {
@@ -1112,7 +1185,12 @@ final class MemoryModel: ObservableObject {
         cancelEdit()
         do {
             if try store.forget(note.id) {
-                status = MemoryWords.forgotten
+                // "Gone" only once no kept digest may still hold its words.
+                switch forgetQuotes(note) {
+                case .stayed: status = DigestWords.stillInDigest
+                case .mayHaveStayed: status = DigestWords.mayStillBeInDigest
+                case .notQuoted, .forgotten: status = MemoryWords.forgotten
+                }
                 forgottenCount += 1
             } else {
                 status = nil
@@ -1121,6 +1199,7 @@ final class MemoryModel: ObservableObject {
             status = MemoryWords.couldNotForget
         }
         refresh()
+        onNotesChanged()
     }
 
     /// What happened to the morning summaries with Forget everything.
@@ -1157,15 +1236,43 @@ final class MemoryModel: ObservableObject {
         // nil when there is nothing else; .some(nil) when it couldn't go.
         let rest = alsoForget.map { forget in try? forget() }
         // A step said yes to may have happened, so the line says so here too.
-        status = Self.forgotLine(notesGone: notesGone, rest: rest, tasksGone: tasks.forgotten > 0,
-                                 summaries: summaries, underway: tasks.underwayLine, hadNotes: hadNotes)
+        status = Self.forgotLineWithTasks(notesGone: notesGone, rest: rest, cleared: tasks, summaries: summaries,
+                                          hadNotes: hadNotes)
         let restGone = rest.map { $0 != nil } == true
-        if notesGone || restGone || tasks.forgotten > 0 || summaries == .erased { forgottenCount += 1 }
+        if notesGone || restGone || (tasks.forgotten > 0 && tasks.erased) || summaries == .erased {
+            forgottenCount += 1
+        }
         refresh()
     }
 
-    /// What Forget everything says went, from what each part did. Tasks
-    /// can't fail to go, so they are named only when something else stayed.
+    /// The same, with the tasks as the engine left them. Tasks whose file
+    /// couldn't be erased are never called gone: the line says so, after
+    /// what happened to everything else and before any step that may have
+    /// happened.
+    static func forgotLineWithTasks(notesGone: Bool, rest: CloudHelp.Forgot??, cleared tasks: ClearedTasks,
+                                    summaries: Summaries? = nil, hadNotes: Bool = true) -> String {
+        guard !tasks.erased else {
+            return forgotLine(notesGone: notesGone, rest: rest, tasksGone: tasks.forgotten > 0, summaries: summaries,
+                              underway: tasks.underwayLine, hadNotes: hadNotes)
+        }
+        let line = forgotLine(notesGone: notesGone, rest: rest, tasksGone: false, summaries: summaries,
+                              hadNotes: hadNotes)
+        let said: String
+        if line == MemoryWords.forgotten {
+            said = TaskWords.forgotNotesNotTasks
+        } else if MemoryWords.retryAdvice.contains(where: { line.hasSuffix(" " + $0) }) {
+            // One ask to try again, last.
+            said = beforeRetry(line, [TaskWords.tasksStayed])
+        } else {
+            said = line + " " + TaskWords.couldNotEraseTasks
+        }
+        return beforeRetry(said, [tasks.underwayLine].compactMap { $0 })
+    }
+
+    /// What Forget everything says went, from what each part did, with
+    /// `tasksGone` true only once the tasks and their file went. Tasks are
+    /// named only when something else stayed; tasks whose file stayed are
+    /// said by `forgotLineWithTasks`.
     /// The summaries are named the same way, and only with background work:
     /// when all the rest went, the line says just what stayed, and when
     /// something else stayed too, a sentence about them follows. Then
@@ -1226,10 +1333,10 @@ final class MemoryModel: ObservableObject {
         }
     }
 
-    private func report(_ decision: @autoclosure () throws -> MemoryStore.Decision, onSaved: () -> Void) {
+    private func report(_ decision: @autoclosure () throws -> MemoryStore.Decision, onSaved: (MemoryNote) -> Void) {
         do {
             switch try decision() {
-            case .saved: status = MemoryWords.saved(place); savedCount += 1; onSaved()
+            case .saved(let note): status = MemoryWords.saved(place); savedCount += 1; onSaved(note)
             case .needsWords: status = MemoryWords.needsWords
             case .tooLong: status = MemoryWords.tooLong
             case .notFound: status = nil; cancelEdit()
@@ -1238,8 +1345,11 @@ final class MemoryModel: ObservableObject {
             }
         } catch is MemoryStore.Unavailable {
             status = MemoryWords.unavailable
-        } catch {
+        } catch is MemoryStore.Unreadable {
             status = MemoryWords.unreadable
+        } catch {
+            // Read fine, but the write didn't go through: nothing changed.
+            status = MemoryWords.couldNotSave
         }
         refresh()
     }

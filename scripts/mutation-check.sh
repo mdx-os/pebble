@@ -7,7 +7,10 @@
 # The working tree is never touched: every change is made to the copy, and
 # the copy's file is put back after each entry, and on any exit.
 #
-# Manifest entries (scripts/mutation-manifest.txt), separated by a blank line:
+# The entries are read from scripts/mutation-manifest.txt and then every
+# scripts/mutation/*.txt, one file per area, by name, as one list. New
+# entries go in an area's file; the manifest only keeps the older ones.
+# Entries, separated by a blank line:
 #   test: nameOfATest anotherTest      the test functions that must fail
 #   file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
 #   perl: s/what the code says/what breaks it/
@@ -23,7 +26,12 @@
 # tests too, since GuardKit builds the copy's PebbleKit.
 #
 # Usage: scripts/mutation-check.sh [manifest [pattern]]
+# A manifest given (not empty) is read alone, in place of those files.
 # With a pattern (or ONLY=), only entries whose test line matches it run.
+# Before anything is built, scripts/mutation-manifest-check.sh fails on an
+# entry shaped wrong, such as two run together by a merge.
+#
+# Each result line ends with the file and line of the entry it came from.
 #
 # A test that hangs once its code is broken is stopped and reported as
 # timed out, apart from the tests that really failed. A timeout fails the
@@ -38,7 +46,7 @@
 set -eu
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
-manifest="${1:-$root/scripts/mutation-manifest.txt}"
+manifest="${1:-}"
 only="${2:-${ONLY:-}}"
 work="$root/build/mutation"
 packages="${MUTATION_PACKAGES:-Packages/PebbleKit Tools/GuardKit}"
@@ -77,10 +85,26 @@ restore() {
 trap 'restore' EXIT
 trap 'restore; exit 1' INT TERM
 
-if [ ! -r "$manifest" ]; then
-  echo "mutation-check: can't read $manifest"
-  exit 1
+# The files the entries are read from, one per line.
+if [ -n "$manifest" ]; then
+  sources="$manifest"
+else
+  sources="$root/scripts/mutation-manifest.txt"
+  for area in "$root"/scripts/mutation/*.txt; do
+    if [ -f "$area" ]; then sources="$sources
+$area"; fi
+  done
 fi
+while IFS= read -r source; do
+  if [ ! -r "$source" ]; then
+    echo "mutation-check: can't read $source"
+    exit 1
+  fi
+done <<EOF
+$sources
+EOF
+# Every entry whole, before anything is built.
+printf '%s\n' "$sources" | tr '\n' '\0' | xargs -0 sh "$root/scripts/mutation-manifest-check.sh"
 
 # A copy of everything the tests read, kept between runs so each build after
 # the first only compiles what an entry changed.
@@ -143,7 +167,7 @@ say() {
 
 # Every listed test passes on the unbroken copy first, so a failure later
 # is the change's doing.
-all_tests="$(sed -n 's/^test: //p' "$manifest" | tr ' ' '\n' | grep -v '^$' | sort -u)"
+all_tests="$(printf '%s\n' "$sources" | tr '\n' '\0' | xargs -0 sed -n 's/^test: //p' | tr ' ' '\n' | grep -v '^$' | sort -u)"
 if [ -n "$only" ]; then all_tests="$(printf '%s\n' "$all_tests" | grep -E "$only" || true)"; fi
 if ! build; then
   echo "mutation-check: the unbroken copy doesn't build. See $work/build.log"
@@ -191,7 +215,7 @@ run_entry() {
   if [ -n "$only" ] && ! printf '%s\n' "$tests" | grep -Eq "$only"; then return 0; fi
   entries=$((entries + 1))
   if [ ! -f "$work/$file" ]; then
-    say "PROBLEM: no file $file"
+    say "PROBLEM: no file $file  [$from]"
     problems=$((problems + 1))
     return 0
   fi
@@ -208,7 +232,7 @@ $perl
 EOF
   rm -f "$work/before.tmp"
   if [ -n "$stale" ]; then
-    say "PROBLEM: this change no longer applies to $file: $stale"
+    say "PROBLEM: this change no longer applies to $file: $stale  [$from]"
     problems=$((problems + 1))
     restore
     return 0
@@ -217,7 +241,7 @@ EOF
     Packages/*|Tools/*)
       built="$(date +%s)"
       if ! build "$(packages_of)"; then
-        say "PROBLEM: $file doesn't build once broken by: $perl"
+        say "PROBLEM: $file doesn't build once broken by: $perl  [$from]"
         problems=$((problems + 1))
         restore
         return 0
@@ -229,19 +253,19 @@ EOF
     outcome="$(run_test "$test")"
     case "$outcome" in
       failed)
-        say "killed    $test  ($file)"
+        say "killed    $test  ($file)  [$from]"
         killed=$((killed + 1))
         ;;
       timedout)
-        say "TIMED OUT $test after ${timeout}s with $file broken; it didn't pass, but it didn't fail either"
+        say "TIMED OUT $test after ${timeout}s with $file broken; it didn't pass, but it didn't fail either  [$from]"
         timedout=$((timedout + 1))
         ;;
       passed)
-        say "SURVIVED  $test still passes with $file broken by: $perl"
+        say "SURVIVED  $test still passes with $file broken by: $perl  [$from]"
         problems=$((problems + 1))
         ;;
       *)
-        say "PROBLEM: no test named $test"
+        say "PROBLEM: no test named $test  [$from]"
         problems=$((problems + 1))
         ;;
     esac
@@ -249,35 +273,53 @@ EOF
   restore
 }
 
-tests=""
-file=""
-perl=""
-while IFS= read -r line || [ -n "$line" ]; do
-  case "$line" in
-    "#"*) ;;
-    "test: "*) tests="${line#test: }" ;;
-    "file: "*) file="${line#file: }" ;;
-    "perl: "*)
-      if [ -n "$perl" ]; then
-        perl="$perl
+# Runs the entries of one file in order. $from is where the entry being
+# read began, as the file in the repository and its line.
+from=""
+read_entries() {
+  name="$1"
+  case "$name" in "$root"/*) name="${name#"$root"/}" ;; esac
+  tests=""
+  file=""
+  perl=""
+  number=0
+  first=1
+  while IFS= read -r line || [ -n "$line" ]; do
+    number=$((number + 1))
+    if [ -z "$tests$file$perl" ]; then first="$number"; fi
+    from="$name:$first"
+    case "$line" in
+      "#"*) ;;
+      "test: "*) tests="${line#test: }" ;;
+      "file: "*) file="${line#file: }" ;;
+      "perl: "*)
+        if [ -n "$perl" ]; then
+          perl="$perl
 ${line#perl: }"
-      else
-        perl="${line#perl: }"
-      fi
-      ;;
-    "")
-      if [ -n "$file" ]; then run_entry; fi
-      tests=""
-      file=""
-      perl=""
-      ;;
-    *)
-      echo "mutation-check: can't read this manifest line: $line"
-      exit 1
-      ;;
-  esac
-done < "$manifest"
-if [ -n "$file" ]; then run_entry; fi
+        else
+          perl="${line#perl: }"
+        fi
+        ;;
+      "")
+        if [ -n "$file" ]; then run_entry; fi
+        tests=""
+        file=""
+        perl=""
+        ;;
+      *)
+        echo "mutation-check: can't read this line in $name:$number: $line"
+        exit 1
+        ;;
+    esac
+  done < "$1"
+  if [ -n "$file" ]; then run_entry; fi
+}
+
+while IFS= read -r source; do
+  read_entries "$source"
+done <<EOF
+$sources
+EOF
 
 # The copy is back as it was, so the next run builds from where it left off.
 build || true

@@ -551,16 +551,15 @@ struct NeedsYouFlowTests {
     }
 
     /// PERMANENT GUARD. The file holds receipts, which name who a yes went
-    /// to, so where the system protects files it can't be read until the
-    /// device is first unlocked, or something stricter. The nudge choice and
-    /// the marker hold nothing of the person's and must be read and written
-    /// while it may still be locked, so they have no protection.
+    /// to, and the on-device engine's tasks, so where the system protects
+    /// files it can be read only while the device is unlocked, as the notes
+    /// are. The nudge choice and the marker hold nothing of the person's and
+    /// must be read and written while it may still be locked, so they have
+    /// no protection.
     @Test func eachFileIsWrittenWithTheProtectionItNeeds() throws {
         let mask = Data.WritingOptions.fileProtectionMask
-        let strongEnough: [Data.WritingOptions] = [.completeFileProtection, .completeFileProtectionUnlessOpen,
-                                                   .completeFileProtectionUntilFirstUserAuthentication]
         let file = TaskStore.fileWriting(protected: true).intersection(mask)
-        #expect(strongEnough.contains(file), "the file is written with \(file.rawValue)")
+        #expect(file == .completeFileProtection, "the file is written with \(file.rawValue)")
         #expect(TaskStore.fileWriting(protected: true).contains(.withoutOverwriting))
         #expect(TaskStore.choiceWriting(protected: true).intersection(mask) == .noFileProtection)
         #expect(TaskStore.markerWriting(protected: true).intersection(mask) == .noFileProtection)
@@ -579,7 +578,9 @@ struct NeedsYouFlowTests {
         let text = try String(contentsOf: root.appendingPathComponent("Packages/PebbleKit/Sources/PebbleCore/TaskStore.swift"),
                               encoding: .utf8)
         let writes = SwiftSource(text).calls(named: ["write"]).filter { $0.arguments.hasPrefix("to:") }
-        #expect(writes.count == 3, "\(writes.map(\.arguments))")
+        // The file, the probe that finds a locked device before there is a
+        // file, the nudge choice and the marker.
+        #expect(writes.count == 4, "\(writes.map(\.arguments))")
         for call in writes {
             #expect(["Self.fileWriting()", "Self.choiceWriting()", "Self.markerWriting()"].contains { call.arguments.contains($0) },
                     "\(call.arguments)")
@@ -823,22 +824,31 @@ struct NeedsYouFlowTests {
         #expect(other.file != file, "another folder is another place")
     }
 
-    /// A file read late never takes back what changed since launch.
+    /// PERMANENT GUARD. While the file can't be opened, as while the device
+    /// is locked, nothing about tasks changes: a `keep` then is refused, not
+    /// held in memory to write once it opens, so a launch killed before then
+    /// loses nothing. The file read late is taken as it is. Only the nudge
+    /// choice, kept apart, still changes.
     @Test(.fileModesHoldOrCI, .failsAsRoot)
-    func aLateReadKeepsWhatChangedSinceLaunch() throws {
+    func aStoreThatWontOpenTakesNoChangeToTasks() throws {
         let (folder, url, marker, earlier) = try Self.earlierFile()
         defer { Self.cleanUp(folder, marker.deletingLastPathComponent()) }
+        let before = try Data(contentsOf: url)
+        let saved = TaskStore(fileURL: url, forgetMarker: marker).tasks.map(\.id)
         try Self.setReadable(url, false)
         let store = TaskStore(fileURL: url, forgetMarker: marker)
-        let (engine, task) = Self.atQuestion(rule: .isolated(), origin: Self.base + 1000)
+        let (engine, _) = Self.atQuestion(rule: .isolated(), origin: Self.base + 1000)
         store.keep(engine)
         store.setNudges(.allowed)
+        #expect(store.tasks.isEmpty, "nothing taken while it is shut")
+        #expect(store.receipts.isEmpty)
         try Self.setReadable(url, true)
-        #expect(store.tasks.map(\.id) == [task.id], "the task kept now, not the file's")
+        #expect(try Data(contentsOf: url) == before, "the file was never written")
+        #expect(store.tasks.map(\.id) == saved, "the file's tasks, as they were")
         #expect(store.nudges == .allowed)
         #expect(store.receipts.map(\.id) == [earlier.id], "the earlier receipt is still kept")
         let next = TaskStore(fileURL: url, forgetMarker: marker)
-        #expect(next.tasks.map(\.id) == [task.id])
+        #expect(next.tasks.map(\.id) == saved)
         #expect(next.nudges == .allowed)
         #expect(next.receipts.map(\.id) == [earlier.id])
     }
