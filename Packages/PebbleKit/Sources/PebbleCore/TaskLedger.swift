@@ -306,8 +306,8 @@ public enum QuietWatch {
     }
 }
 
-/// Where task ledgers are kept. Reading may not be possible yet, as before
-/// the device is first unlocked, and then nothing is written either.
+/// Where task ledgers are kept. Reading may not be possible yet, as while
+/// the device is locked, and then nothing is written either.
 public protocol TaskLedgerStoring: AnyObject, Sendable {
     /// Every ledger kept, or nil while they can't be read yet.
     func read() -> [TaskLedger]?
@@ -366,7 +366,7 @@ public final class InMemoryTaskLedgerStore: TaskLedgerStoring, @unchecked Sendab
 
 /// The ledgers in one file beside the kept tasks, written the way
 /// `TaskStore` writes its file: whole, through a staged copy, and protected
-/// until the device is first unlocked. A file that is there but can't be
+/// while the device is locked. A file that is there but can't be
 /// read yet is never written over.
 ///
 /// Erasing deletes the file first, read or not. If it won't go, an empty
@@ -408,7 +408,7 @@ public final class TaskLedgerFileStore: TaskLedgerStoring, @unchecked Sendable {
     }
 
     /// How the file is written: as the kept tasks are, so it can't be read
-    /// until the device is first unlocked. It names supplied sources and
+    /// while the device is locked. It names supplied sources and
     /// artifacts for the person.
     package static func fileWriting(protected: Bool = TaskStore.protectsFiles) -> Data.WritingOptions {
         TaskStore.fileWriting(protected: protected)
@@ -501,7 +501,7 @@ public final class TaskLedgerFileStore: TaskLedgerStoring, @unchecked Sendable {
 /// that says how, a done only with accepted supplied evidence, and a task
 /// that goes quiet says so on its own.
 ///
-/// While the store can't be read, as before the device is first unlocked,
+/// While the store can't be read, as while the device is locked,
 /// lines are kept in memory and nothing is written. Once it can be read,
 /// what it held and what was written here meanwhile are put together and
 /// written whole. A write that fails is tried again at the next change.

@@ -7,6 +7,14 @@ import SwiftUI
 @main
 struct PebbleApp: App {
     private let brand: Brand
+    /// The model that runs here. The task engine takes its place from it.
+    private let model = LocalStubModel()
+    /// The real task engine: on this device only, reading the same notes,
+    /// its tasks kept in `kept`, the one task store. Shared by Today and the
+    /// background runner, so the summary counts the tasks Today shows. It
+    /// follows the notes whatever the model, and starts tasks only with one
+    /// that keeps every word here. None when the notes can't be opened.
+    private let tasks: DeviceTaskEngine?
     /// Off until the person turns it on, and unavailable while
     /// Config/Cloud.local.xcconfig has no address. Its settings and private
     /// words are kept next to the notes, out of backups.
@@ -18,10 +26,6 @@ struct PebbleApp: App {
     /// The app's questions, shared by Today and the background runner, so
     /// anything the runner asks waits in the same Needs you.
     private let needsYou: NeedsYou
-    /// The app's task engine, shared by Today and the background runner,
-    /// so the summary counts the tasks Today shows. `BackgroundWiring`
-    /// gives it: there is none yet.
-    private let tasks: (any TaskEngine)?
     /// Work done while the app is closed. Off until the person turns it on
     /// from the memory screen. Its runner is nil if its folder can't be made.
     private let background: BackgroundService
@@ -49,19 +53,26 @@ struct PebbleApp: App {
         #if os(macOS)
         SnapshotMode.runIfRequested(brand: brand)
         #endif
+        // One notes store, given to the setting and the task engine both,
+        // so the redactor and the engine read the same notes.
+        let memory = try? MemoryStore.onDevice()
         // The setting is kept next to the notes. If either can't be opened,
         // nothing typed into the setting could be kept, so it reads as off,
         // can't be turned on, and says so plainly. The notes store is held
         // either way, with or without a cloud address.
         _cloud = State(initialValue: CloudHelp.forApp(
-            memory: try? MemoryStore.onDevice(),
+            memory: memory,
             endpoint: CloudEndpoint.url(infoDictionary: Bundle.main.infoDictionary),
             openStore: { try CloudHelpFileStore.onDevice() }
         ))
         // Before launch finishes, so a nudge opened from the lock screen
         // reaches Today even when it starts the app. Asks for nothing.
         LocalQuestionNotifier.shared.install()
-        kept = (try? TaskStore.onDevice()) ?? TaskStore.forgetOnly()
+        let kept = (try? TaskStore.onDevice()) ?? TaskStore.forgetOnly()
+        self.kept = kept
+        let model = self.model
+        let tasks = memory.map { OnDeviceTasks.engine(model: model, notes: $0, store: kept) }
+        self.tasks = tasks
         // The person's grants, read only while the device is unlocked. The
         // rule consults them before it asks; only the question sheet adds one.
         AskFirst.shared.keepGrants(in: GrantBook.onDevice())
@@ -71,14 +82,13 @@ struct PebbleApp: App {
         let wiring: BackgroundWiring
         #if DEBUG
         if let seeded = BackgroundSeed.launched() {
-            wiring = .app(needsYou: asks, store: { seeded.store }, toggle: { seeded.toggle })
+            wiring = .app(needsYou: asks, tasks: tasks, store: { seeded.store }, toggle: { seeded.toggle })
         } else {
-            wiring = .app(needsYou: asks)
+            wiring = .app(needsYou: asks, tasks: tasks)
         }
         #else
-        wiring = .app(needsYou: asks)
+        wiring = .app(needsYou: asks, tasks: tasks)
         #endif
-        tasks = wiring.tasks
         background = wiring.service
         background.start()
     }
@@ -106,7 +116,7 @@ struct PebbleApp: App {
     private var home: some View {
         HomeView(
             brand: brand,
-            model: LocalStubModel(),
+            model: model,
             names: UserDefaultsAgentNameStore(),
             onboarding: UserDefaultsOnboardingStore(),
             memory: memory,

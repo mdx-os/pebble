@@ -1724,6 +1724,63 @@ struct CloudHelpTests {
                 == CloudWords.forgotAndCloudOffAfterSending + " " + CloudWords.sentCantBeErased)
     }
 
+    /// After a send, a task file that stays is said too: no outcome says
+    /// "I no longer have it", the tasks come before what went to the cloud,
+    /// and any advice to try again is still last. Tasks that went say what
+    /// `forgotLine` says.
+    @Test func afterSendingATaskFileThatStaysIsSaidToo() throws {
+        let stayed = ClearedTasks(forgotten: 1, underway: 0, erased: false)
+        let gone = ClearedTasks(forgotten: 1, underway: 0, erased: true)
+        let rests: [CloudHelp.Forgot??] = [nil, .privateWords, .privateWordsAndCloud, .some(nil)]
+        var retried = 0
+        for notes in [true, false] {
+            for rest in rests {
+                for summaries in [nil, MemoryModel.Summaries.erased, .stayed] {
+                    let line = MemoryModel.forgotLineWithTasks(notesGone: notes, rest: rest, cleared: stayed,
+                                                               summaries: summaries, sent: true)
+                    #expect(!line.contains("I no longer have it"), "\(line)")
+                    let tasks = try #require(line.range(of: TaskWords.tasksStayed), "\(line)")
+                    let cloud = try #require(line.range(of: CloudWords.sentCantBeErased), "\(line)")
+                    #expect(tasks.upperBound <= cloud.lowerBound, "\(line)")
+                    let unsent = MemoryModel.forgotLineWithTasks(notesGone: notes, rest: rest, cleared: stayed,
+                                                                 summaries: summaries)
+                    if let retry = MemoryWords.retryAdvice.first(where: { unsent.hasSuffix(" " + $0) }) {
+                        retried += 1
+                        #expect(line.hasSuffix(" " + CloudWords.sentCantBeErased + " " + retry), "\(line)")
+                    } else {
+                        #expect(line.hasSuffix(" " + CloudWords.sentCantBeErased), "\(line)")
+                    }
+                    #expect(MemoryModel.forgotLineWithTasks(notesGone: notes, rest: rest, cleared: gone,
+                                                            summaries: summaries, sent: true)
+                            == MemoryModel.forgotLine(notesGone: notes, rest: rest, tasksGone: true,
+                                                      summaries: summaries, sent: true))
+                }
+            }
+        }
+        #expect(retried > 0, "some outcomes advise trying again")
+        #expect(MemoryModel.forgotLineWithTasks(notesGone: true, rest: .privateWordsAndCloud, cleared: stayed, sent: true)
+                .hasPrefix(CloudWords.forgotAndCloudOffAfterSending + " " + TaskWords.tasksStayed))
+    }
+
+    /// Forget everything says both: the tasks that stayed, and what went to
+    /// the cloud before its chats ended.
+    @Test func forgetEverythingAfterSendingSaysTheTasksStayedAndTheCloudCopy() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("cloud-forget-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let memory = MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
+        _ = try memory.remember("Sam's birthday is May 14.", source: .toldMe)
+        let model = MemoryModel(store: memory, place: .mayLeaveDevice, endsCloudChats: { true },
+                                onForgetEverything: { ClearedTasks(forgotten: 1, underway: 0, erased: false) })
+        model.forgetEverything()
+        let status = try #require(model.status)
+        #expect(status == MemoryModel.forgotLineWithTasks(notesGone: true, rest: nil,
+                                                          cleared: ClearedTasks(forgotten: 1, underway: 0, erased: false),
+                                                          sent: true))
+        #expect(status.contains(TaskWords.tasksStayed))
+        #expect(status.contains(CloudWords.sentCantBeErased))
+    }
+
     /// Each half is erased whatever happens to the other, and the line says
     /// what actually went.
     @Test func forgetEverythingErasesTheWordsEvenWhenTheNotesCantBeErased() throws {

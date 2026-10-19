@@ -255,13 +255,41 @@ public protocol QuestionNotifying: AnyObject, Sendable {
     func onOpen(_ handler: @escaping @MainActor @Sendable (String) -> Void)
 }
 
-/// Everything about waiting questions that outlives the app being closed:
-/// the tasks still going, the receipts for what the person said yes to,
-/// and whether they want a nudge.
+/// Stands in for a task store file that won't open, as while the device is
+/// locked, for tests, so they never need file modes, which root ignores.
+/// What it says can change while a test runs, as the device unlocks.
+package final class TaskStoreFaults: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isShut: Bool
+    private var kept: FileProtectionType?
+
+    package init(shut: Bool = false, protection: FileProtectionType? = nil) {
+        isShut = shut
+        kept = protection
+    }
+
+    package var shut: Bool {
+        get { lock.withLock { isShut } }
+        set { lock.withLock { isShut = newValue } }
+    }
+
+    /// Stands in for the file's protection, where the system keeps none,
+    /// as on a Mac. Nil leaves it to the file.
+    package var protection: FileProtectionType? {
+        get { lock.withLock { kept } }
+        set { lock.withLock { kept = newValue } }
+    }
+}
+
+/// Everything about tasks that outlives the app being closed: the tasks
+/// still going, the receipts for what the person said yes to, whether they
+/// want a nudge, and what the on-device task engine keeps. The app's one
+/// task store: every engine keeps its tasks here, and no other file.
 ///
 /// Kept in one file inside Application Support, left out of backups, and
-/// written whole each time. Forget everything removes the tasks and the
-/// receipts and keeps only the nudge choice, which holds nothing of theirs.
+/// written whole each time. Forget everything removes the tasks, the
+/// receipts and the engine's tasks in one go, and keeps only the nudge
+/// choice, which holds nothing of theirs.
 ///
 /// Forget everything deletes the file first, read or not. If it can't be
 /// deleted, a small marker in a folder of its own says a forget is still
@@ -276,11 +304,24 @@ public protocol QuestionNotifying: AnyObject, Sendable {
 /// A write that fails leaves the store dirty, and each read and change
 /// tries it again, so a receipt cleared here never comes back from the
 /// file.
+///
+/// While the file is there but can't be opened, as while the device is
+/// locked, nothing about tasks changes: not the tasks, not the receipts,
+/// not the engine's tasks. A change then is refused, not held in memory to
+/// write later, so a launch killed before the next unlock loses nothing.
+/// Whoever wanted it works it out again once the file opens. Only the
+/// nudge choice, kept apart with nothing of the person's, still changes.
 public final class TaskStore: @unchecked Sendable {
     public struct State: Codable, Equatable, Sendable {
         public var tasks: [SavedTask] = []
         public var receipts: [Receipt] = []
         public var nudges: NudgeChoice = .notAsked
+        /// What the on-device task engine keeps: its tasks and the kept
+        /// digests it still looks after. Ids, card lines, and in each
+        /// task's history the words the person typed to steer it, kept
+        /// until its card is put away or Forget everything. Never a note's
+        /// words. Absent when it keeps nothing.
+        package var device: StoredFile?
 
         public init(tasks: [SavedTask] = [], receipts: [Receipt] = [], nudges: NudgeChoice = .notAsked) {
             self.tasks = tasks
@@ -288,7 +329,7 @@ public final class TaskStore: @unchecked Sendable {
             self.nudges = nudges
         }
 
-        var holdsSomething: Bool { !tasks.isEmpty || !receipts.isEmpty }
+        var holdsSomething: Bool { !tasks.isEmpty || !receipts.isEmpty || device != nil }
     }
 
     /// Receipts kept at most. Past this the oldest go.
@@ -314,10 +355,15 @@ public final class TaskStore: @unchecked Sendable {
     /// deleted, so nothing is written over it. Each read and change tries
     /// again.
     private var loaded: Bool
-    /// What changed in memory while the file couldn't be read. A late read
-    /// never takes these back.
-    private var changedTasks = false
+    /// The nudge choice changed in memory while the file couldn't be read.
+    /// A late read never takes it back. Nothing else changes then.
     private var changedNudges = false
+    /// Stands in for a file that won't open, for tests.
+    private let faults: TaskStoreFaults?
+    /// A file was let go unread, as one that couldn't be understood or one
+    /// owed a forget, so what the engine kept in it is not known. Told to
+    /// the engine once, by `deviceTasks()`.
+    private var deviceLost = false
     /// Forget everything ran and the file couldn't be deleted. It is never
     /// read; each read and change tries to delete it again.
     private var mustDelete = false
@@ -337,16 +383,22 @@ public final class TaskStore: @unchecked Sendable {
 
     /// `forgetMarker` is where a forget still owed is written down. Nil
     /// keeps it in memory only. Never left out: a test that forgot it would
-    /// share a marker with every other.
-    package init(fileURL: URL?, forgetMarker: URL?) {
+    /// share a marker with every other. Tests may stand in for a file that
+    /// won't open, as while the device is locked, with `faults`, so they
+    /// never need file modes, which root ignores.
+    package init(fileURL: URL?, forgetMarker: URL?, faults: TaskStoreFaults? = nil) {
         self.fileURL = fileURL
         knownURL = fileURL
         markerURL = forgetMarker
+        self.faults = faults
         choiceURL = Self.choice(beside: forgetMarker)
         loaded = fileURL == nil
         lock.lock()
         readChoice()
-        if let forgetMarker, FileManager.default.fileExists(atPath: forgetMarker.path) { mustDelete = true }
+        if let forgetMarker, FileManager.default.fileExists(atPath: forgetMarker.path) {
+            mustDelete = true
+            deviceLost = true
+        }
         loadIfNeeded()
         // Whatever was read now is picked up by `restore`, so none of it
         // arrived late.
@@ -362,12 +414,18 @@ public final class TaskStore: @unchecked Sendable {
         fileURL = nil
         knownURL = forgets
         markerURL = forgetMarker
+        faults = nil
         choiceURL = Self.choice(beside: forgetMarker)
         loaded = true
         lock.lock()
         readChoice()
+        // A file from before is never read here, so what it held is not known.
+        if Self.leftovers(of: forgets).contains(where: { FileManager.default.fileExists(atPath: $0.path) }) {
+            deviceLost = true
+        }
         if let forgetMarker, FileManager.default.fileExists(atPath: forgetMarker.path) {
             mustDelete = true
+            deviceLost = true
             deleteIfOwed()
         }
         lock.unlock()
@@ -556,6 +614,91 @@ public final class TaskStore: @unchecked Sendable {
         change { $0.nudges = choice }
     }
 
+    // MARK: The on-device engine
+
+    /// What the on-device engine kept, once the file has been read: nil
+    /// while it is there but can't be read yet, as before the device is
+    /// first unlocked. `lost` is true once, after a file was let go unread,
+    /// so the engine knows its kept digests are not all known.
+    package func deviceTasks() -> (file: StoredFile?, lost: Bool)? {
+        lock.lock()
+        loadIfNeeded()
+        var out: (file: StoredFile?, lost: Bool)?
+        // A file owed a forget is never read, so it holds nothing to wait for.
+        if loaded || mustDelete || fileURL == nil {
+            out = (state.device, deviceLost)
+            deviceLost = false
+        }
+        let hooks = takeHooks()
+        lock.unlock()
+        for hook in hooks { hook() }
+        return out
+    }
+
+    /// Keeps what the on-device engine holds now, or nothing. Written only
+    /// when it changed.
+    package func keepDevice(_ file: StoredFile?) {
+        change { $0.device = file }
+    }
+
+    /// True while the file is on disk, readable or not, so Forget
+    /// everything is offered while there is anything to erase.
+    public var hasFile: Bool {
+        guard let knownURL else { return false }
+        return Self.leftovers(of: knownURL).contains { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    /// True while the file is there but can't be opened, as while the
+    /// device is locked. Found by trying it. Nothing about tasks changes
+    /// then.
+    package var isShut: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return opensNot()
+    }
+
+    /// With the lock held. True while the file won't open. With no file
+    /// yet, true while a file with its protection can't be opened beside
+    /// it, as while the device is locked, so the first change waits too.
+    private func opensNot() -> Bool {
+        guard let fileURL, !mustDelete else { return false }
+        if faults?.shut == true { return true }
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return !Self.protectedOpens(beside: fileURL) }
+        let descriptor = open(fileURL.path, O_RDONLY)
+        guard descriptor < 0 else {
+            close(descriptor)
+            return false
+        }
+        return true
+    }
+
+    /// True when an empty file can be made beside `url`, written as the
+    /// task store's file is. A file with full protection can't be made
+    /// while the device is locked. It is taken away again at once.
+    private static func protectedOpens(beside url: URL) -> Bool {
+        let manager = FileManager.default
+        let probe = sibling(of: url, ".probe")
+        try? manager.removeItem(at: probe)
+        try? manager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let made = (try? Data().write(to: probe, options: Self.fileWriting())) != nil
+        try? manager.removeItem(at: probe)
+        return made
+    }
+
+    /// After a read: a file from before that was kept with less than full
+    /// protection gets it, so it too opens only while the device is unlocked.
+    private func protectFully(_ url: URL) {
+        if let faults, let protection = faults.protection {
+            if protection != .complete { faults.protection = .complete }
+            return
+        }
+        guard Self.protectsFiles else { return }
+        let manager = FileManager.default
+        let now = (try? manager.attributesOfItem(atPath: url.path))?[.protectionKey] as? FileProtectionType
+        guard now != .complete else { return }
+        try? manager.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: url.path)
+    }
+
     /// Forget everything: every saved task and every receipt. Only the nudge
     /// choice stays, since it holds nothing the person said or did.
     ///
@@ -567,6 +710,7 @@ public final class TaskStore: @unchecked Sendable {
         lock.lock()
         state.tasks = []
         state.receipts = []
+        state.device = nil
         arrivedLate = []
         unreadableCleared = false
         dirty = false
@@ -623,13 +767,17 @@ public final class TaskStore: @unchecked Sendable {
         loadIfNeeded()
         var next = state
         body(&next)
+        // A file there but shut, unread or not, takes no change to tasks:
+        // none is held here to write later. Only the nudge choice goes on.
+        if (!loaded && !mustDelete) || opensNot() {
+            next.tasks = state.tasks
+            next.receipts = state.receipts
+            next.device = state.device
+        }
         let changed = next != state
         if changed {
             if next.nudges != state.nudges { writeChoice(next.nudges) }
-            if !loaded {
-                if next.tasks != state.tasks { changedTasks = true }
-                if next.nudges != state.nudges { changedNudges = true }
-            }
+            if !loaded, next.nudges != state.nudges { changedNudges = true }
             state = next
             if loaded { save(next) }
             tellWatchers = true
@@ -655,10 +803,10 @@ public final class TaskStore: @unchecked Sendable {
     /// owed a forget is never read, only deleted.
     ///
     /// A file read late, as when it was locked until the device was first
-    /// unlocked, never takes back what changed in memory since launch: the
-    /// tasks and the nudge choice made here stand, and the receipts from
-    /// both are kept. Its tasks that aren't here are kept too, as arrived
-    /// late, until an engine picks them up. Then the whole is written back.
+    /// unlocked, is taken as it is: nothing about tasks changed meanwhile,
+    /// since nothing could. Only a nudge choice made here stands over its
+    /// copy. Its tasks are kept as arrived late, until an engine picks
+    /// them up.
     private func loadIfNeeded() {
         if mustDelete { deleteIfOwed() }
         if loaded, dirty { save(state) }
@@ -668,38 +816,33 @@ public final class TaskStore: @unchecked Sendable {
             loaded = true
             return
         }
-        guard let data = try? Data(contentsOf: fileURL) else { return }
+        guard faults?.shut != true, let data = try? Data(contentsOf: fileURL) else { return }
         guard var saved = try? JSONDecoder().decode(State.self, from: data) else {
             // Gone as Forget everything would take it, so a file that won't
             // go is still never read and goes as soon as it can. Today says
             // something was cleared.
             mustDelete = true
             unreadableCleared = true
+            deviceLost = true
             tellWatchers = true
             writeMarker()
             deleteIfOwed()
             return
         }
         loaded = true
+        protectFully(fileURL)
         let decoded = saved
         // A receipt changed into one no question could have shown never
         // reaches a card that says "You said yes".
         saved.receipts = saved.receipts.filter(\.couldHaveBeenAsked)
-        let here = changedTasks ? state.tasks : []
-        let late = saved.tasks.filter { task in !here.contains { $0.id == task.id } }
         var merged = saved
-        merged.tasks = here + late
         if changedNudges || choiceKnown { merged.nudges = state.nudges }
         // A file from before the choice was kept apart hands it over once.
         if !choiceKnown && merged.nudges != .notAsked { writeChoice(merged.nudges) }
-        for receipt in state.receipts where !merged.receipts.contains(where: { $0.id == receipt.id }) {
-            merged.receipts.append(receipt)
-        }
         merged.receipts = Self.newest(merged.receipts)
         if merged != state { tellWatchers = true }
-        arrivedLate = late
+        arrivedLate = saved.tasks
         state = merged
-        changedTasks = false
         changedNudges = false
         if merged != decoded { save(merged) }
     }
@@ -718,7 +861,6 @@ public final class TaskStore: @unchecked Sendable {
         }
         mustDelete = false
         if let markerURL { try? manager.removeItem(at: markerURL) }
-        changedTasks = false
         changedNudges = false
         if fileURL != nil {
             loaded = true
@@ -745,9 +887,11 @@ public final class TaskStore: @unchecked Sendable {
     #endif
 
     /// How the file is written. It holds receipts, which name who a yes went
-    /// to, so it can't be read until the device is first unlocked.
+    /// to, and the on-device engine's tasks, so it can be read only while
+    /// the device is unlocked, as the notes are. A read or write while it is
+    /// locked is tried again later.
     package static func fileWriting(protected: Bool = protectsFiles) -> Data.WritingOptions {
-        protected ? [.withoutOverwriting, .completeFileProtectionUntilFirstUserAuthentication] : [.withoutOverwriting]
+        protected ? [.withoutOverwriting, .completeFileProtection] : [.withoutOverwriting]
     }
 
     /// How the nudge choice is written. One word and nothing of the
@@ -868,6 +1012,7 @@ public enum ReceiptWords {
         case .send: "A message to \(name)"
         case .purchase: "A payment to \(name)"
         case .sharePersonalInfo: "Your details for \(name)"
+        case .save: "Kept in \(name)"
         }
     }
     public static let done = "Done, once, just as you said yes to it."
@@ -886,6 +1031,7 @@ public enum ReceiptWords {
         case .send: "a message to \(name)"
         case .purchase: "a payment to \(name)"
         case .sharePersonalInfo: "your details for \(name)"
+        case .save: "what was kept in \(name)"
         }
     }
     /// On Today after a file that couldn't be read was cleared. It may have

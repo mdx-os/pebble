@@ -212,13 +212,23 @@ public struct HomeView: View {
 
     /// The same, from a place already worked out. With `cloud`, Forget
     /// everything ends every open cloud chat first and erases the words
-    /// always hidden too.
+    /// always hidden too. `othersChanged` says
+    /// when to look again at what else is stored, and `onNotesChanged` runs
+    /// after a note is changed or forgotten, so Today's cards follow, and
+    /// `forgetQuotes` takes a forgotten note out of what tasks kept.
     static func memoryModel(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp? = nil,
                             background: BackgroundRunner? = nil, grants: GrantBook? = nil, log: HomeScreenLog? = nil,
-                            onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) -> MemoryModel {
+                            onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none },
+                            othersStored: @escaping @MainActor () -> Bool = { false },
+                            othersChanged: AnyPublisher<Void, Never>? = nil,
+                            onNotesChanged: @escaping @MainActor () -> Void = {},
+                            forgetQuotes: @escaping @MainActor (MemoryNote) -> QuotesForgotten = { _ in .notQuoted })
+        -> MemoryModel {
         let memory = MemoryModel(store: store, place: place, endsCloudChats: MemoryView.endsCloudChats(cloud),
                                  alsoForget: MemoryView.alsoForget(cloud), background: background,
-                                 grants: grants, onForgetEverything: onForgetEverything)
+                                 grants: grants, onForgetEverything: onForgetEverything,
+                                 othersStored: othersStored, othersChanged: othersChanged,
+                                 onNotesChanged: onNotesChanged, forgetQuotes: forgetQuotes)
         log?.memories.append(memory)
         return memory
     }
@@ -226,13 +236,19 @@ public struct HomeView: View {
     /// The memory screen's model as the home screen makes it: Forget
     /// everything erases the notes, kept points included, and the
     /// background work, then forgets every task on `feed`, a recon still
-    /// going included, and closes an open summary. The list of what the
-    /// agent may do without asking is the rule's own, from `feed`.
+    /// going included, and closes an open summary. It looks again at what
+    /// else is stored when Today's file of tasks comes or goes, and a note
+    /// changed or forgotten there reaches what Today's tasks kept. The list
+    /// of what the agent may do without asking is the rule's own, from `feed`.
     static func memoryModel(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp?,
                             background: BackgroundRunner? = nil, log: HomeScreenLog? = nil,
                             feed: FeedModel) -> MemoryModel {
         memoryModel(store: store, place: place, cloud: cloud, background: background, grants: feed.grants, log: log,
-                    onForgetEverything: { [weak feed] in feed?.forgetEverything() ?? .none })
+                    onForgetEverything: { [weak feed] in feed?.forgetEverything() ?? .none },
+                    othersStored: { [weak feed] in feed?.tasksStored ?? false },
+                    othersChanged: feed.$tasksSeen.map { _ in () }.eraseToAnyPublisher(),
+                    onNotesChanged: { [weak feed] in feed?.notesChanged() },
+                    forgetQuotes: { [weak feed] in feed?.forgetQuotes(of: $0) ?? .notQuoted })
     }
 
     /// Today's model as the home screen makes it, with looking into things
@@ -244,19 +260,32 @@ public struct HomeView: View {
     /// recon was gathered are read from `now` instead, the screen's clock,
     /// so "Gathered today at 9:12" is when it was read. An engine passed in,
     /// as the showcase's, keeps its own clock.
+    ///
+    /// An engine that keeps its own file of tasks, as the device's own does
+    /// (`RunsReconsBeside`), gets recons beside it on a scripted engine of
+    /// their own (`JoinedTasks`), played the same way, so a recon's topic
+    /// never reaches its file. Any other engine that picks its own steps
+    /// runs no recon at all.
     static func reconFeedModel(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)?,
                                ledger: TaskLedgerBook? = nil, drivesTasks: Bool, reading: any SourceProvider, place: PrivacyPlace,
                                memory: MemoryStore?, model: any ModelClient, cloud: CloudHelp?,
                                flow: NeedsYouFlow? = nil, background: BackgroundRunner? = nil,
                                now: @escaping @Sendable () -> Date) -> FeedModel {
         let runner: ReconRunner
-        if let tasks {
-            runner = (tasks as? ReconRunner) ?? ReconRunner(engine: tasks, provider: reading)
+        var playsScripts = tasks == nil
+        if let given = tasks as? ReconRunner {
+            runner = given
+        } else if let own = tasks as? any RunsReconsBeside {
+            let joined = JoinedTasks(main: own, scripted: LocalFakeEngine(rule: needsYou.rule, wallClock: now))
+            runner = ReconRunner(engine: joined, provider: reading, now: now)
+            playsScripts = true
+        } else if let tasks {
+            runner = ReconRunner(engine: tasks, provider: reading)
         } else {
             runner = ReconRunner(engine: LocalFakeEngine(rule: needsYou.rule, wallClock: now), provider: reading, now: now)
         }
         let feed = feedModel(sources: sources, needsYou: needsYou, tasks: runner, ledger: ledger,
-                             drivesTasks: drivesTasks || tasks == nil, flow: flow, background: background,
+                             drivesTasks: drivesTasks || playsScripts, flow: flow, background: background,
                              place: place, memory: memory, now: now)
         // Asked at each start, so turning the cloud on or off counts from
         // the next one, as it does for chats. A summary put together in the

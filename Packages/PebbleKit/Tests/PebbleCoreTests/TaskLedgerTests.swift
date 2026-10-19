@@ -782,14 +782,14 @@ struct TaskLedgerTests {
         #expect(!FileManager.default.fileExists(atPath: file.path))
     }
 
-    /// PERMANENT GUARD. Written as the kept tasks are: protected until the
-    /// device is first unlocked, and the marker, which holds nothing,
-    /// written while it may still be locked. Every write goes through these.
+    /// PERMANENT GUARD. Written as the kept tasks are: complete protection,
+    /// so it opens only while the device is unlocked, and the marker, which
+    /// holds nothing, written while it may still be locked. Every write goes
+    /// through these.
     @Test func theFileIsProtectedLikeTheTasks() throws {
         let mask = Data.WritingOptions.fileProtectionMask
         #expect(TaskLedgerFileStore.fileWriting(protected: true) == TaskStore.fileWriting(protected: true))
-        #expect(TaskLedgerFileStore.fileWriting(protected: true).intersection(mask)
-            == .completeFileProtectionUntilFirstUserAuthentication)
+        #expect(TaskLedgerFileStore.fileWriting(protected: true).intersection(mask) == .completeFileProtection)
         #expect(TaskLedgerFileStore.markerWriting(protected: true).intersection(mask) == .noFileProtection)
         let root = SwiftSource.repositoryRoot(from: #filePath)
         let text = try String(contentsOf: root.appendingPathComponent("Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift"),

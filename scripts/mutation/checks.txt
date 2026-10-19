@@ -1,0 +1,290 @@
+# The repository's own checks: the local and release config checks, the
+# release probe, the comment lint, the mutation check itself, the
+# Makefile's verify and the CI workflow.
+
+test: theLocalConfigCheckFailsWhenItCantLook
+file: scripts/local-config-check.sh
+perl: s~so I can't check it\."\n  exit 1~so I can't check it."\n  exit 0~
+
+test: theLocalConfigCheckFailsWhenATrackedConfigSetsAnAddress
+file: scripts/local-config-check.sh
+perl: s~goes only in \$local_only\."\n    exit 1~goes only in \$local_only."\n    exit 0~
+
+test: theLocalConfigCheckFailsWhenATrackedConfigSetsAnAddress
+file: scripts/local-config-check.sh
+perl: s~PEBBLE_CLOUD_ENDPOINT\(\\\[\[\^\]\]\*\\\]\)\*~PEBBLE_CLOUD_ENDPOINT~
+
+test: theLocalConfigCheckFailsWhenProjectYmlSetsAnAddress
+file: scripts/local-config-check.sh
+perl: s~if \[ -n "\$values" \] \|\| \[ -n "\$passed" \]; then~if [ -n "\$passed" ]; then~
+
+test: theLocalConfigCheckFailsWhenProjectYmlSetsAnAddress
+file: scripts/local-config-check.sh
+perl: s~if \[ -n "\$values" \] \|\| \[ -n "\$passed" \]; then~if [ -n "\$values" ]; then~
+
+test: theLocalConfigCheckFailsWhenProjectYmlSetsAnAddress
+file: scripts/local-config-check.sh
+perl: s~PEBBLE_CLOUD_ENDPOINT\(\\\[\[\^\]\]\*\\\]\)\*"\?~PEBBLE_CLOUD_ENDPOINT"?~
+
+test: theLocalConfigCheckFailsWhenATrackedConfigCantBeRead theLocalConfigCheckFailsWhenATrackedConfigIsUnreadable
+file: scripts/local-config-check.sh
+perl: s~can't read the tracked \$config, so I can't check it\."\n    exit 1~can't read the tracked \$config, so I can't check it."\n    continue~g
+
+test: theReleaseCheckFailsWhenAReleaseBuildHasAnAddress
+file: scripts/release-endpoint-check.sh
+perl: s~or build Debug \(not an archive\) to try it\."\n  exit 1~or build Debug (not an archive) to try it."\n  exit 0~
+
+test: theReleaseCheckFailsWhenAReleaseBuildHasAnAddress
+file: scripts/release-endpoint-check.sh
+perl: s~if \[ "\$CONFIGURATION" = Debug \]~if [ "\$CONFIGURATION" != Release ]~
+
+test: theReleaseCheckFailsWhenAReleaseBuildHasAnAddress
+file: scripts/release-endpoint-check.sh
+perl: s~\[ "\$action" != install \] && \[ "\$action" != archive \]~true~
+
+test: aStrayConfigurationInTheShellDoesNotSkipTheCheck
+file: scripts/release-endpoint-check.sh
+perl: s~ && \[ -n "\$\{TARGET_BUILD_DIR:-\}" \] && \[ -n "\$\{SCRIPT_INPUT_FILE_COUNT:-\}" \]~~
+
+test: theReleaseCheckNeverPrintsTheAddress
+file: scripts/release-endpoint-check.sh
+perl: s~is set for a \$1 build\. The address is not shown here\.~is set for a \$1 build (\$PEBBLE_CLOUD_ENDPOINT).~
+
+test: theReleaseCheckOnItsOwnChecksEveryConfigurationButDebug
+file: scripts/release-endpoint-check.sh
+perl: s~\[ "\$configuration" = Debug \] && continue~[ "\$configuration" = Release ] || continue~
+
+test: theReleaseCheckOnItsOwnChecksEveryConfigurationButDebug
+file: scripts/release-endpoint-check.sh
+perl: s~ -target "\$target"~~
+
+test: theReleaseCheckFailsWhenTheSettingsDisagree
+file: scripts/release-endpoint-check.sh
+perl: s~PEBBLE_CLOUD_ENDPOINT = //p'\)"~PEBBLE_CLOUD_ENDPOINT = //p' | head -n 1)"~
+
+test: theReleaseCheckFailsWhenItCantReadTheSettings
+file: scripts/release-endpoint-check.sh
+perl: s~so it can't check them\."\n  exit 1~so it can't check them."\n  exit 0~
+
+test: theReleaseCheckFailsWhenItCantReadTheSettings
+file: scripts/release-endpoint-check.sh
+perl: s~so it can't check them\."\n    exit 1~so it can't check them."\n    exit 0~
+
+test: everyReleaseBuildRunsTheCheck
+file: project.yml
+perl: s~script: sh "\$SRCROOT/scripts/release-endpoint-check\.sh"~script: "true"~
+
+test: everyReleaseBuildRunsTheCheck
+file: project.yml
+perl: s~script: sh "\$SRCROOT/scripts/release-endpoint-check\.sh"~script: sh "\$SRCROOT/scripts/release-endpoint-check.sh" || true~
+
+test: everyReleaseBuildRunsTheCheck
+file: project.yml
+perl: s~basedOnDependencyAnalysis: false~basedOnDependencyAnalysis: true~
+
+# Names are matched by salted hash, as words and pairs of words, in any case and as possessives.
+test: theCommentLintCatchesReviewHistoryAndNames theNamesAreCommittedOnlyAsSaltedHashes
+file: scripts/comment-lint.sh
+perl: s~return Digest::SHA::sha256_hex\(\$bytes\);~return \$bytes;~
+
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s~my \@keys = \(\@words, map \{ "\$words\[\$_\] \$words\[\$_ \+ 1\]" \} 0 \.\. \$#words - 1\);~my \@keys = \@words;~
+
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s#\$word =~ s/\[\\x27\\x\{2019\}\]s\$//;##
+
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s#for my \$word \(lc\(\$text\) =~#for my \$word (\$text =~#
+
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s~print "\$file:\$n: a name from the list\\n"~print "\$file:\$n:\$line\\n"~
+
+# A hash file with no salt, a stray line or no names is an error, never a pass.
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s~return \(undef, undef, "\$file has no salt line"\) unless defined \$salt;~\$salt //= "";~
+
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s~else \{ return \(undef, undef, "line \$n of \$file is not the salt, a hash or a # comment"\) \}~else { }~
+
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s~if \(!%\$set\) \{~if (0) {~
+
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s~qr/fix\(\?:ed\)\?\\s\+round\|~qr/~
+
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s~else \{ \$comment \.= " \$rest"; \$rest = "" \}~else { \$rest = "" }~
+
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s#\n\s*\$rest =~ s/\$quoted/""/g;##
+
+test: theCommentLintCoversTheProjectFiles
+file: scripts/comment-lint.sh
+perl: s~ scripts project\.yml Makefile~ scripts~
+
+test: theCommentLintCoversTheProjectFiles
+file: scripts/comment-lint.sh
+perl: s~ Tools/GuardKit App~ App~
+
+# The plain list stays out of the repository; --hash-names keeps the salt, and a stale hash file fails.
+test: theNamesAreCommittedOnlyAsSaltedHashes
+file: scripts/comment-lint.sh
+perl: s~-e \$hashes \? read_hashes\(\$hashes\) : ~0 ? read_hashes(\$hashes) : ~
+
+test: theNamesAreCommittedOnlyAsSaltedHashes
+file: scripts/comment-lint.sh
+perl: s~if \(\$names ne ""\) \{~if (0) {~
+
+test: theNamesAreCommittedOnlyAsSaltedHashes
+file: .gitignore
+perl: s~\nConfig/comment-lint-names\.local\.txt\n~\n~
+
+test: theMutationCheckFailsWhenATestSurvives
+file: scripts/mutation-check.sh
+perl: s~(SURVIVED  \$test still passes with \$file broken by: \$perl  \[\$from\]"\n)\s*problems=\$\(\(problems \+ 1\)\)\n~$1~
+
+test: theMutationCheckFailsForAMissingTestOrFile
+file: scripts/mutation-manifest-check.sh
+perl: s~then problem "no file \$file"; fi~then :; fi~
+
+test: theMutationCheckFailsForAMissingTestOrFile
+file: scripts/mutation-check.sh
+perl: s~(say "mutation-check: no test named \$test"\n)\s*exit 1\n~$1~
+
+test: theMutationCheckReportsATimeoutApartFromAKill
+file: scripts/mutation-check.sh
+perl: s~elif \[ "\$status" -eq "\$alarmed" \]; then\n(\s*)echo timedout~elif false; then\n$1echo timedout~
+
+test: theMutationCheckReportsATimeoutApartFromAKill
+file: scripts/mutation-check.sh
+perl: s~if \[ "\$timedout" -ne 0 \] && \[ "\$allow_timeouts" != 1 \]; then~if false; then~
+
+test: aTimedOutTestLeavesNothingRunning
+file: scripts/mutation-check.sh
+perl: s~kill "TERM", -\$pid; sleep 1; kill "KILL", -\$pid;~kill "TERM", \$pid; sleep 1; kill "KILL", \$pid;~
+
+test: everyChangeInAnEntryMustApply
+file: scripts/mutation-check.sh
+perl: s~if cmp -s "\$work/before\.tmp" "\$work/\$file"; then stale="\$change"; break; fi~:~
+
+test: theMutationCheckStopsAHangBeforeAnythingIsBroken
+file: scripts/mutation-check.sh
+perl: s~if \[ "\$status" -eq "\$alarmed" \]; then\n(\s*)say "mutation-check: the listed tests~if false; then\n$1say "mutation-check: the listed tests~
+
+test: theMutationCheckStopsAHangBeforeAnythingIsBroken
+file: scripts/mutation-check.sh
+perl: s~out="\$\(bounded "\$baseline_timeout" \\\n\s*~out="\$(~
+
+test: verifyRunsTheCommentLintAndTheMutationCheck
+file: Makefile
+perl: s~^verify: verify-ci mutation-check$~verify: verify-ci~m
+
+test: verifyRunsTheCommentLintAndTheMutationCheck
+file: Makefile
+perl: s~^verify: verify-ci mutation-check$~verify: mutation-check~m
+
+test: verifyRunsTheCommentLintAndTheMutationCheck
+file: Makefile
+perl: s~^(verify-ci:[^\n]*) build build-release$~$1 mutation-check build build-release~m
+
+test: verifyRunsTheCommentLintAndTheMutationCheck
+file: Makefile
+perl: s~ comment-lint screenshots-check-test graph-check-test test release-test~ screenshots-check-test graph-check-test test release-test~
+
+test: verifyRunsTheCommentLintAndTheMutationCheck
+file: Makefile
+perl: s~ test release-test build build-release~ test build build-release~
+
+test: verifyRunsTheCommentLintAndTheMutationCheck
+file: Makefile
+perl: s~release-test:\n\tsh scripts/release-probe\.sh~release-test:\n\t@true~
+
+# The release probe runs the shipped code, counts no Debug build and fails on any address.
+test: theReleaseProbeRunsTheShippedCode
+file: scripts/release-probe.sh
+perl: s~ -c release --quiet probe~ --quiet probe~
+
+test: theReleaseProbeRunsTheShippedCode
+file: scripts/release-probe.sh
+perl: s~ \|\| CloudEndpoint\.url\(infoDictionary: \[CloudEndpoint\.infoKey: raw\]\) != nil~~
+
+test: theReleaseProbeRunsTheShippedCode
+file: scripts/release-probe.sh
+perl: s~built as Debug, so it proves nothing"\)\nexit\(1\)~built as Debug, so it proves nothing")~
+
+# CI runs the lint with no secret.
+test: ciRunsTheCommentLintWithNoSecret
+file: .github/workflows/ci.yml
+perl: s~        run: make verify-ci\n~        env:\n          NAMES: \${{ secrets.COMMENT_LINT_NAMES }}\n        run: make verify-ci\n~
+
+test: ciRunsTheCommentLintWithNoSecret
+file: .github/workflows/ci.yml
+perl: s~        run: make verify-ci\n~        run: make test\n~
+
+# CI runs the full mutation check on every push and pull request, in its own job.
+test: ciRunsTheFullMutationCheckInItsOwnJob
+file: .github/workflows/ci.yml
+perl: s~        run: make mutation-check\n~        run: make mutation-check ONLY=Redactor\n~
+
+test: ciRunsTheFullMutationCheckInItsOwnJob
+file: .github/workflows/ci.yml
+perl: s~      - name: Mutation check\n        run: make mutation-check\n~      - name: Mutation check\n        run: make test\n~
+
+test: ciRunsTheFullMutationCheckInItsOwnJob
+file: .github/workflows/ci.yml
+perl: s~      - name: Mutation check\n~      - name: Mutation check\n        if: github.ref == 'refs/heads/main'\n~
+
+test: ciRunsTheFullMutationCheckInItsOwnJob
+file: .github/workflows/ci.yml
+perl: s~    timeout-minutes: 150\n~    timeout-minutes: 40\n~
+
+test: ciRunsTheFullMutationCheckInItsOwnJob
+file: .github/workflows/ci.yml
+perl: s~  pull_request:\n~~
+
+test: ciRunsTheFullMutationCheckInItsOwnJob
+file: .github/workflows/ci.yml
+perl: s~  mutation:\n    name: Mutation check\n~  mutation:\n    if: github.ref == 'refs/heads/main'\n    name: Mutation check\n~
+
+test: ciRunsTheFullMutationCheckInItsOwnJob
+file: .github/workflows/ci.yml
+perl: s~    timeout-minutes: 150\n~    timeout-minutes: 150\n    if: github.event_name == 'push'\n~
+
+test: ciRunsTheFullMutationCheckInItsOwnJob
+file: .github/workflows/ci.yml
+perl: s~    runs-on: macos-26\n    timeout-minutes: 150\n~    runs-on: macos-26\n    needs: verify\n    timeout-minutes: 150\n~
+
+test: ciRunsTheFullMutationCheckInItsOwnJob
+file: .github/workflows/ci.yml
+perl: s~  pull_request:\n~  pull_request:\n    paths-ignore: ['scripts/**']\n~
+
+test: ciRunsTheFullMutationCheckInItsOwnJob
+file: .github/workflows/ci.yml
+perl: s~  pull_request:\n~  pull_request:\n    branches: [release]\n~
+
+test: ciRunsTheFullMutationCheckInItsOwnJob
+file: .github/workflows/ci.yml
+perl: s~\nconcurrency:\n~\nenv:\n  MAKEFLAGS: --dry-run\n\nconcurrency:\n~
+
+test: ciRunsTheFullMutationCheckInItsOwnJob
+file: .github/workflows/ci.yml
+perl: s~    timeout-minutes: 150\n~    timeout-minutes: 150\n    env:\n      MAKEFLAGS: --dry-run\n~
+
+# The lint reads a Swift string of several lines as a string, so a URL in one is no comment.
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s~ else \{ \$multi = 1 \}~~
+
+test: verifyRunsTheCommentLintAndTheMutationCheck
+file: Makefile
+perl: s~(\nverify-ci:[^\n]*) build build-release\n~$1 build\n~

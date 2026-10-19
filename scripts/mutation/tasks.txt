@@ -1,0 +1,19 @@
+# The task ledger on Today. The first entry breaks its test a second way
+# beside its entry in scripts/mutation-manifest.txt; the other two replace
+# manifest entries that no longer applied after the task engine changes.
+
+# Today: a task no engine picked up at launch says it stopped.
+test: atLaunchATaskNoEngineHasSaysItStopped
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~        ledger\?\.launch\(live: tasks\?\.tasks \?\? \[\],\n\s*restorationComplete: [^\n]*\)\n~~
+
+# Every simultaneous completion reaches observers before the engine's trim.
+test: thirteenTasksFinishingTogetherAllReachTheirLedgers
+file: Packages/PebbleKit/Sources/PebbleCore/LocalFakeEngine.swift
+perl: s~        lockRuns\(\)\n        let after = runs~        lockRuns()\n        dropOldEnded()\n        let after = runs~
+perl: s~\.filter \{ runs\[\$0\]\.endTold \}~.filter { _ in true }~
+
+# Restored outcomes are recorded before the launch sweep.
+test: finalQuestionExpiringWhileClosedKeepsItsFinish
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~        if let flow, let keeper \{\n            flow\.store\.restore~        ledger?.launch(live: tasks?.tasks ?? [], restorationComplete: true)\n        if let flow, let keeper {\n            flow.store.restore~

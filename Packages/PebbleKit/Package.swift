@@ -16,7 +16,7 @@ import PackageDescription
 //   PebbleUI     SwiftUI views shared by Mac, iPhone and iPad.
 //                Imports PebbleCore and PebbleModel.
 // SourceScan is not a layer. It lives under Tests and only tests use it,
-// to read Swift source for their guards.
+// to read Swift source and stored values for their guards.
 // ReconTestSupport is the same kind of thing: the test engines, gates and
 // waits that the core and UI tests share, kept in one copy.
 // TestScratch is the same kind of helper: a folder of scratch files for
@@ -54,7 +54,7 @@ let package = Package(
         .testTarget(name: "PebbleCoreTests",
                     dependencies: ["PebbleCore", "SourceScan", "ReconTestSupport", "TestScratch", "PromiseWords"]),
         .testTarget(name: "PebblePulseTests", dependencies: ["PebblePulse", "PebbleCore"]),
-        .testTarget(name: "PebbleModelTests", dependencies: ["PebbleModel", "PebbleCore"]),
+        .testTarget(name: "PebbleModelTests", dependencies: ["PebbleModel", "PebbleCore", "SourceScan", "TestScratch"]),
         .testTarget(name: "PebbleBackgroundTests",
                     dependencies: ["PebbleBackground", "PebbleCore", "SourceScan", "TestScratch"]),
         .testTarget(name: "PebbleUITests",

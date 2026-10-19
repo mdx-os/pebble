@@ -17,7 +17,7 @@ in lint, a skill, or CI.
 
 - `make verify`: everything CI runs (brand check, comment lint, tests, mutation check, builds, screenshots). It is `make verify-ci` and then `make mutation-check`. CI runs those as two jobs side by side on every push and PR: "Verify on Mac, iPhone and iPad" (40 minutes) and "Mutation check" (150 minutes, the full manifest; about 45 minutes on a recent Mac). Never move the mutation check back into the Verify job, or cut the manifest to fit a limit
 - `make test`: package unit tests (Swift Testing), PebbleKit's and then the source guards' in `Tools/GuardKit`
-- `make mutation-check`: breaks the code each test in `scripts/mutation-manifest.txt` covers, on a copy in `build/mutation`, and requires the test to fail. Every new package behavior test gets a manifest entry; a test that passes with its code broken protects nothing. The check runs `swift test` in both packages, so a UI test that guards a promise needs a package twin pinning the same thing, with entries, listed at the top of the manifest
+- `make mutation-check`: breaks the code each test in `scripts/mutation-manifest.txt` covers, on a copy in `build/mutation`, and requires the test to fail. Every new package behavior test gets a manifest entry; a test that passes with its code broken protects nothing. The check runs `swift test` in both packages, so a UI test that guards a promise needs a package twin pinning the same thing, with entries, listed at the top of `scripts/mutation/cloud.txt`
 - `make release-test`: runs the "a shipped build reads no cloud address" promise in a Release build of PebbleCore (part of verify). Package tests run in Debug, so they can't see that code
 - `make comment-lint`: no review history ("fix round", "item 11", "round 4") or personal names in code comments, project.yml, the Makefile or the mutation manifest. Say what the code or test protects. The names it blocks are never committed in plain text: `Config/comment-lint-names.sha256` holds a salt and the SHA-256 of each name, and CI needs no secret. The plain list lives only in the git-ignored `Config/comment-lint-names.local.txt`; after changing it, run `make hash-names` and commit the hash file. A match prints the file and line, never the name. Never print, copy or quote the local list
 - `make build-release`: Release builds for macOS and the iOS Simulator (part of verify). Anything behind `#if DEBUG`, like the showcase, must only be used behind it too. Every build with a cloud address fails unless it is Debug and not an archive, whatever the configuration is called
@@ -30,8 +30,14 @@ in lint, a skill, or CI.
 - The screenshots also get a `STAMP` with the commit and the working tree's hash. `make verify` makes them and then fails with "screenshots are stale, rerun make screenshots" if the stamp is missing or the tree has changed since. The tree hash is the contract: the same files make the same screenshots, so committing or amending them with nothing changed keeps them fresh. The commit line is only there to read. Screenshots always show the code as it is now
 - `make screenshots-check`: that check alone, and `make screenshots-check-test` its self-test
 - `make generate`: regenerate `Pebble.xcodeproj` after editing `project.yml`
-- `make mutation-check`: break each entry of `scripts/mutation-manifest.txt` on a copy in
-  `build/mutation` and require its tests to fail. `ONLY=` runs the entries whose tests match
+- `make mutation-check`: break each entry of `scripts/mutation-manifest.txt` and
+  `scripts/mutation/*.txt` on a copy in `build/mutation` and require its tests to fail.
+  `ONLY=` runs the entries whose tests match. Add entries to `scripts/mutation/<area>.txt`
+  (format in its README), never to the end of the old manifest
+- `make mutation-manifest-check`: fail on an entry with no `test:`, `file:` or `perl:`
+  line, a `file:` that is gone, or two `test:` or `file:` lines in one block (part of verify).
+  Merge conflicts in these files are resolved by hand, never with a union merge: two
+  entries with the same `test:` and `file:` lines would fold into one and hide a survivor
 - `make secrets-check`: gitleaks over git history
 
 ## Layout and layers
@@ -41,9 +47,12 @@ in lint, a skill, or CI.
   below it; `Package.swift` enforces this.
   - `PebbleCore`: plain types. No SwiftUI, no networking.
   - `PebblePulse`: public source watch fetching and snapshots. Imports PebbleCore.
-  - `PebbleModel`: model adapter. `ModelClient`, the on-device placeholder and `CloudModel` (off by default, every request previewed and redacted by `Redactor` in PebbleCore). Imports PebbleCore. MLX and Ollama adapters plug in here.
+  - `PebbleModel`: model adapter. `ModelClient`, the on-device placeholder and `CloudModel` (off by default, every request previewed and redacted by `Redactor` in PebbleCore). Imports PebbleCore. MLX and Ollama adapters plug in here. The on-device task engine lives here too, made only by `OnDeviceTasks` from a key the compiler keeps private.
   - `PebbleBackground`: gives the background runner time (`BGTaskScheduler` on iOS, `NSBackgroundActivityScheduler` on the Mac). Imports PebbleCore. Scheduling decisions are pure functions in `BackgroundPlan`; the runner, its store and its switch live in PebbleCore's `Background.swift`, so no platform code goes there.
   - `PebbleUI`: SwiftUI views shared by every platform. Imports PebbleCore and PebbleModel.
+- Where work is done (kept context, a framework, the relay, a remote run,
+  then the person) is decided only by `FallbackRouter` in PebbleCore.
+  The order and rules are in `docs/ROUTING.md`.
 - New code goes in a package, not in `App/`. New layers get added to
   `Package.swift` with their place in the order written down.
 - The source guards (privacy promise, contrast, accent, platform gate) read
@@ -52,7 +61,7 @@ in lint, a skill, or CI.
   reads PebbleKit by path, so swift-syntax never enters the app's package
   graph: PebbleKit and `project.yml` never name it (`make graph-check`).
   A new rule goes in its guard's rule list with a name, a wrong case in
-  `GuardWrongCaseTests` that names it, and a `scripts/mutation-manifest.txt`
+  `GuardWrongCaseTests` that names it, and a `scripts/mutation/guards.txt`
   entry that turns it off. Rules compare names through `SyntaxSource.name`,
   never a token's `text`, so a name in backticks is still the name.
   swift-syntax is pinned to an exact version and only GuardScan uses it.
@@ -72,8 +81,16 @@ in lint, a skill, or CI.
   device and writes counts and times to its own file. Nothing in
   `PebbleBackground` or the runner opens a connection.
 - The summary's file uses `completeUntilFirstUserAuthentication`, so it
-  opens once the device has been unlocked since it started. Notes and
-  private words keep `.complete`, and the summary never copies their words.
+  opens once the device has been unlocked since it started. Notes, private
+  words and the task store (`TaskStore`: the engine's tasks, saved asks,
+  receipts) keep `.complete`, and the summary never copies their words.
+- Background work never changes a task while the task store won't open
+  (`TaskStore.isShut`, found by trying the file). The store refuses the
+  change and the engine makes none; nothing is held in memory to write at
+  the next unlock, and nothing of a task's goes to a weaker file. Once it
+  opens, the change is worked out again from what is there, as a task still
+  going when the app closed is settled as stopped and written so.
+  `LockedTaskStoreTests` guards this.
 - The switch lives in `background-switch.json` with no file protection
   (`.none`), so a run before the first unlock can read it. It holds only a
   bool, dates and a reason (on or off, the next due time, why a run waited,
@@ -94,10 +111,19 @@ in lint, a skill, or CI.
   night in the background is expected, not a bug. The runner counts
   `NeedsYou`, not the asks `TaskStore` keeps for a task while the app is
   closed, so those are not in the summary yet.
+- What finished is counted from the task engine's own record in
+  `TaskStore` (`TaskEngine.endings`), so a fresh launch counts it too.
+  While the store won't open, as overnight with the screen locked, the
+  summary says it couldn't count the tasks (`BackgroundWords.tasksLocked`)
+  rather than leave them out or say zero.
 - Forget everything clears the runner (its file and the switch's) and
   everything `TaskStore` keeps (saved tasks, receipts, nudges) in one tap.
   `BackgroundFeedTests` guards both together. Each window's recons go in
   the same tap, and `TaskStore` never keeps a recon (`ReconNeedsYouTests`).
+- On Today a recon never runs on `DeviceTaskEngine`: it plays beside it on
+  a scripted engine of its own (`JoinedTasks`), whose ids never reach the
+  device's engine, so its topic is never in the device's file.
+  `ReconBesideDeviceTasksTests` guards this.
 - "Locked" for the runner means its file can't be opened yet, found by
   trying the file (`BackgroundConditions.background(store:...)`). Never
   derive it from `isProtectedDataAvailable` or the screen lock: a phone
@@ -170,6 +196,9 @@ Things no test here can reach. Check each on a real iPhone before a release.
   the app as a notification opens. `NeedsYouFlowModelTests` guards this.
 - `onReceive` of a `@Published` publisher replays its value each time the
   body runs. To react to a change, observe the object and use `onChange`.
+- `DeviceTaskEngine` follows the notes whatever the model. Gate only
+  starting a task on `place.staysOnDevice`, never making the engine, or a
+  forgotten note's line stays in a kept digest after a model switch.
 - An engine lets go of ended tasks by when they ended, never by when they
   began. A task dropped in the same change that ends it never tells its
   ledger how it ended. Retention lets go only of ends a delivered snapshot

@@ -636,8 +636,11 @@ struct ScriptGuardTests {
         for file in ["Makefile", "project.yml", ".gitignore", "README.md", "AGENTS.md"] {
             try Data().write(to: root.appendingPathComponent(file))
         }
-        try FileManager.default.copyItem(atPath: Self.script("mutation-check.sh"),
-                                         toPath: root.appendingPathComponent("scripts/mutation-check.sh").path)
+        // The check reads every entry through the manifest check first.
+        for script in ["mutation-check.sh", "mutation-manifest-check.sh"] {
+            try FileManager.default.copyItem(atPath: Self.script(script),
+                                             toPath: root.appendingPathComponent("scripts/\(script)").path)
+        }
         try Data("let works = true\n".utf8).write(to: root.appendingPathComponent("Packages/PebbleKit/Sources/Fixture/Code.swift"))
         try Data(manifest.utf8).write(to: root.appendingPathComponent("scripts/manifest.txt"))
         let swift = try Self.script(#"""
@@ -716,7 +719,10 @@ struct ScriptGuardTests {
         #expect(!noTest.text.contains("PROBLEM"))
         let noFile = try mutationCheck("test: killsIt\nfile: Packages/PebbleKit/Sources/Fixture/Nowhere.swift\nperl: s~a~b~\n")
         #expect(noFile.status == 1)
-        #expect(noFile.text.contains("no file Packages/PebbleKit/Sources/Fixture/Nowhere.swift"))
+        // Caught up front too, by the manifest check, before anything is built.
+        #expect(noFile.text.contains("mutation-manifest-check: scripts/manifest.txt:1: no file Packages/PebbleKit/Sources/Fixture/Nowhere.swift"),
+                "\(noFile.text)")
+        #expect(!noFile.text.contains("PROBLEM"))
         let stale = try mutationCheck("test: killsIt\nfile: Packages/PebbleKit/Sources/Fixture/Code.swift\nperl: s~gone~x~\n")
         #expect(stale.status == 1)
         #expect(stale.text.contains("no longer applies"))
