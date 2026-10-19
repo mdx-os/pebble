@@ -10,7 +10,10 @@ import UIKit
 public struct ChatView: View {
     @StateObject private var controller: ChatController
     @FocusState private var nameFieldFocused: Bool
+    /// The composer's cursor, so a suggestion can leave it ready to send.
+    @FocusState private var composerFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.sendsFromKeyboard) private var sendsFromKeyboard
     /// The pending "thinking" announcement, cancelled if the reply lands first.
     @State private var thinkingNotice: Task<Void, Never>?
@@ -97,6 +100,7 @@ public struct ChatView: View {
                             .padding(.bottom, Theme.Space.xs)
                     }
                     transcript
+                        .padding(.top, headerScrolls ? 0 : Theme.Space.xxs)
                     if let offer = controller.reconOffer {
                         ReconOfferButtons(question: controller.conversation.turns.first { $0.id == offer.turnID }?.text,
                                           onYes: { controller.acceptReconOffer() },
@@ -110,7 +114,7 @@ public struct ChatView: View {
                     if controller.isReplying {
                         ThinkingDots()
                             .id(Self.thinkingID)
-                            .transition(Motion.arrival(reduceMotion: reduceMotion))
+                            .transition(ChatStyle.arrival(.agent, reduceMotion: reduceMotion))
                     }
                     if let failure = controller.failure {
                         GentleNotice(text: failure)
@@ -120,8 +124,18 @@ public struct ChatView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.bottom, Theme.Space.s)
                 .readableColumn(columnWidth)
-                .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.4, dampingFraction: 0.85),
-                           value: controller.isReplying)
+                .animation(ChatStyle.animation(reduceMotion: reduceMotion), value: controller.isReplying)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            // Lines that scroll up under the header fade out softly rather
+            // than stop at a hard edge. With Increase Contrast they never
+            // fade, so words and bubble edges keep their full contrast.
+            .mask {
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                        .frame(height: ChatStyle.headerFadeHeight(scrolls: headerScrolls, contrast: contrast))
+                    Color.black
+                }
             }
             .onAppear {
                 // Wait one pass so layout is done before jumping to the end.
@@ -163,13 +177,18 @@ public struct ChatView: View {
                 speak(Self.arrival(for: controller, covered: covered))
             }
             }
+            // The composer floats at the foot of the chat on its material,
+            // and rises with the keyboard.
             composer
-                .padding(.vertical, Theme.Space.m)
+                .zIndex(1)
+                .padding(.top, Theme.Space.xs)
+                .padding(.bottom, Theme.Space.s)
                 .readableColumn(columnWidth)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.4, dampingFraction: 0.85),
-                   value: controller.conversation.turns.count)
+        .animation(ChatStyle.animation(reduceMotion: reduceMotion), value: controller.conversation.turns.count)
+        // A light tap as a reply lands, on iPhone only.
+        .replyTap(ChatStyle.ReplyMark(controller.conversation.turns))
         // The send's tap is played by `SendTap` around the whole home
         // screen, so it is felt whichever screen sent it.
         .onAppear {
@@ -194,8 +213,19 @@ public struct ChatView: View {
 
     private var header: some View {
         VStack(spacing: Theme.Space.xs) {
+            // A new chat greets with a larger face; once talking, it steps
+            // back a little so the conversation has the room.
             if let look {
-                CharacterView(look: look, size: 72)
+                let size = controller.conversation.isWaitingForPerson ? ChatStyle.greetingFace : ChatStyle.talkingFace
+                // With Reduce Motion the smaller face never shrinks into
+                // place: it cross fades with the larger one, on top of it.
+                ZStack {
+                    CharacterView(look: look, size: size, isThinking: controller.isReplying)
+                        .id(ChatStyle.faceIdentity(size, reduceMotion: reduceMotion))
+                        .transition(.opacity)
+                }
+                .animation(ChatStyle.animation(reduceMotion: reduceMotion),
+                           value: controller.conversation.isWaitingForPerson)
             } else {
                 AvatarView(initial: controller.displayName.initial)
             }
@@ -375,26 +405,39 @@ public struct ChatView: View {
     }
 
     private var transcript: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
-            ForEach(controller.conversation.turns) { turn in
-                bubble(turn)
+        let turns = controller.conversation.turns
+        let groups = ChatStyle.grouping(of: turns)
+        return VStack(alignment: .leading, spacing: 0) {
+            ForEach(turns) { turn in
+                let grouping = groups[turn.id] ?? ChatStyle.Grouping(isFirst: true, isLast: true)
+                bubble(turn, grouping: grouping)
+                    .padding(.top, turn.id == turns.first?.id ? 0
+                             : grouping.isFirst ? ChatStyle.speakerSpacing : ChatStyle.groupedSpacing)
                     .id(turn.id)
-                    .transition(Motion.arrival(reduceMotion: reduceMotion))
+                    .transition(ChatStyle.arrival(turn.speaker, reduceMotion: reduceMotion))
             }
         }
     }
 
-    private func bubble(_ turn: ChatTurn) -> some View {
-        HStack(alignment: .bottom, spacing: 0) {
+    private func bubble(_ turn: ChatTurn, grouping: ChatStyle.Grouping) -> some View {
+        let shape = ChatStyle.bubbleShape(turn.speaker, grouping)
+        return HStack(alignment: .bottom, spacing: 0) {
             if turn.speaker == .person {
                 Spacer(minLength: Theme.Space.xxxl)
             }
             Text(turn.text)
                 .font(Theme.TypeScale.body)
+                .lineSpacing(ChatStyle.lineSpacing)
                 .multilineTextAlignment(.leading)
                 .padding(.horizontal, Theme.Space.m)
                 .padding(.vertical, Theme.Space.s)
-                .background(bubbleFill(for: turn.speaker), in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+                .background(bubbleFill(for: turn.speaker), in: shape)
+                // With Increase Contrast, each bubble gets an edge too.
+                .overlay {
+                    if contrast == .increased {
+                        shape.stroke(Theme.fieldEdge, lineWidth: 1)
+                    }
+                }
                 .frame(maxWidth: bubbleWidth, alignment: turn.speaker == .agent ? .leading : .trailing)
             if turn.speaker == .agent {
                 Spacer(minLength: Theme.Space.xxxl)
@@ -412,25 +455,31 @@ public struct ChatView: View {
     }
 
     /// The new chat's empty state: a few things to start with, so it never
-    /// opens on a blank page.
+    /// opens on a blank page. A suggestion only puts its words in the
+    /// composer, with the cursor there; nothing is sent until the person
+    /// sends it.
     private var starterJobs: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             Text(FirstConversation.startersHeading)
                 .font(Theme.TypeScale.subheadline.weight(.medium))
                 .foregroundStyle(Theme.secondaryText)
                 .accessibilityAddTraits(.isHeader)
-                .padding(.top, Theme.Space.xxs)
-            ForEach(Array(FirstConversation.jobs.enumerated()), id: \.element.id) { index, job in
-                StarterChip(title: job.title, index: index) {
-                    controller.submit(job.prompt)
+                .padding(.top, Theme.Space.s)
+            FlowRows(spacing: Theme.Space.xs) {
+                ForEach(Array(FirstConversation.jobs.enumerated()), id: \.element.id) { index, job in
+                    StarterChip(title: job.title, symbol: ChatStyle.symbol(forStarter: job.id), index: index) {
+                        controller.fill(withSuggestion: job.prompt)
+                        composerFocused = true
+                    }
+                    .disabled(controller.isReplying)
                 }
-                .disabled(controller.isReplying)
             }
         }
     }
 
     private var composer: some View {
-        Composer(draft: $controller.draft, isBusy: controller.isReplying, keyboardSends: sendsFromKeyboard) {
+        Composer(draft: $controller.draft, isBusy: controller.isReplying, keyboardSends: sendsFromKeyboard,
+                 focus: $composerFocused) {
             controller.send($0)
         }
     }
@@ -445,6 +494,9 @@ final class ChatController: ObservableObject {
     @Published var conversation: Conversation
     @Published var draft = "" {
         didSet {
+            // Any change but a suggestion's own, typed, pasted or put back,
+            // makes the words the person's.
+            if draft != oldValue, !fillingSuggestion { draftIsSuggestion = false }
             // "What you wrote is still here" stops being true once the
             // person clears the words, or changes the ones given back, so
             // the line goes with them.
@@ -454,6 +506,10 @@ final class ChatController: ObservableObject {
             }
         }
     }
+    /// True while the draft is a suggestion a tap put there, untouched
+    /// since, so another tap may swap it. Never guessed from the words.
+    private(set) var draftIsSuggestion = false
+    private var fillingSuggestion = false
     /// The words the last failed send put back in the composer, until its
     /// line goes.
     private(set) var returnedWords: String?
@@ -582,6 +638,17 @@ final class ChatController: ObservableObject {
         naming = next
         names.saveDisplayName(name.text)
         conversation = conversation.renamingAgent(to: name)
+    }
+
+    /// A suggestion was tapped: its words go in the composer, unsent. They
+    /// take an empty field or the last suggestion's place, never the
+    /// person's own words.
+    func fill(withSuggestion suggestion: String) {
+        guard ChatStyle.suggestionTakes(draft, fromSuggestion: draftIsSuggestion) else { return }
+        fillingSuggestion = true
+        draft = suggestion
+        fillingSuggestion = false
+        draftIsSuggestion = true
     }
 
     /// What both composers call, in the chat and on Today: the same care
@@ -958,10 +1025,12 @@ struct ReconOfferButtons: View {
     }
 }
 
-/// One starter in a new chat. The chips arrive one after another and give
-/// a little under a press.
+/// One starter in a new chat: a soft capsule with a symbol. The chips arrive
+/// one after another and give a little under a press. A tap fills the
+/// composer; it never sends.
 struct StarterChip: View {
     let title: String
+    var symbol = "sparkles"
     let index: Int
     let action: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -988,16 +1057,25 @@ struct StarterChip: View {
 
     var body: some View {
         Button(action: action) {
-            Text(title)
-                .font(Theme.TypeScale.body.weight(.medium))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, Theme.Space.m)
-                .padding(.vertical, Theme.Space.s)
-                .background(Theme.accent.opacity(Theme.accentWash), in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
-                .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
-                .pointerHover(in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+            HStack(spacing: Theme.Space.xs) {
+                Image(systemName: symbol)
+                    .font(Theme.TypeScale.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.accentSymbol)
+                    .accessibilityHidden(true)
+                Text(title)
+                    .font(Theme.TypeScale.subheadline.weight(.medium))
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.vertical, Theme.Space.s)
+            .frame(minHeight: 44)
+            .background(Theme.accent.opacity(Theme.accentWash), in: Capsule())
+            .contentShape(Capsule())
+            .pointerHover(in: Capsule())
         }
         .buttonStyle(SoftPressStyle())
+        .accessibilityLabel(title)
         .opacity(shown ? 1 : 0)
         .offset(y: shown ? 0 : Motion.entranceOffset(reduceMotion: reduceMotion))
         .onAppear {
