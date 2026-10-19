@@ -55,9 +55,10 @@ the engine.
   else and then tells it, so a step that ended the run never runs again.
   A held end lives only in that runner's memory, so one task has one
   runner, and a new runner made after the app closes won't know of it.
-- `failed` with `unreadable`: the kept checkpoint says a place the run
-  can't have reached, before the first step or past the last. Nothing
-  runs and nothing is written over it until it is forgotten.
+- `failed` with `unreadable`: the kept checkpoint can't be understood, as
+  one written by another version, or it says a place the run can't have
+  reached, before the first step or past the last. Nothing runs and
+  nothing is written over it until it is forgotten.
 - `stopped(step:)`: the run was cancelled. Running it again picks up there.
 - `waiting(step:question:)`: a step is waiting on the person.
 
@@ -80,6 +81,25 @@ two stores made for it, as `onDevice()` makes a new one each time, never
 lose each other's changes either. Nothing makes that file yet; when
 the kit is wired in, Forget everything has to clear it too.
 
+### A record that can't be understood
+
+The file holds one record for each task, and each is read on its own. A
+record that can't be understood, as one a later version wrote or one
+damaged on disk, makes only its own task unreadable: that task runs
+nothing and says `unreadable`, and every other task keeps its place and
+how it ended. Nothing ever deletes the file or writes over that record
+because it can't be read. A change for another task writes the record
+back byte for byte, and a save for the task itself is refused.
+
+There are two ways past it. A person, or the app for them, forgets the
+task (`CheckpointRunner.forget()`), which lets go of that task's record
+alone; run again, the task starts from its first step, each step still
+carrying its own key. Or a later version that understands the record
+reads it as it was, since nothing in it was lost. A file that isn't a
+set of records at all leaves every task unreadable and can't be changed
+one task at a time; only clearing the whole file, as Forget everything
+will, gets past that.
+
 ## Time in tests
 
 All time comes from an injected `RunClock` and `RunSleeper`. The tests use a
@@ -88,5 +108,7 @@ the fault tests in `RetryResumeTests` run in milliseconds and the same way
 every time. `make mutation-check` breaks each rule on its own (the
 checkpoint save, Retry-After, the transient check, the most tries, the key,
 where a run picks up, a save or remove in two goes, an end that couldn't
-be kept, a lock for each store rather than each file, and a kept place
-outside the steps) and requires those tests to fail.
+be kept, a lock for each store rather than each file, a kept place
+outside the steps, a file deleted or read all or nothing when a record
+can't be understood, and such a record dropped or written over) and
+requires those tests to fail.

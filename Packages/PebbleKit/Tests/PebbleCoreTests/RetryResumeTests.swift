@@ -466,7 +466,7 @@ struct RetryResumeTests {
             let limit = Date(timeIntervalSinceNow: 60)
             while !started.isFinished, store.waitingForFile == 0, Date() < limit { Thread.sleep(forTimeInterval: 0.001) }
         }
-        #expect(await OwnThread(change).value())
+        #expect(await OwnThread(change).value() == true, "the change ended within its limit")
         store.whileHeld = nil
         let started = other.value
         #expect(started != nil, "the change in between ran")
@@ -477,13 +477,78 @@ struct RetryResumeTests {
         Set(store.read().map { Array($0.keys) } ?? [])
     }
 
-    @Test(.scratchFiles) func aFileNoOneCanUnderstandGoes() throws {
+    /// One task's record that can't be understood, as from another version,
+    /// costs that task alone. Reading never changes the file, every other
+    /// task keeps its end, and a change for another task writes the record
+    /// back just as it was. Forgetting the task lets go of it.
+    @Test(.scratchFiles) func aRecordNoOneCanUnderstandCostsOnlyItsOwnTask() async throws {
         let base = try #require(Scratch.folder)
         let file = CheckpointFileStore.location(base: base)
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data("not a checkpoint".utf8).write(to: file)
-        #expect(CheckpointFileStore(fileURL: file).read() == [:])
-        #expect(!FileManager.default.fileExists(atPath: file.path))
+        let at = Date(timeIntervalSince1970: 0)
+        let failed = RunOutcome.failed(step: 0, reason: .refused)
+        let ended = Checkpoint(taskID: "task", ended: failed, savedAt: at)
+        #expect(CheckpointFileStore(fileURL: file).save(ended))
+        let broken = #"{ "taskID": "broken", "finished": "bad", "savedAt": 0 }"#
+        let written = String(decoding: try Data(contentsOf: file), as: UTF8.self)
+        try Data(("{\"broken\": " + broken + "," + written.dropFirst()).utf8).write(to: file)
+        let before = try Data(contentsOf: file)
+
+        let store = CheckpointFileStore(fileURL: file)
+        let tries = Tries()
+        let steps = (0..<2).map { index in
+            RunStep("step \(index)") { attempt in tries.add(attempt); return .done }
+        }
+        #expect(store.read() == ["task": ended])
+        #expect(store.checkpoint("task") == .kept(ended))
+        #expect(store.checkpoint("broken") == .unreadable)
+        #expect(await World(store: store).runner(steps: steps).run() == failed)
+        #expect(await World(store: store).runner(steps: steps, taskID: "broken").run()
+            == .failed(step: 0, reason: .unreadable))
+        #expect(tries.total == 0)
+        #expect(try Data(contentsOf: file) == before, "reading never changes the file")
+        #expect(!store.save(Checkpoint(taskID: "broken", finished: 1, savedAt: at)), "never written over")
+        #expect(try Data(contentsOf: file) == before)
+
+        #expect(store.save(Checkpoint(taskID: "third", finished: 1, savedAt: at)))
+        let after = String(decoding: try Data(contentsOf: file), as: UTF8.self)
+        #expect(after.contains("\"broken\":" + broken), "\(after)")
+        let reopened = CheckpointFileStore(fileURL: file)
+        #expect(Self.keys(reopened) == ["task", "third"])
+        #expect(reopened.checkpoint("broken") == .unreadable)
+        #expect(await World(store: reopened).runner(steps: steps).run() == failed)
+        #expect(tries.total == 0)
+
+        let forgotten = World(store: reopened).runner(steps: steps, taskID: "broken")
+        #expect(forgotten.forget())
+        #expect(reopened.checkpoint("broken") == .missing)
+        #expect(Self.keys(reopened) == ["task", "third"], "forgetting lets go of its own record alone")
+        #expect(await forgotten.run() == .done, "forgotten, it starts from the top")
+        #expect(tries.total == 2)
+        #expect(await World(store: reopened).runner(steps: steps).run() == failed)
+        #expect(tries.total == 2)
+    }
+
+    /// A file that isn't a set of records at all is never deleted or
+    /// written over: every task in it is unreadable and runs nothing.
+    @Test(.scratchFiles) func aFileNoOneCanUnderstandStaysAsItIs() async throws {
+        let base = try #require(Scratch.folder)
+        let file = CheckpointFileStore.location(base: base)
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let at = Date(timeIntervalSince1970: 0)
+        for text in ["not a checkpoint", "", "[]", #"{"task":"#, #"{"task":{},"task":{}}"#] {
+            try Data(text.utf8).write(to: file)
+            let store = CheckpointFileStore(fileURL: file)
+            let tries = Tries()
+            let runner = World(store: store).runner(steps: [RunStep("only") { attempt in tries.add(attempt); return .done }])
+            #expect(store.read() == nil, "\(text)")
+            #expect(store.checkpoint("task") == .unreadable, "\(text)")
+            #expect(await runner.run() == .failed(step: 0, reason: .unreadable), "\(text)")
+            #expect(tries.total == 0)
+            #expect(!store.save(Checkpoint(taskID: "other", finished: 1, savedAt: at)))
+            #expect(!runner.forget())
+            #expect(try Data(contentsOf: file) == Data(text.utf8), "\(text)")
+        }
     }
 
     /// PERMANENT GUARD. Written as the kept tasks are: whole, through a
@@ -632,8 +697,8 @@ private struct World {
         sleeper = TestSleeper(clock: clock, limitsThatEnd: 0, backoffsHang: false)
     }
 
-    func runner(steps: [RunStep]) -> CheckpointRunner {
-        CheckpointRunner(taskID: "task", steps: steps, store: fileStore ?? store, policy: policy,
+    func runner(steps: [RunStep], taskID: String = "task") -> CheckpointRunner {
+        CheckpointRunner(taskID: taskID, steps: steps, store: fileStore ?? store, policy: policy,
                          clock: clock, sleeper: sleeper, random: { 0.5 })
     }
 }
@@ -711,9 +776,10 @@ private final class Box<Value>: @unchecked Sendable {
 
 /// Work on a thread of its own, never the pool, so it may block.
 private final class OwnThread: @unchecked Sendable {
+    private static let timers = DispatchQueue(label: "OwnThread.timers")
     private let lock = NSLock()
     private var result: Bool?
-    private var waiter: CheckedContinuation<Bool, Never>?
+    private var waiters: [UUID: CheckedContinuation<Bool?, Never>] = [:]
 
     init(_ body: @escaping @Sendable () -> Bool) {
         Thread { self.finish(body()) }.start()
@@ -721,26 +787,46 @@ private final class OwnThread: @unchecked Sendable {
 
     var isFinished: Bool { lock.lock(); defer { lock.unlock() }; return result != nil }
 
-    func value() async -> Bool {
-        await withCheckedContinuation { next in
-            lock.lock()
-            if let result {
-                lock.unlock()
-                next.resume(returning: result)
-            } else {
-                waiter = next
-                lock.unlock()
+    /// What the work returned, or nil when it isn't done within `limit` or
+    /// the wait is cancelled, so a lock that is never let go fails the test
+    /// rather than hang it.
+    func value(limit: TimeInterval = 60) async -> Bool? {
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (next: CheckedContinuation<Bool?, Never>) in
+                lock.lock()
+                if let result {
+                    lock.unlock()
+                    next.resume(returning: result)
+                } else if Task.isCancelled {
+                    lock.unlock()
+                    next.resume(returning: nil)
+                } else {
+                    waiters[id] = next
+                    lock.unlock()
+                    Self.timers.asyncAfter(deadline: .now() + limit) { self.release(id) }
+                }
             }
+        } onCancel: {
+            release(id)
         }
+    }
+
+    /// Ends one wait with nothing, when it hasn't ended already.
+    private func release(_ id: UUID) {
+        lock.lock()
+        let next = waiters.removeValue(forKey: id)
+        lock.unlock()
+        next?.resume(returning: nil)
     }
 
     private func finish(_ value: Bool) {
         lock.lock()
         result = value
-        let next = waiter
-        waiter = nil
+        let all = waiters.values
+        waiters = [:]
         lock.unlock()
-        next?.resume(returning: value)
+        for next in all { next.resume(returning: value) }
     }
 }
 

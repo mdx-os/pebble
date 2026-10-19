@@ -77,3 +77,37 @@ perl: s~guard checkpoint\.finished >= 0, checkpoint\.finished <= last else~guard
 test: aKeptPlaceOutsideTheStepsIsUnreadable
 file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
 perl: s~checkpoint\.question == nil \? steps\.count : steps\.count - 1~steps.count~
+
+# A checkpoint file that can't be understood is deleted again, so every
+# task in it, an ended one too, starts from the top.
+test: aFileNoOneCanUnderstandStaysAsItIs
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~guard let records = CheckpointRecords\.split\(data\) else \{ return \.unreadable \}~guard let records = CheckpointRecords.split(data) else { try? FileManager.default.removeItem(at: fileURL); return .kept(Kept()) }~
+
+# The file is read all or nothing: one record that can't be understood
+# makes every task unreadable, an ended one too.
+test: aRecordNoOneCanUnderstandCostsOnlyItsOwnTask
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~kept\.unreadable\[taskID\] = record~return .unreadable~
+
+# A record that can't be understood is dropped: its task reads as never
+# started and runs from the top, and the next write loses the record.
+test: aRecordNoOneCanUnderstandCostsOnlyItsOwnTask
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~kept\.unreadable\[taskID\] = record~_ = record~
+
+# A save for another task leaves out the record that can't be understood.
+test: aRecordNoOneCanUnderstandCostsOnlyItsOwnTask
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~var records = kept\.unreadable~var records: [String: Data] = [:]~
+
+# A save for the task whose record can't be understood writes over it.
+test: aRecordNoOneCanUnderstandCostsOnlyItsOwnTask
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~guard kept\.unreadable\.keys\.allSatisfy\(\{ all\[\$0\] == nil \}\) else \{ return false \}~~
+
+# Forgetting a task leaves its record that can't be understood, so the
+# task stays unreadable for good.
+test: aRecordNoOneCanUnderstandCostsOnlyItsOwnTask
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~kept\.unreadable\[taskID\] = nil\n~~
