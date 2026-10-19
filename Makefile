@@ -37,12 +37,14 @@ build: generate
 ## build-release: compile the app in Release for macOS and the iOS Simulator, so
 ## code kept to Debug (the showcase screens) can never break a shipped build.
 ## Fails first if any configuration but Debug has a cloud address without the
-## current cloud policy and a plain https address; every build checks again,
-## an archive even in Debug.
+## current cloud policy and a plain https address, or signs in with anything
+## but Apple; every build checks again, an archive even in Debug. Fails last
+## if either Release app holds the staging test sign-in.
 build-release: generate
 	sh scripts/release-endpoint-check.sh
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath $(DERIVED)
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath $(DERIVED) CODE_SIGNING_ALLOWED=NO
+	sh scripts/release-binary-check.sh $(DERIVED)/Build/Products/Release $(DERIVED)/Build/Products/Release-iphonesimulator
 
 ## screenshots: first screen on iPhone, iPad and Mac, written to build/screenshots
 screenshots: generate

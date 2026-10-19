@@ -149,6 +149,58 @@ policy version in `CloudPolicy`, `Config/Cloud.xcconfig` and this page,
 together. A build whose settings still name an older version, such as
 `mdx-zero-retention-1`, fails and says the cloud policy changed.
 
+## Signing in on staging
+
+For Debug builds only. Every source of an identity token sits behind one
+seam, `IdentityTokenSource` in `PebbleModel`: Sign in with Apple
+(`AppleIdentityTokenSource`), offered when `PEBBLE_SIGN_IN = apple`; the
+staging test sign-in (`StagingIdentityTokenSource`), which only Debug builds
+contain; and a fake in tests. Whichever it is, the token goes through
+`AppleCloudAuth.accept(identityToken:)` and then the same sign-in hop, with
+the same three values, the same preview and the same yes.
+
+To try it, put these in `Config/Cloud.local.xcconfig`, with a staging
+address in `PEBBLE_CLOUD_ENDPOINT`:
+
+```
+PEBBLE_SIGN_IN[config=Debug] = staging
+PEBBLE_STAGING_SIGN_IN_PASS = (the staging pass, letters only)
+```
+
+The sign-in row in the turn on question, and in the cloud setting while it
+is on, then reads "Test sign-in for this build only". Pressing it sends
+nothing. The first message's preview shows three requests, in the order
+they go, and one yes sends them all:
+
+1. The test sign-in: `POST` to `v1/sign-in/dev-token` under the cloud
+   address, with `{"nonceSha256": "...", "pass": "..."}`, both values
+   covered. `nonceSha256` is the SHA-256 of the nonce made for this one
+   sign-in, each hex digit written as a letter from `a` to `p` (`a` is 0,
+   `p` is 15), so the redactor never takes it for a number. `pass` is the
+   pass from the local config, and nothing else. The relay answers
+   `{"identityToken": "..."}`, a token made for that nonce.
+2. The sign-in hop, as above. Its `appleToken` is the test token, filled in
+   once the test sign-in answers; the preview covers it, and covers the
+   hop's length too, since that token sets it.
+3. The message.
+
+If the test sign-in brings back no token, nothing more is sent and the
+message stays on the device.
+
+Release builds can't use it, checked three ways:
+
+- `scripts/release-endpoint-check.sh` fails every build that could ship
+  (any configuration but Debug, and any archive) unless
+  `PEBBLE_SIGN_IN = apple` and no staging pass reaches the app.
+- `make release-test` builds `PebbleModel` in Release and checks that the
+  only source it can offer is Apple.
+- `make build-release` scans both Release apps for the staging source's
+  type name and its path, and fails if either is there.
+
+The pass reaches the app only through `PEBBLE_STAGING_SIGN_IN_PASS_FOR_APP`,
+which `Config/Cloud.xcconfig` sets for Debug alone, and
+`make local-config-check` fails if a tracked file gives the pass a value.
+
 ## For the owner: before the first real sign-in
 
 These need the Apple developer account, so the code stops short of them:

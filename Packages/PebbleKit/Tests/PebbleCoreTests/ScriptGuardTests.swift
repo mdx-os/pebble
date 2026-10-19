@@ -154,9 +154,86 @@ struct ScriptGuardTests {
 
     // MARK: The Release check
 
-    /// What Xcode sets for a script phase in a build, and only then.
+    /// What Xcode sets for a script phase in a build, and only then, with
+    /// the project's own sign-in settings: Apple, and no staging pass.
     static func inBuild(_ folder: URL) -> [String: String] {
-        ["TARGET_BUILD_DIR": folder.path, "SCRIPT_INPUT_FILE_COUNT": "1"]
+        ["TARGET_BUILD_DIR": folder.path, "SCRIPT_INPUT_FILE_COUNT": "1",
+         "PEBBLE_SIGN_IN": "apple", "PEBBLE_STAGING_SIGN_IN_PASS_FOR_APP": ""]
+    }
+
+    /// A build that could ship signs in with Apple only, with an address or
+    /// without: any other PEBBLE_SIGN_IN, or a staging pass that reaches
+    /// the app, fails, and the pass is never printed. A Debug build that
+    /// isn't an archive may use the staging test sign-in.
+    @Test func aBuildThatCouldShipSignsInWithAppleOnly() throws {
+        let folder = try scratchFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let check = Self.script("release-endpoint-check.sh")
+        let policy = try Self.currentPolicy()
+        func run(_ signIn: String, pass: String = "", endpoint: String = "", configuration: String = "Release",
+                 action: String = "build") throws -> (status: Int32, text: String) {
+            try Self.output(["sh", check], in: folder, environment: Self.inBuild(folder).merging([
+                "CONFIGURATION": configuration, "ACTION": action, "PEBBLE_CLOUD_ENDPOINT": endpoint,
+                "PEBBLE_CLOUD_POLICY": policy, "PEBBLE_SIGN_IN": signIn, "PEBBLE_STAGING_SIGN_IN_PASS_FOR_APP": pass,
+            ]) { $1 })
+        }
+        let address = "https://cloud.example.com"
+        for configuration in ["Release", "TestFlight"] {
+            for endpoint in ["", address] {
+                for other in ["staging", "", "Apple", "apple staging", "fake"] {
+                    let refused = try run(other, endpoint: endpoint, configuration: configuration)
+                    #expect(refused.status == 1, "\(configuration) \(other)")
+                    #expect(refused.text.contains("PEBBLE_SIGN_IN isn't apple"), "\(configuration) \(other)")
+                }
+                #expect(try run("apple", endpoint: endpoint, configuration: configuration).status == 0)
+                #expect(try run(" apple ", endpoint: endpoint, configuration: configuration).status == 0)
+            }
+        }
+        // An archive could ship even in Debug.
+        for action in ["install", "archive"] {
+            #expect(try run("staging", configuration: "Debug", action: action).status == 1, "\(action)")
+            #expect(try run("apple", configuration: "Debug", action: action).status == 0, "\(action)")
+        }
+        #expect(try run("staging", endpoint: address, configuration: "Debug").status == 0)
+        // A pass that reaches a build that could ship fails, unprinted.
+        let pass = "secretpassletters"
+        let leaked = try run("apple", pass: pass)
+        #expect(leaked.status == 1)
+        #expect(leaked.text.contains("The staging test sign-in's pass reaches a Release (build) build"))
+        #expect(!leaked.text.contains(pass))
+        #expect(try run("apple", pass: pass, configuration: "Debug", action: "archive").status == 1)
+        #expect(try run("staging", pass: pass, configuration: "Debug").status == 0)
+    }
+
+    /// On its own, it reads PEBBLE_SIGN_IN and the pass from every
+    /// configuration but Debug, the same way, and fails when they disagree.
+    @Test func theReleaseCheckOnItsOwnSignsInWithAppleOnly() throws {
+        let folder = try scratchFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let check = Self.script("release-endpoint-check.sh")
+        func status(_ release: String, signIn: String?) throws -> (status: Int32, text: String) {
+            let environment = try fakeXcodebuild(in: folder, configurations: ["Debug", "Release"],
+                                                 settings: ["Release": release], signIn: signIn)
+            return try Self.output(["sh", check], in: folder, environment: environment)
+        }
+        let empty = "    PEBBLE_CLOUD_ENDPOINT = "
+        #expect(try status(empty, signIn: "apple").status == 0)
+        for other in ["staging", ""] {
+            let refused = try status(empty, signIn: other)
+            #expect(refused.status == 1, "\(other)")
+            #expect(refused.text.contains("PEBBLE_SIGN_IN isn't apple"), "\(other)")
+        }
+        // No PEBBLE_SIGN_IN at all fails too.
+        #expect(try status(empty, signIn: nil).status == 1)
+        let both = empty + "' '    PEBBLE_SIGN_IN = staging"
+        #expect(try status(both, signIn: "apple").status == 1)
+        let pass = empty + "' '    PEBBLE_STAGING_SIGN_IN_PASS_FOR_APP = secretpassletters"
+        let leaked = try status(pass, signIn: "apple")
+        #expect(leaked.status == 1)
+        #expect(!leaked.text.contains("secretpassletters"))
+        // The project's own settings sign in with Apple.
+        let project = try String(contentsOf: Self.root.appendingPathComponent("Config/Cloud.xcconfig"), encoding: .utf8)
+        #expect(project.contains("\nPEBBLE_SIGN_IN = apple\n"))
     }
 
     /// Inside a build, only Debug that isn't an archive may keep an address.
@@ -333,12 +410,17 @@ struct ScriptGuardTests {
     /// the quote and opens another, so printf gets two arguments and
     /// prints two lines: that is how the disagreeing settings fixture
     /// prints two values.
-    func fakeXcodebuild(in folder: URL, configurations: [String], settings: [String: String]) throws -> [String: String] {
+    ///
+    /// Each configuration also prints `PEBBLE_SIGN_IN = signIn`, as the
+    /// project's own settings do, unless `signIn` is nil.
+    func fakeXcodebuild(in folder: URL, configurations: [String], settings: [String: String],
+                        signIn: String? = "apple") throws -> [String: String] {
         let bin = folder.appendingPathComponent("bin")
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         var cases = ""
         for (configuration, text) in settings {
-            cases += "  \(configuration)) printf '%s\\n' '\(text)' ;;\n"
+            let all = signIn.map { text + "' '    PEBBLE_SIGN_IN = \($0)" } ?? text
+            cases += "  \(configuration)) printf '%s\\n' '\(all)' ;;\n"
         }
         let list = configurations.map { "        \($0)" }.joined(separator: "\n")
         try Self.script("""
@@ -429,6 +511,107 @@ struct ScriptGuardTests {
         }
         let makefile = try String(contentsOf: Self.root.appendingPathComponent("Makefile"), encoding: .utf8)
         #expect(makefile.contains("build-release: generate\n\tsh scripts/release-endpoint-check.sh\n"))
+    }
+
+    // MARK: The staging test sign-in stays out of Release
+
+    /// The scan of a Release app fails when any file in it, the executable
+    /// or a framework, holds the staging test sign-in's type name or its
+    /// path, and when a folder has no app to scan. A clean app passes.
+    @Test func theBinaryCheckFindsTheStagingSignIn() throws {
+        let folder = try scratchFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let check = Self.script("release-binary-check.sh")
+        func app(_ name: String, holding text: String, at path: String = "Contents/MacOS/Sample") throws -> URL {
+            let products = folder.appendingPathComponent(name)
+            let file = products.appendingPathComponent("Sample.app").appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            // Bytes around the words, as in a binary.
+            try (Data([0, 1, 2]) + Data(text.utf8) + Data([0, 255])).write(to: file)
+            return products
+        }
+        let clean = try app("clean", holding: "AppleIdentityTokenSource v1/sign-in v1/reply")
+        #expect(try Self.run(["sh", check, clean.path], in: folder) == 0)
+        // Joined at run time, so this file never holds either whole.
+        let typeName = "26Staging" + "IdentityTokenSource"
+        let path = "v1/sign-in/" + "dev-token"
+        for (name, text, at) in [("type", typeName, "Contents/MacOS/Sample"), ("path", path, "Contents/MacOS/Sample"),
+                                 ("framework", typeName, "Frameworks/PebbleKit.framework/PebbleKit"),
+                                 ("simulator", path, "Sample")] {
+            let held = try app(name, holding: text, at: at)
+            let run = try Self.output(["sh", check, clean.path, held.path], in: folder)
+            #expect(run.status == 1, "\(name)")
+            #expect(run.text.contains("for Debug builds only"), "\(name)")
+        }
+        // No app, or no folder named, fails rather than reading as clean.
+        #expect(try Self.run(["sh", check, folder.appendingPathComponent("nowhere").path], in: folder) == 1)
+        let empty = folder.appendingPathComponent("empty")
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+        #expect(try Self.run(["sh", check, empty.path], in: folder) == 1)
+        #expect(try Self.run(["sh", check], in: folder) == 1)
+    }
+
+    /// `make build-release` scans both Release apps it builds, after
+    /// building them, with nothing that lets the scan fail quietly.
+    @Test func everyReleaseBuildIsScannedForTheStagingSignIn() throws {
+        let makefile = try String(contentsOf: Self.root.appendingPathComponent("Makefile"), encoding: .utf8)
+        let rule = try #require(makefile.range(of: "\nbuild-release: generate\n"))
+        let steps = makefile[rule.upperBound...].split(separator: "\n").prefix { $0.hasPrefix("\t") }
+        #expect(steps.count == 4)
+        #expect(steps.last == "\tsh scripts/release-binary-check.sh $(DERIVED)/Build/Products/Release $(DERIVED)/Build/Products/Release-iphonesimulator")
+        #expect(steps.dropLast().allSatisfy { !$0.contains("release-binary-check") })
+        for loophole in ["|| true", "|| exit 0", "-true"] {
+            #expect(!steps.joined().contains(loophole), "\(loophole)")
+        }
+        let script = try String(contentsOf: URL(fileURLWithPath: Self.script("release-binary-check.sh")), encoding: .utf8)
+        #expect(script.contains("StagingIdentityTokenSource\nsign-in/dev-token\""))
+    }
+
+    /// The pass is held like the address: no tracked config or project.yml
+    /// may give it a value, and the Info.plist key only passes the
+    /// Debug-only setting through.
+    @Test func theLocalConfigCheckFailsWhenATrackedFileSetsThePass() throws {
+        let repo = try scratchFolder()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let check = Self.script("local-config-check.sh")
+        #expect(try Self.run(["git", "init", "--quiet"], in: repo) == 0)
+        let config = repo.appendingPathComponent("Config/Cloud.xcconfig")
+        let fine = "PEBBLE_STAGING_SIGN_IN_PASS =\nPEBBLE_STAGING_SIGN_IN_PASS_FOR_APP[config=Debug] = $(PEBBLE_STAGING_SIGN_IN_PASS)\n"
+        try Data(fine.utf8).write(to: config)
+        #expect(try Self.run(["git", "add", "Config/Cloud.xcconfig"], in: repo) == 0)
+        #expect(try Self.run(["sh", check, repo.path], in: repo) == 0)
+        for line in ["PEBBLE_STAGING_SIGN_IN_PASS = letters\n", "PEBBLE_STAGING_SIGN_IN_PASS[config=Debug] = letters\n"] {
+            try Data((fine + line).utf8).write(to: config)
+            let run = try Self.output(["sh", check, repo.path], in: repo)
+            #expect(run.status == 1, "\(line)")
+            #expect(!run.text.contains("letters"), "\(line)")
+        }
+        try Data(fine.utf8).write(to: config)
+        let project = repo.appendingPathComponent("project.yml")
+        let passThrough = "targets:\n  Pebble:\n    info:\n      properties:\n        PebbleStagingSignInPass: $(PEBBLE_STAGING_SIGN_IN_PASS_FOR_APP)\n"
+        try Data(passThrough.utf8).write(to: project)
+        #expect(try Self.run(["git", "add", "project.yml"], in: repo) == 0)
+        #expect(try Self.run(["sh", check, repo.path], in: repo) == 0)
+        for bad in [passThrough.replacingOccurrences(of: "$(PEBBLE_STAGING_SIGN_IN_PASS_FOR_APP)", with: "letters"),
+                    passThrough + "    settings:\n      PEBBLE_STAGING_SIGN_IN_PASS: letters\n",
+                    passThrough + "    settings:\n      PEBBLE_STAGING_SIGN_IN_PASS_FOR_APP: letters\n"] {
+            try Data(bad.utf8).write(to: project)
+            #expect(try Self.run(["sh", check, repo.path], in: repo) == 1, "\(bad)")
+        }
+    }
+
+    /// The project keeps the pass to Debug: empty in the tracked config,
+    /// handed to the app only through the Debug-only setting.
+    @Test func theProjectKeepsThePassToDebug() throws {
+        let config = try String(contentsOf: Self.root.appendingPathComponent("Config/Cloud.xcconfig"), encoding: .utf8)
+        #expect(config.contains("\nPEBBLE_STAGING_SIGN_IN_PASS =\n"))
+        #expect(config.contains("\nPEBBLE_STAGING_SIGN_IN_PASS_FOR_APP =\n"))
+        #expect(config.contains("\nPEBBLE_STAGING_SIGN_IN_PASS_FOR_APP[config=Debug] = $(PEBBLE_STAGING_SIGN_IN_PASS)\n"))
+        let setters = config.split(separator: "\n").filter { $0.hasPrefix("PEBBLE_STAGING_SIGN_IN_PASS_FOR_APP") }
+        #expect(setters.count == 2, "set only empty, and for Debug")
+        let project = try String(contentsOf: Self.root.appendingPathComponent("project.yml"), encoding: .utf8)
+        #expect(project.contains("        PebbleSignIn: $(PEBBLE_SIGN_IN)\n"))
+        #expect(project.contains("        PebbleStagingSignInPass: $(PEBBLE_STAGING_SIGN_IN_PASS_FOR_APP)\n"))
     }
 
     // MARK: The comment lint
@@ -628,6 +811,12 @@ struct ScriptGuardTests {
         #expect(probe.contains("    || reads([CloudEndpoint.infoKey: \"\", CloudEndpoint.policyKey: policy]) {\n"))
         #expect(probe.contains("if !reads([CloudEndpoint.infoKey: raw, CloudEndpoint.policyKey: policy]) {\n"))
         #expect(probe.contains("let policy = CloudPolicy.currentVersion\n"))
+        // The sign-in sources a Release build can offer are exactly Apple.
+        #expect(probe.contains(#".product(name: "PebbleModel", package: "PebbleKit")"#))
+        #expect(probe.contains("if IdentitySourceKind.allCases != [.apple] {\n"))
+        #expect(probe.contains("guard let apple = offered(\"apple\"), apple is AppleIdentityTokenSource, apple.kind == .apple else {\n"))
+        #expect(probe.contains("for setting in [\"staging\", \"\", \"fake\", \"Apple\", \"dev-token\"] where offered(setting) != nil {\n"))
+        #expect(probe.contains("IdentitySignIn.offered(infoDictionary: [IdentitySignIn.settingKey: setting, \"PebbleStagingSignInPass\": \"letterspass\",\n"))
         #expect(probe.contains("set -eu"))
         for loophole in ["|| true", "exit 0"] {
             #expect(!probe.contains(loophole), "\(loophole)")

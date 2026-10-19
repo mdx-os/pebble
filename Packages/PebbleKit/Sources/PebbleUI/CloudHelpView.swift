@@ -161,6 +161,48 @@ public final class CloudHelp: ObservableObject {
     /// again before it would sign in, so the key is never sent again.
     private(set) var signInKeyMayStay = false
 
+    /// What the sign-in row last came to, said under it. Gone once the
+    /// cloud is turned off, Forget everything runs, or the turn on
+    /// question is answered no.
+    @Published private(set) var signInLine: String?
+    /// True while the offered source is being asked, so the row can't be
+    /// pressed twice.
+    @Published private(set) var signingIn = false
+
+    /// The kind of sign-in this build offers, while the setting can be
+    /// used. Nil for none: then the row isn't shown, nothing is asked, and
+    /// a chat says it needs signing in with Apple (`CloudWords.needsSignIn`).
+    var signInKind: IdentitySourceKind? { isAvailable ? auth.identitySource : nil }
+
+    /// The sign-in row: asks the source this build offers for a sign-in
+    /// token (`CloudAuth.askForIdentityToken`). Nothing reaches the cloud
+    /// from here. Apple's own sheet may show; a token is held for the
+    /// first message's preview, and an ask that would leave the device is
+    /// shown in that preview, above the sign-in, and sent only by its yes.
+    func signIn() async {
+        guard signInKind != nil, !signingIn else { return }
+        signingIn = true
+        defer { signingIn = false }
+        signInLine = Self.line(for: await auth.askForIdentityToken())
+    }
+
+    /// What the row says after asking.
+    static func line(for outcome: IdentitySignInOutcome) -> String? {
+        switch outcome {
+        case .ready: CloudWords.signInReady
+        case .asksWithFirstMessage: CloudWords.testSignInReady
+        case .refused(let line): line
+        case .unavailable: nil
+        }
+    }
+
+    /// The turn on question was answered no: a sign-in started from it is
+    /// let go, so nothing is held for a cloud that stays off.
+    func turnOnDeclined() {
+        auth.dropHeldSignIn()
+        signInLine = nil
+    }
+
     public convenience init(
         store: any CloudHelpStoring,
         endpoint: URL?,
@@ -475,6 +517,7 @@ public final class CloudHelp: ObservableObject {
         withdrawPreviews()
         let keyGone = auth.forget()
         signInKeyMayStay = !keyGone
+        signInLine = nil
         let first = update { $0.turnOff() }
         let line: Status?
         if first.isDone || update({ $0.turnOff() }).isDone {
@@ -556,6 +599,7 @@ public final class CloudHelp: ObservableObject {
         // kept for Forget everything's line (`signInKeyMayStay`).
         endOpenCloudChats()
         signInKeyMayStay = !auth.forget()
+        signInLine = nil
         newPrivateWord = ""
         guard storeOpened else { return try eraseUnopenedFile() }
         let current = try? store.load()
@@ -733,10 +777,15 @@ public struct CloudHelpView: View {
         self.init(help: help, place: place, asking: false)
     }
 
-    /// `asking` opens on the turn on question, for screenshots.
-    init(help: CloudHelp, place: PrivacyPlace, asking: Bool) {
+    /// Where the turn on question opens scrolled to, for screenshots.
+    private var askAnchor: UnitPoint?
+
+    /// `asking` opens on the turn on question, for screenshots, scrolled
+    /// to `askAnchor` when one is given.
+    init(help: CloudHelp, place: PrivacyPlace, asking: Bool, askAnchor: UnitPoint? = nil) {
         self.help = help
         self.place = place
+        self.askAnchor = askAnchor
         _asksToTurnOn = State(initialValue: asking)
     }
 
@@ -777,8 +826,10 @@ public struct CloudHelpView: View {
             }
         }
         .sheet(isPresented: $asksToTurnOn) {
-            CloudTurnOnSheet(onYes: { asksToTurnOn = false; act { $0.confirmTurnOn() } },
-                             onNo: { asksToTurnOn = false })
+            CloudTurnOnSheet(help: help,
+                             onYes: { asksToTurnOn = false; act { $0.confirmTurnOn() } },
+                             onNo: { asksToTurnOn = false; help.turnOnDeclined() })
+                .defaultScrollAnchor(askAnchor)
         }
     }
 
@@ -816,6 +867,11 @@ public struct CloudHelpView: View {
                 .font(.subheadline)
                 .foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
+            // While on, so the person can sign in again, as after the app
+            // was closed, without turning the cloud off and on.
+            if help.usesCloudForNewChats {
+                CloudSignInRow(help: help)
+            }
         }
         .padding(16)
         .card(scheme)
@@ -1046,9 +1102,61 @@ struct CloudHelpRow: View {
     }
 }
 
+/// The sign-in row: one button that asks the source this build offers for
+/// a sign-in token, and the line it came to. Not shown when the build
+/// offers none. Nothing reaches the cloud from here (`CloudHelp.signIn`).
+struct CloudSignInRow: View {
+    @ObservedObject var help: CloudHelp
+
+    var body: some View {
+        if let kind = help.signInKind {
+            VStack(alignment: .leading, spacing: 6) {
+                Button { Task { await help.signIn() } } label: {
+                    Label(Self.title(kind), systemImage: Self.symbol(kind))
+                }
+                .buttonStyle(SoftButtonStyle(neutral: true))
+                .disabled(help.signingIn)
+                .accessibilityIdentifier("cloudSignIn")
+                if let line = help.signInLine {
+                    Text(line)
+                        .font(.footnote)
+                        .foregroundStyle(Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("cloudSignInLine")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onChange(of: help.signInLine) { _, line in
+                if let line { AccessibilityNotification.Announcement(line).post() }
+            }
+        }
+    }
+
+    /// The button's words: Sign in with Apple, or the staging test
+    /// sign-in, which says it is for this build only.
+    static func title(_ kind: IdentitySourceKind) -> String {
+        switch kind {
+        case .apple: CloudWords.signInWithApple
+        #if DEBUG
+        case .staging: CloudWords.testSignIn
+        #endif
+        }
+    }
+
+    static func symbol(_ kind: IdentitySourceKind) -> String {
+        switch kind {
+        case .apple: "apple.logo"
+        #if DEBUG
+        case .staging: "testtube.2"
+        #endif
+        }
+    }
+}
+
 /// The question before the cloud is turned on, saying in plain words what
-/// changes.
+/// changes, with the sign-in row when the build offers one.
 struct CloudTurnOnSheet: View {
+    @ObservedObject var help: CloudHelp
     let onYes: () -> Void
     let onNo: () -> Void
     @Environment(\.colorScheme) private var scheme
@@ -1081,6 +1189,7 @@ struct CloudTurnOnSheet: View {
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .card(scheme)
+                CloudSignInRow(help: help)
                 VStack(spacing: 6) {
                     Button(CloudWords.askYes, action: onYes)
                         .buttonStyle(PrimaryButtonStyle())
@@ -1124,20 +1233,36 @@ struct CloudPreviewSheet: View {
     /// - the sign-in hop's whole body, but for the name of each part when
     ///   it is a JSON object (`maskedSignInBody`);
     /// - nothing of the message's body, which is the redacted chat.
+    /// A token ask, when there is one, shows above the hop like a hop, its
+    /// whole body covered, the pass included; the hop's length is covered
+    /// then too, since the token it waits for sets it (`coversLength`).
     /// The names still show, so the person sees that a value goes and
     /// under what name. The sheet says the values are covered
     /// (`CloudWords.previewSignInCovered`).
     static func displayedText(_ preview: CloudPreview) -> String {
-        func shown(_ request: CloudRequest, isSignInHop: Bool) -> String {
+        func shown(_ request: CloudRequest, isSignInHop: Bool, coversLength: Bool = false) -> String {
             let lines = CloudRequest.shownHeaders(url: request.url, headers: request.headers, body: request.body).map {
-                "\($0.name): " + (isSignIn($0.name, $0.value) ? signInMask : $0.value)
+                "\($0.name): " + (isCovered($0.name, $0.value, coversLength: coversLength) ? signInMask : $0.value)
             }
             return ([request.method + " " + request.url.absoluteString] + lines).joined(separator: "\n")
                 + "\n\n" + (isSignInHop ? maskedSignInBody(request.body) : request.text)
         }
         guard let signIn = preview.signIn else { return shown(preview.request, isSignInHop: false) }
-        return CloudWords.previewSignInFirst + "\n" + shown(signIn, isSignInHop: true) + "\n\n"
+        let asking = preview.ask.map { CloudWords.previewAskFirst + "\n" + shown($0, isSignInHop: true) + "\n\n" } ?? ""
+        return asking + (preview.ask == nil ? CloudWords.previewSignInFirst : CloudWords.previewThenSignIn) + "\n"
+            + shown(signIn, isSignInHop: true, coversLength: coversLength(preview)) + "\n\n"
             + CloudWords.previewThenMessage + "\n" + shown(preview.request, isSignInHop: false)
+    }
+
+    /// True when the hop's length is covered: its token comes from the ask
+    /// above it, so the length isn't known until then, and says something
+    /// of the token once it is.
+    static func coversLength(_ preview: CloudPreview) -> Bool { preview.tokenField != nil }
+
+    /// A label whose value the card and VoiceOver cover: a sign-in label,
+    /// and the length of a hop that waits for its token.
+    static func isCovered(_ name: String, _ value: String, coversLength: Bool) -> Bool {
+        isSignIn(name, value) || (coversLength && name == "Content-Length")
     }
 
     /// What covers a sign-in value on the card. Always the same length, so
@@ -1206,21 +1331,28 @@ struct CloudPreviewSheet: View {
             let covered = coversAnything(preview) ? [CloudWords.previewSignInCovered] : []
             return covered + spokenLines(preview.request, isSignInHop: false)
         }
-        return [CloudWords.previewSignInFirst, CloudWords.previewSignInCovered]
+        // A token ask is read first, as the card shows it, then the hop
+        // under its own heading.
+        let first = preview.ask.map {
+            [CloudWords.previewSignInCovered, CloudWords.previewAskFirst] + spokenLines($0, isSignInHop: true)
+                + [CloudWords.previewThenSignIn]
+        } ?? [CloudWords.previewSignInFirst, CloudWords.previewSignInCovered]
+        return first
             + (carriesAppleSignIn(preview) ? [CloudWords.previewSignInCarries] : [])
-            + spokenLines(signIn, isSignInHop: true)
+            + (coversLength(preview) ? [CloudWords.previewTokenFromAsk] : [])
+            + spokenLines(signIn, isSignInHop: true, coversLength: coversLength(preview))
             + [CloudWords.previewThenMessage]
             + (preview.sessionHeader == nil ? [] : [CloudWords.previewSessionFromSignIn])
             + spokenLines(preview.request, isSignInHop: false)
     }
 
-    private static func spokenLines(_ request: CloudRequest, isSignInHop: Bool) -> [String] {
+    private static func spokenLines(_ request: CloudRequest, isSignInHop: Bool, coversLength: Bool = false) -> [String] {
         var lines = [CloudWords.spokenAddress(request.url.absoluteString)]
         // A fixed label, or one the system adds, is read in full. Any other
         // is sign-in, whose value is a secret: VoiceOver says only that it
         // is hidden, so neither it nor its length is ever spoken aloud.
         let labels = CloudRequest.shownHeaders(url: request.url, headers: request.headers, body: request.body).map {
-            isSignIn($0.name, $0.value) ? CloudWords.spokenSignIn($0.name) : "\($0.name), \($0.value)"
+            isCovered($0.name, $0.value, coversLength: coversLength) ? CloudWords.spokenSignIn($0.name) : "\($0.name), \($0.value)"
         }
         if !labels.isEmpty { lines.append(CloudWords.spokenLabels(labels)) }
         // Every body is read, never skipped. A sign-in body is read as the
@@ -1263,6 +1395,11 @@ struct CloudPreviewSheet: View {
                         Label(CloudWords.previewSignInCarries, systemImage: "apple.logo")
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityIdentifier("cloudPreviewSignInCarries")
+                    }
+                    if Self.coversLength(preview) {
+                        Label(CloudWords.previewTokenFromAsk, systemImage: "testtube.2")
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("cloudPreviewTokenFromAsk")
                     }
                     if preview.sessionHeader != nil {
                         Label(CloudWords.previewSessionFromSignIn, systemImage: "key.horizontal")

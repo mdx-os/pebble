@@ -252,7 +252,7 @@ perl: s~sign-in value, hidden"~sign-in value, 7 characters"~
 
 test: voiceOverNeverReadsASignInValue
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~\(isSignIn\(\$0\.name, \$0\.value\) \? signInMask : \$0\.value\)~\$0.value~
+perl: s~\(isCovered\(\$0\.name, \$0\.value, coversLength: coversLength\) \? signInMask : \$0\.value\)~\$0.value~
 
 # Sign-in is a hop in the same preview, sent only by its yes.
 test: signInNeverGoesWithoutAYesToThePreviewThatShowsIt turningOnSendsNothingAndSignInWaitsForThePreviewsYes
@@ -261,7 +261,7 @@ perl: s~(\n\s*guard await reviewer\.review\(preview\) == \.send)~\n        if le
 
 test: theYesSendsTheSignInHopThenTheMessageExactlyAsShown turningOnSendsNothingAndSignInWaitsForThePreviewsYes
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
-perl: s~if let signIn = preview\.signIn \{~if let signIn = preview.signIn, false {~
+perl: s~if var signIn = preview\.signIn \{~if var signIn = preview.signIn, false {~
 
 test: aSignInIsShownAsAHopInTheSamePreview turningOnSendsNothingAndSignInWaitsForThePreviewsYes
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
@@ -286,7 +286,7 @@ perl: s~try checkOn\(\)\n(\s*)try session\.handOver \{ auth\.signedIn\(answer\) 
 # The end and the hand over share the chat's lock, so a forget can't land between them.
 test: anEndWaitsForAHandOverUnderWay
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
-perl: s~try lock\.withLock \{\n\s*if let endedBy \{ throw endedBy \}\n\s*try handOver\(\)\n\s*\}~if let endedBy = lock.withLock({ endedBy }) { throw endedBy }\n        try handOver()~
+perl: s~try lock\.withLock \{\n\s*if let endedBy \{ throw endedBy \}\n\s*return try handOver\(\)\n\s*\}~if let endedBy = lock.withLock({ endedBy }) { throw endedBy }\n        return try handOver()~
 
 # A reply holds something from its yes until it is back, so Forget everything always ends it.
 test: aSignInAnswerNeverOutlivesTheForgetThatEndsTheChat aReplyUnderWayHoldsSomethingBetweenSends
@@ -558,11 +558,11 @@ perl: s~names\[2\]: key\]~names[2]: key, "name": "made"]~
 
 test: theSignInHopCarriesExactlyTheThreeValues
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
-perl: s~, names\[1\]: held\.nonce, names\[2\]: key\]~, names[2]: key]~
+perl: s~, names\[1\]: nonce, names\[2\]: key\], ask\)~, names[2]: key], ask)~
 
 test: theSignInHopCarriesExactlyTheThreeValues theHopPassesThePreviewChecks
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
-perl: s~names\[0\]: Self\.letters\(held\.token\)~names[0]: held.token~
+perl: s~\(Self\.letters\(held\.token\), held\.nonce, nil\)~(held.token, held.nonce, nil)~
 
 test: theSignInHopCarriesExactlyTheThreeValues
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
@@ -598,7 +598,7 @@ perl: s~SHA256\.hash\(data: Data\(nonce\.utf8\)\)~SHA256.hash(data: Data((nonce 
 
 test: theAppleRequestAsksForNoScopesAndCarriesTheNoncesHash theCodeReadsOnlyTheIdentityToken
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
-perl: s~request\.nonce = hashed~request.nonce = "abc"~
+perl: s~request\.nonce = nonceSha256~request.nonce = "abc"~
 
 test: anOddTokenIsRefused
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
@@ -610,7 +610,7 @@ perl: s~guard \(1\.\.\.maxTokenLength\)\.contains\(token\.count\) else~guard !to
 
 test: afterTheHopTheAuthHoldsNoTokenOrNonce noTokenMeansNoHopAndNoKey theSessionIsKeptOnlyWhenItIsLetters
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
-perl: s~(guard let held = unsent else \{ return nil \})\n\s*unsent = nil~$1~
+perl: s~(if let held = unsent \{)\n\s*unsent = nil~$1~
 
 test: afterTheHopTheAuthHoldsNoTokenOrNonce turningTheCloudOffRemovesTheDeviceKey forgetEverythingRemovesTheDeviceKey
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
@@ -622,23 +622,23 @@ perl: s~(public func forget\(\) -> Bool \{\n\s*let gone = lock\.withLock \{\n\s*
 
 test: afterTheHopTheAuthHoldsNoTokenOrNonce
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
-perl: s~lock\.withLock \{ waitingNonce = nil \}~lock.withLock { }~
+perl: s~lock\.withLock \{\n\s*waitingNonce = nil\n(\s*)pendingAsk = nil\n(\s*)\}\n(\s*)CloudLog\.note\("Apple sign-in ended~lock.withLock {\n$1pendingAsk = nil\n$2}\n$3CloudLog.note("Apple sign-in ended~
 
 test: theSessionIsKeptOnlyWhenItIsLetters
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
-perl: s~guard let fields = try takeSignInFields\(\), !signedIn,~guard let fields = try takeSignInFields(),~
+perl: s~guard !signedIn, let body = try\? CloudSignIn\.encoded\(hop\.fields\) else \{~guard let body = try? CloudSignIn.encoded(hop.fields) else {~
 
 test: theSessionIsKeptOnlyWhenItIsLetters
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
-perl: s~guard let fields = try takeSignInFields\(\), !signedIn,~guard !signedIn, let fields = try takeSignInFields(),~
+perl: s~let signedIn = lock\.withLock \{ session != nil \}\n(\s*)guard let hop = try takeHop\(\) else \{ return nil \}~let signedIn = lock.withLock { session != nil }\n$1guard !signedIn, let hop = try takeHop() else { return nil }~
 
 test: theTokenIsNeverKeptOrLogged nothingInTheCloudCodeLogsAValue
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
-perl: s~(guard let held = unsent else \{ return nil \})~$1\n            try? keychain.write(held.token, for: "cloud.token")~
+perl: s~(if let held = unsent \{)~$1\n                try? keychain.write(held.token, for: "cloud.token")~
 
 test: theTokenIsNeverKeptOrLogged
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
-perl: s~(guard let held = unsent else \{ return nil \})~$1\n            UserDefaults.standard.set(held.nonce, forKey: "cloud.nonce")~
+perl: s~(if let held = unsent \{)~$1\n                UserDefaults.standard.set(held.nonce, forKey: "cloud.nonce")~
 
 test: nothingInTheCloudCodeLogsAValue
 file: Packages/PebbleKit/Sources/PebbleModel/CloudLog.swift
@@ -1252,7 +1252,7 @@ perl: s~CloudHelp\(store: store, endpoint: endpoint, memory: memory, auth: auth\
 
 test: theAppLetsAnUnopenedSettingEraseItsFile theFallbackMemoryScreenErasesKeptPrivateWords theFallbackMemoryScreenSaysWhenTheCloudWentOffWithTheWords forgetEverythingErasesWordsKeptInASettingThatCouldntBeOpened turningOffAndForgettingTellSignInToForget
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~(endOpenCloudChats\(\)\n)\s*signInKeyMayStay = !auth\.forget\(\)\n(\s*newPrivateWord = "")~$1$2~
+perl: s~(endOpenCloudChats\(\)\n)\s*signInKeyMayStay = !auth\.forget\(\)\n(\s*signInLine = nil\n\s*newPrivateWord = "")~$1$2~
 
 # Each newer line is in CloudWords.all, which every copy check reads.
 test: everyCloudLineIsInTheCopyLists
@@ -1383,9 +1383,207 @@ perl: s~\n\s*case \.oldKeyStayed: CloudWords\.oldKeyStayed~~
 
 test: eachFailureHasItsOwnLine
 file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
-perl: s~\.ended, \.needsSignIn, \.noSession, \.oldKeyStayed: true\n(\s*)case \.unreadableReply, nil: false~.ended: true\n$1case .unreadableReply, .needsSignIn, .noSession, .oldKeyStayed, nil: false~
+perl: s~\.ended, \.needsSignIn, \.signInFirst, \.noToken, \.noSession,\n\s*\.oldKeyStayed: true\n(\s*)case \.unreadableReply, nil: false~.ended, .signInFirst, .noToken: true\n$1case .unreadableReply, .needsSignIn, .noSession, .oldKeyStayed, nil: false~
 
 # A name of the letters a to p never matches inside a sign-in value: names match as whole words.
 test: namesOfTheLettersAToPNeverRefuseTheSignIn
 file: Packages/PebbleKit/Sources/PebbleCore/Redactor.swift
 perl: s~return regex\(#"\(\?<!\[~return regex(#"(?<=[~
+
+# Every identity token source sits behind one seam, and the hop after it doesn't change.
+test: aTokenFromTheSourceGoesThroughTheSameHop
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~\(token, nonce, ask\) = \(Self\.letters\(held\.token\), held\.nonce, nil\)~(token, nonce, ask) = (Self.letters(held.token), held.nonce + "a", nil)~
+
+test: aSourcesTokenIsCheckedByAccept
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~try accept\(identityToken: token\)\n(\s*)return \.ready~lock.withLock { unsent = (String(decoding: token, as: UTF8.self), waitingNonce ?? "") }\n$1return .ready~
+
+test: aRefusalHoldsNothingAndSaysWhy theRowSaysWhyItCouldNotSignIn
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~appleSignInEnded\(\)\n(\s*)return \.refused\(line\)~return .refused(line)~
+
+test: withNoSourceNothingIsAskedOrSent
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~throw auth\.identitySource == nil \? CloudModelError\.needsSignIn : CloudModelError\.signInFirst~throw CloudModelError.signInFirst~
+
+test: withASourceButNoSignInTheChatSaysToSignIn
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~throw auth\.identitySource == nil \? CloudModelError\.needsSignIn : CloudModelError\.signInFirst~throw CloudModelError.needsSignIn~
+
+# A token ask goes in the same preview, above the hop, and only its token is filled in after.
+test: theTokenAskGoesInTheSamePreviewAboveTheHop
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~signIn = try Self\.signIn\(after: preview, carrying: token, redactor: redactor\)~_ = try Self.signIn(after: preview, carrying: token, redactor: redactor)~
+
+test: theTokenAskGoesInTheSamePreviewAboveTheHop
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~public var hops: \[CloudRequest\] \{ \[ask, signIn, request\]\.compactMap \{ \$0 \} \}~public var hops: [CloudRequest] { [signIn, ask, request].compactMap { \$0 } }~
+
+test: aDeclinedTokenAskSendsNothingAndHoldsNothing
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~defer \{ if signIn\?\.ask != nil \{ auth\.dropTokenAsk\(\) \} \}~_ = signIn~
+
+test: aTokenAskWithNoTokenSendsNothingMore
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~guard let held, let token = held\.read\(answer\) else \{~guard let held, let token = held.read(answer) ?? Optional(Data("a.b.c".utf8)) else {~
+
+test: aTokenAskIsHeldToTheHopsRules
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~(\n\s*)signInTexts \+= Array\(fields\.keys\) \+ Array\(fields\.values\)\n(\s*)return CloudRequest\(url: url, headers: try CloudHeaders\.merged\(with: \[:\]\)~${1}_ = fields\n${2}return CloudRequest(url: url, headers: try CloudHeaders.merged(with: [:])~
+
+test: aTokenAskIsHeldToTheHopsRules
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~if let tokenField = \$0\.tokenField, fields\[tokenField\] != "" \{ throw CloudTransportError\.signInBodyRefused \}~_ = 0~
+
+test: aTokenAskIsHeldToTheHopsRules
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~guard let url = asked\.url\(under: endpoint\) else \{ throw CloudTransportError\.signInPathRefused\(ask\.path\) \}~let url = endpoint.appendingPathComponent(ask.path)~
+
+# Which source a build offers.
+test: eachSourceIsOfferedOnlyWhenTheBuildSaysSo
+file: Packages/PebbleKit/Sources/PebbleModel/IdentityTokenSource.swift
+perl: s~guard endpoint != nil else \{ return nil \}~_ = endpoint~
+
+test: eachSourceIsOfferedOnlyWhenTheBuildSaysSo
+file: Packages/PebbleKit/Sources/PebbleModel/StagingIdentityTokenSource.swift
+perl: s~!pass\.isEmpty,\n\s*!pass\.hasPrefix\("\$\("\) else~!pass.isEmpty else~
+
+test: eachSourceIsOfferedOnlyWhenTheBuildSaysSo
+file: Packages/PebbleKit/Sources/PebbleModel/IdentityTokenSource.swift
+perl: s~\.trimmingCharacters\(in: \.whitespacesAndNewlines\)\n(\s*)switch setting \{~.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()\n$1switch setting {~
+
+test: theStagingSourceAsksWithTheHashAndThePass
+file: Packages/PebbleKit/Sources/PebbleModel/StagingIdentityTokenSource.swift
+perl: s~fields: \["nonceSha256": hash, "pass": pass\]~fields: ["nonceSha256": nonceSha256, "pass": pass]~
+
+test: theStagingSourceAsksWithTheHashAndThePass
+file: Packages/PebbleKit/Sources/PebbleModel/StagingIdentityTokenSource.swift
+perl: s~let token = reply\["identityToken"\], !token\.isEmpty else~let token = reply["identityToken"] ?? reply["session"] else~
+
+test: appleSaysPlainlyWhenSignInIsNotSetUp
+file: Packages/PebbleKit/Sources/PebbleModel/AppleIdentityTokenSource.swift
+perl: s~case \.unknown: \.refused\(CloudWords\.appleSignInNotSetUp\)~case .unknown: .refused(CloudWords.appleSignInFailed)~
+
+test: appleSaysPlainlyWhenSignInIsNotSetUp
+file: Packages/PebbleKit/Sources/PebbleModel/AppleIdentityTokenSource.swift
+perl: s~case \.canceled: \.refused\(CloudWords\.appleSignInCancelled\)~case .canceled: .refused(CloudWords.appleSignInFailed)~
+
+test: theCodeReadsOnlyTheIdentityToken
+file: Packages/PebbleKit/Sources/PebbleModel/AppleIdentityTokenSource.swift
+perl: s~let token = credential\.identityToken, !token\.isEmpty else~let token = credential.identityToken, !token.isEmpty, credential.email != "a" else~
+
+# The sign-in row asks the source the build offers, and says what came of it.
+test: theSignInRowAsksTheOfferedSource
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~var signInKind: IdentitySourceKind\? \{ isAvailable \? auth\.identitySource : nil \}~var signInKind: IdentitySourceKind? { auth.identitySource }~
+
+test: theSignInRowAsksTheOfferedSource
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~case \.ready: CloudWords\.signInReady~case .ready: nil~
+
+test: theSignInRowAsksTheOfferedSource
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~case \.apple: CloudWords\.signInWithApple~case .apple: CloudWords.testSignIn~
+
+test: theTestSignInSaysItIsForThisBuildOnly
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~case \.asksWithFirstMessage: CloudWords\.testSignInReady~case .asksWithFirstMessage: CloudWords.signInReady~
+
+test: aSignInIsLetGoWhenTheCloudStaysOff
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~auth\.dropHeldSignIn\(\)\n(\s*)signInLine = nil~signInLine = nil~
+
+test: aSignInIsLetGoWhenTheCloudStaysOff
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~pendingAsk = nil\n(\s*)asked = nil\n(\s*)return removeKey\(\)~return removeKey()~
+
+test: aSignInIsLetGoWhenTheCloudStaysOff
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~signInKeyMayStay = !auth\.forget\(\)\n(\s*)signInLine = nil~signInKeyMayStay = !auth.forget()~
+
+# The preview shows a token ask above the hop, every value covered, and the hop's length too.
+test: thePreviewShowsTheTestSignInAboveTheHopWithThePassCovered
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~static func coversLength\(_ preview: CloudPreview\) -> Bool \{ preview\.tokenField != nil \}~static func coversLength(_ preview: CloudPreview) -> Bool { false }~
+
+test: thePreviewShowsTheTestSignInAboveTheHopWithThePassCovered
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~CloudWords\.previewAskFirst \+ "\\n" \+ shown\(\$0, isSignInHop: true\)~CloudWords.previewAskFirst + "\\n" + shown(\$0, isSignInHop: false)~
+
+test: thePreviewShowsTheTestSignInAboveTheHopWithThePassCovered
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~\[CloudWords\.previewSignInCovered, CloudWords\.previewAskFirst\] \+ spokenLines\(\$0, isSignInHop: true\)~[CloudWords.previewSignInCovered, CloudWords.previewAskFirst] + spokenLines(\$0, isSignInHop: false)~
+
+test: thePreviewShowsTheTestSignInAboveTheHopWithThePassCovered
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~\+ \(coversLength\(preview\) \? \[CloudWords\.previewTokenFromAsk\] : \[\]\)~+ []~
+
+test: withoutAnAskThePreviewIsUnchanged
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~return asking \+ \(preview\.ask == nil \? CloudWords\.previewSignInFirst : CloudWords\.previewThenSignIn\)~return asking + CloudWords.previewThenSignIn~
+
+test: theNewFailuresHaveTheirLines
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~case \.signInFirst: CloudWords\.signInFirst~case .signInFirst: CloudWords.needsSignIn~
+
+test: theNewFailuresHaveTheirLines
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~CloudWords\.oldKeyStayed, CloudWords\.noToken\]\.contains\(failure\)~CloudWords.oldKeyStayed].contains(failure)~
+
+# Release can never use the staging test sign-in.
+test: aBuildThatCouldShipSignsInWithAppleOnly
+file: scripts/release-endpoint-check.sh
+perl: s~\n  check_sign_in "\$CONFIGURATION \(\$action\)"[^\n]*~~
+
+test: aBuildThatCouldShipSignsInWithAppleOnly theReleaseCheckOnItsOwnSignsInWithAppleOnly
+file: scripts/release-endpoint-check.sh
+perl: s~if ! blank "\$3"; then~if false; then~
+
+test: theReleaseCheckOnItsOwnSignsInWithAppleOnly
+file: scripts/release-endpoint-check.sh
+perl: s~\n  check_sign_in "\$configuration" "\$sign_ins" "\$passes"~~
+
+test: theReleaseCheckOnItsOwnSignsInWithAppleOnly
+file: Config/Cloud.xcconfig
+perl: s~\nPEBBLE_SIGN_IN = apple\n~\nPEBBLE_SIGN_IN = staging\n~
+
+test: theBinaryCheckFindsTheStagingSignIn
+file: scripts/release-binary-check.sh
+perl: s~grep -r -l -a -F -e~grep -l -a -F -e~
+
+test: theBinaryCheckFindsTheStagingSignIn
+file: scripts/release-binary-check.sh
+perl: s~Build Release first\."\n    exit 1~Build Release first."\n    continue~
+
+test: theBinaryCheckFindsTheStagingSignIn everyReleaseBuildIsScannedForTheStagingSignIn
+file: scripts/release-binary-check.sh
+perl: s~words="StagingIdentityTokenSource\nsign-in/dev-token"~words="StagingIdentityTokenSource"~
+
+test: everyReleaseBuildIsScannedForTheStagingSignIn
+file: Makefile
+perl: s~\n\tsh scripts/release-binary-check\.sh [^\n]*~~
+
+test: theLocalConfigCheckFailsWhenATrackedFileSetsThePass
+file: scripts/local-config-check.sh
+perl: s~echo "local-config-check: \$config sets PEBBLE_STAGING_SIGN_IN_PASS\.[^\n]*\n(\s*)exit 1~true~
+
+test: theLocalConfigCheckFailsWhenATrackedFileSetsThePass
+file: scripts/local-config-check.sh
+perl: s~if \[ -n "\$pass_values" \] \|\| \[ -n "\$pass_passed" \]; then~if false; then~
+
+test: theProjectKeepsThePassToDebug
+file: Config/Cloud.xcconfig
+perl: s~PEBBLE_STAGING_SIGN_IN_PASS_FOR_APP\[config=Debug\]~PEBBLE_STAGING_SIGN_IN_PASS_FOR_APP[config=Release]~
+
+test: theProjectKeepsThePassToDebug
+file: project.yml
+perl: s~PebbleStagingSignInPass: \$\(PEBBLE_STAGING_SIGN_IN_PASS_FOR_APP\)~PebbleStagingSignInPass: \$(PEBBLE_STAGING_SIGN_IN_PASS)~
+
+test: theReleaseProbeRunsTheShippedCode
+file: scripts/release-probe.sh
+perl: s~if IdentitySourceKind\.allCases != \[\.apple\] \{~if false {~
+
+test: theReleaseProbeRunsTheShippedCode
+file: scripts/release-probe.sh
+perl: s~for setting in \["staging", "", "fake", "Apple", "dev-token"\] where~for setting in [""] where~

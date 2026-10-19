@@ -17,6 +17,12 @@
 # else fails, with a line saying what to fix. The address itself is never
 # printed: it is meant for one machine, and build logs are not.
 #
+# Every build that could ship, with an address or without, must also sign
+# in with Apple only: PEBBLE_SIGN_IN equal to `apple`, and no staging test
+# sign-in pass reaching the app (PEBBLE_STAGING_SIGN_IN_PASS_FOR_APP
+# empty). The staging test sign-in is for Debug builds that aren't
+# archives. The pass is never printed either.
+#
 # Two ways in:
 # - The Run Script phase in project.yml runs it inside every build of the
 #   app, with CONFIGURATION, ACTION, PEBBLE_CLOUD_ENDPOINT and
@@ -89,12 +95,29 @@ check_shipping() {
   fi
 }
 
+# Passes a build that could ship only when it signs in with Apple, with
+# PEBBLE_SIGN_IN $2, and no staging pass $3 reaches the app. $1 names the
+# build. Neither value is printed.
+check_sign_in() {
+  if [ "$(printf '%s' "$2" | tr -d '[:space:]')" != apple ]; then
+    echo "error: PEBBLE_SIGN_IN isn't apple for a $1 build, which could ship. A build that could ship signs in with Apple only."
+    echo "error: Set PEBBLE_SIGN_IN = apple in Config/Cloud.xcconfig. The staging test sign-in is for Debug builds only: set PEBBLE_SIGN_IN[config=Debug] = staging in Config/Cloud.local.xcconfig, and build Debug (not an archive) to try it."
+    exit 1
+  fi
+  if ! blank "$3"; then
+    echo "error: The staging test sign-in's pass reaches a $1 build, which could ship. The pass is not shown here."
+    echo "error: Set it only as PEBBLE_STAGING_SIGN_IN_PASS in Config/Cloud.local.xcconfig, which passes it to Debug builds only."
+    exit 1
+  fi
+}
+
 if [ -n "${CONFIGURATION:-}" ] && [ -n "${TARGET_BUILD_DIR:-}" ] && [ -n "${SCRIPT_INPUT_FILE_COUNT:-}" ]; then
-  blank "${PEBBLE_CLOUD_ENDPOINT:-}" && exit 0
   action="${ACTION:-build}"
   if [ "$CONFIGURATION" = Debug ] && [ "$action" != install ] && [ "$action" != archive ]; then
     exit 0
   fi
+  check_sign_in "$CONFIGURATION ($action)" "${PEBBLE_SIGN_IN:-}" "${PEBBLE_STAGING_SIGN_IN_PASS_FOR_APP:-}"
+  blank "${PEBBLE_CLOUD_ENDPOINT:-}" && exit 0
   check_shipping "$CONFIGURATION ($action)" "$PEBBLE_CLOUD_ENDPOINT" "${PEBBLE_CLOUD_POLICY:-}"
   exit 0
 fi
@@ -118,6 +141,15 @@ while IFS= read -r configuration; do
     echo "release-endpoint-check: can't read the $configuration build settings of $project, so it can't check them."
     exit 1
   fi
+  # Sign in with Apple only, read the same way: settings that disagree
+  # fail, and so does a pass that would reach the app.
+  sign_ins="$(printf '%s\n' "$settings" | sed -n 's/^[[:space:]]*PEBBLE_SIGN_IN = //p' | sort -u)"
+  if [ "$(printf '%s\n' "$sign_ins" | wc -l | tr -d ' ')" != 1 ]; then
+    echo "error: The $configuration build settings disagree about PEBBLE_SIGN_IN. Set it in Config/Cloud.xcconfig only."
+    exit 1
+  fi
+  passes="$(printf '%s\n' "$settings" | sed -n 's/^[[:space:]]*PEBBLE_STAGING_SIGN_IN_PASS_FOR_APP = //p')"
+  check_sign_in "$configuration" "$sign_ins" "$passes"
   # Every value it finds counts, so an empty one, from another target or
   # printed first, can never hide one that is set.
   values="$(printf '%s\n' "$settings" | sed -n 's/^[[:space:]]*PEBBLE_CLOUD_ENDPOINT = //p')"
@@ -141,4 +173,4 @@ if [ "$checked" -eq 0 ]; then
   echo "release-endpoint-check: $project has only Debug, so there is nothing that ships to check."
   exit 1
 fi
-echo "release-endpoint-check: ok (every configuration but Debug has no cloud address, or the current cloud policy and a plain https one)"
+echo "release-endpoint-check: ok (every configuration but Debug signs in with Apple only, and has no cloud address, or the current cloud policy and a plain https one)"

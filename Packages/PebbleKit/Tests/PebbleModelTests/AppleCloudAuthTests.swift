@@ -448,20 +448,30 @@ struct AppleCloudAuthTests {
     #endif
 
     /// The code reads nothing from Apple but the identity token: no email,
-    /// name, user, code or status, and asks for no scope.
+    /// name, user, code or status, and asks for no scope. Apple's sheet,
+    /// run by the identity token source, is held to the same.
     @Test func theCodeReadsOnlyTheIdentityToken() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent()
-        let source = try String(contentsOf: root.appendingPathComponent("Sources/PebbleModel/AppleCloudAuth.swift"),
-                                encoding: .utf8)
-        let code = source.split(separator: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
-            .joined(separator: "\n")
-        for word in [".email", ".fullName", "credential.user", "authorizationCode", "realUserStatus", "requestedScopes = [."] {
-            #expect(!code.contains(word), "\(word)")
+        func code(_ file: String) throws -> String {
+            let source = try String(contentsOf: root.appendingPathComponent("Sources/PebbleModel/\(file)"), encoding: .utf8)
+            return source.split(separator: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+                .joined(separator: "\n")
         }
-        #expect(code.contains("request.requestedScopes = []"))
-        #expect(code.contains("request.nonce = hashed"))
-        #expect(code.contains("try accept(identityToken: credential.identityToken ?? Data())"))
+        let auth = try code("AppleCloudAuth.swift")
+        let sheet = try code("AppleIdentityTokenSource.swift")
+        for word in [".email", ".fullName", "credential.user", "authorizationCode", "realUserStatus", "requestedScopes = [.",
+                     "requestedScopes.append", "ASAuthorizationPasswordProvider"] {
+            #expect(!auth.contains(word), "\(word)")
+            #expect(!sheet.contains(word), "\(word)")
+        }
+        #expect(auth.contains("request.requestedScopes = []"))
+        #expect(auth.contains("request.nonce = nonceSha256"))
+        #expect(auth.contains("try accept(identityToken: credential.identityToken ?? Data())"))
+        // The sheet asks with that very request, and reads only the token.
+        #expect(sheet.contains("ASAuthorizationController(authorizationRequests: [AppleCloudAuth.appleIDRequest(nonceSha256: nonceSha256)])"))
+        #expect(sheet.contains("let token = credential.identityToken"))
+        #expect(sheet.components(separatedBy: "credential.").count == 2, "the credential is read once, for its token")
     }
 }
 

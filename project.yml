@@ -37,6 +37,12 @@ targets:
         PebbleCloudEndpoint: $(PEBBLE_CLOUD_ENDPOINT)
         # The policy the build was checked against, from Config/Cloud.xcconfig.
         PebbleCloudPolicy: $(PEBBLE_CLOUD_POLICY)
+        # Which sign-in the build offers (IdentitySignIn): `apple`, or in a
+        # Debug build only, `staging`. A build that could ship says `apple`.
+        PebbleSignIn: $(PEBBLE_SIGN_IN)
+        # The staging test sign-in's pass, from Config/Cloud.local.xcconfig.
+        # Empty in every configuration but Debug.
+        PebbleStagingSignInPass: $(PEBBLE_STAGING_SIGN_IN_PASS_FOR_APP)
         LSApplicationCategoryType: public.app-category.productivity
         UILaunchScreen: {}
         # Every orientation on iPad, which Split View, Slide Over and Stage Manager need.

@@ -526,6 +526,34 @@ public enum CloudWords {
     /// Said when the message carries the session the sign-in brings back,
     /// on the card and aloud. Its line shows on the message, covered.
     public static let previewSessionFromSignIn = "Your message also carries the session that signing in brings back, covered with dots too. If signing in brings none back, I don't send your message."
+    /// Said before a token ask, which goes before the sign-in hop. Only the
+    /// staging test sign-in asks, in a Debug build.
+    public static let previewAskFirst = "First, a test sign-in for this build only, asking for a sign-in token:"
+    /// Said before the sign-in hop when a token ask comes first.
+    public static let previewThenSignIn = "Then, to sign in:"
+    /// Said when the sign-in waits for the token the ask brings back, on
+    /// the card and aloud. Its value and the length it sets are covered.
+    public static let previewTokenFromAsk = "The sign-in carries the token the test sign-in brings back, covered with dots, and so is its length. If the test sign-in brings none back, I send nothing more."
+
+    /// The sign-in row, in the turn on question and the cloud setting.
+    public static let signInWithApple = "Sign in with Apple"
+    /// The same row, for the staging test sign-in in a Debug build.
+    public static let testSignIn = "Test sign-in for this build only"
+    /// After Apple gave a token. Nothing has gone to the cloud yet.
+    public static let signInReady = "Signed in with Apple. The sign-in goes with your first message, in the same preview, and only if you send it."
+    /// After the test sign-in was asked for. Nothing has gone yet.
+    public static let testSignInReady = "Test sign-in ready. Nothing has gone yet: your first message's preview shows it above the sign-in, with its pass covered, and it goes only if you send it."
+    /// No fresh code could be made for signing in.
+    public static let signInCouldNotStart = "I couldn't start signing in just now. Please try again in a moment."
+    /// Apple's answer wasn't a token as Apple writes one.
+    public static let signInTokenRefused = "Apple's answer didn't look like a sign-in, so I didn't keep it."
+    /// The build has no Sign in with Apple entitlement yet.
+    public static let appleSignInNotSetUp = "Signing in with Apple isn't set up in this build yet, so I couldn't sign in."
+    /// The person closed Apple's sheet.
+    public static let appleSignInCancelled = "You stopped signing in with Apple, so I'm not signed in."
+    /// Apple's sheet failed some other way.
+    public static let appleSignInFailed = "Apple couldn't sign you in just now. Please try again in a moment."
+
     public static func spokenMessage(role: String, text: String) -> String {
         switch role {
         case "person": "You said: \(text)"
@@ -590,6 +618,12 @@ public enum CloudWords {
     /// The cloud takes messages only after signing in with Apple, and this
     /// build has no way to sign in yet, so nothing was sent.
     public static let needsSignIn = "I didn't send that. Help from the cloud needs me to sign in with Apple first, and this version of the app can't do that yet. What you wrote is still here."
+    /// The same, in a build that offers a way to sign in, from the cloud
+    /// setting.
+    public static let signInFirst = "I didn't send that. Help from the cloud needs me to sign in first, and you can do that in Help from the cloud. What you wrote is still here."
+    /// The ask for a sign-in token brought none back, so the sign-in and
+    /// the message stayed here.
+    public static let noToken = "I asked for a sign-in token, but none came back, so I didn't send your message. What you wrote is still here."
     /// The sign-in went, but its answer brought nothing the message could
     /// go with, so the message stayed here.
     public static let noSession = "I signed in, but the cloud didn't let me in, so I didn't send your message. What you wrote is still here."
@@ -629,5 +663,8 @@ public enum CloudWords {
         chatEnded, signInRefused, forgotAfterSending, forgotAndCloudOffAfterSending, sentCantBeErased,
         policyTitle, previewPolicy, previewSignInCarries,
         previewSessionFromSignIn, needsSignIn, noSession, oldKeyStayed, signInKeyMayStay,
+        previewAskFirst, previewThenSignIn, previewTokenFromAsk, signInWithApple, testSignIn, signInReady,
+        testSignInReady, signInCouldNotStart, signInTokenRefused, appleSignInNotSetUp, appleSignInCancelled,
+        appleSignInFailed, signInFirst, noToken,
     ] + askPoints + policyLines + Redaction.Kind.allCases.map(\.spoken)
 }

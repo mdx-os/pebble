@@ -620,6 +620,8 @@ final class ChatController: ObservableObject {
         case .notesUnreadable: CloudWords.notesUnreadable
         case .ended: CloudWords.chatEnded
         case .needsSignIn: CloudWords.needsSignIn
+        case .signInFirst: CloudWords.signInFirst
+        case .noToken: CloudWords.noToken
         case .noSession: CloudWords.noSession
         case .oldKeyStayed: CloudWords.oldKeyStayed
         default: FirstConversation.couldNotAnswer
@@ -629,14 +631,14 @@ final class ChatController: ObservableObject {
     /// True for a line that says the words are back in the composer, so it
     /// goes once the person clears them.
     ///
-    /// `staysHere`, `turnedOff`, `chatEnded` and `needsSignIn` give the
-    /// words back too, but they are about the chat or the build, not the
-    /// draft: clearing the words doesn't make "part of this chat has to
-    /// stay here" or "the cloud is off" any less true, so those lines stay
-    /// until the next send or a new chat.
+    /// `staysHere`, `turnedOff`, `chatEnded`, `needsSignIn` and
+    /// `signInFirst` give the words back too, but they are about the chat
+    /// or the build, not the draft: clearing the words doesn't make "part
+    /// of this chat has to stay here" or "the cloud is off" any less true,
+    /// so those lines stay until the next send or a new chat.
     nonisolated static func pointsAtTheDraft(_ failure: String) -> Bool {
         [FirstConversation.couldNotAnswer, CloudWords.notSent, CloudWords.notesUnreadable,
-         CloudWords.noSession, CloudWords.oldKeyStayed].contains(failure)
+         CloudWords.noSession, CloudWords.oldKeyStayed, CloudWords.noToken].contains(failure)
     }
 
     /// The words that weren't sent, back in the composer. Anything typed
@@ -671,8 +673,10 @@ final class ChatController: ObservableObject {
         // Without a session or a sign-in, and with an old key kept, nothing
         // went. With no session after signing in, only the sign-in went,
         // which carries nothing of the chat, and the message stayed here.
+        // With no token after a token ask, only the ask went, the same way.
         return switch error as? CloudModelError {
-        case .notSent, .off, .staysHere, .notesUnreadable, .ended, .needsSignIn, .noSession, .oldKeyStayed: true
+        case .notSent, .off, .staysHere, .notesUnreadable, .ended, .needsSignIn, .signInFirst, .noToken, .noSession,
+             .oldKeyStayed: true
         case .unreadableReply, nil: false
         }
     }

@@ -1909,7 +1909,7 @@ struct CloudHelpTests {
         let preview = try CloudModel.preview(for: turns, endpoint: endpoint, redactor: Redactor(names: ["Sam"]))
         let screens: [AnyView] = [
             AnyView(CloudHelpView(help: cloud)),
-            AnyView(CloudTurnOnSheet(onYes: {}, onNo: {})),
+            AnyView(CloudTurnOnSheet(help: cloud, onYes: {}, onNo: {})),
             AnyView(CloudPreviewSheet(preview: preview, onSend: {}, onCancel: {})),
         ]
         for screen in screens {

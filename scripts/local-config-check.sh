@@ -6,7 +6,10 @@
 # conditional (PEBBLE_CLOUD_ENDPOINT[config=Debug] = ...), or project.yml
 # gives it one in its settings, or writes an address straight into the
 # Info.plist key, and fails whenever it can't look, a tracked file it
-# can't read included, so a broken check never reads as ok.
+# can't read included, so a broken check never reads as ok. The staging
+# test sign-in's pass is held the same way: no tracked config or
+# project.yml gives PEBBLE_STAGING_SIGN_IN_PASS a value, and the Info.plist
+# key only passes the Debug-only setting through.
 # Pass a different repository as $1 to check it instead, as the tests do.
 set -eu
 
@@ -50,6 +53,14 @@ while IFS= read -r config; do
     echo "local-config-check: $config sets PEBBLE_CLOUD_ENDPOINT. A real address goes only in $local_only."
     exit 1
   fi
+  if ! lines="$(sed -n -E 's/^[[:space:]]*PEBBLE_STAGING_SIGN_IN_PASS(\[[^]]*\])*[[:space:]]*=//p' "$repo/$config")"; then
+    echo "local-config-check: can't read the tracked $config, so I can't check it."
+    exit 1
+  fi
+  if [ -n "$(printf '%s\n' "$lines" | sed 's|//.*||' | tr -d '[:space:]')" ]; then
+    echo "local-config-check: $config sets PEBBLE_STAGING_SIGN_IN_PASS. The pass goes only in $local_only."
+    exit 1
+  fi
 done <<EOF
 $configs
 EOF
@@ -75,5 +86,13 @@ if [ -n "$project" ]; then
     echo "local-config-check: project.yml sets a cloud address. A real address goes only in $local_only."
     exit 1
   fi
+  pass_values="$(sed -n -E 's/^[[:space:]]*"?PEBBLE_STAGING_SIGN_IN_PASS(_FOR_APP)?(\[[^]]*\])*"?[[:space:]]*:(.*)$/\3/p' "$repo/project.yml" \
+    | sed 's/[[:space:]]#.*$//' | tr -d "\"'[:space:]")"
+  pass_passed="$(sed -n -E 's/^[[:space:]]*PebbleStagingSignInPass[[:space:]]*:(.*)$/\1/p' "$repo/project.yml" \
+    | sed 's/[[:space:]]#.*$//' | tr -d "\"'[:space:]" | grep -v -x -F '$(PEBBLE_STAGING_SIGN_IN_PASS_FOR_APP)' || true)"
+  if [ -n "$pass_values" ] || [ -n "$pass_passed" ]; then
+    echo "local-config-check: project.yml sets the staging test sign-in's pass. The pass goes only in $local_only."
+    exit 1
+  fi
 fi
-echo "local-config-check: ok ($local_only is not tracked, and no tracked config or project.yml sets an address)"
+echo "local-config-check: ok ($local_only is not tracked, and no tracked config or project.yml sets an address or a staging pass)"

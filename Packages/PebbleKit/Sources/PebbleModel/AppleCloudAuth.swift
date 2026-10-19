@@ -43,6 +43,14 @@ public protocol CloudKeychain: Sendable {
 /// Nothing here reaches the network. The hop is shown with its values
 /// covered, and sent only by the person's yes (`CloudModel`).
 ///
+/// The token comes from the source this build offers
+/// (`IdentityTokenSource`, asked by `askForIdentityToken`): Apple's own
+/// sheet, the staging test sign-in in a Debug build, or a fake in tests.
+/// Every token goes through `accept(identityToken:)` and then the same hop.
+/// A source whose ask leaves the device hands it back instead of sending
+/// it, and it goes in the same preview as the hop, above it, sent by the
+/// same yes; its token fills in the hop's `appleToken` (`tokenArrived`).
+///
 /// Every value goes as letters only (`letters(_:)`): the token's bytes two
 /// letters each, and a nonce and key made as letters. So nothing in them
 /// can look like a phone number, a card or an address, and the sign-in is
@@ -65,6 +73,8 @@ public final class AppleCloudAuth: CloudAuth, @unchecked Sendable {
     private let keychain: any CloudKeychain
     private let makeKey: @Sendable () -> String?
     private let makeNonce: @Sendable () -> String?
+    /// Where a token comes from, or nil when this build offers none.
+    private let source: (any IdentityTokenSource)?
     private let lock = NSLock()
     /// What the server answered the last sign-in with. Held in memory only,
     /// so every launch signs in again.
@@ -78,13 +88,56 @@ public final class AppleCloudAuth: CloudAuth, @unchecked Sendable {
     /// memory only. Every forget tries again, and so does every sign-in,
     /// which refuses rather than send the old key.
     private var keyRemovalOwed = false
+    /// A source's ask for a token, from its answer until the next preview
+    /// takes it, with the nonce still waiting for that token.
+    private var pendingAsk: IdentityTokenAsk?
+    /// The ask a preview took, with the nonce its hop carries, until the
+    /// ask is answered or the reply ends (`dropTokenAsk`).
+    private var asked: (nonce: String, read: @Sendable (Data) -> Data?)?
 
     public init(keychain: any CloudKeychain = SystemCloudKeychain(),
                 makeKey: @escaping @Sendable () -> String? = AppleCloudAuth.randomKey,
-                makeNonce: @escaping @Sendable () -> String? = AppleCloudAuth.randomKey) {
+                makeNonce: @escaping @Sendable () -> String? = AppleCloudAuth.randomKey,
+                source: (any IdentityTokenSource)? = nil) {
         self.keychain = keychain
         self.makeKey = makeKey
         self.makeNonce = makeNonce
+        self.source = source
+    }
+
+    public var identitySource: IdentitySourceKind? { source?.kind }
+
+    /// Asks the offered source for a token for a fresh nonce. A token is
+    /// taken through `accept(identityToken:)`, and held for the next
+    /// preview's hop. An ask that leaves the device is held as it is, sent
+    /// by nothing here, for the next preview to show above the hop. Nothing
+    /// is held after a refusal.
+    public func askForIdentityToken() async -> IdentitySignInOutcome {
+        guard let source else { return .unavailable }
+        guard let hashed = startAppleSignIn() else { return .refused(CloudWords.signInCouldNotStart) }
+        switch await source.identityToken(nonceSha256: hashed) {
+        case .token(let token):
+            do {
+                try accept(identityToken: token)
+                return .ready
+            } catch {
+                return .refused(CloudWords.signInTokenRefused)
+            }
+        case .refused(let line):
+            appleSignInEnded()
+            return .refused(line)
+        case .asks(let ask):
+            // Held only for the sign-in it was asked for: a newer start
+            // has its own nonce.
+            let held = lock.withLock {
+                guard let nonce = waitingNonce, Self.sha256(nonce) == hashed else { return false }
+                pendingAsk = ask
+                return true
+            }
+            guard held else { return .refused(CloudWords.signInCouldNotStart) }
+            CloudLog.note("token ask held for the next preview")
+            return .asksWithFirstMessage
+        }
     }
 
     /// Starts one Apple sign-in: makes a fresh nonce, held in memory, and
@@ -98,6 +151,8 @@ public final class AppleCloudAuth: CloudAuth, @unchecked Sendable {
         lock.withLock {
             waitingNonce = hashed == nil ? nil : nonce
             unsent = nil
+            pendingAsk = nil
+            asked = nil
         }
         CloudLog.note(hashed == nil ? "Apple sign-in not started" : "Apple sign-in started")
         return hashed
@@ -108,10 +163,16 @@ public final class AppleCloudAuth: CloudAuth, @unchecked Sendable {
     /// person's email nor their name, and the SHA-256 of a fresh nonce. Nil
     /// when no nonce can be made.
     public func appleIDRequest() -> ASAuthorizationAppleIDRequest? {
-        guard let hashed = startAppleSignIn() else { return nil }
+        startAppleSignIn().map(Self.appleIDRequest(nonceSha256:))
+    }
+
+    /// The Apple sign-in request for the nonce whose SHA-256 is
+    /// `nonceSha256`: no scopes, so Apple shares neither the person's email
+    /// nor their name.
+    public static func appleIDRequest(nonceSha256: String) -> ASAuthorizationAppleIDRequest {
         let request = ASAuthorizationAppleIDProvider().createRequest()
         request.requestedScopes = []
-        request.nonce = hashed
+        request.nonce = nonceSha256
         return request
     }
 
@@ -153,7 +214,10 @@ public final class AppleCloudAuth: CloudAuth, @unchecked Sendable {
     /// Apple's sign-in ended without a token, cancelled or failed: its
     /// nonce is dropped.
     public func appleSignInEnded() {
-        lock.withLock { waitingNonce = nil }
+        lock.withLock {
+            waitingNonce = nil
+            pendingAsk = nil
+        }
         CloudLog.note("Apple sign-in ended without a token")
     }
 
@@ -180,9 +244,29 @@ public final class AppleCloudAuth: CloudAuth, @unchecked Sendable {
     /// again, and if it still fails this throws `oldKeyStayed` and no hop
     /// is made.
     package func takeSignInFields() throws -> [String: String]? {
+        try takeHop()?.fields
+    }
+
+    /// The hop's three values, and the ask its token waits for, if any.
+    /// With an ask, the token's value is empty until the ask is answered
+    /// (`tokenArrived`), and the nonce goes in the hop now, held here too
+    /// for the token to be accepted with. Either way the token, the nonce
+    /// and the ask are taken, so nothing else uses them.
+    private func takeHop() throws -> (fields: [String: String], ask: IdentityTokenAsk?)? {
         try lock.withLock {
-            guard let held = unsent else { return nil }
-            unsent = nil
+            let token: String
+            let nonce: String
+            let ask: IdentityTokenAsk?
+            if let held = unsent {
+                unsent = nil
+                (token, nonce, ask) = (Self.letters(held.token), held.nonce, nil)
+            } else if let waiting = pendingAsk, let waitingFor = waitingNonce {
+                pendingAsk = nil
+                waitingNonce = nil
+                (token, nonce, ask) = ("", waitingFor, waiting)
+            } else {
+                return nil
+            }
             if keyRemovalOwed {
                 guard (try? keychain.remove(Self.deviceKeyAccount)) != nil else {
                     CloudLog.note("old device key still kept, sign-in refused")
@@ -196,15 +280,59 @@ public final class AppleCloudAuth: CloudAuth, @unchecked Sendable {
                 key = made
             }
             guard let key else { return nil }
+            if let ask { asked = (nonce, ask.read) }
             let names = CloudPolicy.current.signInFields
-            return [names[0]: Self.letters(held.token), names[1]: held.nonce, names[2]: key]
+            return ([names[0]: token, names[1]: nonce, names[2]: key], ask)
         }
     }
 
-    /// True while a token or a nonce is held here: from the start of an
-    /// Apple sign-in until the next preview takes them.
+    /// The token the ask's `answer` brought, accepted with the nonce the
+    /// hop carries, as letters for the hop's `appleToken`. Throws `noToken`
+    /// when no ask is under way, or the answer holds no plain token.
+    public func tokenArrived(_ answer: Data) throws -> String {
+        let held = lock.withLock { () -> (nonce: String, read: @Sendable (Data) -> Data?)? in
+            defer { asked = nil }
+            return asked
+        }
+        guard let held, let token = held.read(answer) else {
+            CloudLog.note("token ask answered with no token")
+            throw CloudModelError.noToken
+        }
+        lock.withLock { waitingNonce = held.nonce }
+        do {
+            try accept(identityToken: token)
+        } catch {
+            throw CloudModelError.noToken
+        }
+        let accepted = lock.withLock { () -> String? in
+            defer { unsent = nil }
+            return unsent.map { Self.letters($0.token) }
+        }
+        guard let accepted else { throw CloudModelError.noToken }
+        return accepted
+    }
+
+    /// Lets go of a preview's ask once its reply is over, answered or not.
+    public func dropTokenAsk() {
+        lock.withLock { asked = nil }
+    }
+
+    /// Lets go of any token, nonce or ask from a sign-in the person didn't
+    /// go on with, as when they answer the turn on question with no.
+    public func dropHeldSignIn() {
+        lock.withLock {
+            waitingNonce = nil
+            unsent = nil
+            pendingAsk = nil
+            asked = nil
+        }
+    }
+
+    /// True while a token, a nonce or an ask is held here: from the start
+    /// of a sign-in until the next preview takes them, and for an ask,
+    /// until its reply is over.
     package var holdsTokenOrNonce: Bool {
-        lock.withLock { waitingNonce != nil || unsent != nil }
+        lock.withLock { waitingNonce != nil || unsent != nil || pendingAsk != nil || asked != nil }
     }
 
     public func headers(for url: URL) -> [String: String] {
@@ -222,10 +350,18 @@ public final class AppleCloudAuth: CloudAuth, @unchecked Sendable {
     /// kept (`takeSignInFields`).
     public func signIn(for endpoint: URL) throws -> CloudSignIn? {
         let signedIn = lock.withLock { session != nil }
-        guard let fields = try takeSignInFields(), !signedIn,
-              let body = try? CloudSignIn.encoded(fields) else { return nil }
+        guard let hop = try takeHop() else { return nil }
+        guard !signedIn, let body = try? CloudSignIn.encoded(hop.fields) else {
+            dropTokenAsk()
+            return nil
+        }
         CloudLog.note("sign-in hop made for the preview")
-        return CloudSignIn(path: Self.signInPath, body: body, sessionHeader: Self.sessionHeader)
+        guard let ask = hop.ask, let askBody = try? CloudSignIn.encoded(ask.fields) else {
+            return CloudSignIn(path: Self.signInPath, body: body, sessionHeader: Self.sessionHeader)
+        }
+        return CloudSignIn(path: Self.signInPath, body: body, sessionHeader: Self.sessionHeader,
+                           ask: CloudSignIn.Ask(path: ask.path, body: askBody),
+                           tokenField: CloudPolicy.current.signInFields[0])
     }
 
     /// Keeps the server's `{"session": "..."}` in memory, when it is only
@@ -254,6 +390,8 @@ public final class AppleCloudAuth: CloudAuth, @unchecked Sendable {
             session = nil
             waitingNonce = nil
             unsent = nil
+            pendingAsk = nil
+            asked = nil
             return removeKey()
         }
         CloudLog.note(gone ? "sign-in forgotten" : "sign-in forgotten, device key still kept")

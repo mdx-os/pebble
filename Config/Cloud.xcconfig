@@ -15,4 +15,22 @@ PEBBLE_CLOUD_ENDPOINT =
 // reaches. Change it only together with CloudPolicy.
 PEBBLE_CLOUD_POLICY = mdx-zero-retention-2
 
+// Where the cloud sign-in gets its identity token (IdentitySignIn in
+// PebbleModel). `apple` offers Sign in with Apple. Every build that could
+// ship must say `apple` (scripts/release-endpoint-check.sh). A Debug build
+// may try the staging test sign-in instead, set only in
+// Config/Cloud.local.xcconfig, and only for Debug:
+//   PEBBLE_SIGN_IN[config=Debug] = staging
+//   PEBBLE_STAGING_SIGN_IN_PASS = (the staging pass)
+// Release builds don't contain the staging code at all.
+PEBBLE_SIGN_IN = apple
+
+// The staging test sign-in's pass. Leave it empty here; it goes only in
+// Config/Cloud.local.xcconfig, which git ignores. It reaches the app only
+// in Debug (PEBBLE_STAGING_SIGN_IN_PASS_FOR_APP), never in a build that
+// could ship.
+PEBBLE_STAGING_SIGN_IN_PASS =
+PEBBLE_STAGING_SIGN_IN_PASS_FOR_APP =
+PEBBLE_STAGING_SIGN_IN_PASS_FOR_APP[config=Debug] = $(PEBBLE_STAGING_SIGN_IN_PASS)
+
 #include? "Cloud.local.xcconfig"

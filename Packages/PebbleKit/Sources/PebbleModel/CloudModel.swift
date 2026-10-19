@@ -156,8 +156,16 @@ public enum CloudHeaders {
 /// password and adds none
 /// (`URLSessionCloudTransport.makeSession`), so a cookie set by a sign-in
 /// answer never rides on the message.
+///
+/// When the sign-in's token comes from a request of its own, as the staging
+/// test sign-in's does, that request is part of the same preview too, above
+/// the hop, and goes first. Its answer's token fills in the hop's token
+/// value, which the card shows covered, along with the hop's length, which
+/// that token sets; nothing else of the hop changes.
 public struct CloudPreview: Sendable, Equatable, Identifiable {
     public let id: UUID
+    /// The request for the sign-in's token, if it needs one. Goes first.
+    public let ask: CloudRequest?
     /// The sign-in hop that goes first, if the cloud needs one.
     public let signIn: CloudRequest?
     /// The message. With `sessionHeader`, it already carries that header
@@ -170,18 +178,33 @@ public struct CloudPreview: Sendable, Equatable, Identifiable {
     /// preview's sign-in hop. Nil without a hop, or for a hop that brings
     /// none back.
     public let sessionHeader: String?
+    /// The hop's body part that `ask`'s token fills in. Nil without an ask.
+    public let tokenField: String?
 
     public init(id: UUID = UUID(), signIn: CloudRequest? = nil, request: CloudRequest, hidden: [Redaction.Kind: Int],
-                sessionHeader: String? = nil) {
+                sessionHeader: String? = nil, ask: CloudRequest? = nil, tokenField: String? = nil) {
         self.id = id
         self.signIn = signIn
         self.request = request
         self.hidden = hidden
         self.sessionHeader = signIn == nil ? nil : sessionHeader
+        self.ask = signIn == nil ? nil : ask
+        self.tokenField = signIn == nil || ask == nil ? nil : tokenField
     }
 
     /// Every request the yes sends, in order, as the card shows them.
-    public var hops: [CloudRequest] { [signIn, request].compactMap { $0 } }
+    public var hops: [CloudRequest] { [ask, signIn, request].compactMap { $0 } }
+
+    /// The hop as it goes once `ask` is answered: `signIn` with only the
+    /// token's value filled in by `token`. Nil without an ask, or for a
+    /// token that is empty or not letters only, as every token value is.
+    public func signIn(carrying token: String) -> CloudRequest? {
+        guard let signIn, let tokenField, !token.isEmpty,
+              token.unicodeScalars.allSatisfy({ ("a"..."z").contains($0) || ("A"..."Z").contains($0) }),
+              let fields = CloudSignIn(path: "", body: signIn.body).fields, fields[tokenField] == "",
+              let body = try? CloudSignIn.encoded(fields.merging([tokenField: token]) { $1 }) else { return nil }
+        return CloudRequest(method: signIn.method, url: signIn.url, headers: signIn.headers, body: body)
+    }
 
     /// The message as it goes after the sign-in hop: `request` with only
     /// the session header's value filled in by `session`. Nil without a
@@ -199,8 +222,9 @@ public struct CloudPreview: Sendable, Equatable, Identifiable {
     /// first when there is one, then the message.
     public var shownText: String {
         guard let signIn else { return request.shownText }
-        return CloudWords.previewSignInFirst + "\n" + signIn.shownText + "\n\n"
-            + CloudWords.previewThenMessage + "\n" + request.shownText
+        let asking = ask.map { CloudWords.previewAskFirst + "\n" + $0.shownText + "\n\n" } ?? ""
+        return asking + (ask == nil ? CloudWords.previewSignInFirst : CloudWords.previewThenSignIn) + "\n"
+            + signIn.shownText + "\n\n" + CloudWords.previewThenMessage + "\n" + request.shownText
     }
 }
 
@@ -240,12 +264,34 @@ public struct CloudSignIn: Sendable, Equatable {
     /// the message as a sign-in line, its value covered, and it is the one
     /// thing added to the message after the answer (`CloudPreview`).
     public let sessionHeader: String?
+    /// A request that gets this sign-in's identity token, sent first, as
+    /// the staging test sign-in's is. Shown in the same preview, above the
+    /// hop, its values covered, and sent by the same yes.
+    public let ask: Ask?
+    /// The body part the ask's token fills in, empty until then. Only with
+    /// an `ask`.
+    public let tokenField: String?
 
-    public init(path: String, headers: [String: String] = [:], body: Data, sessionHeader: String? = nil) {
+    /// A request for a token, under the same address. Held to every rule
+    /// the hop is: a plain path and a flat body of short values.
+    public struct Ask: Sendable, Equatable {
+        public let path: String
+        public let body: Data
+
+        public init(path: String, body: Data) {
+            self.path = path
+            self.body = body
+        }
+    }
+
+    public init(path: String, headers: [String: String] = [:], body: Data, sessionHeader: String? = nil,
+                ask: Ask? = nil, tokenField: String? = nil) {
         self.path = path
         self.headers = headers
         self.body = body
         self.sessionHeader = sessionHeader
+        self.ask = ask
+        self.tokenField = ask == nil ? nil : tokenField
     }
 
     /// The longest value a sign-in body may hold, in characters. Only a
@@ -393,6 +439,25 @@ public protocol CloudAuth: Sendable {
     /// turned on, since a fresh yes starts with nothing kept. True when
     /// nothing is left; when something is, it is owed as after `forget`.
     @discardableResult func forgetLeftovers() -> Bool
+
+    /// The kind of source this build offers a sign-in token from, or nil
+    /// when it offers none (`IdentitySignIn.offered`).
+    var identitySource: IdentitySourceKind? { get }
+
+    /// Asks that source for a token, for the next preview's hop. Never
+    /// reaches the cloud's address: an ask that would is held for the next
+    /// preview instead.
+    func askForIdentityToken() async -> IdentitySignInOutcome
+
+    /// The token the answer to a hop's `CloudSignIn.ask` brought, as the
+    /// hop's token value. Throws `noToken` when it brought none.
+    func tokenArrived(_ answer: Data) throws -> String
+
+    /// The reply whose preview took an ask is over, answered or not.
+    func dropTokenAsk()
+
+    /// The person didn't go on with a sign-in they started.
+    func dropHeldSignIn()
 }
 
 extension CloudAuth {
@@ -400,6 +465,11 @@ extension CloudAuth {
     public func isSignedIn(to endpoint: URL) -> Bool { false }
     public func signedIn(_ answer: Data) {}
     public func forgetLeftovers() -> Bool { true }
+    public var identitySource: IdentitySourceKind? { nil }
+    public func askForIdentityToken() async -> IdentitySignInOutcome { .unavailable }
+    public func tokenArrived(_ answer: Data) throws -> String { throw CloudModelError.noToken }
+    public func dropTokenAsk() {}
+    public func dropHeldSignIn() {}
 }
 
 /// Adds nothing and signs in to nothing.
@@ -427,6 +497,12 @@ public enum CloudModelError: Error, Equatable, Sendable {
     /// The cloud takes messages only from a device signed in to it, and
     /// there is no session and no sign-in to show. Nothing was sent.
     case needsSignIn
+    /// The same, in a build that offers a way to sign in: the person can
+    /// sign in from the cloud setting. Nothing was sent.
+    case signInFirst
+    /// The ask for a sign-in token went, but its answer brought no token
+    /// the sign-in could carry. Nothing more was sent.
+    case noToken
     /// The sign-in hop went, but its answer brought no session the message
     /// could carry. Nothing more was sent, so the message stayed here.
     case noSession
@@ -552,9 +628,13 @@ public struct CloudModel: ModelClient {
             throw CloudModelError.notesUnreadable
         }
         let redactor = try session.widened(by: current)
+        let headers = auth.headers(for: Self.url(for: endpoint))
+        let signIn = try auth.signIn(for: endpoint)
+        // A token ask this preview took is let go once the reply is over,
+        // whatever happens to it.
+        defer { if signIn?.ask != nil { auth.dropTokenAsk() } }
         let preview = try Self.preview(
-            for: transcript, endpoint: endpoint, redactor: redactor,
-            headers: auth.headers(for: Self.url(for: endpoint)), signIn: auth.signIn(for: endpoint)
+            for: transcript, endpoint: endpoint, redactor: redactor, headers: headers, signIn: signIn
         )
         // A server that takes messages only from a signed in device is
         // never sent one without a session or a sign-in to show first.
@@ -562,7 +642,7 @@ public struct CloudModel: ModelClient {
         // still say so, and before it is shown.
         if policy.needsSignIn, preview.signIn == nil, !auth.isSignedIn(to: endpoint) {
             CloudLog.note("no session and no sign-in, nothing sent")
-            throw CloudModelError.needsSignIn
+            throw auth.identitySource == nil ? CloudModelError.needsSignIn : CloudModelError.signInFirst
         }
         guard await reviewer.review(preview) == .send else {
             CloudLog.note("preview declined")
@@ -577,7 +657,18 @@ public struct CloudModel: ModelClient {
             // one way only: the session line the card showed covered gets
             // the session the sign-in answer brought.
             var message = preview.request
-            if let signIn = preview.signIn {
+            if var signIn = preview.signIn {
+                // The token ask goes first, when there is one, and its
+                // token is the one thing filled in on the hop: its value
+                // and the length it sets, both covered on the card.
+                if let ask = preview.ask {
+                    try readyToSend()
+                    let asked = try await session.send(ask, through: transport)
+                    CloudLog.note("token ask answered")
+                    try checkOn()
+                    let token = try session.handOver { try auth.tokenArrived(asked) }
+                    signIn = try Self.signIn(after: preview, carrying: token, redactor: redactor)
+                }
                 try readyToSend()
                 let answer = try await session.send(signIn, through: transport)
                 CloudLog.note("sign-in hop answered")
@@ -619,6 +710,19 @@ public struct CloudModel: ModelClient {
         }
         guard redactor.redact(value).isUnchanged else { throw CloudTransportError.signInCarriesPersonalDetails }
         return message
+    }
+
+    /// The hop to send once `preview`'s token ask is answered with `token`.
+    /// Throws `noToken`, so nothing more goes, when the token can't fill
+    /// in the hop's covered value, and refuses one `redactor` would change,
+    /// as for every sign-in value.
+    static func signIn(after preview: CloudPreview, carrying token: String, redactor: Redactor) throws -> CloudRequest {
+        guard let hop = preview.signIn(carrying: token) else {
+            CloudLog.note("token ask brought no token the sign-in could carry, nothing more sent")
+            throw CloudModelError.noToken
+        }
+        guard redactor.redact(token).isUnchanged else { throw CloudTransportError.signInCarriesPersonalDetails }
+        return hop
     }
 
     /// Still asked for, still on, and the chat still open.
@@ -700,9 +804,21 @@ public struct CloudModel: ModelClient {
         let signInRequest = try signIn.map {
             guard let url = $0.url(under: endpoint) else { throw CloudTransportError.signInPathRefused($0.path) }
             guard let fields = $0.fields else { throw CloudTransportError.signInBodyRefused }
+            // The part a token ask fills in is there, and empty, until then.
+            if let tokenField = $0.tokenField, fields[tokenField] != "" { throw CloudTransportError.signInBodyRefused }
             let hopHeaders = try CloudHeaders.merged(with: $0.headers)
             signInTexts += Array(fields.keys) + Array(fields.values) + Array($0.headers.keys) + Array($0.headers.values)
             return CloudRequest(url: url, headers: hopHeaders, body: try CloudSignIn.encoded(fields))
+        }
+        // The token ask, under the same rules as the hop: a plain path
+        // under the address, a flat body of short values, the fixed
+        // headers only, and nothing the redactor would change.
+        let askRequest = try signIn?.ask.map { ask in
+            let asked = CloudSignIn(path: ask.path, body: ask.body)
+            guard let url = asked.url(under: endpoint) else { throw CloudTransportError.signInPathRefused(ask.path) }
+            guard let fields = asked.fields else { throw CloudTransportError.signInBodyRefused }
+            signInTexts += Array(fields.keys) + Array(fields.values)
+            return CloudRequest(url: url, headers: try CloudHeaders.merged(with: [:]), body: try CloudSignIn.encoded(fields))
         }
         if signInTexts.contains(where: { !redactor.redact($0).isUnchanged }) {
             throw CloudTransportError.signInCarriesPersonalDetails
@@ -711,7 +827,9 @@ public struct CloudModel: ModelClient {
             signIn: signInRequest,
             request: CloudRequest(url: url(for: endpoint), headers: messageHeaders, body: body),
             hidden: hidden,
-            sessionHeader: sessionLine.keys.first
+            sessionHeader: sessionLine.keys.first,
+            ask: askRequest,
+            tokenField: signIn?.tokenField
         )
     }
 }
@@ -787,10 +905,10 @@ public final class CloudChatSession: @unchecked Sendable {
     /// Runs `handOver` under the chat's lock, unless the chat has ended, so
     /// `end` can't come between the check and the hand over. `handOver`
     /// runs with the lock held, so it must not touch this chat.
-    package func handOver(_ handOver: () throws -> Void) throws {
+    package func handOver<T>(_ handOver: () throws -> T) throws -> T {
         try lock.withLock {
             if let endedBy { throw endedBy }
-            try handOver()
+            return try handOver()
         }
     }
 

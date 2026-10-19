@@ -38,14 +38,18 @@ struct PebbleApp: App {
         // nothing typed into the setting could be kept, so it reads as off,
         // can't be turned on, and says so plainly. The notes store is held
         // either way, with or without a cloud address.
+        let endpoint = CloudEndpoint.url(infoDictionary: Bundle.main.infoDictionary)
         _cloud = State(initialValue: CloudHelp.forApp(
             memory: try? MemoryStore.onDevice(),
-            endpoint: CloudEndpoint.url(infoDictionary: Bundle.main.infoDictionary),
+            endpoint: endpoint,
             // Sign in with Apple, sending only Apple's identity token, a
             // one-time nonce and a key made on this device (`CloudPolicy`).
-            // Told to forget when the cloud is turned off and by Forget
-            // everything.
-            auth: AppleCloudAuth(),
+            // The token comes from the source this build offers
+            // (`PEBBLE_SIGN_IN`): Apple, or in a Debug build only, the
+            // staging test sign-in. Told to forget when the cloud is
+            // turned off and by Forget everything.
+            auth: AppleCloudAuth(source: IdentitySignIn.offered(infoDictionary: Bundle.main.infoDictionary,
+                                                                endpoint: endpoint)),
             openStore: { try CloudHelpFileStore.onDevice() }
         ))
     }

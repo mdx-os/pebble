@@ -20,6 +20,9 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// The cloud setting off, the question before it turns on, and the
     /// preview of exactly what would leave the device.
     case cloudOff, cloudAsk, cloudPreview
+    /// The question scrolled down to its sign-in row, and the preview with
+    /// the staging test sign-in above the sign-in, its pass covered.
+    case cloudAskSignIn, cloudPreviewTestSignIn
     /// Today with live task cards on the scripted engine, held still at a
     /// moment: working, trying another way, waiting on the person, and done.
     /// `tasksLive` plays the same tasks in real time.
@@ -91,17 +94,17 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
             case .memorySaved:
                 MemoryView(model: Self.savedNoteMemory(place: LocalStubModel().privacyPlace),
                            place: LocalStubModel().privacyPlace)
-            case .cloudOff, .cloudAsk:
+            case .cloudOff, .cloudAsk, .cloudAskSignIn:
                 NavigationStack {
                     // With the cloud off and no cloud chat open, the flag
                     // is the on-device model's, as `HomeView` would give it.
                     CloudHelpView(help: Self.sampleCloud(),
                                   place: HomeView.surfacePlace(chat: LocalStubModel().privacyPlace,
                                                                newChat: LocalStubModel().privacyPlace),
-                                  asking: self == .cloudAsk)
+                                  asking: self != .cloudOff, askAnchor: self == .cloudAskSignIn ? .bottom : nil)
                 }
-            case .cloudPreview:
-                Self.cloudPreviewChat(brand: brand, looks: looks)
+            case .cloudPreview, .cloudPreviewTestSignIn:
+                Self.cloudPreviewChat(brand: brand, looks: looks, testSignIn: self == .cloudPreviewTestSignIn)
             case .confirm, .confirmTimedOut:
                 ZStack {
                     Backdrop()
@@ -293,28 +296,39 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// from the showcase: its transport refuses every request.
     static let sampleEndpoint = URL(string: "https://cloud.example.com")!
 
-    /// The cloud setting, off, with one private word.
+    /// The cloud setting, off, with one private word, in a build that
+    /// offers Sign in with Apple, so the turn on question shows its row.
+    /// Its key is kept in memory only.
     @MainActor
     static func sampleCloud() -> CloudHelp {
         CloudHelp(
             store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: false, privateWords: ["lemon cake"])),
-            endpoint: sampleEndpoint, memory: sampleMemory(), transport: { NoSendTransport() }
+            endpoint: sampleEndpoint, memory: sampleMemory(),
+            auth: AppleCloudAuth(keychain: InMemoryCloudKeychain(), source: AppleIdentityTokenSource()),
+            transport: { NoSendTransport() }
         )
     }
 
     /// A chat on the cloud model with its preview showing, presented the
     /// way `HomeView` presents it. The preview is built by the same code a
     /// real reply uses.
+    ///
+    /// With `testSignIn`, the token comes from the staging test sign-in, with
+    /// a made up pass, so the card shows its ask above the sign-in. Nothing
+    /// is sent either way.
     @MainActor
-    static func cloudPreviewChat(brand: Brand, looks: UserDefaults) -> some View {
+    static func cloudPreviewChat(brand: Brand, looks: UserDefaults, testSignIn: Bool = false) -> some View {
         let memory = sampleMemory()
         // The real Apple sign-in, with a made up token, nonce and key kept
         // in memory, so the card shows the very hop a person would see.
         let auth = AppleCloudAuth(keychain: InMemoryCloudKeychain(),
                                   makeKey: { AppleCloudAuth.letters("made up sample key") },
-                                  makeNonce: { AppleCloudAuth.letters("made up nonce") })
-        _ = auth.startAppleSignIn()
-        try? auth.accept(identityToken: Data("made.up.sample".utf8))
+                                  makeNonce: { AppleCloudAuth.letters("made up nonce") },
+                                  source: testSignIn ? StagingIdentityTokenSource(pass: "madeuppass") : nil)
+        if !testSignIn {
+            _ = auth.startAppleSignIn()
+            try? auth.accept(identityToken: Data("made.up.sample".utf8))
+        }
         let help = CloudHelp(
             store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: sampleEndpoint, privateWords: ["lemon cake"])),
             endpoint: sampleEndpoint, memory: memory, auth: auth, transport: { NoSendTransport() }
@@ -325,10 +339,21 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         turns.append(ChatTurn(id: UUID(), speaker: .person, text: "Help me write a note to Sam about Saturday. The party moved to 42 Maple Street. He can call me at 416 555 0199 or email jo.lee@example.com, and don't mention the lemon cake."))
         let conversation = Conversation(turns: turns, onDevice: false)
         let redactor = Redactor(memory: memory.notes(), privateWords: help.settings.privateWords)
-        if let preview = try? CloudModel.preview(for: turns, endpoint: sampleEndpoint, redactor: redactor,
-                                                 headers: auth.headers(for: CloudModel.url(for: sampleEndpoint)),
-                                                 signIn: auth.signIn(for: sampleEndpoint)) {
-            review.show(preview)
+        func show() {
+            if let preview = try? CloudModel.preview(for: turns, endpoint: sampleEndpoint, redactor: redactor,
+                                                     headers: auth.headers(for: CloudModel.url(for: sampleEndpoint)),
+                                                     signIn: auth.signIn(for: sampleEndpoint)) {
+                review.show(preview)
+            }
+        }
+        if testSignIn {
+            // The test sign-in's ask is made on this device, without sending.
+            Task { @MainActor in
+                _ = await auth.askForIdentityToken()
+                show()
+            }
+        } else {
+            show()
         }
         let controller = ChatController.make(brand: brand, model: model, names: InMemoryAgentNameStore(stored: "Pip"),
                                              conversation: conversation, review: review)
