@@ -719,23 +719,36 @@ struct BackgroundFeedTests {
             .frame(width: 393, height: 852))
     }
 
-    /// The app wires no task engine yet, so the line under the switch, read
-    /// as the person turns it on, doesn't promise what finished. With an
-    /// engine, it does. The app's wiring comes from `BackgroundWiring.app`,
-    /// the same factory this reads.
+    /// Without a task engine, as when the notes can't be opened, the line
+    /// under the switch, read as the person turns it on, doesn't promise
+    /// what finished. With one, it does where the summary can count it. The
+    /// app's wiring comes from `BackgroundWiring.app`, the same factory this
+    /// reads, and the runner gets the engine Today shows.
     @Test func theSwitchPromisesWhatFinishedOnlyWithTasksToCount() throws {
         let store = scratchStore()
         defer { try? store.forget() }
         let asks = NeedsYou(rule: .isolated())
-        let wiring = BackgroundWiring.app(needsYou: asks, store: { store }, toggle: { InMemoryBackgroundSwitch() })
-        #expect(wiring.tasks == nil, "the app wires no engine yet")
-        let wired = try #require(wiring.service.runner)
-        #expect(wired.tasks == nil, "the runner counts the same tasks as Today")
-        #expect(wired.needsYou === asks)
-        let asTheAppHasIt = MemoryModel(store: scratchMemory(), place: .onDevice, background: wired)
-        #expect(!asTheAppHasIt.backgroundDetail.contains("finished"))
-        #expect(asTheAppHasIt.backgroundDetail
+        let without = BackgroundWiring.app(needsYou: asks, tasks: nil, store: { store },
+                                           toggle: { InMemoryBackgroundSwitch() })
+        let none = try #require(without.service.runner)
+        #expect(none.tasks == nil)
+        #expect(none.needsYou === asks)
+        let noEngine = MemoryModel(store: scratchMemory(), place: .onDevice, background: none)
+        #expect(!noEngine.backgroundDetail.contains("finished"))
+        #expect(noEngine.backgroundDetail
             == BackgroundWords.settingDetail(whileClosed: BackgroundRow.runsWhileClosed, countsTasks: false))
+
+        let notes = scratchMemory()
+        let kept = TaskStore(fileURL: Scratch.url("tasks-ui"), forgetMarker: Scratch.url("tasks-forgotten-ui"))
+        let engine = OnDeviceTasks.engine(model: LocalStubModel(), notes: notes, store: kept, rule: asks.rule, pace: nil)
+        let wiring = BackgroundWiring.app(needsYou: asks, tasks: engine, store: { store },
+                                          toggle: { InMemoryBackgroundSwitch() })
+        #expect(wiring.tasks === engine)
+        let wired = try #require(wiring.service.runner)
+        #expect(wired.tasks === engine, "the runner counts the same tasks as Today")
+        let asTheAppHasIt = MemoryModel(store: notes, place: .onDevice, background: wired)
+        #expect(asTheAppHasIt.backgroundDetail
+            == BackgroundWords.settingDetail(whileClosed: BackgroundRow.runsWhileClosed, countsTasks: true))
 
         let rule = AskFirst.isolated()
         let withTasks = BackgroundRunner(store: scratchStore(), toggle: InMemoryBackgroundSwitch(),
@@ -832,6 +845,9 @@ struct BackgroundFeedTests {
         "PebbleUI/CloudHelpView.swift: MemoryStore":
             "CloudHelp reads the notes' store to build the redactor, so names from the notes are taken out of a "
             + "cloud request. It only reads the notes; it never hands the store a chat.",
+        "PebbleModel/OnDeviceTasks.swift: MemoryStore":
+            "OnDeviceTasks reads a ModelClient only for where its words go, and hands the notes' store to the task "
+            + "engine it makes. The engine reads notes and keeps a digest only after a yes; no chat goes in.",
         "PebbleUI/HomeView.swift: MemoryStore":
             "The home screen hands the notes' store to the memory screen and to CloudHelp, the same one for both. "
             + "Only the memory screen writes notes the person adds; no chat goes in.",

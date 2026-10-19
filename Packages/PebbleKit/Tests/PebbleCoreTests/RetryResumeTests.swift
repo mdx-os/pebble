@@ -327,12 +327,12 @@ struct RetryResumeTests {
     }
 
     /// PERMANENT GUARD. Written as the kept tasks are: whole, through a
-    /// staged copy, and protected until the device is first unlocked.
+    /// staged copy, and readable only while the device is unlocked.
     @Test func theCheckpointFileIsProtectedLikeTheTasks() throws {
         let mask = Data.WritingOptions.fileProtectionMask
         #expect(CheckpointFileStore.fileWriting(protected: true) == TaskStore.fileWriting(protected: true))
         #expect(CheckpointFileStore.fileWriting(protected: true).intersection(mask)
-            == .completeFileProtectionUntilFirstUserAuthentication)
+            == .completeFileProtection)
         let root = SwiftSource.repositoryRoot(from: #filePath)
         let text = try String(contentsOf: root.appendingPathComponent(
             "Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift"), encoding: .utf8)

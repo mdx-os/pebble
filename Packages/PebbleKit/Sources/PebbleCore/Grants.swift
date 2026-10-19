@@ -769,6 +769,7 @@ public enum GrantWords {
         case .send: "send messages to \(target)"
         case .purchase: "pay \(target)"
         case .sharePersonalInfo: "share your details with \(target)"
+        case .save: "keep things in \(target)"
         }
     }
 
@@ -778,6 +779,7 @@ public enum GrantWords {
         case .send: "Send messages to \(name)"
         case .purchase: "Pay \(name)"
         case .sharePersonalInfo: "Share your details with \(name)"
+        case .save: "Keep things in \(name)"
         }
     }
 
@@ -820,6 +822,7 @@ public enum GrantWords {
         case .send: return "Sent with your OK from \(when)."
         case .purchase: return "Paid with your OK from \(when)."
         case .sharePersonalInfo: return "Shared with your OK from \(when)."
+        case .save: return "Kept with your OK from \(when)."
         }
     }
     /// The receipt's line when the step was under way as the task stopped.

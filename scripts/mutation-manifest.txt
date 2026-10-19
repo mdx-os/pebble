@@ -3,6 +3,8 @@
 # delimiter. An entry that needs several changes gives each its own perl:
 # line, and each must apply.
 #
+# New entries go in scripts/mutation/<area>.txt, not here: see its README.
+#
 # The source guards. Each rule in GuardScan (Tools/GuardKit) is turned off
 # on its own, and the wrong-case suite for its guard must fail: no rule can
 # stop catching its cases unseen. Then the scanner's own reading is broken,
@@ -351,6 +353,29 @@ test: diagnosticsCountCharacters
 file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
 perl: s~let column = String\(decoding: bytes\[start\.\.<min\(max\(start, offset\), bytes\.count\)\], as: UTF8\.self\)\.count \+ 1~let column = String(decoding: bytes[start..<min(max(start, offset), bytes.count)], as: UTF8.self).utf16.count + 1~
 
+# A note edit open in one window while another changes the note. The save
+# writes over whatever the note holds now, so words forgotten meanwhile
+# come back.
+test: aStaleDigestEditNeverSavesForgottenWords
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~store\.edit\(id, to: editDraft, ifStill: from\)~store.edit(id, to: editDraft, ifStill: nil)~
+
+# The store changes the note whatever it holds now.
+test: aStaleDigestEditNeverSavesForgottenWords
+file: Packages/PebbleKit/Sources/PebbleCore/Memory.swift
+perl: s~if let earlier, all\[index\]\.text != earlier \{ return \.notFound \}~~
+
+# The memory screen never hears a note changed in another window, so the
+# edit and the forget question stay open over words that went.
+test: aWindowPutsAwayAnEditOnceItHearsTheNoteChanged
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~Task \{ \@MainActor in self\?\.refresh\(\) \}\n        \}\n        backgroundWatch~Task { \@MainActor in _ = self }\n        }\n        backgroundWatch~
+
+# The screen hears, but keeps the edit and the question open.
+test: aWindowPutsAwayAnEditOnceItHearsTheNoteChanged
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~(private func dropStale\(\) \{)~$1\n        if true { return }~
+
 # The task ledger (PebbleCore/TaskLedger.swift). Every task ends with one
 # line that says how, a done only with proof, and a task that goes quiet
 # says so on its own. Each rule is broken on its own, and its tests must fail.
@@ -539,7 +564,7 @@ perl: s~        ledger\?\.watch\(\)\n~~
 # Today: a task no engine picked up at launch says it stopped.
 test: atLaunchATaskNoEngineHasSaysItStopped
 file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
-perl: s~        ledger\?\.launch\(live: tasks\?\.tasks \?\? \[\]\)\n~~
+perl: s~        ledger\?\.launch\(live: tasks\?\.tasks \?\? \[\],\n                       restorationComplete: keeper == nil \|\| store\?\.restorationComplete != false\)\n~~
 
 # Today: Forget everything takes the ledger, here and in another window.
 test: forgetEverythingEmptiesTheLedger
@@ -1032,33 +1057,28 @@ test: aMarkerThatCannotBeRemovedNeverSilentlyLosesANewGrant
 file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
 perl: s~dirty \|\| !addedWhileUnread\.isEmpty \?~dirty ?~
 
-# The retry and resume kit (docs/RETRY.md). A finished step whose
-# checkpoint is never kept is done again after the app closes.
-test: closingMidTaskThenPickingUpRepeatsNothing aRunThatCannotKeepItsPlaceStopsThere
-file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
-perl: s~guard keep\(&checkpoint\) else \{ return \.failed\(step: index, reason: \.notSaved\) \}\n(\s+)break stepTries~break stepTries~
+# The fallback router. A leaving hop never goes without a grant for that
+# exact action and target: without one it asks first.
+test: fallbackAsksFirstWithoutAGrantForThatExactActionAndTarget
+file: Packages/PebbleKit/Sources/PebbleCore/FallbackRouter.swift
+perl: s~covered\.map\(RouteClearance\.granted\) \?\? \.askFirst~covered.map(RouteClearance.granted) ?? .ready~
 
-# A Retry-After value that is never read.
-test: retryAfterIsHonouredButCapped a429WaitsAsLongAsRetryAfterSays
-file: Packages/PebbleKit/Sources/PebbleCore/RetryKit.swift
-perl: s~if let value = failure\.retryAfter, ~if let value = Optional<String>.none, ~
+# A leaving hop always carries the preview of what goes.
+test: fallbackLeavingHopsAlwaysShowThePreview
+file: Packages/PebbleKit/Sources/PebbleCore/FallbackRouter.swift
+perl: s~preview: hop\.leavesDevice \? action\.map\(RoutePreview\.init\) : nil~preview: nil~
 
-# A failure that isn't transient, tried again anyway.
-test: aFailureThatIsNotTransientIsNeverTriedAgain anErrorThatIsNotAStepFailureEndsTheRunWithoutATryAgain
-file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
-perl: s~if !failure\.isTransient \|\| tryNumber >= policy\.maxTries~if tryNumber >= policy.maxTries~
+# The hops are tried in one fixed order.
+test: fallbackTriesTheHopsInTheirFixedOrder
+file: Packages/PebbleKit/Sources/PebbleCore/FallbackRouter.swift
+perl: s~\[\.deviceContext, \.deviceFramework, \.relayFetch, \.remoteRun, \.askPerson\]~[.deviceContext, .deviceFramework, .remoteRun, .relayFetch, .askPerson]~
 
-# One try more than the most there may be.
-test: triesRunOutAfterTheMaximum
-file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
-perl: s~tryNumber >= policy\.maxTries~tryNumber > policy.maxTries~
+# Outside help off skips both leaving hops, and the decision says so.
+test: fallbackOutsideHelpOffSkipsLeavingHopsAndSaysSo
+file: Packages/PebbleKit/Sources/PebbleCore/FallbackRouter.swift
+perl: s~ *guard context\.outsideHelp\.isOn else \{ return \.failure\(\.outsideOff\) \}\n~~g
 
-# A key made from the time, not the step, differs on every try.
-test: aKeyComesFromTheTaskAndTheStepAlone aDropMidStepIsTriedAgainWithTheSameKey closingMidTaskThenPickingUpRepeatsNothing
-file: Packages/PebbleKit/Sources/PebbleCore/RetryKit.swift
-perl: s~value = "\\\(taskID\):\\\(step\)"~value = "\\(taskID):\\(Date().timeIntervalSince1970)"~
-
-# Picked up again, the run starts from the top and redoes finished steps.
-test: closingMidTaskThenPickingUpRepeatsNothing aQuestionForThePersonKeepsItsPlaceAndGoesOnWithTheAnswer aCheckpointOnDiskIsPickedUpByANewStore
-file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
-perl: s~var index = checkpoint\.finished~var index = 0~
+# Every decision is written to the task's ledger.
+test: fallbackWritesEachDecisionToTheLedger
+file: Packages/PebbleKit/Sources/PebbleCore/FallbackRouter.swift
+perl: s~ledger\.append\(\.working\(step: decision\.ledgerLine\), at: time, artifacts: artifacts\)~true~

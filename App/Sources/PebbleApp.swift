@@ -10,6 +10,14 @@ struct PebbleApp: App {
     /// The one notes store, shared by the memory screen and the cloud
     /// redactor, so both always see the same notes.
     private let memory: MemoryStore?
+    /// The model that runs here. The task engine takes its place from it.
+    private let model = LocalStubModel()
+    /// The real task engine: on this device only, reading the same notes,
+    /// its tasks kept in `kept`, the one task store. Shared by Today and the
+    /// background runner, so the summary counts the tasks Today shows. It
+    /// follows the notes whatever the model, and starts tasks only with one
+    /// that keeps every word here. None when the notes can't be opened.
+    private let tasks: DeviceTaskEngine?
     /// Off until the person turns it on, and unavailable while
     /// Config/Cloud.local.xcconfig has no address. Its settings and private
     /// words are kept next to the notes, out of backups.
@@ -21,10 +29,6 @@ struct PebbleApp: App {
     /// The app's questions, shared by Today and the background runner, so
     /// anything the runner asks waits in the same Needs you.
     private let needsYou: NeedsYou
-    /// The app's task engine, shared by Today and the background runner,
-    /// so the summary counts the tasks Today shows. `BackgroundWiring`
-    /// gives it: there is none yet.
-    private let tasks: (any TaskEngine)?
     /// Work done while the app is closed. Off until the person turns it on
     /// from the memory screen. Its runner is nil if its folder can't be made.
     private let background: BackgroundService
@@ -43,7 +47,11 @@ struct PebbleApp: App {
         LocalQuestionNotifier.shared.install()
         let memory = try? MemoryStore.onDevice()
         self.memory = memory
-        kept = (try? TaskStore.onDevice()) ?? TaskStore.forgetOnly()
+        let kept = (try? TaskStore.onDevice()) ?? TaskStore.forgetOnly()
+        self.kept = kept
+        let model = self.model
+        let tasks = memory.map { OnDeviceTasks.engine(model: model, notes: $0, store: kept) }
+        self.tasks = tasks
         let endpoint = CloudEndpoint.url(infoDictionary: Bundle.main.infoDictionary)
         // The setting is kept next to the notes. If either can't be opened,
         // nothing typed into the setting could be kept, so it reads as off,
@@ -69,14 +77,13 @@ struct PebbleApp: App {
         let wiring: BackgroundWiring
         #if DEBUG
         if let seeded = BackgroundSeed.launched() {
-            wiring = .app(needsYou: asks, store: { seeded.store }, toggle: { seeded.toggle })
+            wiring = .app(needsYou: asks, tasks: tasks, store: { seeded.store }, toggle: { seeded.toggle })
         } else {
-            wiring = .app(needsYou: asks)
+            wiring = .app(needsYou: asks, tasks: tasks)
         }
         #else
-        wiring = .app(needsYou: asks)
+        wiring = .app(needsYou: asks, tasks: tasks)
         #endif
-        tasks = wiring.tasks
         background = wiring.service
         background.start()
     }
@@ -104,7 +111,7 @@ struct PebbleApp: App {
     private var home: some View {
         HomeView(
             brand: brand,
-            model: LocalStubModel(),
+            model: model,
             names: UserDefaultsAgentNameStore(),
             onboarding: UserDefaultsOnboardingStore(),
             memory: memory,

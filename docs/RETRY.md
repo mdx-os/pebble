@@ -59,8 +59,8 @@ Nothing ends silently.
 
 `InMemoryCheckpointStore` is for tests. `CheckpointFileStore` keeps them in
 one file beside the kept tasks, written the way `TaskStore` writes its file:
-whole, through a staged copy that is renamed into place, protected until the
-device is first unlocked, and left out of backups. A file that is there but
+whole, through a staged copy that is renamed into place, readable only while
+the device is unlocked, and left out of backups. A file that is there but
 can't be read yet is never written over. Nothing makes that file yet; when
 the kit is wired in, Forget everything has to clear it too.
 

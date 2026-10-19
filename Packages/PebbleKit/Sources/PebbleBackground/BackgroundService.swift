@@ -219,18 +219,18 @@ final class SystemScheduler: BackgroundScheduling {
 /// share, and the service that gives the runner time.
 @MainActor
 public struct BackgroundWiring {
-    /// The app's task engine. There is none yet, so the summary says
-    /// nothing about tasks rather than count zero, and the switch promises
-    /// nothing about them.
+    /// The app's task engine, the one Today shows. The summary counts what
+    /// it finished from the task store it keeps them in. Nil when the notes
+    /// couldn't be opened: the summary then says nothing about tasks rather
+    /// than count zero, and the switch promises nothing about them.
     public let tasks: (any TaskEngine)?
     public let service: BackgroundService
 
     /// The app's own, on the device's store and switch. Tests pass their own.
-    public static func app(needsYou: NeedsYou,
+    public static func app(needsYou: NeedsYou, tasks: (any TaskEngine)?,
                            store: () throws -> BackgroundStore = { try BackgroundStore.onDevice() },
                            toggle: () throws -> any BackgroundSwitch = { try FileBackgroundSwitch.onDevice() })
         -> BackgroundWiring {
-        let tasks: (any TaskEngine)? = nil
         let runner = BackgroundRunner.onDevice(needsYou: needsYou, tasks: tasks, store: store, toggle: toggle)
         return BackgroundWiring(tasks: tasks, service: BackgroundService(runner: runner))
     }

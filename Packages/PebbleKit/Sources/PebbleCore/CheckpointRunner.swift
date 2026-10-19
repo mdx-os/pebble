@@ -75,7 +75,7 @@ public struct Checkpoint: Codable, Sendable, Equatable {
 }
 
 /// Where checkpoints are kept, one for each task. Reading may not be
-/// possible yet, as before the device is first unlocked, and then nothing
+/// possible yet, as while the device is locked, and then nothing
 /// is written either.
 public protocol CheckpointStoring: AnyObject, Sendable {
     /// Every checkpoint kept, by task, or nil while they can't be read.
@@ -212,8 +212,8 @@ public final class CheckpointRunner: Sendable {
     }
 }
 
-/// Kept in memory only, for tests. `locked` stands for a device not yet
-/// unlocked: nothing can be read or written.
+/// Kept in memory only, for tests. `locked` stands for a locked device:
+/// nothing can be read or written.
 public final class InMemoryCheckpointStore: CheckpointStoring, @unchecked Sendable {
     private let lock = NSLock()
     private var kept: [String: Checkpoint]
@@ -251,8 +251,8 @@ public final class InMemoryCheckpointStore: CheckpointStoring, @unchecked Sendab
 }
 
 /// The checkpoints in one file beside the kept tasks, written the way
-/// `TaskStore` writes its file: whole, through a staged copy, and protected
-/// until the device is first unlocked. A file that is there but can't be
+/// `TaskStore` writes its file: whole, through a staged copy, and readable
+/// only while the device is unlocked. A file that is there but can't be
 /// read yet is never written over.
 public final class CheckpointFileStore: CheckpointStoring, @unchecked Sendable {
     public let fileURL: URL
@@ -280,8 +280,8 @@ public final class CheckpointFileStore: CheckpointStoring, @unchecked Sendable {
         return CheckpointFileStore(fileURL: file)
     }
 
-    /// How the file is written: as the kept tasks are, so it can't be read
-    /// until the device is first unlocked.
+    /// How the file is written: as the kept tasks are, so it can be read
+    /// only while the device is unlocked.
     package static func fileWriting(protected: Bool = TaskStore.protectsFiles) -> Data.WritingOptions {
         TaskStore.fileWriting(protected: protected)
     }

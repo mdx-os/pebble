@@ -1,0 +1,30 @@
+# The retry and resume kit (docs/RETRY.md). A finished step whose
+# checkpoint is never kept is done again after the app closes.
+test: closingMidTaskThenPickingUpRepeatsNothing aRunThatCannotKeepItsPlaceStopsThere
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~guard keep\(&checkpoint\) else \{ return \.failed\(step: index, reason: \.notSaved\) \}\n(\s+)break stepTries~break stepTries~
+
+# A Retry-After value that is never read.
+test: retryAfterIsHonouredButCapped a429WaitsAsLongAsRetryAfterSays
+file: Packages/PebbleKit/Sources/PebbleCore/RetryKit.swift
+perl: s~if let value = failure\.retryAfter, ~if let value = Optional<String>.none, ~
+
+# A failure that isn't transient, tried again anyway.
+test: aFailureThatIsNotTransientIsNeverTriedAgain anErrorThatIsNotAStepFailureEndsTheRunWithoutATryAgain
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~if !failure\.isTransient \|\| tryNumber >= policy\.maxTries~if tryNumber >= policy.maxTries~
+
+# One try more than the most there may be.
+test: triesRunOutAfterTheMaximum
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~tryNumber >= policy\.maxTries~tryNumber > policy.maxTries~
+
+# A key made from the time, not the step, differs on every try.
+test: aKeyComesFromTheTaskAndTheStepAlone aDropMidStepIsTriedAgainWithTheSameKey closingMidTaskThenPickingUpRepeatsNothing
+file: Packages/PebbleKit/Sources/PebbleCore/RetryKit.swift
+perl: s~value = "\\\(taskID\):\\\(step\)"~value = "\\(taskID):\\(Date().timeIntervalSince1970)"~
+
+# Picked up again, the run starts from the top and redoes finished steps.
+test: closingMidTaskThenPickingUpRepeatsNothing aQuestionForThePersonKeepsItsPlaceAndGoesOnWithTheAnswer aCheckpointOnDiskIsPickedUpByANewStore
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~var index = checkpoint\.finished~var index = 0~
