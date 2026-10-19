@@ -33,7 +33,8 @@ in lint, a skill, or CI.
 - `make private-check`: fail on any file in git holding a word whose salted hash is in
   `Config/private-words.sha256` (prints file and line, never the word), and on a hosting
   provider hostname, a `.internal` or `.local` host or an IP address in `docs/`, `Config/`
-  or `Packages/` (part of verify). The owner fills the plain list in the git ignored
+  or `Packages/` (part of verify). A camel case name is also read in its parts and in
+  every run of up to 8 parts joined, within that one name only. The owner fills the plain list in the git ignored
   `Config/private-words.local.txt` and runs `make hash-private-words`; the hash file
   committed now is built from a made up placeholder word
 

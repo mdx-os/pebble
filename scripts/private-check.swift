@@ -18,7 +18,10 @@
 // Unicode NFC, so a letter written as one scalar (U+00E9) or as a base
 // letter and a combining mark (e and U+0301) is the same word. A word
 // written in camel case is also read in its parts, so a listed word inside
-// a name such as fooBarRelay, FOORelay or FOOs is found. Each line of the
+// a name such as fooBarRelay, FOORelay or FOOs is found, and so are runs of
+// up to 8 of its parts joined, so a listed foobar in OpenFooBarRelay is
+// found too. A join only counts when it is itself a listed word, and parts
+// of different names (foo_bar, foo bar) never join. Each line of the
 // hash file after the salt is the lowercase hex SHA-256 of "<salt>:<word>",
 // the word in lowercase NFC.
 import CryptoKit
@@ -118,8 +121,13 @@ func readHashes(_ repo: URL) -> (salt: String, hashes: Set<String>)? {
     return (salt, hashes)
 }
 
+/// The most camel case parts joined into one word. A name in more parts
+/// than this is still read whole, and in every run of up to this many.
+let maxJoined = 8
+
 /// The words of a line, each as `key` makes it: each run of letters and
-/// digits, and the parts of one written in camel case.
+/// digits, the parts of one written in camel case, and runs of up to
+/// `maxJoined` of those parts joined.
 func words(_ line: Substring) -> Set<String> {
     var found: Set<String> = []
     var run = ""
@@ -133,19 +141,29 @@ func words(_ line: Substring) -> Set<String> {
         // FOORelay). Both are kept, so the second only ever adds words:
         // useACMECorp still gives acmecorp.
         for capitalRuns in [false, true] {
+            var parts: [String] = []
             var part = ""
             for (index, character) in characters.enumerated() {
                 if index > 0, character.isUppercase {
                     let before = characters[index - 1]
                     let after = index + 1 < characters.count ? characters[index + 1] : nil
                     if before.isLowercase || before.isNumber || capitalRuns && before.isUppercase && after?.isLowercase == true {
-                        found.insert(key(part))
+                        parts.append(part)
                         part = ""
                     }
                 }
                 part.append(character)
             }
-            found.insert(key(part))
+            parts.append(part)
+            // Each part, and each run of 2 to `maxJoined` parts next to each
+            // other in this reading, joined: a listed word written in parts
+            // (OpenFooBarRelay gives foobar) is found. Only parts of one run
+            // of letters and digits join, so foo_bar never gives foobar.
+            for start in parts.indices {
+                for end in start..<min(start + maxJoined, parts.count) {
+                    found.insert(key(parts[start...end].joined()))
+                }
+            }
         }
         // A run of two or more capitals with one small s after it, at the
         // end or before the next part, is also read without the s: FOOs,

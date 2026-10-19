@@ -185,7 +185,9 @@ gets `runNotFound`.
   2,000 bytes.
 - `artifacts`: at most 5. `name` is a plain file name: one line, at most
   100 code points, no `/`, `\` or `:` Unicode scalar (even when followed
-  by a combining mark), and not starting with `.`. `kind`
+  by a combining mark), not starting with `.`, and no hidden character as
+  a target's `name` defines them, so a name of only U+200B is refused. A
+  joined emoji is fine in a file name. `kind`
   is `text`, `markdown`, `csv`, `json`, `png` or `pdf`. `bytesBase64` is
   the file in standard base64, at most 1,048,576 bytes once decoded, and
   all of a result's artifacts together at most 4,194,304. `sha256` is the
@@ -413,10 +415,18 @@ Runs:
 - `run.invalid.target-filler-name-1160.json`: Hangul jungseong filler U+1160
 - `run.invalid.target-filler-name-ffa0.json`: halfwidth Hangul filler U+FFA0
 - `run.invalid.target-filler-handle.json`: U+3164 in `handle`
+- `run.invalid.target-handle-spacing.json`: a space before `handle`,
+  which would not be shown as written
 - `run.invalid.target-joined-emoji-name.json`: a joined emoji, with
   U+200D, in `name`
 - `run.valid.target-emoji-selector-name.json`: an emoji with its
   selector U+FE0F in `name`
+- `run.invalid.artifact-hidden-name-200b.json`: an artifact `name` of
+  only the zero width space U+200B
+- `run.invalid.artifact-hidden-inside-200b.json`: U+200B inside an
+  artifact `name`
+- `run.invalid.artifact-hidden-name-3164.json`: an artifact `name` of
+  only the Hangul filler U+3164
 - `run.invalid.artifact-combining-slash.json`
 - `run.invalid.artifact-combining-backslash.json`
 - `run.invalid.artifact-combining-colon.json`

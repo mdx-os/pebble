@@ -430,7 +430,7 @@ perl: s~                if listed \{~                if false {~
 # A listed word inside a camel case name is let by.
 test: aPlantedWordFailsWithItsPlaceButNotTheWord
 file: scripts/private-check.swift
-perl: s~found\.insert\(key\(part\)\)\n\s*part = ""~part = ""~
+perl: s~parts\.append\(part\)\n\s*part = ""~part = ""~
 
 # The word printed with its place.
 test: aPlantedWordFailsWithItsPlaceButNotTheWord
@@ -633,13 +633,26 @@ test: review7EitherSpellingOfAWordIsFound review7EitherSpellingOfAWordInAPathIsR
 file: scripts/private-check.swift
 perl: s~word\.lowercased\(\)\.precomposedStringWithCanonicalMapping~word.lowercased()~
 
+# Since round 8 joined parts of the capital run reading give every part
+# of the plainer reading, so this entry stops the joins too.
 test: review7CapitalRunSplitOnlyAddsParts
 file: scripts/private-check.swift
 perl: s~for capitalRuns in \[false, true\]~for capitalRuns in [true]~
+perl: s~for end in start\.\.<min\(start \+ maxJoined, parts\.count\)~for end in start..<min(start + 1, parts.count)~
 
 test: review7PluralOfACapitalRunIsFound
 file: scripts/private-check.swift
 perl: s~found\.insert\(key\(String\(characters\[start\.\.<index\]\)\)\)~_ = start~
+
+# Round-8 relay review: a word written in camel case parts, in text and in
+# a path, and a hidden character in an artifact's name.
+test: review8AWordInPartsIsFound review8AWordInPartsInAPathIsRedacted
+file: scripts/private-check.swift
+perl: s~for end in start\.\.<min\(start \+ maxJoined, parts\.count\)~for end in start..<min(start + 1, parts.count)~
+
+test: review8ArtifactNameHiddenScalarsAreRefused anInvalidFixtureIsRefused
+file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
+perl: s~guard !AskFirst\.hasHiddenScalars\(name\) else \{ throw refused\("name has hidden characters", decoder\) \}~~
 
 # The task ledger (PebbleCore/TaskLedger.swift). Every task ends with one
 # line that says how, a done only with proof, and a task that goes quiet

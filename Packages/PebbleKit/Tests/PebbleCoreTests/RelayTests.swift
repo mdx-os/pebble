@@ -505,6 +505,32 @@ struct RelayRound4Tests {
     }
 }
 
+struct RelayRound8Tests {
+    static func artifactName(_ fixture: String) throws -> String {
+        let object = try #require(JSONSerialization.jsonObject(with: RelayFixtureTests.data(fixture)) as? [String: Any])
+        let artifacts = try #require((object["result"] as? [String: Any])?["artifacts"] as? [[String: Any]])
+        return try #require(artifacts.first?["name"] as? String)
+    }
+
+    /// An artifact's name has a target name's rule: nothing hidden in it,
+    /// whether it is all of the name or inside one. Each fixture holds the
+    /// character it's named for, written as the character itself.
+    @Test(arguments: [("name-200b", 0x200B, true), ("inside-200b", 0x200B, false), ("name-3164", 0x3164, true)] as [(String, UInt32, Bool)])
+    func review8ArtifactNameHiddenScalarsAreRefused(fixture: String, hidden: UInt32, alone: Bool) throws {
+        let name = "run.invalid.artifact-hidden-" + fixture
+        let scalars = try Self.artifactName(name).unicodeScalars.map(\.value)
+        #expect(alone ? scalars == [hidden] : scalars.count > 1 && scalars.contains(hidden))
+        #expect(throws: DecodingError.self) { try RelayFixtureTests.roundTrip(name) }
+    }
+
+    /// A plain name, one with an emoji and one with a joined emoji still read.
+    @Test(arguments: ["pool-hours.md", "Pool hours 👋🏽.md", "Family \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}.md"])
+    func review8PlainArtifactNameStillReads(name: String) throws {
+        let artifact = RelayArtifact(name: name, kind: .markdown, bytes: Data("Open at 9.".utf8))
+        #expect(try Relay.decode(RelayArtifact.self, from: Relay.encode(artifact)) == artifact)
+    }
+}
+
 struct RelayWholeRunTests {
     @Test(arguments: [RelayRunState.done, .failed, .stopped])
     func review2WholeRunUsesItsOwnContext(state: RelayRunState) throws {

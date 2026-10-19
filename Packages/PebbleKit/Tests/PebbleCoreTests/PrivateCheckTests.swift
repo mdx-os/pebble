@@ -497,6 +497,51 @@ struct PrivateCheckTests {
         #expect(!named, "the output names what was planted")
     }
 
+    /// The listed word written as two camel case parts, each capitalized,
+    /// in place of the % in `name`.
+    static func inParts(_ name: String) -> String {
+        name.replacingOccurrences(of: "%", with: word.prefix(6).capitalized + word.dropFirst(6).capitalized)
+    }
+
+    /// Parts next to each other in one name are joined, so a listed word
+    /// written in parts is found.
+    @Test(arguments: ["Open%Relay", "%", "open%", "make%RelayAgainNow"])
+    func review8AWordInPartsIsFound(name: String) throws {
+        let scratch = try Scratch()
+        try scratch.write("Sources/Relay.swift", "First line.\nstruct \(Self.inParts(name)) {}\n")
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("Sources/Relay.swift:2: a private word"), "\(result.output)")
+        let named = result.output.lowercased().contains(Self.word)
+        #expect(!named, "the output names what was planted")
+    }
+
+    @Test(arguments: ["Open%Relay", "%"])
+    func review8AWordInPartsInAPathIsRedacted(name: String) throws {
+        let scratch = try Scratch()
+        try scratch.write("docs/\(Self.inParts(name))/notes.md", "First line.\n\(Self.word)\n")
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("docs/[redacted]/notes.md:2: a private word"), "\(result.output)")
+        let named = result.output.lowercased().contains(Self.word)
+        #expect(!named, "the output names what was planted")
+    }
+
+    /// Parts of different names never join: zorble_frump is two names, as
+    /// it was before parts were joined, in a file and in a path.
+    @Test func review8PartsOfDifferentNamesNeverJoin() throws {
+        let scratch = try Scratch()
+        let apart = Self.word.prefix(6) + "_" + Self.word.dropFirst(6)
+        let host = "relay.corp" + ".internal"
+        try scratch.write("Sources/Relay.swift", "let \(apart) = 1\nlet a = \(Self.word.prefix(6)) \(Self.word.dropFirst(6))\n")
+        try scratch.write("docs/\(apart)/notes.md", "First line.\n\(host)\n")
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(!result.output.contains("Sources/Relay.swift"), "\(result.output)")
+        #expect(result.output.contains("docs/\(apart)/notes.md:2: a .internal or .local host"), "\(result.output)")
+        #expect(result.output.contains("1 found."), "\(result.output)")
+    }
+
     @Test(arguments: [
         ("relay.example" + ".herokuapp.com", "a hosting provider's hostname"),
         ("https://run-" + "abc.fly" + ".dev/v1", "a hosting provider's hostname"),

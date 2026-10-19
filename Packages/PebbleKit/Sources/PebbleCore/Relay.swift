@@ -406,6 +406,8 @@ public struct RelayArtifact: Codable, Sendable, Equatable {
               !name.unicodeScalars.contains(where: { "/\\:".unicodeScalars.contains($0) }) else {
             throw refused("name isn't a plain file name", decoder)
         }
+        // The rule a target's name has. A name of only U+200B shows as nothing.
+        guard !AskFirst.hasHiddenScalars(name) else { throw refused("name has hidden characters", decoder) }
         guard Relay.isHash(sha256) else { throw refused("sha256 isn't 64 lowercase hex digits", decoder) }
         guard bytesBase64.utf8.count <= (Relay.maxArtifactBytes + 2) / 3 * 4,
               let bytes = Data(base64Encoded: bytesBase64), bytes.count <= Relay.maxArtifactBytes else {
