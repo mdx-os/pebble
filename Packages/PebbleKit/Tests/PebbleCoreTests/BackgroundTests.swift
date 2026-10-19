@@ -1950,13 +1950,18 @@ struct BackgroundWordsTests {
         let quiet = MorningSummary(waiting: 0, finished: 0, couldNotFinish: 0, since: at(19, days: -1), late: nil)
         let busy = MorningSummary(waiting: 3, finished: 1, couldNotFinish: 2, since: at(19, days: -1), late: .locked)
         let unknown = MorningSummary(waiting: nil, finished: nil, couldNotFinish: nil, since: at(7, days: -3), late: nil)
+        let locked = MorningSummary(waiting: 0, finished: nil, couldNotFinish: nil, since: at(19, days: -1), late: nil,
+                                    tasksLocked: true)
         let en = Locale(identifier: "en_US")
         return [BackgroundWords.summaryTitle, BackgroundWords.whereWaiting,
                 BackgroundWords.summaryBody(quiet, now: at(7), calendar: calendar),
                 BackgroundWords.summaryBody(busy, now: at(7), calendar: calendar),
                 BackgroundWords.summaryBody(unknown, now: at(7), calendar: calendar),
+                BackgroundWords.summaryBody(locked, now: at(7), calendar: calendar),
                 BackgroundWords.summaryDetail(busy, now: at(7), calendar: calendar, locale: en),
                 BackgroundWords.summaryDetail(unknown, now: at(7), calendar: calendar, locale: en),
+                BackgroundWords.summaryDetail(locked, now: at(7), calendar: calendar, locale: en),
+                BackgroundWords.tasksLocked,
                 BackgroundWords.missedTitle(at(7)), BackgroundWords.settingTitle,
                 BackgroundWords.missedTitle(from: at(7), through: at(7, days: 2), calendar: calendar, locale: en),
                 BackgroundWords.missedTitle(from: at(7), through: at(7, days: 9), calendar: calendar, locale: en),

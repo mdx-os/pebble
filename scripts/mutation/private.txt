@@ -1,0 +1,182 @@
+# The private words check (scripts/private-check.swift).
+test: aPlantedWordFailsWithItsPlaceButNotTheWord
+file: scripts/private-check.swift
+perl: s~                if listed \{~                if false {~
+
+# A listed word inside a camel case name is let by.
+test: aPlantedWordFailsWithItsPlaceButNotTheWord
+file: scripts/private-check.swift
+perl: s~parts\.append\(part\)\n\s*part = ""~part = ""~
+
+# The word printed with its place.
+test: aPlantedWordFailsWithItsPlaceButNotTheWord
+file: scripts/private-check.swift
+perl: s~report\(index \+ 1, "a private word"\)~report(index + 1, "a private word \\(word)")~
+
+test: aPlantedHostFailsWithItsPlaceButNotTheHost
+file: scripts/private-check.swift
+perl: s~guard checkHosts else \{ continue \}~continue~
+
+test: hostsAreLookedForWhereTheyCouldShip
+file: scripts/private-check.swift
+perl: s~let checkHosts = hostFolders\.contains \{ file\.hasPrefix\(\$0\) \}~let checkHosts = !hostFolders.isEmpty~
+
+test: aTrackedPlainListFails
+file: scripts/private-check.swift
+perl: s~guard git\(repo, \["ls-files", "--cached", "--", plainList\]\)\.isEmpty else~guard true else~
+
+# Round-1 relay review: each new refusal has an independent mutation.
+test: reviewUTF16PrivateWordsAreChecked reviewUTF16HostsAreChecked reviewUTF16NULDoesNotHideWords
+file: scripts/private-check.swift
+perl: s~for text in decodedTexts\(data\)~for text in (data.contains(0) ? [] : [String(decoding: data, as: UTF8.self)])~
+
+test: reviewSensitivePathsAreRedacted
+file: scripts/private-check.swift
+perl: s~let path = diagnosticPath\(file, salt: salt, hashes: hashes\)~let path = file~
+
+test: reviewFixedDiagnosticPathsAreRedacted
+file: scripts/private-check.swift
+perl: s~return diagnosticPath\(path, salt: salt, hashes: Set\(lines.dropFirst\(\)\)\)~return path~
+
+# Round-2 relay review: keep encoding covered.
+# Since round 5 every whole data reading is scanned beside the readings
+# after a BOM, so an entry that breaks a BOM's reading also breaks the
+# whole data reading in the same encoding, or it changes nothing.
+test: review2UTF32IsChecked
+file: scripts/private-check.swift
+perl: s~\(\[0xff, 0xfe, 0x00, 0x00\], \.utf32LittleEndian, 4, false\),~~
+perl: s~\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)~(.utf32BigEndian, true)~
+
+test: review2UTF32IsChecked
+file: scripts/private-check.swift
+perl: s~\(\[0x00, 0x00, 0xfe, 0xff\], \.utf32BigEndian, 4, true\)~([0x00, 0x00, 0xfe, 0xff], .utf32LittleEndian, 4, false)~
+perl: s~\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)~(.utf32LittleEndian, false)~
+
+test: review2SymlinkTargetsAreChecked
+file: scripts/private-check.swift
+perl: s~data = Data\(target.utf8\)~data = Data()~
+
+test: review2SymlinkDestinationIsNotRead
+file: scripts/private-check.swift
+perl: s~data = Data\(target.utf8\)~data = (try? Data(contentsOf: url)) ?? Data(target.utf8)~
+
+test: review2CompressedIPv6IsChecked
+file: scripts/private-check.swift
+perl: s~\(\?<\=\[0-9a-f\]\|\[0-9a-f\]::\)~(?<=[0-9a-f])~
+
+test: review2LossyUTF8IsChecked
+file: scripts/private-check.swift
+perl: s~add\(String\(data: data, encoding: \.utf8\) \?\? String\(decoding: data, as: UTF8\.self\)\)~add(String(data: data, encoding: .utf8))~
+
+# Round-3 relay review: UTF-32 without a BOM and text a BOM can't vouch for.
+test: review3UTF32WithoutBOMIsChecked
+file: scripts/private-check.swift
+perl: s~\(4, \[\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)\]\)\]~(4, [])]~
+
+test: review3UTF32WithoutBOMIsChecked
+file: scripts/private-check.swift
+perl: s~\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)~(.utf32BigEndian, true)~
+
+test: review3UTF32WithoutBOMIsChecked
+file: scripts/private-check.swift
+perl: s~\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)~(.utf32LittleEndian, false)~
+
+test: review3UTF8AfterABOMIsChecked
+file: scripts/private-check.swift
+perl: s~add\(String\(data: data, encoding: \.utf8\) \?\? String\(decoding: data, as: UTF8\.self\)\)~add(String(data: data, encoding: .utf8))~
+
+test: review3BrokenBOMTextIsChecked
+file: scripts/private-check.swift
+perl: s~\?\? lossyText\(rest, width: bom.width, bigEndian: bom.bigEndian\)~?? ""~
+perl: s~ \?\? lossyText\(data, width: width, bigEndian: bigEndian\)~~
+
+test: review3BrokenBOMTextIsChecked
+file: scripts/private-check.swift
+perl: s~bigEndian \? \$1 : width - 1 - \$1~\$1~
+
+# Round-4 relay review: a start that fits two BOMs and broken text without
+# a BOM. The first entries put back the decoding 931fe10 had.
+test: review4BOMFittingTwoReadingsIsChecked
+file: scripts/private-check.swift
+perl: s~let fitting = boms\.filter \{ data\.starts\(with: \$0\.bytes\) \}~let fitting = Array(boms.filter { data.starts(with: \$0.bytes) }.prefix(1))~
+perl: s~\[\(String\.Encoding\.utf16LittleEndian, false\), \(\.utf16BigEndian, true\)\]~[(String.Encoding.utf16BigEndian, true)]~
+
+test: review4BrokenTextWithoutBOMIsChecked
+file: scripts/private-check.swift
+perl: s~ \?\? lossyText\(data, width: width, bigEndian: bigEndian\)~~
+perl: s~\(4, \[\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)\]\)\] \{~(4, [(.utf32LittleEndian, false), (.utf32BigEndian, true)])] where data.count.isMultiple(of: width) {~
+
+test: review4BrokenTextWithoutBOMIsChecked
+file: scripts/private-check.swift
+perl: s~ \?\? lossyText\(data, width: width, bigEndian: bigEndian\)~~
+
+test: review4BrokenTextWithoutBOMIsChecked
+file: scripts/private-check.swift
+perl: s~\(4, \[\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)\]\)\] \{~(4, [(.utf32LittleEndian, false), (.utf32BigEndian, true)])] where data.count.isMultiple(of: width) {~
+
+# Round-5 relay review: a start that fits a BOM stopping the other
+# readings. This puts back the early return 9f37abe had.
+test: review5BOMNeverStopsTheOtherReadings
+file: scripts/private-check.swift
+perl: s~(bigEndian: bom\.bigEndian\)\)\n    \}\n)~$1    if !fitting.isEmpty {\n        add(String(decoding: data, as: UTF8.self))\n        return texts\n    }\n~
+
+# Round-6 relay review: a word in capitals inside a camel case name, in
+# text and in a path, and a line two readings both find.
+test: review6CapitalizedWordInACamelCaseNameIsFound review6CapitalizedWordInAPathIsRedacted
+file: scripts/private-check.swift
+perl: s~ \|\| capitalRuns && before\.isUppercase && after\?\.isLowercase == true~~
+
+test: review6ALineFoundInTwoReadingsIsReportedOnce
+file: scripts/private-check.swift
+perl: s~guard reported\.insert\("\\\(line\): \\\(kind\)"\)\.inserted else \{ return \}~~
+
+# Round-7 relay review: a word in either Unicode spelling, in text and in
+# a path, the split before the capital run split, and a capital plural.
+test: review7EitherSpellingOfAWordIsFound review7EitherSpellingOfAWordInAPathIsRedacted
+file: scripts/private-check.swift
+perl: s~word\.lowercased\(\)\.precomposedStringWithCanonicalMapping~word.lowercased()~
+
+# Since round 8 joined parts of the capital run reading give every part
+# of the plainer reading, so this entry stops the joins too.
+test: review7CapitalRunSplitOnlyAddsParts
+file: scripts/private-check.swift
+perl: s~for capitalRuns in \[false, true\]~for capitalRuns in [true]~
+perl: s~for end in start\.\.<min\(start \+ maxJoined, parts\.count\)~for end in start..<min(start + 1, parts.count)~
+
+test: review7PluralOfACapitalRunIsFound
+file: scripts/private-check.swift
+perl: s~found\.insert\(key\(String\(characters\[start\.\.<index\]\)\)\)~_ = start~
+
+# Round-8 relay review: a word written in camel case parts, in text and in
+# a path.
+test: review8AWordInPartsIsFound review8AWordInPartsInAPathIsRedacted
+file: scripts/private-check.swift
+perl: s~for end in start\.\.<min\(start \+ maxJoined, parts\.count\)~for end in start..<min(start + 1, parts.count)~
+
+# Round-9 relay review: a listed word in a path is a problem whatever the
+# file holds, in a folder or file name, in camel case parts and in either
+# Unicode spelling. Each entry skips the path check one way.
+test: review9AWordInAPathFailsWhateverTheFileHolds review9AWordInAPathFailsWhenTheFileIsNotRead review9EitherSpellingOfAWordInAPathFails
+file: scripts/private-check.swift
+perl: s~if file\.split\(separator: "/"\)\.contains\(where:~if false, file.split(separator: "/").contains(where:~
+
+# Only the file name is checked, never its folders.
+test: review9AWordInAPathFailsWhateverTheFileHolds review9EitherSpellingOfAWordInAPathFails
+file: scripts/private-check.swift
+perl: s~if file\.split\(separator: "/"\)\.contains\(where:~if file.split(separator: "/").suffix(1).contains(where:~
+
+# The path is checked only for a file whose contents can be read and
+# hold something.
+test: review9AWordInAPathFailsWhateverTheFileHolds review9AWordInAPathFailsWhenTheFileIsNotRead review9EitherSpellingOfAWordInAPathFails
+file: scripts/private-check.swift
+perl: s~(\n\s*)(if file\.split\(separator: "/"\)\.contains\(where:)~$1guard (try? Data(contentsOf: repo.appendingPathComponent(file)))?.isEmpty == false else { continue }$1$2~
+
+# The path is printed but not counted, so the check still passes.
+test: review9AWordInAPathFailsWhateverTheFileHolds review9AWordInAPathFailsWhenTheFileIsNotRead review9EitherSpellingOfAWordInAPathFails
+file: scripts/private-check.swift
+perl: s~(a private word in its path"\)\n\s*)problems \+= 1~$1~
+
+# A name is read whole, without its camel case parts.
+test: review9AWordInAPathFailsWhateverTheFileHolds review9EitherSpellingOfAWordInAPathFails
+file: scripts/private-check.swift
+perl: s~contains\(where: \{ holdsPrivateWord\(\$0, salt: salt, hashes: hashes\) \}\)~contains(where: { \$0.split(separator: ".").contains { hashes.contains(hash(salt, key(\$0))) } })~

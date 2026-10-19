@@ -1,6 +1,48 @@
 import Foundation
 @testable import PebbleCore
+import SourceScan
 import Testing
+
+/// The app has one notes store, so every writer, the memory screen, the
+/// cloud redactor and the task engine alike, is heard by everything that
+/// watches it. `MemoryStore.onDevice()` gives the same store every time,
+/// its plain init is package-only so the app can't make another, and the
+/// only other makers in the package are the store's own and the
+/// showcase's, which is Debug only and never touches real notes.
+struct OneNotesStoreTests {
+    static let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+
+    /// Code only: comments and words in strings are blanked.
+    func code(_ file: URL) throws -> String {
+        String(SwiftSource(try String(contentsOf: file, encoding: .utf8)).code)
+    }
+
+    func swiftFiles(in folder: URL) throws -> [URL] {
+        try #require(FileManager.default.enumerator(at: folder, includingPropertiesForKeys: nil))
+            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
+    }
+
+    @Test func theAppMakesOneNotesStore() throws {
+        let app = Self.root.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("App")
+        let appFiles = try swiftFiles(in: app)
+        #expect(!appFiles.isEmpty)
+        var opened = 0
+        for file in appFiles {
+            let text = try code(file)
+            opened += text.components(separatedBy: "MemoryStore.onDevice(").count - 1
+            #expect(!text.contains("MemoryStore(fileURL"), "\(file.lastPathComponent) makes a store")
+        }
+        #expect(opened == 1)
+        let makers = try swiftFiles(in: Self.root.appendingPathComponent("Sources")).filter {
+            try code($0).contains("MemoryStore(fileURL")
+        }.map(\.lastPathComponent).sorted()
+        #expect(makers == ["Memory.swift", "ShowcaseScene.swift"])
+        let showcase = try String(contentsOf: Self.root.appendingPathComponent("Sources/PebbleUI/ShowcaseScene.swift"),
+                                  encoding: .utf8)
+        #expect(showcase.contains("#if canImport(SwiftUI) && DEBUG"))
+    }
+}
 
 struct MemoryStoreTests {
     let folder: URL
@@ -139,6 +181,51 @@ struct MemoryStoreTests {
         try Data("not notes {".utf8).write(to: store.fileURL)
         try store.forgetEverything()
         #expect(!FileManager.default.fileExists(atPath: store.fileURL.path))
+    }
+
+    /// The same words from the same source are kept once. The same words
+    /// the person typed are theirs, so they don't count.
+    @Test func rememberOnceKeepsTheSameWordsOnce() throws {
+        let typed = try saved(store.remember("Tea at four", source: .toldMe))
+        let first = try store.rememberOnce("Tea at four", source: .inferred)
+        #expect(first.isNew)
+        let again = try store.rememberOnce(" Tea at four ", source: .inferred)
+        #expect(!again.isNew)
+        #expect(again.decision == first.decision)
+        #expect(store.notes().count == 2)
+        #expect(store.notes().first == typed)
+        #expect(try store.rememberOnce("  ", source: .inferred) == (.needsWords, false))
+        #expect(try store.rememberOnce(String(repeating: "a", count: MemoryStore.maxLength + 1),
+                                       source: .inferred) == (.tooLong, false))
+    }
+
+    /// Every change, from any writer, is told to whoever watches, and only
+    /// changes are. Nothing is told once the watch is let go.
+    @Test func everyChangeIsTold() throws {
+        final class Count: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = 0
+            func add() { lock.lock(); value += 1; lock.unlock() }
+            var now: Int { lock.lock(); defer { lock.unlock() }; return value }
+        }
+        let count = Count()
+        var watch: TaskObservation? = store.observeChanges { count.add() }
+        let note = try saved(store.remember("Prefers tea", source: .toldMe))
+        #expect(count.now == 1)
+        _ = try store.edit(note.id, to: "Prefers green tea")
+        #expect(count.now == 2)
+        _ = try store.edit(note.id, to: " ")
+        _ = try store.rememberOnce("Prefers green tea", source: .toldMe)
+        #expect(try !store.forget(UUID()))
+        #expect(count.now == 2)
+        #expect(try store.forget(note.id))
+        #expect(count.now == 3)
+        try store.forgetEverything()
+        #expect(count.now == 4)
+        _ = watch
+        watch = nil
+        _ = try store.remember("Later", source: .toldMe)
+        #expect(count.now == 4)
     }
 
     private func saved(_ decision: MemoryStore.Decision) throws -> MemoryNote {

@@ -3,6 +3,8 @@
 # delimiter. An entry that needs several changes gives each its own perl:
 # line, and each must apply.
 #
+# New entries go in scripts/mutation/<area>.txt, not here: see its README.
+#
 # The source guards. Each rule in GuardScan (Tools/GuardKit) is turned off
 # on its own, and the wrong-case suite for its guard must fail: no rule can
 # stop catching its cases unseen. Then the scanner's own reading is broken,
@@ -351,308 +353,28 @@ test: diagnosticsCountCharacters
 file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
 perl: s~let column = String\(decoding: bytes\[start\.\.<min\(max\(start, offset\), bytes\.count\)\], as: UTF8\.self\)\.count \+ 1~let column = String(decoding: bytes[start..<min(max(start, offset), bytes.count)], as: UTF8.self).utf16.count + 1~
 
-# The relay protocol (docs/RELAY.md). Each refusal is turned off on its own,
-# and a conformance vector or a test of its own must then be let by.
-
-# An id with more than letters and digits.
-test: idsArePlainLettersAndDigits anInvalidFixtureIsRefused
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~text\.utf8\.allSatisfy\(isLetterOrDigit\)~true~
-
-test: anInvalidFixtureIsRefused
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~guard \(1\.\.\.Relay\.maxMinutes\)\.contains\(maxMinutes\) else~guard true else~
-
-test: anInvalidFixtureIsRefused
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~guard \(state == \.needsYou\) == \(needsYou != nil\) else~guard true else~
-
-test: anInvalidFixtureIsRefused
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~guard Relay\.hex\(SHA256\.hash\(data: bytes\)\) == sha256 else~guard true else~
-
-# A handle the approval sheet wouldn't show as the relay sent it.
-test: anInvalidFixtureIsRefused
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~guard recipient\.handle == handle else~guard true else~
-
-test: anInvalidFixtureIsRefused
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~guard kind\.isFinal == \(signature != nil\) else~guard true else~
-
-test: oneLineFieldsRefuseWhatIsNotOneLine
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~return scalars\.allSatisfy \{ !isControl\(\$0\) && \$0 != "\\u\{2028\}" && \$0 != "\\u\{2029\}" \}~return true~
-
-test: timesAreUTCInWholeSeconds
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~formatter\.string\(from: date\) == text~true~
-
-test: aBodyPastTheLimitIsRefusedUnread
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~guard data\.count <= maxBodyBytes else~guard true else~
-
-# The receipt chain: each check of RelayReceipts.verify on its own.
-test: anInvalidFixtureIsRefused
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~guard receipt\.seq == index \+ 1 else \{ throw \.seq\(index: index\) \}~~
-
-test: aReorderedPairWithSeqRenumberedFails anInvalidFixtureIsRefused
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~guard receipt\.prevHash == prevHash else \{ throw \.prevHash\(index: index\) \}~~
-
-test: aChangedFieldFails anInvalidFixtureIsRefused
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~guard receipt\.hash == own else \{ throw \.hash\(index: index\) \}~~
-
-test: aWrongKeyFails aChangedFieldWithEveryHashRemadeFails
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~publicKey\.isValidSignature\(signature, for: signed\)~signed.count == 32~
-
-test: anUnfinishedChainFailsButItsLinksHold
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~guard let last = receipts\.last, last\.kind\.isFinal else~guard let last = receipts.last else~
-
-test: nothingComesAfterTheEnd
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~if receipt\.kind\.isFinal, index != receipts\.count - 1 \{ throw \.kind\(index: index\) \}~~
-
-# A canonical form that drifts from the one the page writes.
-test: theCanonicalFormIsNineLines theFixtureChainsLink
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~"relay-receipt/1",~"relay-receipt/2",~
-
-# The private words check (scripts/private-check.swift).
-test: aPlantedWordFailsWithItsPlaceButNotTheWord
-file: scripts/private-check.swift
-perl: s~                if listed \{~                if false {~
-
-# A listed word inside a camel case name is let by.
-test: aPlantedWordFailsWithItsPlaceButNotTheWord
-file: scripts/private-check.swift
-perl: s~parts\.append\(part\)\n\s*part = ""~part = ""~
-
-# The word printed with its place.
-test: aPlantedWordFailsWithItsPlaceButNotTheWord
-file: scripts/private-check.swift
-perl: s~report\(index \+ 1, "a private word"\)~report(index + 1, "a private word \\(word)")~
-
-test: aPlantedHostFailsWithItsPlaceButNotTheHost
-file: scripts/private-check.swift
-perl: s~guard checkHosts else \{ continue \}~continue~
-
-test: hostsAreLookedForWhereTheyCouldShip
-file: scripts/private-check.swift
-perl: s~let checkHosts = hostFolders\.contains \{ file\.hasPrefix\(\$0\) \}~let checkHosts = !hostFolders.isEmpty~
-
-test: aTrackedPlainListFails
-file: scripts/private-check.swift
-perl: s~guard git\(repo, \["ls-files", "--cached", "--", plainList\]\)\.isEmpty else~guard true else~
-
-# Round-1 relay review: each new refusal has an independent mutation.
-test: reviewCrossRunReplayIsRefused
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~receipt.runId == runId~true~
-
-test: reviewCrossRunReplayIsRefused
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~receipt.clientRunId == clientRunId~true~
-
-test: reviewRunIdentityIsSigned
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~            "runId:.*\n~~
-
-test: reviewRunIdentityIsSigned
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~            "clientRunId:.*\n~~
-
-test: reviewTerminalStateMustMatch
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~guard last.kind == expectedKind else \{ throw \.terminalState \}~_ = expectedKind~
-
-test: reviewTerminalStateMustMatch
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~default: throw \.terminalState~default: expectedKind = .runDone~
-
-test: reviewPurchaseRequiresPrice
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~guard action != \.purchase \|\| price != nil else~guard true else~
-
-test: reviewPurchaseRefusesInvalidPrice
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~guard price != nil else~guard true else~
-
-test: reviewArtifactSeparatorsAreScalars
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~!name.unicodeScalars.contains~!name.contains~
-perl: s~".unicodeScalars.contains\(\$0\)~".contains(\$0)~
-
-test: reviewTargetLimitsAreScalars
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~name.unicodeScalars.count <= 40~name.count <= 40~
-
-test: reviewTargetLimitsAreScalars
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~handle.unicodeScalars.count <= 254~handle.count <= 254~
-
-test: reviewUTF16PrivateWordsAreChecked reviewUTF16HostsAreChecked reviewUTF16NULDoesNotHideWords
-file: scripts/private-check.swift
-perl: s~for text in decodedTexts\(data\)~for text in (data.contains(0) ? [] : [String(decoding: data, as: UTF8.self)])~
-
-test: reviewSensitivePathsAreRedacted
-file: scripts/private-check.swift
-perl: s~let path = diagnosticPath\(file, salt: salt, hashes: hashes\)~let path = file~
-
-
-test: reviewFixedDiagnosticPathsAreRedacted
-file: scripts/private-check.swift
-perl: s~return diagnosticPath\(path, salt: salt, hashes: Set\(lines.dropFirst\(\)\)\)~return path~
-
-
-# Round-2 relay review: keep encoding, link text and scalar refusals covered.
-test: review2LeadingDotIsAScalar
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~name.unicodeScalars.first != "\."~!name.hasPrefix(".")~
-
-test: review2NonPurchaseRefusesPrice
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~guard action == \.purchase \|\| price == nil else~guard true else~
-
-# Since round 5 every whole data reading is scanned beside the readings
-# after a BOM, so an entry that breaks a BOM's reading also breaks the
-# whole data reading in the same encoding, or it changes nothing.
-test: review2UTF32IsChecked
-file: scripts/private-check.swift
-perl: s~\(\[0xff, 0xfe, 0x00, 0x00\], \.utf32LittleEndian, 4, false\),~~
-perl: s~\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)~(.utf32BigEndian, true)~
-
-test: review2UTF32IsChecked
-file: scripts/private-check.swift
-perl: s~\(\[0x00, 0x00, 0xfe, 0xff\], \.utf32BigEndian, 4, true\)~([0x00, 0x00, 0xfe, 0xff], .utf32LittleEndian, 4, false)~
-perl: s~\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)~(.utf32LittleEndian, false)~
-
-test: review2SymlinkTargetsAreChecked
-file: scripts/private-check.swift
-perl: s~data = Data\(target.utf8\)~data = Data()~
-
-test: review2SymlinkDestinationIsNotRead
-file: scripts/private-check.swift
-perl: s~data = Data\(target.utf8\)~data = (try? Data(contentsOf: url)) ?? Data(target.utf8)~
-
-test: review2CompressedIPv6IsChecked
-file: scripts/private-check.swift
-perl: s~\(\?<\=\[0-9a-f\]\|\[0-9a-f\]::\)~(?<=[0-9a-f])~
-
-test: review2LossyUTF8IsChecked
-file: scripts/private-check.swift
-perl: s~add\(String\(data: data, encoding: \.utf8\) \?\? String\(decoding: data, as: UTF8\.self\)\)~add(String(data: data, encoding: .utf8))~
-
-test: review2WholeRunUsesItsOwnContext
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~runId: run.runId~runId: run.receipts.first?.runId ?? ""~
-
-test: review2WholeRunUsesItsOwnContext
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~terminalState: run.state~terminalState: .done~
-
-# Round-3 relay review: UTF-32 without a BOM, text a BOM can't vouch for,
-# and fillers in a target's name.
-test: review3UTF32WithoutBOMIsChecked
-file: scripts/private-check.swift
-perl: s~\(4, \[\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)\]\)\]~(4, [])]~
-
-test: review3UTF32WithoutBOMIsChecked
-file: scripts/private-check.swift
-perl: s~\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)~(.utf32BigEndian, true)~
-
-test: review3UTF32WithoutBOMIsChecked
-file: scripts/private-check.swift
-perl: s~\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)~(.utf32LittleEndian, false)~
-
-test: review3UTF8AfterABOMIsChecked
-file: scripts/private-check.swift
-perl: s~add\(String\(data: data, encoding: \.utf8\) \?\? String\(decoding: data, as: UTF8\.self\)\)~add(String(data: data, encoding: .utf8))~
-
-test: review3BrokenBOMTextIsChecked
-file: scripts/private-check.swift
-perl: s~\?\? lossyText\(rest, width: bom.width, bigEndian: bom.bigEndian\)~?? ""~
-perl: s~ \?\? lossyText\(data, width: width, bigEndian: bigEndian\)~~
-
-test: review3BrokenBOMTextIsChecked
-file: scripts/private-check.swift
-perl: s~bigEndian \? \$1 : width - 1 - \$1~\$1~
-
-test: review3TargetNameFillersAreRefused
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~guard !AskFirst.hasHiddenScalars\(name\) else~guard true else~
-
-# Round-4 relay review: a start that fits two BOMs, broken text without a
-# BOM, and the joiner in a target's name. The first entries put back the
-# decoding 931fe10 had.
-test: review4BOMFittingTwoReadingsIsChecked
-file: scripts/private-check.swift
-perl: s~let fitting = boms\.filter \{ data\.starts\(with: \$0\.bytes\) \}~let fitting = Array(boms.filter { data.starts(with: \$0.bytes) }.prefix(1))~
-perl: s~\[\(String\.Encoding\.utf16LittleEndian, false\), \(\.utf16BigEndian, true\)\]~[(String.Encoding.utf16BigEndian, true)]~
-
-test: review4BrokenTextWithoutBOMIsChecked
-file: scripts/private-check.swift
-perl: s~ \?\? lossyText\(data, width: width, bigEndian: bigEndian\)~~
-perl: s~\(4, \[\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)\]\)\] \{~(4, [(.utf32LittleEndian, false), (.utf32BigEndian, true)])] where data.count.isMultiple(of: width) {~
-
-test: review4BrokenTextWithoutBOMIsChecked
-file: scripts/private-check.swift
-perl: s~ \?\? lossyText\(data, width: width, bigEndian: bigEndian\)~~
-
-test: review4BrokenTextWithoutBOMIsChecked
-file: scripts/private-check.swift
-perl: s~\(4, \[\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)\]\)\] \{~(4, [(.utf32LittleEndian, false), (.utf32BigEndian, true)])] where data.count.isMultiple(of: width) {~
-
-test: review4JoinedEmojiNameIsRefused
-file: Packages/PebbleKit/Sources/PebbleCore/AskFirst.swift
-perl: s~\.unicodeScalars\.filter \{ !CharacterSet\.controlCharacters~.unicodeScalars.filter { \$0.value == 0x200D || !CharacterSet.controlCharacters~
-
-# Round-5 relay review: a start that fits a BOM stopping the other
-# readings. This puts back the early return 9f37abe had.
-test: review5BOMNeverStopsTheOtherReadings
-file: scripts/private-check.swift
-perl: s~(bigEndian: bom\.bigEndian\)\)\n    \}\n)~$1    if !fitting.isEmpty {\n        add(String(decoding: data, as: UTF8.self))\n        return texts\n    }\n~
-
-# Round-6 relay review: a word in capitals inside a camel case name, in
-# text and in a path, and a line two readings both find.
-test: review6CapitalizedWordInACamelCaseNameIsFound review6CapitalizedWordInAPathIsRedacted
-file: scripts/private-check.swift
-perl: s~ \|\| capitalRuns && before\.isUppercase && after\?\.isLowercase == true~~
-
-test: review6ALineFoundInTwoReadingsIsReportedOnce
-file: scripts/private-check.swift
-perl: s~guard reported\.insert\("\\\(line\): \\\(kind\)"\)\.inserted else \{ return \}~~
-
-# Round-7 relay review: a word in either Unicode spelling, in text and in
-# a path, the split before the capital run split, and a capital plural.
-test: review7EitherSpellingOfAWordIsFound review7EitherSpellingOfAWordInAPathIsRedacted
-file: scripts/private-check.swift
-perl: s~word\.lowercased\(\)\.precomposedStringWithCanonicalMapping~word.lowercased()~
-
-# Since round 8 joined parts of the capital run reading give every part
-# of the plainer reading, so this entry stops the joins too.
-test: review7CapitalRunSplitOnlyAddsParts
-file: scripts/private-check.swift
-perl: s~for capitalRuns in \[false, true\]~for capitalRuns in [true]~
-perl: s~for end in start\.\.<min\(start \+ maxJoined, parts\.count\)~for end in start..<min(start + 1, parts.count)~
-
-test: review7PluralOfACapitalRunIsFound
-file: scripts/private-check.swift
-perl: s~found\.insert\(key\(String\(characters\[start\.\.<index\]\)\)\)~_ = start~
-
-# Round-8 relay review: a word written in camel case parts, in text and in
-# a path, and a hidden character in an artifact's name.
-test: review8AWordInPartsIsFound review8AWordInPartsInAPathIsRedacted
-file: scripts/private-check.swift
-perl: s~for end in start\.\.<min\(start \+ maxJoined, parts\.count\)~for end in start..<min(start + 1, parts.count)~
-
-test: review8ArtifactNameHiddenScalarsAreRefused anInvalidFixtureIsRefused
-file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
-perl: s~guard !AskFirst\.hasHiddenScalars\(name\) else \{ throw refused\("name has hidden characters", decoder\) \}~~
+# A note edit open in one window while another changes the note. The save
+# writes over whatever the note holds now, so words forgotten meanwhile
+# come back.
+test: aStaleDigestEditNeverSavesForgottenWords
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~store\.edit\(id, to: editDraft, ifStill: from\)~store.edit(id, to: editDraft, ifStill: nil)~
+
+# The store changes the note whatever it holds now.
+test: aStaleDigestEditNeverSavesForgottenWords
+file: Packages/PebbleKit/Sources/PebbleCore/Memory.swift
+perl: s~if let earlier, all\[index\]\.text != earlier \{ return \.notFound \}~~
+
+# The memory screen never hears a note changed in another window, so the
+# edit and the forget question stay open over words that went.
+test: aWindowPutsAwayAnEditOnceItHearsTheNoteChanged
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~Task \{ \@MainActor in self\?\.refresh\(\) \}\n        \}\n        backgroundWatch~Task { \@MainActor in _ = self }\n        }\n        backgroundWatch~
+
+# The screen hears, but keeps the edit and the question open.
+test: aWindowPutsAwayAnEditOnceItHearsTheNoteChanged
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~(private func dropStale\(\) \{)~$1\n        if true { return }~
 
 # The task ledger (PebbleCore/TaskLedger.swift). Every task ends with one
 # line that says how, a done only with proof, and a task that goes quiet
@@ -842,7 +564,7 @@ perl: s~        ledger\?\.watch\(\)\n~~
 # Today: a task no engine picked up at launch says it stopped.
 test: atLaunchATaskNoEngineHasSaysItStopped
 file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
-perl: s~        ledger\?\.launch\(live: tasks\?\.tasks \?\? \[\]\)\n~~
+perl: s~        ledger\?\.launch\(live: tasks\?\.tasks \?\? \[\],\n                       restorationComplete: keeper == nil \|\| store\?\.restorationComplete != false\)\n~~
 
 # Today: Forget everything takes the ledger, here and in another window.
 test: forgetEverythingEmptiesTheLedger
@@ -1335,30 +1057,28 @@ test: aMarkerThatCannotBeRemovedNeverSilentlyLosesANewGrant
 file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
 perl: s~dirty \|\| !addedWhileUnread\.isEmpty \?~dirty ?~
 
-# Round-9 relay review: a listed word in a path is a problem whatever the
-# file holds, in a folder or file name, in camel case parts and in either
-# Unicode spelling. Each entry skips the path check one way.
-test: review9AWordInAPathFailsWhateverTheFileHolds review9AWordInAPathFailsWhenTheFileIsNotRead review9EitherSpellingOfAWordInAPathFails
-file: scripts/private-check.swift
-perl: s~if file\.split\(separator: "/"\)\.contains\(where:~if false, file.split(separator: "/").contains(where:~
+# The fallback router. A leaving hop never goes without a grant for that
+# exact action and target: without one it asks first.
+test: fallbackAsksFirstWithoutAGrantForThatExactActionAndTarget
+file: Packages/PebbleKit/Sources/PebbleCore/FallbackRouter.swift
+perl: s~covered\.map\(RouteClearance\.granted\) \?\? \.askFirst~covered.map(RouteClearance.granted) ?? .ready~
 
-# Only the file name is checked, never its folders.
-test: review9AWordInAPathFailsWhateverTheFileHolds review9EitherSpellingOfAWordInAPathFails
-file: scripts/private-check.swift
-perl: s~if file\.split\(separator: "/"\)\.contains\(where:~if file.split(separator: "/").suffix(1).contains(where:~
+# A leaving hop always carries the preview of what goes.
+test: fallbackLeavingHopsAlwaysShowThePreview
+file: Packages/PebbleKit/Sources/PebbleCore/FallbackRouter.swift
+perl: s~preview: hop\.leavesDevice \? action\.map\(RoutePreview\.init\) : nil~preview: nil~
 
-# The path is checked only for a file whose contents can be read and
-# hold something.
-test: review9AWordInAPathFailsWhateverTheFileHolds review9AWordInAPathFailsWhenTheFileIsNotRead review9EitherSpellingOfAWordInAPathFails
-file: scripts/private-check.swift
-perl: s~(\n\s*)(if file\.split\(separator: "/"\)\.contains\(where:)~$1guard (try? Data(contentsOf: repo.appendingPathComponent(file)))?.isEmpty == false else { continue }$1$2~
+# The hops are tried in one fixed order.
+test: fallbackTriesTheHopsInTheirFixedOrder
+file: Packages/PebbleKit/Sources/PebbleCore/FallbackRouter.swift
+perl: s~\[\.deviceContext, \.deviceFramework, \.relayFetch, \.remoteRun, \.askPerson\]~[.deviceContext, .deviceFramework, .remoteRun, .relayFetch, .askPerson]~
 
-# The path is printed but not counted, so the check still passes.
-test: review9AWordInAPathFailsWhateverTheFileHolds review9AWordInAPathFailsWhenTheFileIsNotRead review9EitherSpellingOfAWordInAPathFails
-file: scripts/private-check.swift
-perl: s~(a private word in its path"\)\n\s*)problems \+= 1~$1~
+# Outside help off skips both leaving hops, and the decision says so.
+test: fallbackOutsideHelpOffSkipsLeavingHopsAndSaysSo
+file: Packages/PebbleKit/Sources/PebbleCore/FallbackRouter.swift
+perl: s~ *guard context\.outsideHelp\.isOn else \{ return \.failure\(\.outsideOff\) \}\n~~g
 
-# A name is read whole, without its camel case parts.
-test: review9AWordInAPathFailsWhateverTheFileHolds review9EitherSpellingOfAWordInAPathFails
-file: scripts/private-check.swift
-perl: s~contains\(where: \{ holdsPrivateWord\(\$0, salt: salt, hashes: hashes\) \}\)~contains(where: { \$0.split(separator: ".").contains { hashes.contains(hash(salt, key(\$0))) } })~
+# Every decision is written to the task's ledger.
+test: fallbackWritesEachDecisionToTheLedger
+file: Packages/PebbleKit/Sources/PebbleCore/FallbackRouter.swift
+perl: s~ledger\.append\(\.working\(step: decision\.ledgerLine\), at: time, artifacts: artifacts\)~true~
