@@ -47,7 +47,7 @@ import PebbleCore
 /// Steps move on with `runPending()`. With a `pace`, the engine calls it
 /// itself while work is waiting; without one, the caller does, so tests
 /// never sleep.
-public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
+public final class DeviceTaskEngine: RunsReconsBeside, @unchecked Sendable {
     /// Where a task is in its work.
     enum Stage: String, Codable, Equatable {
         case reading, picking, writing
@@ -486,7 +486,8 @@ public final class DeviceTaskEngine: TaskEngine, @unchecked Sendable {
         case (.saved(let note), let isNew)?: saved = (note, isNew ? DigestWords.done : DigestWords.alreadyKept)
         case (.tooLong, _)?: saved = (nil, DigestWords.tooLongToKeep)
         case (.needsWords, _)?: saved = (nil, DigestWords.emptyDigest)
-        case (.notFound, _)?, nil: saved = (nil, DigestWords.couldNotSave)
+        // Refused only for a note from something looked into, never this one.
+        case (.notFound, _)?, (.notKept, _)?, nil: saved = (nil, DigestWords.couldNotSave)
         }
         let lookAgain = mutate { () -> Bool in
             guard let index = runs.firstIndex(where: { $0.task.id == id }), runs[index].stage == .saving else { return false }

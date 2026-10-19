@@ -59,6 +59,16 @@ public struct AgentTask: Identifiable, Sendable, Equatable {
     /// True while the agent may still do something on this task.
     public var isActive: Bool { !state.isFinished }
 
+    /// The same task under another id, its steps numbered as they were.
+    func with(id: String) -> AgentTask {
+        var copy = AgentTask(id: id, title: title, step: step, progress: progress, state: state,
+                             question: question, wrapUp: wrapUp, result: result, startedAt: startedAt,
+                             updatedAt: updatedAt)
+        copy.history = history
+        copy.stepsRecorded = stepsRecorded
+        return copy
+    }
+
     /// Waiting for a yes from `AskFirst`, so the card can offer Approve.
     public var waitsForApproval: Bool { state == .waitingOnYou && question != nil }
 
@@ -329,6 +339,10 @@ public protocol TaskEngine: AnyObject, Sendable {
     /// done, so the feed labels them like every other example.
     var isSample: Bool { get }
 
+    /// True when this one task is an example. The feed asks per card, so
+    /// an example never makes real work look like one.
+    func isSample(_ id: String) -> Bool
+
     /// The tasks this engine can start, for Today to offer.
     var builtIns: [TaskRequest] { get }
 
@@ -347,6 +361,7 @@ public protocol TaskEngine: AnyObject, Sendable {
 
 extension TaskEngine {
     public var isSample: Bool { false }
+    public func isSample(_ id: String) -> Bool { isSample }
     public var builtIns: [TaskRequest] { [] }
     public var hasStoredFile: Bool { false }
     public func forgetQuotes(of note: MemoryNote) -> QuotesForgotten { .notQuoted }

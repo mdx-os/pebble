@@ -3,7 +3,8 @@
 How the agent talks, everywhere: the first run, the chat, memory, and the
 questions it asks before it acts. Read this before writing any words a
 person will see. The words themselves live in `PebbleCore` (`FirstRunWords`,
-`FirstConversation`, `MemoryWords`, `ConfirmationWords`, `FeedWords`, `TaskWords`, `BackgroundWords` and friends), so a
+`FirstConversation`, `MemoryWords`, `ConfirmationWords`, `FeedWords`, `TaskWords`, `BackgroundWords`,
+`ReconWords` and friends), so a
 change here usually means a change there.
 
 ## Who the agent is
@@ -74,7 +75,9 @@ when the code makes them true.
   and passed down by the app. There is no second flag. Every device line
   takes it: `FirstConversation.opening` and `presence`,
   `FirstRunWords.helloDetail`, `MemoryWords.empty`, `saved` and
-  `privacyNote`, `FeedWords.sampleNote` and `CloudWords.offDetail`. Memory lines follow it too: notes never reach a model,
+  `privacyNote`, `FeedWords.sampleNote`, `ReconWords.offer` (for example
+  pages) and `rememberDetail`, and `CloudWords.offDetail`. Memory lines
+  follow it too: notes never reach a model,
   but with a cloud model the chat does leave the device, so a promise on
   the memory screen would mislead. `PrivacyPlaceTests` pins every line.
 - When the flag is off, say nothing about the device. Drop the sentence
@@ -193,6 +196,30 @@ could have been reworded. A digest the agent takes out of the notes itself,
 because every note it quoted went, says so ("I took the weekly digest out
 of your notes, because the notes it quoted are gone or changed."), never
 that the person removed it.
+
+### Looking into something
+
+When the person asks the agent to look into something, the chat offers
+first and starts nothing on its own: "Want me to look into this?" A
+summary says only what its sources say. Every point names where it came
+from, and when sources don't agree, the card says so plainly instead of
+picking a side. A point names only the sources that say it; the other
+side is named in the disagreement, and a remembered point keeps that
+disagreement with it. It says when it was gathered, so the person knows how
+fresh it is. Saving a point to memory happens only on a tap. While the
+only pages to read are examples, the offer says so. Points the cloud put
+into words say so under the card and under the points in Open sources,
+since they are a retelling, not quotes. Remembered, such a point says
+"put into words in the cloud, from the sources it was given" and names no
+publisher, in the note or its label: which page the cloud said a line came
+from was never checked on the device. The overview above a card worded in
+the cloud is the plain one that only says what was read. A kept point is
+the person's own note: it stays when the card goes, and the remember sheet
+says so. A point from example pages is never kept. Sources that couldn't
+be read are a failure, said plainly, never "nothing found". Asked again for
+a topic already going, the agent says it is on it; once that one is ready,
+"That one's ready." A note under a card never says nothing went to the
+cloud after the person said send.
 
 ### Work while you're away
 

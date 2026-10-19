@@ -82,6 +82,9 @@ public enum FeedAction: Sendable, Equatable {
     /// question sheet as `review`, for the question the task's engine asked
     /// through `AskFirst`. Holds the task without live progress.
     case task(AgentTask)
+    /// Starts looking into this topic, as a task that lands back in the
+    /// feed. The tap is the person's go ahead; nothing starts without it.
+    case lookInto(String)
     /// A receipt card, whose one button clears it.
     case receipt(Receipt)
 
@@ -91,6 +94,7 @@ public enum FeedAction: Sendable, Equatable {
         case .talk: FeedWords.talkTitle
         case .review: FeedWords.reviewTitle
         case .task(let task): task.waitsForApproval ? TaskWords.approveTitle : FeedWords.openTitle
+        case .lookInto: ReconWords.lookIntoTitle
         case .receipt: TaskWords.dismissTitle
         }
     }
@@ -102,6 +106,7 @@ public enum FeedAction: Sendable, Equatable {
         case .talk: FeedWords.talkHint
         case .review: FeedWords.reviewHint
         case .task(let task): task.waitsForApproval ? FeedWords.reviewHint : FeedWords.openHint
+        case .lookInto: ReconWords.lookIntoHint
         case .receipt: ReceiptWords.clearHint
         }
     }
@@ -162,6 +167,12 @@ public struct SampleFeedSource: FeedSource {
                 title: "Sam's birthday is coming up",
                 body: "It's on \((now + 12 * day).formatted(.dateTime.month(.wide).day())), and Sam loves lemon cake. Want a few ideas?",
                 action: .talk("Help me plan something for Sam's birthday.")
+            ),
+            FeedItem(
+                id: "sample:pool", kind: .noticed, time: now - 3.1 * hour,
+                title: "The Riverside pool may be reopening soon",
+                body: "You asked about swim lessons last week. Want me to look into when it opens?",
+                action: .lookInto(SampleSources.poolTopic)
             ),
             FeedItem(
                 id: "sample:grocery-list", kind: .did, time: now - day + 7.5 * hour,

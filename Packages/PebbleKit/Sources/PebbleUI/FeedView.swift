@@ -1,6 +1,7 @@
 import Foundation
 import PebbleCore
 #if canImport(SwiftUI)
+import Combine
 import SwiftUI
 
 /// Everything the Today screen shows and does, kept apart from the view so
@@ -17,8 +18,47 @@ final class FeedModel: ObservableObject {
     @Published var reviewing: ConfirmationRequest?
     /// The result open to read.
     @Published var reading: FeedItem?
+    /// A summary whose sources are open to read.
+    @Published var readingSources: ReconSummary?
+    /// A summary whose points are open to choose one to remember. Opening
+    /// it looks again at which kept points are still in the notes. An
+    /// example's points can't be kept, so its choice never opens.
+    @Published var choosingPoint: ReconSummary? {
+        didSet {
+            guard let summary = choosingPoint else { return }
+            guard canRemember(summary) else { choosingPoint = nil; return }
+            refreshRemembered()
+        }
+    }
+    /// Points kept in memory from this screen, by `rememberKey`.
+    @Published private(set) var remembered: Set<String> = []
+    /// The summary, and so the task, each kept point came from.
+    private var rememberedFrom: [String: String] = [:]
+    /// The note each kept point became, so a note deleted on the memory
+    /// screen no longer shows its point as kept.
+    private var rememberedAs: [String: UUID] = [:]
+    /// Watches the cloud setting, so a change withdraws Today's preview.
+    private var cloudWatch: AnyCancellable?
+    /// What happened to the last Remember tap, such as "Saved. It stays on this device."
+    @Published private(set) var rememberStatus: String? {
+        didSet { if rememberStatus != nil { rememberTold += 1 } }
+    }
+    /// Goes up each time `rememberStatus` is set, so the same words twice,
+    /// such as a second "Saved", are still said.
+    @Published private(set) var rememberTold = 0
 
     let needsYou: NeedsYou
+    /// Runs "look into this" as tasks. The same object as `tasks` when set.
+    let recon: ReconRunner?
+    /// Where a point goes when the person taps Remember. Nothing is saved any other way.
+    private let memory: MemoryStore?
+    /// Chooses how the next summary is put together: on this device, or
+    /// through the cloud's preview when the person turned the cloud on.
+    var summarizer: @MainActor () -> any ReconSummarizer = { LocalReconSummarizer() }
+    /// The preview gate for a summary put together in the cloud. It belongs
+    /// to Today alone, as each cloud chat's belongs to that chat, and
+    /// `HomeView` shows it over whichever screen is in front.
+    let cloudReview = CloudReview()
     /// Long work shown on live task cards. Nil when nothing is running. Its
     /// questions reach the feed only when it asks through the rule of
     /// `needsYou`.
@@ -52,6 +92,9 @@ final class FeedModel: ObservableObject {
     private var cards: [AgentTask] = []
     /// Ids of every task, so `isSample` needn't ask the engine.
     private var taskIDs: Set<String> = []
+    /// Each card's summary, or none, as of the last snapshot taken in, so
+    /// drawing the feed never walks the engine's tasks once per card.
+    private var summaries: [String: ReconSummary?] = [:]
     /// What each task's card is in the middle of, by id: its Change course
     /// field, the words in it, and where focus goes. Kept here, not in the
     /// card, so a card moving to another section keeps it.
@@ -103,20 +146,34 @@ final class FeedModel: ObservableObject {
     private var storeObservation: TaskStore.Observation?
     /// The flow's store, held here too so `deinit` can stop watching it.
     private let store: TaskStore?
+    /// The engine whose tasks the store keeps, when it can keep them. A
+    /// runner over such an engine keeps its tasks, a recon's apart.
+    private let keeper: (any KeepsTasks)?
     /// This window, as the flow knows it. Made fresh for each model and
     /// never used again, unlike an address a later model may be given.
     let window = UUID()
 
     init(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)? = nil,
-         drivesTasks: Bool = false, place: PrivacyPlace, flow: NeedsYouFlow? = nil,
-         background: BackgroundRunner? = nil, calendar: Calendar = .current,
+         drivesTasks: Bool = false, place: PrivacyPlace, memory: MemoryStore? = nil,
+         flow: NeedsYouFlow? = nil, background: BackgroundRunner? = nil, calendar: Calendar = .current,
          now: @escaping () -> Date = { Date() },
          clock: @escaping () -> ContinuousClock.Instant = { ContinuousClock.now }) {
-        self.sources = sources + (flow.map { [ReceiptFeed(store: $0.store)] } ?? [])
+        let recon = tasks as? ReconRunner
+        // A card offers to look into something only when its tap can start
+        // it. Otherwise it offers to talk about it, which is what the tap does.
+        let offered = recon?.canLookInto == true ? sources : sources.map { AsksInChat(source: $0) }
+        self.sources = offered + (flow.map { [ReceiptFeed(store: $0.store)] } ?? [])
             + (background.map { [BackgroundFeed(runner: $0, calendar: calendar)] } ?? [])
         self.background = background
+        if let recon {
+            keeper = recon.engine is any KeepsTasks ? recon : nil
+        } else {
+            keeper = tasks as? any KeepsTasks
+        }
         self.needsYou = needsYou
         self.tasks = tasks
+        self.recon = recon
+        self.memory = memory
         self.drivesTasks = drivesTasks
         self.place = place
         self.flow = flow
@@ -127,7 +184,7 @@ final class FeedModel: ObservableObject {
         // Tasks kept while the app was closed come back first, before
         // anything is shown. A question is asked again with the deadline it
         // had; a yes is never brought back.
-        if let flow, let keeper = tasks as? any KeepsTasks {
+        if let flow, let keeper {
             flow.store.restore(into: keeper, now: now())
         }
         feed = Feed.build(from: self.sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
@@ -187,7 +244,7 @@ final class FeedModel: ObservableObject {
     /// engine at once, as they would have been at launch, so a step said
     /// yes to that was under way still gets its card and its receipt.
     private func storeChanged() {
-        if let store, let keeper = tasks as? any KeepsTasks, store.hasLateTasks { store.keep(keeper, now: now()) }
+        if let store, let keeper, store.hasLateTasks { store.keep(keeper, now: now()) }
         if store?.clearedUnreadable == true, clearedUnreadable == nil { clearedUnreadable = ReceiptWords.unreadableCleared }
         followStored()
         rebuild()
@@ -242,23 +299,32 @@ final class FeedModel: ObservableObject {
         flow?.preview(waiting: waiting, from: window)
     }
 
-    var isSample: Bool { needsYou.isSample || sources.contains { $0.isSample } || tasks?.isSample == true }
+    /// True when anything on Today is an example, so the note at the top says so.
+    var isSample: Bool {
+        needsYou.isSample || sources.contains { $0.isSample } || taskIDs.contains { tasks?.isSample($0) == true }
+    }
 
-    /// True when this card came from an example source or a scripted engine.
+    /// True when this card came from an example source, a scripted engine,
+    /// or a recon that read sample sources. Asked per task, so one example
+    /// never makes real work look like one.
     func isSample(_ item: FeedItem) -> Bool {
-        if let tasks, tasks.isSample, taskIDs.contains(item.id) { return true }
+        if let tasks, taskIDs.contains(item.id) { return tasks.isSample(item.id) }
         if let receipt = item.receipt { return receipt.isSample }
         if item.kind == .needsYou { return needsYou.isSample }
         return sources.contains { $0.isSample && $0.items(now: now()).contains { $0.id == item.id } }
     }
 
     /// True when a question in the sheet is an example: one of the sample
-    /// questions, or one a scripted task asked, so the sheet says so too.
+    /// questions, or one an example task asked, so the sheet says so too.
     func isSample(_ request: ConfirmationRequest) -> Bool {
         if needsYou.isSample { return true }
-        guard let tasks, tasks.isSample else { return false }
-        return taskAsked[request.id] != nil
+        guard let tasks, let id = taskAsked[request.id] else { return false }
+        return tasks.isSample(id)
     }
+
+    /// True while a card in Working on it is live, so the scripted clock
+    /// needs to move. Nothing ticks while nothing is going.
+    var ticks: Bool { drivesTasks && !feed.working.isEmpty }
 
     /// The live progress a task's card reads. Ticks change it, never `feed`.
     func liveProgress(_ id: String) -> LiveProgress {
@@ -322,6 +388,7 @@ final class FeedModel: ObservableObject {
     var inFront = false
 
     private func rebuild() {
+        summaries = [:]
         let next = Feed.build(from: sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
         if next != feed { feed = next }
         let offered = Self.offers(from: tasks)
@@ -419,17 +486,23 @@ final class FeedModel: ObservableObject {
         }
     }
 
-    /// Moves a scripted engine along, for the live showcase.
+    /// Moves a scripted engine along, for the live showcase and for recons
+    /// played on the scripted engine.
     func tick(_ seconds: TimeInterval) {
-        (tasks as? LocalFakeEngine)?.advance(by: seconds)
+        if let recon {
+            recon.advance(by: seconds)
+        } else {
+            (tasks as? LocalFakeEngine)?.advance(by: seconds)
+        }
     }
 
     func tasksChanged(_ snapshot: TaskSnapshot) {
         guard snapshot.sequence > seen else { return }
         seen = snapshot.sequence
+        summaries = [:]
         // Kept at every real change, so closing the app at any moment loses
         // nothing. Only what changed is written.
-        if let flow, let keeper = tasks as? any KeepsTasks { flow.store.keep(keeper, now: now()) }
+        if let flow, let keeper { flow.store.keep(keeper, now: now()) }
         followStored()
         if track(snapshot.tasks) { rebuild() }
         for line in announcer.lines(for: snapshot.tasks, at: clock()) { announce(line) }
@@ -448,9 +521,12 @@ final class FeedModel: ObservableObject {
         // A result open to read whose task went away, as when the oldest
         // ended tasks are let go, closes with it.
         if let reading, taskIDs.contains(reading.id), !ids.contains(reading.id) { self.reading = nil }
-        // So does one whose words are gone, as when the note it showed is
-        // forgotten. One whose words changed, as when a forget took one
-        // line of a digest, shows the words as they are now.
+        // So do a summary's sources and its points, and what was kept from it.
+        let before = taskIDs
+        closeSummaries { before.contains($0) && !ids.contains($0) }
+        // A result open to read whose words are gone closes too, as when the
+        // note it showed is forgotten. One whose words changed, as when a
+        // forget took one line of a digest, shows the words as they are now.
         if let reading, let task = list.first(where: { $0.id == reading.id }) {
             if let result = task.result {
                 if reading.action != .open(result) { open(task) }
@@ -504,10 +580,213 @@ final class FeedModel: ObservableObject {
         case .talk(let line): talk(line)
         case .task(let task):
             if task.question != nil { review(task) } else { open(task) }
+        case .lookInto(let topic):
+            switch start(lookingInto: topic) {
+            case .started: break
+            case .already(let line):
+                // A second tap while the first is under way, or once it is
+                // ready, starts nothing more: the card for it is already
+                // here, and VoiceOver hears so, rather than nothing at all.
+                announce(TaskAnnouncer.Line(text: line, urgent: false))
+            case .couldNotStart:
+                // The chat offers it instead, still one tap away.
+                talk(ReconWords.askLine(topic))
+            }
         case .receipt(let receipt): clearReceipt(receipt)
         case nil: break
         }
     }
+
+    // MARK: Looking into something
+
+    /// Starts looking into `topic`, after the person's tap. False when
+    /// nothing new started: one on that topic is already going or ready,
+    /// or nothing could start, as for words of crisis.
+    @discardableResult
+    func lookInto(_ topic: String, place: PrivacyPlace = .mayLeaveDevice) -> Bool {
+        start(lookingInto: topic, place: place) == .started
+    }
+
+    /// Starts looking into `topic`, after the person's tap, and says what
+    /// came of it. The runner itself decides whether one on that topic is
+    /// already going, so two taps at once, here and in a chat, start one.
+    ///
+    /// `place` is the asking chat's model's place. A chat that promised to
+    /// stay on this device keeps that promise: the summary is put together
+    /// here, whatever the cloud setting is now. If the one already going may
+    /// be put into words in the cloud, the line says so.
+    func start(lookingInto topic: String, place: PrivacyPlace = .mayLeaveDevice) -> ReconTap {
+        guard let recon else { return .couldNotStart }
+        let summarizer: any ReconSummarizer = place.staysOnDevice ? LocalReconSummarizer() : summarizer()
+        switch recon.start(lookingInto: topic, with: summarizer) {
+        case .started:
+            refresh()
+            return .started
+        case .already(let id, let mayUseCloud):
+            return .already(alreadyLine(id: id, mayUseCloud: mayUseCloud, place: place))
+        case .notStarted:
+            return .couldNotStart
+        }
+    }
+
+    /// True while the only pages to read are examples, so the chat's offer says so.
+    var readsExamples: Bool { recon?.provider.isSample == true }
+
+    /// True when a tap on Look into it could start anything. Only then may
+    /// a chat offer it.
+    var canLookInto: Bool { recon?.canLookInto == true }
+
+    /// Withdraws Today's preview each time the cloud setting changes, as
+    /// when another window turned it off. A Send could no longer go out,
+    /// so the person is never left being asked.
+    func follow(cloudSettings: AnyPublisher<CloudHelpSettings, Never>) {
+        // On the main thread it is withdrawn then and there, so a Send
+        // tapped right after can't go. A change published on any other
+        // thread hops to the main one first, and never traps.
+        // Duplicates go before the first is dropped, so saving the settings
+        // as they already were changes nothing.
+        cloudWatch = cloudSettings.removeDuplicates().dropFirst()
+            .sink { @Sendable [weak self] _ in
+                if Thread.isMainThread {
+                    MainActor.assumeIsolated { self?.cloudReview.cancelPending() }
+                } else {
+                    Task { @MainActor in self?.cloudReview.cancelPending() }
+                }
+            }
+    }
+
+    /// True when a recon for `topic` is going or done on Today. One that
+    /// stopped or failed can be started again. Asked of the runner, so the
+    /// feed and every chat agree on what counts as the same topic.
+    func isLookingInto(_ topic: String) -> Bool {
+        recon?.activeRecon(for: topic) != nil
+    }
+
+    /// What to say when `topic` is already going or ready, or nil when a
+    /// tap may start it. For a chat whose `place` stays on this device, if
+    /// the one already going may be put into words in the cloud, the line
+    /// says so, so that promise stays true.
+    func alreadyLine(for topic: String, place: PrivacyPlace = .mayLeaveDevice) -> String? {
+        guard let recon, let id = recon.activeRecon(for: topic) else { return nil }
+        return alreadyLine(id: id, mayUseCloud: recon.mayUseCloud(id), place: place)
+    }
+
+    /// The line for one already going or ready, from what the runner said
+    /// of it. One still being started is going.
+    private func alreadyLine(id: String?, mayUseCloud: Bool, place: PrivacyPlace) -> String {
+        if let id, recon?.tasks.first(where: { $0.id == id })?.state == .done { return ReconWords.alreadyReady }
+        return place.staysOnDevice && mayUseCloud ? ReconWords.alreadyOnWithCloud : ReconWords.alreadyOn
+    }
+
+    /// The summary a finished recon card shows. Asked of the runner once
+    /// per card for each snapshot.
+    func summary(for task: AgentTask) -> ReconSummary? {
+        if let known = summaries[task.id] { return known }
+        let summary = recon?.summary(for: task.id)
+        summaries[task.id] = summary
+        return summary
+    }
+
+    /// A recon reads for one topic, so its card offers Stop but not Change course.
+    func canRedirect(_ task: AgentTask) -> Bool {
+        recon?.isRecon(task.id) != true
+    }
+
+    /// Opens the chat with a follow-up ready. Nothing is sent until the person sends it.
+    func followUp(_ summary: ReconSummary, talk: (String) -> Void) {
+        talk(ReconWords.followUpDraft(summary.topic))
+    }
+
+    static func rememberKey(_ summary: ReconSummary, _ point: ReconPoint) -> String {
+        "\(summary.id)/\(point.id)"
+    }
+
+    func isRemembered(_ point: ReconPoint, in summary: ReconSummary) -> Bool {
+        remembered.contains(Self.rememberKey(summary, point))
+    }
+
+    /// True when the summary's points may go in the notes. Never for one
+    /// read from example pages, so made up news is never kept as real.
+    func canRemember(_ summary: ReconSummary) -> Bool {
+        recon?.keepsPoints(summary.id) == true
+    }
+
+    /// Keeps one point in memory, with where it came from, through the same
+    /// store the memory screen uses. Only a tap on Remember this calls it,
+    /// and never for an example.
+    @discardableResult
+    func remember(_ point: ReconPoint, in summary: ReconSummary) -> Bool {
+        guard canRemember(summary), summary.points.contains(point), !isRemembered(point, in: summary) else { return false }
+        guard let memory else {
+            rememberStatus = MemoryWords.couldNotOpen
+            return false
+        }
+        do {
+            // A point worded in the cloud says so in the note, and its
+            // label names no publisher (see `ReconSummary.note(for:)`). The
+            // store itself refuses an example's point.
+            switch try memory.remember(point, from: summary) {
+            case .saved(let note):
+                remembered.insert(Self.rememberKey(summary, point))
+                rememberedFrom[Self.rememberKey(summary, point)] = summary.id
+                rememberedAs[Self.rememberKey(summary, point)] = note.id
+                rememberStatus = MemoryWords.saved(place)
+                return true
+            case .tooLong:
+                // Not the composer's "shorten it": the person didn't write this.
+                rememberStatus = ReconWords.pointTooLong
+            case .needsWords, .notFound:
+                rememberStatus = MemoryWords.needsWords
+            case .notKept:
+                // Only an example's point, which never gets this far.
+                rememberStatus = nil
+            }
+        } catch is MemoryStore.Unavailable {
+            rememberStatus = MemoryWords.unavailable
+        } catch is MemoryStore.Unreadable {
+            rememberStatus = MemoryWords.unreadable
+        } catch {
+            rememberStatus = MemoryWords.couldNotOpen
+        }
+        return false
+    }
+
+    func clearRememberStatus() {
+        rememberStatus = nil
+    }
+
+    /// Lets go of kept points whose notes are gone, as when the person
+    /// deleted one on the memory screen, so the point can be kept again.
+    /// Notes that can't be read right now change nothing.
+    func refreshRemembered() {
+        guard let memory, !rememberedAs.isEmpty, case .notes(let notes) = memory.contents() else { return }
+        let kept = Set(notes.map(\.id))
+        let goneKeys = rememberedAs.filter { !kept.contains($0.value) }.keys
+        guard !goneKeys.isEmpty else { return }
+        forgetKept(Set(goneKeys))
+    }
+
+    /// Closes the sources and points of every summary whose task id matches,
+    /// and lets go of which of its points were kept, since the card is gone.
+    /// The notes themselves stay: they are the person's (see
+    /// `ReconWords.rememberDetail`).
+    private func closeSummaries(where gone: (String) -> Bool) {
+        if let open = readingSources, gone(open.id) { readingSources = nil }
+        if let open = choosingPoint, gone(open.id) { choosingPoint = nil }
+        let goneKeys = rememberedFrom.filter { gone($0.value) }.keys
+        guard !goneKeys.isEmpty else { return }
+        forgetKept(Set(goneKeys))
+    }
+
+    private func forgetKept(_ keys: Set<String>) {
+        for key in keys {
+            rememberedFrom[key] = nil
+            rememberedAs[key] = nil
+        }
+        remembered.subtract(keys)
+    }
+
+    // MARK: Receipts
 
     /// Takes a receipt away for good. Its card goes from under VoiceOver,
     /// so what went is said.
@@ -551,8 +830,12 @@ final class FeedModel: ObservableObject {
         return done
     }
 
-    /// Stops at once. Never needs a yes.
+    /// Stops at once. Never needs a yes. A recon's preview still waiting
+    /// goes then and there, with its sheet, so a Send tapped on it after
+    /// Stop sends nothing. Stopping cancels its work too, but that answers
+    /// only on a later turn of the main actor.
     func stop(_ task: AgentTask) {
+        cloudReview.withdraw(run: task.id)
         tasks?.stop(task.id)
         if let question = task.question { askedBy[question.id] = nil }
         if let reviewing, reviewing.id == task.question?.id { self.reviewing = nil }
@@ -568,6 +851,7 @@ final class FeedModel: ObservableObject {
     func dismiss(_ task: AgentTask) {
         guard tasks?.dismiss(task.id) == true else { return }
         if reading?.id == task.id { reading = nil }
+        closeSummaries { $0 == task.id }
         refresh()
     }
 
@@ -585,18 +869,46 @@ final class FeedModel: ObservableObject {
     @discardableResult
     func forgetTasks() -> ClearedTasks {
         let hadReceipts = store?.holdsSomething == true
+        // Asked before clearing: a summary going through the cloud may have
+        // sent what it read already, and that can't be called back. Only
+        // one past the person's yes: one still reading, taking details out
+        // or waiting on its preview has sent nothing.
+        let inCloud = (recon?.summariesPastAYes ?? 0) > 0
+        forgetting = true
+        defer { forgetting = false }
         forgotten(.init())
         let cleared = tasks?.clear() ?? .none
+        let line = Self.forgetLine(cleared.underwayLine, inCloud: inCloud)
         // Said forgotten only once the file has gone too, so nothing says
         // they are forgotten while they may come back.
         let what = NeedsYouFlow.Forgotten(something: (cleared.forgotten > 0 || hadReceipts) && cleared.erased,
-                                          underway: cleared.underwayLine)
+                                          underway: line)
         if let flow { flow.forget(what) } else { forgotten(what) }
         refresh()
-        if let line = cleared.underwayLine {
+        if let line {
             announce(TaskAnnouncer.Line(text: line, urgent: true))
         }
         return cleared
+    }
+
+    /// True while this window's own Forget everything runs, so the call
+    /// back from the flow doesn't clear its tasks a second time.
+    private var forgetting = false
+
+    /// Run with every Forget everything, here or in another window, so a
+    /// chat wired to this Today lets go of what it holds for a recon. Each
+    /// says false once its chat has gone, and is let go then.
+    private var forgetHooks: [@MainActor () -> Bool] = []
+
+    func whenForgotten(_ hook: @escaping @MainActor () -> Bool) {
+        forgetHooks.append(hook)
+    }
+
+    /// The line kept on Today after forgetting: a step said yes to that may
+    /// be done, and a summary that may have gone to the cloud already.
+    static func forgetLine(_ underway: String?, inCloud: Bool) -> String? {
+        let lines = [underway, inCloud ? ReconWords.forgotWhileInCloud : nil].compactMap { $0 }
+        return lines.isEmpty ? nil : lines.joined(separator: " ")
     }
 
     /// Forget everything, from the memory screen: every task goes, as in
@@ -622,11 +934,33 @@ final class FeedModel: ObservableObject {
             self.reviewing = nil
         }
         if let reading, taskIDs.contains(reading.id) { self.reading = nil }
+        // Every summary goes with its recon, so its sheets close too.
+        closeSummaries { _ in true }
+        rememberStatus = nil
+        // A preview still waiting goes at once, with its sheet, so a Send
+        // tapped on it later sends nothing from a recon that is forgotten.
+        // Clearing cancels the work too, but that answers only on a later
+        // turn of the main actor.
+        cloudReview.cancelPending()
+        forgetHooks = forgetHooks.filter { $0() }
         askedBy.removeAll()
         usedYes.removeAll()
+        var something = what.something
+        var underway = what.underway
+        if !forgetting, let tasks {
+            // Forgotten in another window. This window's own recons go too,
+            // and if one of them may have reached the cloud, the line says so.
+            let inCloud = (recon?.summariesPastAYes ?? 0) > 0
+            let cleared = tasks.clear()
+            if cleared.forgotten > 0 && cleared.erased { something = true }
+            let own = Self.forgetLine(cleared.underwayLine, inCloud: inCloud)
+            if let own, underway?.contains(own) != true {
+                underway = [underway, own].compactMap { $0 }.joined(separator: " ")
+            }
+        }
         rebuild()
-        if what.something { tasksForgotten = true }
-        if let line = what.underway { forgotUnderway = line }
+        if something { tasksForgotten = true }
+        if let line = underway { forgotUnderway = line }
         // What it said went is forgotten too.
         clearedUnreadable = nil
     }
@@ -672,12 +1006,12 @@ final class FeedModel: ObservableObject {
                 // Kept now, not at the next change: if the app closes in
                 // between, the step is known to be under way and is never
                 // asked about or run again.
-                if let flow, let keeper = tasks as? any KeepsTasks { flow.store.keep(keeper, now: now()) }
+                if let flow, let keeper { flow.store.keep(keeper, now: now()) }
             case .notKept:
                 // Spent, so a second tap is quiet too. The card says why
                 // nothing was kept.
                 usedYes.insert(approval.id)
-                if let flow, let keeper = tasks as? any KeepsTasks { flow.store.keep(keeper, now: now()) }
+                if let flow, let keeper { flow.store.keep(keeper, now: now()) }
             case .refused: refusedBy = id
             case .timedOut: break
             }
@@ -748,6 +1082,23 @@ final class FeedModel: ObservableObject {
 
     var dateLine: String {
         now().formatted(.dateTime.weekday(.wide).month(.wide).day())
+    }
+}
+
+/// A feed source whose Look into it cards become Talk about it, with the
+/// same line ready in the chat, for a Today that can't start one. Its
+/// cards then never promise to start what the tap can't.
+struct AsksInChat: FeedSource {
+    let source: any FeedSource
+
+    var isSample: Bool { source.isSample }
+
+    func items(now: Date) -> [FeedItem] {
+        source.items(now: now).map { item in
+            guard case .lookInto(let topic) = item.action else { return item }
+            return FeedItem(id: item.id, kind: item.kind, time: item.time, title: item.title, body: item.body,
+                            action: .talk(ReconWords.askLine(topic)))
+        }
     }
 }
 
@@ -887,21 +1238,8 @@ struct FeedView: View {
         // Kept fresh by `FeedModel.keepFresh`, which the home screen runs
         // whether Today is showing or not, so the sidebar's count is true too.
         // Its `refresh` also has the engine notice task questions that timed out.
-        .task(id: model.drivesTasks) {
-            // The live showcase plays its scripted tasks in real time. It
-            // ticks only while Today is on screen, on purpose: the scripted
-            // clock pauses elsewhere and picks up from there on return. It is
-            // a labelled example, and `keepFresh` still runs from the root.
-            guard model.drivesTasks else { return }
-            var last = ContinuousClock.now
-            while !Task.isCancelled {
-                do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
-                let now = ContinuousClock.now
-                let step = now - last
-                last = now
-                model.tick(Double(step.components.seconds) + Double(step.components.attoseconds) / 1e18)
-            }
-        }
+        // Scripted tasks are played in real time by `HomeView`, so a recon
+        // goes on while the person is in the chat or memory.
     }
 
     /// The room the cards have: the window's width, held to the reading
@@ -941,7 +1279,16 @@ struct FeedView: View {
             LazyVGrid(columns: columns, alignment: .leading, spacing: Self.cardSpacing) {
                 ForEach(items) { item in
                     Group {
-                        if let task = item.task {
+                        if let task = item.task, let summary = model.summary(for: task) {
+                            ReconCard(summary: summary, time: model.timeLabel(for: item.time),
+                                      gathered: ReconWords.gathered(summary.gatheredAt, now: model.now()),
+                                      isSample: model.isSample(item),
+                                      canRemember: model.canRemember(summary),
+                                      onOpenSources: { model.readingSources = summary },
+                                      onFollowUp: { model.followUp(summary, talk: onTalk) },
+                                      onRemember: { model.choosingPoint = summary },
+                                      onDismiss: { model.dismiss(task) })
+                        } else if let task = item.task {
                             // Keyed by the task's id, reading live progress
                             // from the model, so a tick redraws only this card.
                             TaskCard(task: task, time: model.timeLabel(for: item.time),
@@ -949,6 +1296,7 @@ struct FeedView: View {
                                      state: model.cardState(task.id),
                                      canApprove: model.canApprove(task),
                                      isSample: model.isSample(item),
+                                     canRedirect: model.canRedirect(task),
                                      onApprove: { model.review(task) },
                                      onRedirect: { model.redirect(task, with: $0) },
                                      onStop: { model.stop(task) },
