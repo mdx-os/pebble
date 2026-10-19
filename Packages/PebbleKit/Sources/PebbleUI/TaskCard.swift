@@ -83,6 +83,12 @@ struct TaskCard: View {
     let isSample: Bool
     /// False for work that can't change course, such as looking into one topic.
     let canRedirect: Bool
+    /// How the task's ledger says it finished: what shows it, as chips, or
+    /// that it couldn't be checked. Nil without a ledger or until it ends.
+    let finish: TaskFinish?
+    /// What `QuietWatch` last said about a task gone quiet, while it still
+    /// stands. The card's Stop is always there beside it.
+    let quietLine: String?
     let onApprove: () -> Void
     /// Returns false when the engine couldn't take the words, so they stay.
     let onRedirect: (String) -> Bool
@@ -93,6 +99,7 @@ struct TaskCard: View {
 
     init(task: AgentTask, time: String, progress: LiveProgress? = nil, state: TaskCardState? = nil,
          canApprove: Bool = false, isSample: Bool = false, canRedirect: Bool = true,
+         finish: TaskFinish? = nil, quietLine: String? = nil,
          onApprove: @escaping () -> Void = {}, onRedirect: @escaping (String) -> Bool = { _ in true },
          onStop: @escaping () -> Void = {}, onRetry: @escaping () -> Void = {},
          onOpen: @escaping () -> Void = {}, onDismiss: @escaping () -> Void = {}) {
@@ -103,6 +110,8 @@ struct TaskCard: View {
         self.canApprove = canApprove
         self.isSample = isSample
         self.canRedirect = canRedirect
+        self.finish = finish
+        self.quietLine = quietLine
         self.onApprove = onApprove
         self.onRedirect = onRedirect
         self.onStop = onStop
@@ -139,6 +148,14 @@ struct TaskCard: View {
             if task.isActive, !task.history.isEmpty {
                 history
             }
+            if let quiet = shownQuietLine {
+                Text(quiet)
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .transition(Motion.arrival(reduceMotion: reduceMotion))
+                    .accessibilityIdentifier("taskQuiet")
+            }
             if let closing = closingLine {
                 Text(closing)
                     .font(Theme.TypeScale.subheadline)
@@ -148,6 +165,10 @@ struct TaskCard: View {
             }
             if let wrapUp = task.wrapUp {
                 wrapUpLines(wrapUp)
+            }
+            if let finish = shownFinish {
+                finishLines(finish)
+                    .transition(Motion.arrival(reduceMotion: reduceMotion))
             }
             if redirecting && task.isActive {
                 redirectField
@@ -213,10 +234,13 @@ struct TaskCard: View {
 
     // MARK: What it says
 
+    /// The same completion status in the visible label and VoiceOver.
+    var statusLabel: String { shownFinish?.label ?? task.state.label }
+
     /// The card's first line for VoiceOver. An example says so first, as it
     /// is seen first.
     var spoken: String {
-        [isSample ? FeedWords.exampleMarker : "", task.state.label, task.title, task.step, time]
+        [isSample ? FeedWords.exampleMarker : "", statusLabel, task.title, task.step, time]
             .filter { !$0.isEmpty }.joined(separator: ". ")
     }
 
@@ -231,7 +255,7 @@ struct TaskCard: View {
     private var summary: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             HStack(alignment: .center, spacing: Theme.Space.xs) {
-                KindBadge(text: task.state.label) {
+                KindBadge(text: statusLabel) {
                     if isLive {
                         LiveDot()
                     } else {
@@ -313,6 +337,42 @@ struct TaskCard: View {
         .foregroundStyle(.primary)
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .combine)
+    }
+
+    /// The ledger's finish, only once the task is done.
+    var shownFinish: TaskFinish? {
+        task.state == .done ? finish : nil
+    }
+
+    /// The quiet line, only while the task is still going.
+    var shownQuietLine: String? {
+        task.isActive ? quietLine : nil
+    }
+
+    /// The words each proof's chip says to VoiceOver, in order.
+    var spokenProofs: [String] {
+        guard case .proven(let proofs) = shownFinish else { return [] }
+        return proofs.map(\.spoken)
+    }
+
+    @ViewBuilder
+    private func finishLines(_ finish: TaskFinish) -> some View {
+        switch finish {
+        case .proven(let proofs):
+            ChipFlow(spacing: 6) {
+                ForEach(proofs, id: \.self) { proof in
+                    TaskProofChip(proof: proof)
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("taskProofs")
+        case .unchecked:
+            Text(LedgerWords.unchecked)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("taskUnchecked")
+        }
     }
 
     // MARK: What it does
@@ -448,6 +508,98 @@ struct TaskCard: View {
         case .skipped: "minus"
         case .approved: "hand.thumbsup"
         }
+    }
+}
+
+/// One proof under a finished task's result: a source's title, the name of
+/// something made here, or what a check found. VoiceOver reads it as
+/// "Source: Maple Dental hours" or "Made: Saturday dentists".
+struct TaskProofChip: View {
+    let proof: TaskProof
+
+    var body: some View {
+        // Words in the primary ink on the neutral field, a pair
+        // `Theme.textPairs` checks, like the example tag beside the label.
+        Label {
+            Text(proof.title)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+        } icon: {
+            Image(systemName: Self.symbol(proof))
+                .foregroundStyle(Theme.accentSymbol)
+                .accessibilityHidden(true)
+        }
+        .font(.caption.weight(.medium))
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Color.primary.opacity(Theme.fieldTint), in: Capsule())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(proof.spoken)
+        .accessibilityIdentifier("proofChip")
+    }
+
+    static func symbol(_ proof: TaskProof) -> String {
+        switch proof {
+        case .source: "doc.text"
+        case .artifact: "square.and.pencil"
+        case .check: "checkmark.seal"
+        }
+    }
+}
+
+/// Lays its pieces out in rows, starting a new row when one is full, so
+/// chips wrap at any width and text size.
+struct ChipFlow: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = rows(width: proposal.width ?? .infinity, subviews: subviews)
+        let height = rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(0, rows.count - 1))
+        let width = rows.map(\.width).max() ?? 0
+        return CGSize(width: proposal.width.map { min($0, width) } ?? width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in rows(width: bounds.width, subviews: subviews) {
+            var x = bounds.minX
+            for (index, size) in zip(row.indices, row.sizes) {
+                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += row.height + spacing
+        }
+    }
+
+    private struct Row {
+        var indices: [Int] = []
+        var sizes: [CGSize] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private func rows(width: CGFloat, subviews: Subviews) -> [Row] {
+        var rows: [Row] = []
+        var row = Row()
+        for index in subviews.indices {
+            var size = subviews[index].sizeThatFits(.unspecified)
+            // A chip wider than the row wraps its own words instead.
+            if size.width > width {
+                size = subviews[index].sizeThatFits(ProposedViewSize(width: width, height: nil))
+            }
+            let needed = row.indices.isEmpty ? size.width : row.width + spacing + size.width
+            if needed > width, !row.indices.isEmpty {
+                rows.append(row)
+                row = Row()
+            }
+            row.width = row.indices.isEmpty ? size.width : row.width + spacing + size.width
+            row.height = max(row.height, size.height)
+            row.indices.append(index)
+            row.sizes.append(size)
+        }
+        if !row.indices.isEmpty { rows.append(row) }
+        return rows
     }
 }
 

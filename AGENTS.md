@@ -175,6 +175,20 @@ Things no test here can reach. Check each on a real iPhone before a release.
   the app as a notification opens. `NeedsYouFlowModelTests` guards this.
 - `onReceive` of a `@Published` publisher replays its value each time the
   body runs. To react to a change, observe the object and use `onChange`.
+- An engine lets go of ended tasks by when they ended, never by when they
+  began. A task dropped in the same change that ends it never tells its
+  ledger how it ended. Retention lets go only of ends a delivered snapshot
+  told, so an end still on its way is kept and steady work never stalls
+  retention. `TaskLedgerRunTests` guards this.
+- The ledger listens before saved tasks are restored: restoration can end
+  more tasks than the engine keeps, and it trims the oldest as soon as
+  their ends are told. A kept ledger is something to forget, so Forget
+  everything shows for a ledger alone. `TaskLedgerCardTests` guards both.
+- Record ledger outcomes before dispatching snapshots to the UI, whose
+  sequence guard can drop older completions. Launch orphan detection waits
+  for task restoration to resolve and its outcomes to be recorded. Only
+  tasks absent from the reconciled snapshot are orphans, including when
+  restoration ends a task. `TaskLedgerCardTests` guards this.
 
 ## Never
 
