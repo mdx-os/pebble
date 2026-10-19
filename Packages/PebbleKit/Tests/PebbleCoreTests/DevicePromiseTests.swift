@@ -100,20 +100,20 @@ enum DevicePromise {
                 literal: "Tell me the detail in your own words. I'll say it back so you can check I heard it. It stays on this device.",
                 reason: "The stub's remember opener. Only the on-device stub says it."),
         Allowed(file: "PebbleCore/PulseNotice.swift", literal: "Privacy: 0. Adapt this idea or leave it.",
-                reason: "The competitor watch's note to the founder, never shown in the app. \"Privacy\" names the idea's "
+                reason: "The public source watch's note to the founder, never shown in the app. \"Privacy\" names the idea's "
                     + "privacy fit score, a number about someone else's product, and promises nothing about this one."),
         Allowed(file: "PebbleCore/PulseNotice.swift", literal: #"Privacy: \(fit.privacy)."#,
-                reason: "The same privacy fit score in the competitor watch's note to the founder, not app copy."),
+                reason: "The same privacy fit score in the public source watch's note to the founder, not app copy."),
         Allowed(file: "PebbleCore/PulseNotice.swift",
                 literal: #"\(privacy) Local models: \(fit.localFirst). Open weights: \(fit.openWeights)."#,
-                reason: "The competitor watch's fit line, which only names its `privacy` score. A note to the founder, "
+                reason: "The public source watch's fit line, which only names its `privacy` score. A note to the founder, "
                     + "not app copy."),
         Allowed(file: "PebbleCore/Feed.swift", literal: "These are examples for now. Nothing was sent or bought.",
                 reason: "FeedWords.sampleNote off the device. \"Nothing was sent\" is about the example cards' actions, "
                     + "which never ran, not about where words go, so it is true with any model."),
     ] + cloud + recon + ideaFitKeywords.map { keyword in
         Allowed(file: "PebbleCore/IdeaDraft.swift", literal: keyword,
-                reason: "A keyword IdeaDraft.fit looks for in a competitor's own words, to score how private that "
+                reason: "A keyword IdeaDraft.fit looks for in a product's own words, to score how private that "
                     + "product is. Matched with `contains`, never shown to anyone, and promises nothing about this app.")
     }
 
@@ -354,7 +354,7 @@ enum DevicePromise {
         "PebbleModel/LocalStubModel.swift",
     ]
 
-    /// The words the competitor watch's fit score looks for.
+    /// The words the public source watch's fit score looks for.
     static let ideaFitKeywords = ["upload", "cloud data storage", "on our servers", "requires cloud", "cloud only"]
 
     /// True when `text` in `file` is an allowed line, word for word, with

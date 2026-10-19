@@ -23,7 +23,7 @@ test:
 repeat-test:
 	sh scripts/repeat-test.sh $(or $(N),30) "$(FILTER)"
 
-## pulse: fetch the competitor watch and write a digest of real changes.
+## pulse: fetch the public source watch and write a digest of real changes.
 ## When something changed, also write build/pulse/notify.md and build/pulse/summary.json.
 pulse:
 	swift run --package-path Packages/PebbleKit pulse -- --root "$(CURDIR)"
