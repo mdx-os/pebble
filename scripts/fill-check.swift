@@ -1,4 +1,4 @@
-// Checks that a screenshot shows the orange fill with white words on it.
+// Checks that a screenshot shows the blue fill with white words on it.
 // Usage: swift scripts/fill-check.swift <png> <left> <top> <right> <bottom> [--badge | --white]
 //        swift scripts/fill-check.swift --self-test
 // --white prints only the number of white pixels on the fill in the region,
@@ -14,14 +14,15 @@
 // same shot at 2x or 3x does.
 //
 // Passes when the region holds a patch of Theme.tintFill in dark mode
-// (0.74, 0.33, 0.08), or in light mode (0.66, 0.29, 0.07), which is inside
+// (0.16, 0.42, 0.86), or in light mode (0.13, 0.37, 0.80), which is inside
 // the tolerance, and that patch has white words on it, not black or
-// gray ones. A gray sidebar selection, or a Done drawn as orange words on
-// glass, has no such patch and fails.
+// gray ones. A gray sidebar selection, or a Done drawn as blue words on
+// glass, has no such patch and fails. The lighter Theme.accent
+// (0.40, 0.62, 0.97) is outside the tolerance, so a Done drawn in it fails too.
 //
 // White counts only inside a patch of fill: each row of each connected
 // patch, from its first fill pixel to its last. So the white of a light
-// sheet between Done and another orange control on the same row is never
+// sheet between Done and another blue control on the same row is never
 // taken for words.
 import CoreGraphics
 import Foundation
@@ -93,7 +94,7 @@ func check(_ pixels: Pixels, _ box: [Double], badge: Bool) -> Result<String, Che
     // button covers 6 to 14 percent of its region, the end of a row with its
     // count about as much of its narrower one.
     guard Double(count) >= area * (badge ? 0.015 : 0.03) else {
-        return .failure(CheckFailure("no orange fill in the region (\(count) pixels)"))
+        return .failure(CheckFailure("no blue fill in the region (\(count) pixels)"))
     }
     // The words cover 0.2 to 0.6 percent of the region, a count about 0.05.
     guard Double(white) >= area * (badge ? 0.0002 : 0.001) else {
@@ -119,7 +120,7 @@ func measure(_ pixels: Pixels, _ box: [Double]) -> Result<Measure, CheckFailure>
         return .failure(CheckFailure("the region \(box) is less than a pixel across in a \(width) by \(height) image"))
     }
     // Theme.tintFill in dark mode, with room for the glass's sheen.
-    let fill = (189, 84, 20)
+    let fill = (41, 107, 219)
     let tolerance = 40
     let regionWidth = x1 - x0, regionHeight = y1 - y0
     var isFill = [Bool](repeating: false, count: regionWidth * regionHeight)
@@ -180,7 +181,9 @@ struct CheckFailure: Error {
 
 /// Draws the cases the check exists for and checks each comes out right.
 func selfTest() -> Never {
-    let orange: (UInt8, UInt8, UInt8) = (189, 84, 20)
+    let blue: (UInt8, UInt8, UInt8) = (41, 107, 219)
+    // Theme.accent, the lighter blue, which is never the fill.
+    let accent: (UInt8, UInt8, UInt8) = (102, 158, 247)
     let white: (UInt8, UInt8, UInt8) = (255, 255, 255)
     let gray: (UInt8, UInt8, UInt8) = (110, 110, 110)
     var problems: [String] = []
@@ -201,9 +204,14 @@ func selfTest() -> Never {
     // Done: a patch of fill with white words inside it.
     var done = Pixels(width: 200, height: 100)
     done.paint(0, 0, 200, 100, (30, 30, 30))
-    done.paint(40, 30, 160, 70, orange)
+    done.paint(40, 30, 160, 70, blue)
     for letter in 0..<4 { done.paint(60 + letter * 22, 42, 72 + letter * 22, 58, white) }
     expect("white words on the fill", done, passes: true)
+    // The same button in the lighter accent: not the fill.
+    var lighter = done
+    lighter.paint(40, 30, 160, 70, accent)
+    for letter in 0..<4 { lighter.paint(60 + letter * 22, 42, 72 + letter * 22, 58, white) }
+    expect("white words on the lighter accent", lighter, passes: false, because: "no blue fill")
     // The same with gray words.
     var grayWords = done
     for letter in 0..<4 { grayWords.paint(60 + letter * 22, 42, 72 + letter * 22, 58, gray) }
@@ -224,22 +232,22 @@ func selfTest() -> Never {
     var someBlack = done
     for letter in 0..<4 { someBlack.paint(60 + letter * 22, 57, 72 + letter * 22, 58, black) }
     expect("white words with some black", someBlack, passes: true)
-    // A light sheet: two orange things on one row with only the white
+    // A light sheet: two blue things on one row with only the white
     // sheet between them, and no words on either.
     var light = Pixels(width: 200, height: 100)
     light.paint(0, 0, 200, 100, white)
-    light.paint(10, 30, 60, 70, orange)
-    light.paint(140, 30, 190, 70, orange)
+    light.paint(10, 30, 60, 70, blue)
+    light.paint(140, 30, 190, 70, blue)
     expect("white background between two patches", light, passes: false, because: "aren't white")
     // The end of a row with its count: a small patch of fill with a small
     // white number, about 2 percent of the region and 0.05 of it white.
     // Enough for --badge, too little for a whole button.
     var count = Pixels(width: 400, height: 200)
     count.paint(0, 0, 400, 200, (30, 30, 30))
-    count.paint(340, 80, 380, 120, orange)
+    count.paint(340, 80, 380, 120, blue)
     count.paint(357, 97, 363, 103, white)
     expect("a count at the end of a row", count, badge: true, passes: true)
-    expect("a count is too small for a button", count, passes: false, because: "no orange fill")
+    expect("a count is too small for a button", count, passes: false, because: "no blue fill")
     // Bad regions fail with a reason rather than a crash.
     expect("right before left", done, [0.8, 0, 0.2, 1], passes: false)
     expect("bottom before top", done, [0, 0.9, 1, 0.1], passes: false)
