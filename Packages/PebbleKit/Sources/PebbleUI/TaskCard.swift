@@ -178,7 +178,7 @@ struct TaskCard: View {
         }
         .padding(Theme.Space.m)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .elevation(.raised, in: shape, edge: asks ? Theme.accent.opacity(0.55) : nil, edgeWidth: asks ? 1.5 : 1)
+        .feedCardSurface(asks: asks)
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.45, dampingFraction: 0.9), value: task.state)
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .easeInOut(duration: 0.3), value: redirecting)
         .accessibilityElement(children: .contain)
@@ -254,10 +254,8 @@ struct TaskCard: View {
 
     private var summary: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
-                Label {
-                    Text(statusLabel)
-                } icon: {
+            HStack(alignment: .center, spacing: Theme.Space.xs) {
+                KindBadge(text: statusLabel) {
                     if isLive {
                         LiveDot()
                     } else {
@@ -265,8 +263,6 @@ struct TaskCard: View {
                             .foregroundStyle(Theme.accentSymbol)
                     }
                 }
-                .font(Theme.TypeScale.footnote.weight(.semibold))
-                .foregroundStyle(Theme.secondaryText)
                 if isSample {
                     // The same capsule as the label over an example opened to read.
                     Text(FeedWords.exampleMarker)
@@ -365,7 +361,7 @@ struct TaskCard: View {
         case .proven(let proofs):
             ChipFlow(spacing: 6) {
                 ForEach(proofs, id: \.self) { proof in
-                    ProofChip(proof: proof)
+                    TaskProofChip(proof: proof)
                 }
             }
             .accessibilityElement(children: .contain)
@@ -518,7 +514,7 @@ struct TaskCard: View {
 /// One proof under a finished task's result: a source's title, the name of
 /// something made here, or what a check found. VoiceOver reads it as
 /// "Source: Maple Dental hours" or "Made: Saturday dentists".
-struct ProofChip: View {
+struct TaskProofChip: View {
     let proof: TaskProof
 
     var body: some View {

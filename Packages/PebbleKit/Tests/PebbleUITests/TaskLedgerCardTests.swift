@@ -348,11 +348,11 @@ struct TaskLedgerCardTests {
         let task = try #require(engine.tasks.first)
         #expect(task.state == .done)
         let card = card(model, task)
-        // Keep the visible Text wired to the same status that VoiceOver reads.
+        // Keep the visible badge wired to the same status that VoiceOver reads.
         let root = SwiftSource.repositoryRoot(from: #filePath)
         let source = try String(contentsOf: root.appendingPathComponent("Packages/PebbleKit/Sources/PebbleUI/TaskCard.swift"),
                                 encoding: .utf8)
-        #expect(SwiftSource(source).calls(named: ["Text"]).contains { $0.arguments == "statusLabel" })
+        #expect(SwiftSource(source).calls(named: ["KindBadge"]).contains { $0.arguments == "text: statusLabel" })
         #expect(card.statusLabel == "Finished")
         #expect(card.spoken.hasPrefix("Finished."))
         #expect(!card.spoken.hasPrefix("Done."))
@@ -485,7 +485,7 @@ struct TaskLedgerCardTests {
     /// Chips wrap onto new rows rather than run off the card.
     @Test func chipsWrapToTheWidthTheyHave() {
         let chips = ChipFlow(spacing: 6) {
-            ForEach(SampleTasks.dentist.proofs, id: \.self) { ProofChip(proof: $0) }
+            ForEach(SampleTasks.dentist.proofs, id: \.self) { TaskProofChip(proof: $0) }
         }
         let narrow = ImageRenderer(content: chips.frame(width: 140).fixedSize(horizontal: false, vertical: true))
         let wide = ImageRenderer(content: chips.frame(width: 900).fixedSize(horizontal: false, vertical: true))

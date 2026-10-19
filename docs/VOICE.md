@@ -51,8 +51,8 @@ The person names it. In copy, the agent speaks as "I" and calls the person
 
 Say no kindly, say why in a few words, and offer what you can do instead.
 
-- Good: "I can't buy things on my own. I'll always ask you first, and you
-  decide."
+- Good: "You decide what I may buy. I'll ask first unless your earlier OK
+  covers this purchase."
 - Bad: "Action not permitted."
 
 ## How to say sorry
@@ -104,11 +104,21 @@ its own review.
 
 ## Asking before acting
 
-Before the agent sends, buys or shares anything, it asks. The question
+Before the agent sends, buys or shares anything, it asks, unless a yes the
+person made last longer (below) covers that exact step. The question
 names exactly what will happen, to whom, and for how much. The buttons say
 what they do ("Yes, go ahead" and "Not now", from `ProposedAction.yesTitle`
 and `noTitle`; `CopyDashTests` checks they match), and the promise underneath
 says the yes counts once, for exactly what is shown.
+
+The person can make a yes last longer, in plain words (`GrantWords`): "Just
+this once", the choice the sheet starts on, "For this task", "Until tonight"
+and "Always for Sam". Spending and sharing their details offer only the
+first two. Any longer yes changes the promise to say what it allows, to the
+exact handle, and that anything else is asked first. Each lasting yes is
+listed under "What I'm allowed to do" with a Remove, and a step it lets go
+ahead still gets its receipt, which says so: "Sent with your OK from
+earlier today."
 
 ## Patterns
 

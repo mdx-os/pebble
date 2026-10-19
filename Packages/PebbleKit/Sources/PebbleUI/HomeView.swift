@@ -209,10 +209,10 @@ public struct HomeView: View {
     /// The same, from a place already worked out. With `cloud`, Forget
     /// everything erases the words always hidden too.
     static func memoryModel(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp? = nil,
-                            background: BackgroundRunner? = nil, log: HomeScreenLog? = nil,
+                            background: BackgroundRunner? = nil, grants: GrantBook? = nil, log: HomeScreenLog? = nil,
                             onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) -> MemoryModel {
         let memory = MemoryModel(store: store, place: place, alsoForget: MemoryView.alsoForget(cloud),
-                                 background: background, onForgetEverything: onForgetEverything)
+                                 background: background, grants: grants, onForgetEverything: onForgetEverything)
         log?.memories.append(memory)
         return memory
     }
@@ -220,11 +220,12 @@ public struct HomeView: View {
     /// The memory screen's model as the home screen makes it: Forget
     /// everything erases the notes, kept points included, and the
     /// background work, then forgets every task on `feed`, a recon still
-    /// going included, and closes an open summary.
+    /// going included, and closes an open summary. The list of what the
+    /// agent may do without asking is the rule's own, from `feed`.
     static func memoryModel(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp?,
                             background: BackgroundRunner? = nil, log: HomeScreenLog? = nil,
                             feed: FeedModel) -> MemoryModel {
-        memoryModel(store: store, place: place, cloud: cloud, background: background, log: log,
+        memoryModel(store: store, place: place, cloud: cloud, background: background, grants: feed.grants, log: log,
                     onForgetEverything: { [weak feed] in feed?.forgetEverything() ?? .none })
     }
 
@@ -621,6 +622,8 @@ struct HomeScreen: View {
             ConfirmationSheet(request: request, look: AgentLook.load(from: looks), rule: feed.rule,
                               isExample: feed.isSample(request),
                               onApprove: { feed.approved($0) },
+                              // A yes that lasts is offered only where it can be kept.
+                              onGrant: feed.grants == nil ? nil : { feed.granted($0, for: request) },
                               onDecline: { feed.closedQuestion(request) })
                 .onDisappear { feed.closedQuestion(request) }
         }
@@ -870,9 +873,13 @@ struct HomeScreen: View {
             //
             // Background work keeps its own file, so its switch and a way to
             // forget its summaries are here whenever its runner was built.
+            //
+            // Grants keep their own file too, and still let steps go ahead
+            // and can still be given on Today, so their list, with Remove
+            // and what couldn't be saved, is here whenever the rule has them.
             MemoryUnavailableView(hasTasks: feed.hasSomethingToForget, forgotten: feed.tasksForgotten,
                                   underway: feed.forgotUnderway, wordsErased: wordsErased,
-                                  erasesWords: cloud != nil, background: background,
+                                  erasesWords: cloud != nil, background: background, grants: feed.grants,
                                   onForgetTasks: forgetTasksWithoutNotes)
         }
     }

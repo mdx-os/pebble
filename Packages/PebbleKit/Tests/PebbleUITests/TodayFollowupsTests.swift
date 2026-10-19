@@ -688,7 +688,7 @@ struct TodayFollowupsTests {
             showing.append(scene)
             #expect(examples, "\(scene) shows a sample question not marked as an example")
         }
-        #expect(Set(showing) == [.confirm, .confirmTimedOut, .todayNeedsYou, .todaySummary,
+        #expect(Set(showing) == [.confirm, .confirmTimedOut, .confirmScopes, .todayNeedsYou, .todaySummary,
                                  .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive,
                                  .taskProven, .taskUnchecked, .askWaiting, .askSheet, .askAnswered, .askClosed, .askLive,
                                  .reconRunning, .reconReady])
