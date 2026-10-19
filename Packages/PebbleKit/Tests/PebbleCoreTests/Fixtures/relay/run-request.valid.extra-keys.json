@@ -1,0 +1,16 @@
+{
+  "brief" : "Look into the pool's new Sunday hours and tell me when it opens.",
+  "clientRunId" : "c7Run42",
+  "kind" : "research",
+  "limits" : {
+    "maxMinutes" : 5,
+    "maxSteps" : 5,
+    "note" : "ignored"
+  },
+  "priority" : "high",
+  "tools" : [
+    "web.search",
+    "web.read"
+  ],
+  "version" : 1
+}

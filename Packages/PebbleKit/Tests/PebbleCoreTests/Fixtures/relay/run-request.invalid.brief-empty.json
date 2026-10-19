@@ -1,0 +1,14 @@
+{
+  "brief" : "",
+  "clientRunId" : "c7Run42",
+  "kind" : "research",
+  "limits" : {
+    "maxMinutes" : 20,
+    "maxSteps" : 30
+  },
+  "tools" : [
+    "web.search",
+    "web.read"
+  ],
+  "version" : 1
+}
