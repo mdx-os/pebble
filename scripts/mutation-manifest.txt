@@ -335,3 +335,207 @@ perl: s~guard called \|\| reached, !source\.context\(of: reference\)\.inPreview 
 test: diagnosticsCountCharacters
 file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
 perl: s~let column = String\(decoding: bytes\[start\.\.<min\(max\(start, offset\), bytes\.count\)\], as: UTF8\.self\)\.count \+ 1~let column = String(decoding: bytes[start..<min(max(start, offset), bytes.count)], as: UTF8.self).utf16.count + 1~
+
+# The task ledger (PebbleCore/TaskLedger.swift). Every task ends with one
+# line that says how, a done only with proof, and a task that goes quiet
+# says so on its own. Each rule is broken on its own, and its tests must fail.
+
+# Nothing is written after an end.
+test: nothingIsWrittenAfterAnEnd
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~guard !isEnded else \{ return false \}~guard true else { return false }~
+
+# The book checks for an end too, so the run test needs both broken.
+test: fiftySeededTasksNeverEndSilently
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~guard !isEnded else \{ return false \}~guard true else { return false }~
+perl: s~guard before != seen, !kept\[index\]\.isEnded else \{ return \}~guard before != seen else { return }~
+
+# A done with no proof left is finished unchecked.
+test: aDoneWithNoProofIsFinishedUnchecked fiftySeededTasksNeverEndSilently anUncheckedCardSaysSoInPlainWords
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~kind = kept\.isEmpty \? \.finishedUnchecked : \.done\(proofs: kept\)~kind = .done(proofs: kept)~
+
+# A source needs an http or https address.
+test: aSourceNeedsAWebAddress fiftySeededTasksNeverEndSilently
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~guard let scheme = url\.scheme\?\.lowercased\(\), scheme == "http" \|\| scheme == "https" else \{ return false \}~guard url.scheme != nil else { return false }~
+
+# And a host.
+test: aSourceNeedsAWebAddress
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~return !\(url\.host\(\) \?\? ""\)\.isEmpty~return true~
+
+# An artifact must resolve on this device.
+test: anArtifactMustResolveOnThisDevice aChipShowsOnlyForAProofTheLedgerFound fiftySeededTasksNeverEndSilently theFileIsKeptBesideTheTasksAndReadBackAsWritten
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~return !reference\.isEmpty && artifacts\.resolves\(reference\)~return !reference.isEmpty~
+
+# A folder resolves nothing outside it.
+test: aFolderResolvesOnlyFilesInsideIt
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~!parts\.contains\(where: \{ \$0\.isEmpty \|\| \$0 == "\." \|\| \$0 == "\.\." \}\)~true~
+
+# A file changed by hand is read as append would write it.
+test: aFileChangedByHandCantPutALineAfterAnEnd theFileIsKeptBesideTheTasksAndReadBackAsWritten
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~(public func replayed\(artifacts: any TaskArtifactResolving\) -> TaskLedger \{)~$1\n        if true { return self }~
+
+# QuietWatch: still on it after a quiet period.
+test: aQuietTaskSaysItIsStillOnItsLastStep aQuietCardSaysSoAndOffersStop fiftySeededTasksNeverEndSilently
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~guard periods > stills else \{ return nil \}~guard periods > stills + 99 else { return nil }~
+
+# QuietWatch: stuck after three quiet periods in a row.
+test: threeQuietPeriodsInARowAreStuck oneLookAfterALongQuietIsStuck aQuietCardSaysSoAndOffersStop fiftySeededTasksNeverEndSilently
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~if periods >= periodsBeforeStuck \{~if periods >= periodsBeforeStuck + 99 {~
+
+# QuietWatch leaves a task waiting on the person alone.
+test: aTaskWaitingOnThePersonOrEndedIsLeftAlone
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~case \.queued, \.working, \.answered, \.stillWorking: break~case .queued, .working, .answered, .stillWorking, .needsYou: break~
+perl: s~case \.needsYou, \.stuck, \.done,~case .stuck, .done,~
+
+# QuietWatch counts from the last line that wasn't its own.
+test: aNewStepStartsTheQuietOver
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~let since = ledger\.entries\[ledger\.entries\.count - 1 - stills\]\.at~let since = ledger.entries[0].at~
+
+# An engine's stall is stuck.
+test: aStalledTaskIsStuck aRunIsWrittenDownStepByStep fiftySeededTasksNeverEndSilently
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~if before\?\.state != \.stalled \{ write~if false { write~
+
+# A question closed without a yes is a no.
+test: aQuestionClosedWithoutAYesIsANo
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~write\(\.answered\(yes: task\.history\.last\?\.mark == \.approved\)\)~write(.answered(yes: true))~
+
+# A question asked is written down.
+test: aRunIsWrittenDownStepByStep
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~if before\?\.question != question\.id \{ write~if false { write~
+
+# A task an engine lets go of still ends.
+test: aTaskAnEngineLetsGoOfStillEnds
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~kept\[index\]\.append\(\.stopped\(why: LedgerWords\.letGo\), at: now, artifacts: artifacts\)~_ = index~
+
+# A new task with an old id gets its own ledger.
+test: aNewTaskWithAnOldIdGetsItsOwnLedger
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~TaskLedger\.Key\(task: task\.id, startedAt: task\.startedAt\)~TaskLedger.Key(task: task.id, startedAt: .distantPast)~
+
+# A late snapshot is dropped.
+test: aLateSnapshotIsNotWrittenDown forgetEmptiesEveryLedgerReadOrNot
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~guard snapshot\.sequence > seen else \{ return \}~guard true else { return }~
+
+# At launch, a task no engine has stops when the app closed.
+test: atLaunchATaskNoEngineHasStopsWhenTheAppClosed atLaunchATaskNoEngineHasSaysItStopped fiftySeededTasksNeverEndSilently
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~kept\[index\]\.append\(\.stopped\(why: LedgerWords\.stoppedWhenClosed\), at: time, artifacts: artifacts\)~_ = time~
+
+# The launch waits until the ledger can be read.
+test: launchWaitsUntilTheLedgerCanBeRead aFileThatCantBeReadYetIsNeverWrittenOver
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~stopOrphans\(0\.\.<before\.count, at: sweep\.at, live: sweep\.live\)~_ = sweep~
+
+# Nothing is written while the store can't be read.
+test: nothingIsWrittenOverAStoreThatCantBeRead
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~guard loaded else \{\n            dirty = true\n            return\n        \}~~
+
+# And the file there is never written over.
+test: aFileThatCantBeReadYetIsNeverWrittenOver
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~if manager\.fileExists\(atPath: fileURL\.path\), !manager\.isReadableFile\(atPath: fileURL\.path\) \{ return false \}~~
+
+# A task picked up while locked joins its ledger once.
+test: aTaskPickedUpWhileLockedJoinsItsLedger
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~for entry in ledger\.entries where entry\.kind != \.queued \{~for entry in ledger.entries {~
+
+# Forget everything empties every ledger.
+test: forgetEmptiesEveryLedgerReadOrNot forgetEverythingEmptiesTheLedger forgetEverythingInAnotherWindowEmptiesItToo
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~        kept = \[\]\n        last = \[:\]~        last = [:]~
+
+# Clearing a task takes its ledger.
+test: clearingATaskTakesItsLedger clearingACardTakesItsLedger
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~kept\.removeAll \{ \$0\.taskID == id \}~kept.removeAll { _ in false }~
+
+# Only the newest ended ledgers are kept.
+test: onlyTheNewestEndedLedgersAreKept
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~guard ended\.count > Self\.endedLimit else \{ return \}~guard ended.count > Self.endedLimit * 99 else { return }~
+
+# A file no one can understand goes.
+test: aFileNoOneCanUnderstandGoes
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~return erased\(\) \? \[\] : nil~return nil~
+
+# An erase still owed means the file is never read.
+test: anEraseThatCantFinishIsOwedAndNeverRead
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~guard eraseIfOwed\(\) else \{ return nil \}~guard true else { return nil }~
+
+# The file is protected as the kept tasks are.
+test: theFileIsProtectedLikeTheTasks
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~TaskStore\.fileWriting\(protected: protected\)~[.withoutOverwriting]~
+
+# A chip says what it is, for VoiceOver.
+test: aChipSaysWhatItIs aProvenCardShowsEachProofAndSaysWhatItIs
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~\{ "Source: ~{ "~
+
+test: aChipSaysWhatItIs aProvenCardShowsEachProofAndSaysWhatItIs
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~\{ "Made: ~{ "~
+
+# The still line follows a colon as a sentence would.
+test: theStillLineReadsAsASentence
+file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
+perl: s~if !capitals \{ text~if true { text~
+
+# The engine lets go of the tasks that ended first, never one ending now.
+test: aTaskThatEndsAfterManyOthersStillSaysHowItEnded fiftySeededTasksNeverEndSilently
+file: Packages/PebbleKit/Sources/PebbleCore/LocalFakeEngine.swift
+perl: s~\n            \.sorted \{ \(runs\[\$0\]\.task\.updatedAt, \$0\) < \(runs\[\$1\]\.task\.updatedAt, \$1\) \}~~
+
+# Today: the card shows the ledger's finish, only once the task is done.
+test: aProvenCardShowsEachProofAndSaysWhatItIs anUncheckedCardSaysSoInPlainWords
+file: Packages/PebbleKit/Sources/PebbleUI/TaskCard.swift
+perl: s~task\.state == \.done \? finish : nil~nil~
+
+# Today: the feed writes each snapshot down.
+test: aChipShowsOnlyForAProofTheLedgerFound
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~        ledger\?\.record\(snapshot\)\n~~
+
+# Today: QuietWatch looks at each refresh.
+test: aQuietCardSaysSoAndOffersStop
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~        ledger\?\.watch\(\)\n~~
+
+# Today: a task no engine picked up at launch says it stopped.
+test: atLaunchATaskNoEngineHasSaysItStopped
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~        ledger\?\.launch\(live: tasks\?\.tasks \?\? \[\]\)\n~~
+
+# Today: Forget everything takes the ledger, here and in another window.
+test: forgetEverythingEmptiesTheLedger
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~        ledger\?\.forget\(\)\n        let line = ~        let line = ~
+
+test: forgetEverythingInAnotherWindowEmptiesItToo
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~            let cleared = tasks\.clear\(\)\n            ledger\?\.forget\(\)\n~            let cleared = tasks.clear()\n~
+
+# Today: Clear takes the card's ledger.
+test: clearingACardTakesItsLedger
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~        ledger\?\.remove\(task\.id\)\n~~

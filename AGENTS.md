@@ -154,6 +154,9 @@ Things no test here can reach. Check each on a real iPhone before a release.
   the app as a notification opens. `NeedsYouFlowModelTests` guards this.
 - `onReceive` of a `@Published` publisher replays its value each time the
   body runs. To react to a change, observe the object and use `onChange`.
+- An engine lets go of ended tasks by when they ended, never by when they
+  began. A task dropped in the same change that ends it never tells its
+  ledger how it ended. `TaskLedgerRunTests` guards this.
 
 ## Never
 

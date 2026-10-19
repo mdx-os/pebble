@@ -61,6 +61,12 @@ final class FeedModel: ObservableObject {
     /// questions reach the feed only when it asks through the rule of
     /// `needsYou`.
     let tasks: (any TaskEngine)?
+    /// Where every task's ledger is written, from the engine's snapshots
+    /// and from `QuietWatch` at each refresh. Its cards show how a task
+    /// finished and when one has gone quiet. Nil writes nothing down.
+    let ledger: TaskLedgerBook?
+    /// What each task's ledger shows on its card, by task id.
+    @Published private(set) var ledgerShown: [String: LedgerShown] = [:]
     /// Moves a scripted engine's clock with real time, for the live showcase.
     let drivesTasks: Bool
     /// Where the person's words go, passed down from the model so copy that
@@ -142,6 +148,7 @@ final class FeedModel: ObservableObject {
     let window = UUID()
 
     init(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)? = nil,
+         ledger: TaskLedgerBook? = nil,
          drivesTasks: Bool = false, place: PrivacyPlace, memory: MemoryStore? = nil,
          flow: NeedsYouFlow? = nil, background: BackgroundRunner? = nil, calendar: Calendar = .current,
          now: @escaping () -> Date = { Date() },
@@ -160,6 +167,7 @@ final class FeedModel: ObservableObject {
         }
         self.needsYou = needsYou
         self.tasks = tasks
+        self.ledger = ledger
         self.recon = recon
         self.memory = memory
         self.drivesTasks = drivesTasks
@@ -175,6 +183,9 @@ final class FeedModel: ObservableObject {
         if let flow, let keeper {
             flow.store.restore(into: keeper, now: now())
         }
+        // Then a task the ledger has going that no engine picked up says
+        // it stopped when the app closed, rather than sit there.
+        ledger?.launch(live: tasks?.tasks ?? [])
         feed = Feed.build(from: self.sources, needsYou: needsYou, tasks: tasks, now: now(), calendar: calendar)
         if store?.clearedUnreadable == true { clearedUnreadable = ReceiptWords.unreadableCleared }
         flow?.pinned(Self.pinnedTasks(in: feed), rule: needsYou.rule, from: window)
@@ -350,8 +361,31 @@ final class FeedModel: ObservableObject {
     /// background work that is due runs, with the person here.
     func refresh() {
         tasks?.refresh()
+        ledger?.watch()
         if inFront { background?.runDue(now: now(), conditions: .foreground) }
         rebuild()
+    }
+
+    /// What a task's ledger shows on its card.
+    struct LedgerShown: Equatable {
+        let finish: TaskFinish?
+        let quiet: String?
+    }
+
+    func finish(_ task: AgentTask) -> TaskFinish? { ledgerShown[task.id]?.finish }
+
+    func quietLine(_ task: AgentTask) -> String? { ledgerShown[task.id]?.quiet }
+
+    /// Reads again what each task's ledger shows, publishing only a change.
+    private func followLedger() {
+        guard let ledger else { return }
+        var shown: [String: LedgerShown] = [:]
+        for task in tasks?.tasks ?? [] {
+            guard let kept = ledger.ledger(for: task) else { continue }
+            let line = LedgerShown(finish: kept.finish, quiet: kept.quietLine)
+            if line.finish != nil || line.quiet != nil { shown[task.id] = line }
+        }
+        if shown != ledgerShown { ledgerShown = shown }
     }
 
     /// True while the app is active, so the person is here and the device
@@ -368,6 +402,7 @@ final class FeedModel: ObservableObject {
         if next != feed { feed = next }
         closeSummaryGone()
         followCards()
+        followLedger()
         flow?.pinned(Self.pinnedTasks(in: feed), rule: rule, from: window)
     }
 
@@ -423,10 +458,11 @@ final class FeedModel: ObservableObject {
         guard snapshot.sequence > seen else { return }
         seen = snapshot.sequence
         summaries = [:]
+        ledger?.record(snapshot)
         // Kept at every real change, so closing the app at any moment loses
         // nothing. Only what changed is written.
         if let flow, let keeper { flow.store.keep(keeper, now: now()) }
-        if track(snapshot.tasks) { rebuild() }
+        if track(snapshot.tasks) { rebuild() } else { followLedger() }
         for line in announcer.lines(for: snapshot.tasks, at: clock()) { announce(line) }
     }
 
@@ -756,6 +792,7 @@ final class FeedModel: ObservableObject {
     /// Takes an ended card away, and everything the task held.
     func dismiss(_ task: AgentTask) {
         guard tasks?.dismiss(task.id) == true else { return }
+        ledger?.remove(task.id)
         if reading?.id == task.id { reading = nil }
         closeSummaries { $0 == task.id }
         refresh()
@@ -784,6 +821,8 @@ final class FeedModel: ObservableObject {
         defer { forgetting = false }
         forgotten(.init())
         let cleared = tasks?.clear() ?? .none
+        // Every task's ledger goes with it, with or without an engine.
+        ledger?.forget()
         let line = Self.forgetLine(cleared.underwayLine, inCloud: inCloud)
         let what = NeedsYouFlow.Forgotten(something: cleared.forgotten > 0 || hadReceipts, underway: line)
         if let flow { flow.forget(what) } else { forgotten(what) }
@@ -855,6 +894,7 @@ final class FeedModel: ObservableObject {
             // and if one of them may have reached the cloud, the line says so.
             let inCloud = (recon?.summariesPastAYes ?? 0) > 0
             let cleared = tasks.clear()
+            ledger?.forget()
             if cleared.forgotten > 0 { something = true }
             let own = Self.forgetLine(cleared.underwayLine, inCloud: inCloud)
             if let own, underway?.contains(own) != true {
@@ -1186,6 +1226,8 @@ struct FeedView: View {
                                      canApprove: model.canApprove(task),
                                      isSample: model.isSample(item),
                                      canRedirect: model.canRedirect(task),
+                                     finish: model.finish(task),
+                                     quietLine: model.quietLine(task),
                                      onApprove: { model.review(task) },
                                      onRedirect: { model.redirect(task, with: $0) },
                                      onStop: { model.stop(task) },

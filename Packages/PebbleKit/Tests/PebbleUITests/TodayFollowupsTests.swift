@@ -690,7 +690,7 @@ struct TodayFollowupsTests {
         }
         #expect(Set(showing) == [.confirm, .confirmTimedOut, .todayNeedsYou, .todaySummary,
                                  .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive,
-                                 .askWaiting, .askSheet, .askAnswered, .askClosed, .askLive,
+                                 .taskProven, .taskUnchecked, .askWaiting, .askSheet, .askAnswered, .askClosed, .askLive,
                                  .reconRunning, .reconReady])
     }
 

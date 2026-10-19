@@ -182,6 +182,18 @@ stops tasks still going. If a step said yes to was under way, a short line
 stays on Today to say it may be done, naming nothing the task held. A
 scripted task's card says "Example", like every other example.
 
+A done card shows what backs it, as small chips under the result: the
+title of a page that was read, the name of something made on this device,
+or what a check found. VoiceOver reads each as "Source: Maple Dental
+hours", "Made: Saturday dentists" or "Checked: All three open on
+Saturdays". Done with nothing real to show, the card says so plainly:
+"Finished, but I couldn't check the result." It never calls that done. A
+task that goes quiet says so on its own, naming its last step ("Still on
+it: reading the third page."), and after half an hour of nothing new says
+it hasn't moved forward and that the person can stop it, with Stop right
+there. A task that was going when the app closed says "This stopped when
+the app closed." The words live in `LedgerWords`.
+
 ### Looking into something
 
 When the person asks the agent to look into something, the chat offers

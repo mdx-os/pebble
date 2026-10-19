@@ -22,8 +22,10 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     case cloudOff, cloudAsk, cloudPreview
     /// Today with live task cards on the scripted engine, held still at a
     /// moment: working, trying another way, waiting on the person, and done.
-    /// `tasksLive` plays the same tasks in real time.
-    case taskRunning, taskRetrying, taskWaiting, taskDone, tasksLive
+    /// `tasksLive` plays the same tasks in real time. `taskProven` is the
+    /// dentist search done with what shows it as chips, written down in a
+    /// ledger, and `taskUnchecked` the week's plan done with nothing to show.
+    case taskRunning, taskRetrying, taskWaiting, taskDone, tasksLive, taskProven, taskUnchecked
     /// Looking into something: the offer in the chat, the live card while it
     /// reads, and the summary with its sources. On the sample sources.
     case reconOffer, reconRunning, reconReady
@@ -86,7 +88,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     needsYou: needsYou(at: morning) ?? NeedsYou(rule: .isolated()),
                     now: { morning }
                 )
-            case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive,
+            case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive, .taskProven, .taskUnchecked,
                  .askWaiting, .askSheet, .askAnswered, .askClosed, .askLive:
                 taskHome(brand: brand, looks: looks)
                     .overlay(alignment: .topLeading) {
@@ -207,8 +209,8 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         case .todayNeedsYou, .todaySummary: Self.sampleQuestion(at: now)
         case .today, .todayEmpty, .home, .homeMemory: NeedsYou(rule: .isolated())
         case .reconOffer: NeedsYou(rule: .isolated())
-        case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive, .reconRunning, .reconReady,
-             .askWaiting, .askSheet, .askAnswered, .askClosed, .askLive: NeedsYou(rule: rule)
+        case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive, .taskProven, .taskUnchecked,
+             .reconRunning, .reconReady, .askWaiting, .askSheet, .askAnswered, .askClosed, .askLive: NeedsYou(rule: rule)
         default: nil
         }
     }
@@ -220,6 +222,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         switch self {
         case .tasksLive: Self.liveTasks(rule: rule)
         case .taskRunning, .taskRetrying, .taskWaiting, .taskDone: Self.sampleTasks(self, rule: rule)
+        case .taskProven, .taskUnchecked: Self.ledgerTasks(self, rule: rule).engine
         case .reconRunning, .reconReady: Self.sampleRecon(ready: self == .reconReady, rule: rule)
         case .askWaiting, .askSheet, .askAnswered, .askClosed: Self.askTasks(self, rule: rule)
         case .askLive: Self.liveAsks().engine
@@ -286,7 +289,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         let held = TaskScript.Step(last.text, kind: last.kind, duration: hold, kept: last.kept, todo: last.todo)
         return TaskScript(title: SampleTasks.dentist.title, steps: SampleTasks.dentist.steps.dropLast() + [held],
                           determinate: SampleTasks.dentist.determinate, doneLine: SampleTasks.dentist.doneLine,
-                          result: SampleTasks.dentist.result)
+                          result: SampleTasks.dentist.result, proofs: SampleTasks.dentist.proofs)
     }
 
     /// The dentist search at its question, and after it is answered.
@@ -417,6 +420,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
             looks: looks, conversation: Self.sampleFirstChat(), section: .today,
             feed: [SampleFeedSource()], needsYou: needsYou(at: morning, rule: rule) ?? NeedsYou(rule: rule),
             tasks: tasks(rule: rule),
+            ledger: ledger(rule: rule),
             drivesTasks: live,
             kept: kept(), notifier: notifier, opensQuestion: self == .askSheet,
             now: { @Sendable in live ? Date() : morning }
@@ -481,6 +485,58 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
             engine.advance(by: at - 30)
         }
         return engine
+    }
+
+    /// A finished task written down in a ledger of its own, kept in memory,
+    /// played to the moment the scene shows so the engine's clock lands on
+    /// 9:40. The dentist search is said yes to and done at 47 seconds, with
+    /// its pages and its list; the ledger knows where the list is kept. The
+    /// week's plan is done at 22, with nothing to show for it. Nothing here
+    /// is really read, made or done.
+    @MainActor
+    static func ledgerTasks(_ scene: ShowcaseScene, rule: AskFirst) -> (engine: LocalFakeEngine, ledger: TaskLedgerBook) {
+        if let made = ledgerScenes[scene], made.rule === rule { return (made.engine, made.ledger) }
+        let made = playLedgerTasks(scene, rule: rule)
+        ledgerScenes[scene] = (rule, made.engine, made.ledger)
+        return made
+    }
+
+    /// The ledger scenes made so far, each with the rule it asks through,
+    /// so `tasks(rule:)` and `ledger(rule:)` hand over the same pair.
+    @MainActor private static var ledgerScenes: [ShowcaseScene: (rule: AskFirst, engine: LocalFakeEngine,
+                                                                 ledger: TaskLedgerBook)] = [:]
+
+    /// Where a scene's tasks are written down. Nil for scenes without a ledger.
+    @MainActor
+    func ledger(rule: AskFirst) -> TaskLedgerBook? {
+        self == .taskProven || self == .taskUnchecked ? Self.ledgerTasks(self, rule: rule).ledger : nil
+    }
+
+    @MainActor
+    private static func playLedgerTasks(_ scene: ShowcaseScene, rule: AskFirst)
+        -> (engine: LocalFakeEngine, ledger: TaskLedgerBook) {
+        let at: TimeInterval = scene == .taskProven ? 50 : 30
+        let engine = LocalFakeEngine(rule: rule, origin: morning - at)
+        let ledger = TaskLedgerBook(store: InMemoryTaskLedgerStore(),
+                                    artifacts: KnownArtifacts([SampleTasks.dentistListReference]),
+                                    clock: { [engine] in engine.currentDate })
+        let following = ledger.follow(engine)
+        if scene == .taskProven {
+            engine.start(SampleTasks.dentist)
+            engine.advance(by: 43)
+            // The yes goes through the sheet's own state, as a tap on Yes would.
+            if let task = engine.tasks.first, let question = task.question {
+                let sheet = ConfirmationState(request: question, rule: rule,
+                                              onApprove: { _ = engine.resume(task.id, with: $0) }, onDecline: {})
+                sheet.tapPrimary()
+            }
+            engine.advance(by: at - 43)
+        } else {
+            engine.start(SampleTasks.plan)
+            engine.advance(by: at)
+        }
+        following.cancel()
+        return (engine, ledger)
     }
 
     /// What the person says in the offer scene.

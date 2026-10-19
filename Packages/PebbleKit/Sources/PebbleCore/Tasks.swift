@@ -23,6 +23,10 @@ public struct AgentTask: Identifiable, Sendable, Equatable {
     public var wrapUp: TaskWrapUp?
     /// The finished result to read, once the task is done.
     public var result: String?
+    /// What the engine says shows the result, once the task is done. Taken
+    /// on its word by no one: `TaskLedgerBook` keeps only proofs that point
+    /// at something real, and a done with none is finished unchecked.
+    public var proofs: [TaskProof] = []
     public let startedAt: Date
     public var updatedAt: Date
     /// Steps recorded so far, counting those the history has let go. Each
