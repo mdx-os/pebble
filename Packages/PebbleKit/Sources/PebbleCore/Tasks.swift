@@ -23,6 +23,11 @@ public struct AgentTask: Identifiable, Sendable, Equatable {
     public var wrapUp: TaskWrapUp?
     /// The finished result to read, once the task is done.
     public var result: String?
+    /// Evidence supplied by the engine for its result. `TaskLedgerBook`
+    /// checks source and check shapes and resolves local artifact references.
+    /// Sources and checks remain supplied claims until backed by trusted
+    /// execution records. A done with no accepted evidence is finished unchecked.
+    public var proofs: [TaskProof] = []
     public let startedAt: Date
     public var updatedAt: Date
     /// Steps recorded so far, counting those the history has let go. Each

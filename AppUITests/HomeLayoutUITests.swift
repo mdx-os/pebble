@@ -65,6 +65,36 @@ final class HomeLayoutUITests: XCTestCase {
         XCTAssertFalse((field.value as? String ?? "").contains("Pack lunches"))
     }
 
+    /// At the largest text sizes the first run scrolls. Scrolled down to the
+    /// button, the next page still opens at its top, heading in view.
+    func testEachFirstRunPageOpensAtItsTop() throws {
+        let app = launch("hello", textSize: "UICTContentSizeCategoryAccessibilityXXXL")
+        let begin = app.buttons["Let's begin"]
+        XCTAssertTrue(begin.waitForExistence(timeout: 10))
+        for _ in 0..<8 { app.swipeUp() }
+        XCTAssertTrue(begin.isHittable)
+        let screen = app.windows.firstMatch.frame
+        let hello = app.staticTexts["Hi there. I'm glad you're here."]
+        if screen.contains(hello.frame) {
+            throw XCTSkip("the whole page fits on this screen, so nothing scrolls")
+        }
+        begin.tap()
+        let heading = app.staticTexts["What would you like to call me?"]
+        XCTAssertTrue(heading.waitForExistence(timeout: 5))
+        // The page's top is its step dots, above the character and the
+        // heading. Past the page's slide in, they sit wholly on the screen,
+        // so the heading below them does too, clear of the status bar.
+        let steps = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Step 2 of")).firstMatch
+        XCTAssertTrue(steps.waitForExistence(timeout: 5))
+        let deadline = Date().addingTimeInterval(5)
+        while !screen.contains(steps.frame), Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        }
+        XCTAssertTrue(screen.contains(steps.frame), "the name page opens at its top: steps at \(steps.frame)")
+        XCTAssertLessThan(steps.frame.maxY, heading.frame.minY)
+        XCTAssertTrue(screen.contains(heading.frame), "the heading in view: \(heading.frame) on \(screen)")
+    }
+
     /// Today is home. On iPad it is the first place in the sidebar, chosen
     /// first; on iPhone the chat is one tap away at the bottom.
     func testTodayIsHomeAndTheChatIsOneTapAway() throws {
@@ -101,6 +131,12 @@ final class HomeLayoutUITests: XCTestCase {
         // Something spotted opens the chat with a line ready, not sent.
         let spotted = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Example. Noticed. Sam's birthday")).firstMatch
         XCTAssertTrue(spotted.waitForExistence(timeout: 5))
+        // Low on Today, so on a smaller phone it may sit under the composer.
+        let todayComposer = app.descendants(matching: .any).matching(identifier: "todayComposer").firstMatch
+        let composerTop = todayComposer.exists ? todayComposer.frame.minY - 12 : app.frame.maxY
+        for _ in 0..<3 where !spotted.isHittable || spotted.frame.maxY > composerTop {
+            app.scrollViews.firstMatch.swipeUp()
+        }
         spotted.tap()
         let field = composer(in: app)
         XCTAssertTrue(field.waitForExistence(timeout: 5))

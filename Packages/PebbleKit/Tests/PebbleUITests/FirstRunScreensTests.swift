@@ -18,6 +18,57 @@ struct FirstRunScreensTests {
             .frame(width: 393, height: 852))
     }
 
+    #if os(macOS)
+    /// Scrolled down to reach Continue, as at a large text size or in a
+    /// short window, the next page still opens at its top, heading and all.
+    @Test func eachPageOpensAtItsTop() throws {
+        let suite = "first-run-top-\(UUID().uuidString)"
+        let looks = try #require(UserDefaults(suiteName: suite))
+        defer { looks.removePersistentDomain(forName: suite) }
+        let model = OnboardingModel(brand: brand, names: InMemoryAgentNameStore(), store: InMemoryOnboardingStore(),
+                                    looks: looks, page: .hello, draftName: "", onFinish: { _ in })
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 360, height: 280), styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        // Under ARC a window released on close is released twice.
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: OnboardingView(model: model, place: .onDevice)
+            .environment(\.holdsStill, true)
+            .environment(\.dynamicTypeSize, .accessibility3))
+        window.contentView = host
+        func settle(until done: () -> Bool) {
+            let deadline = Date().addingTimeInterval(5)
+            host.layoutSubtreeIfNeeded()
+            while !done(), Date() < deadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+                host.layoutSubtreeIfNeeded()
+            }
+        }
+        func scrollView(in view: NSView) -> NSScrollView? {
+            if let found = view as? NSScrollView { return found }
+            return view.subviews.lazy.compactMap(scrollView(in:)).first
+        }
+        settle { scrollView(in: host) != nil }
+        let scroller = try #require(scrollView(in: host))
+        let top = scroller.contentView.bounds.origin.y
+        func offset() -> CGFloat { scroller.contentView.bounds.origin.y - top }
+        func bottom() -> CGFloat {
+            (scroller.documentView?.frame.height ?? 0) - scroller.contentView.bounds.height
+        }
+        // Down to the foot of the page, where Continue waits.
+        settle { bottom() > 100 }
+        #expect(bottom() > 100, "the page outgrows the window, so it scrolls")
+        scroller.contentView.scroll(to: CGPoint(x: 0, y: top + bottom()))
+        scroller.reflectScrolledClipView(scroller.contentView)
+        settle { offset() > 100 }
+        #expect(offset() > 100, "scrolled down to Continue")
+        model.advance()
+        settle { model.page == .name && abs(offset()) < 1 }
+        #expect(model.page == .name)
+        #expect(abs(offset()) < 1, "the next page opens at its top, scrolled \(offset())")
+    }
+    #endif
+
     /// Each view of the first run that reads Reduce Motion also holds still
     /// for the screenshots, so its entrances settle and two shots match.
     @Test func theFirstRunHoldsStillForTheScreenshots() throws {
