@@ -131,6 +131,12 @@ final class HomeLayoutUITests: XCTestCase {
         // Something spotted opens the chat with a line ready, not sent.
         let spotted = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Example. Noticed. Sam's birthday")).firstMatch
         XCTAssertTrue(spotted.waitForExistence(timeout: 5))
+        // Low on Today, so on a smaller phone it may sit under the composer.
+        let todayComposer = app.descendants(matching: .any).matching(identifier: "todayComposer").firstMatch
+        let composerTop = todayComposer.exists ? todayComposer.frame.minY - 12 : app.frame.maxY
+        for _ in 0..<3 where !spotted.isHittable || spotted.frame.maxY > composerTop {
+            app.scrollViews.firstMatch.swipeUp()
+        }
         spotted.tap()
         let field = composer(in: app)
         XCTAssertTrue(field.waitForExistence(timeout: 5))
