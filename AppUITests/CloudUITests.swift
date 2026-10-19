@@ -50,8 +50,13 @@ final class CloudUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@",
                                                            "To sign in, this carries an Apple sign-in token, used once"))
             .firstMatch.exists)
-        // Not signed in yet, so the message carries no sign-in label.
-        XCTAssertFalse(labels.label.contains("sign-in value"))
+        // The message carries the session signing in brings back: one
+        // sign-in label, its value hidden, and the sheet says so.
+        XCTAssertTrue(labels.label.contains("Cloud-Session, sign-in value, hidden"))
+        XCTAssertEqual(labels.label.components(separatedBy: "sign-in value").count, 2)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@",
+                                                           "Your message also carries the session that signing in brings back"))
+            .firstMatch.exists)
         // A plain word, never the product's name.
         XCTAssertTrue(labels.label.contains("User-Agent, agent"))
         XCTAssertTrue(labels.label.contains("Host, cloud.example.com"))

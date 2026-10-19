@@ -121,7 +121,8 @@ public struct HomeView: View {
     static func memoryModel(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp? = nil,
                             onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) -> MemoryModel {
         MemoryModel(store: store, place: place, endsCloudChats: MemoryView.endsCloudChats(cloud),
-                    alsoForget: MemoryView.alsoForget(cloud), onForgetEverything: onForgetEverything)
+                    alsoForget: MemoryView.alsoForget(cloud), keyStayed: MemoryView.keyStayed(cloud),
+                    onForgetEverything: onForgetEverything)
     }
 
     /// The send itself, apart from moving, so tests can drive it.

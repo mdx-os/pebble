@@ -47,6 +47,12 @@ public struct CloudPolicy: Sendable, Equatable {
         signInFields: ["appleToken", "nonce", "deviceKey"]
     )
 
+    /// True when the server takes a message only from a device signed in
+    /// to it: whenever signing in sends anything at all. The current
+    /// policy does, so with no session and no sign-in hop in the preview,
+    /// no message goes (`CloudModel`).
+    public var needsSignIn: Bool { !signInFields.isEmpty }
+
     /// Who runs it, said plainly.
     public var whoLine: String {
         "Your messages go to a server \(runBy) runs itself. \(runBy) doesn't hand them to anyone else."

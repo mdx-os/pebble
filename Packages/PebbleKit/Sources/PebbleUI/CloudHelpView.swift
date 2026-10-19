@@ -44,6 +44,9 @@ public final class CloudHelp: ObservableObject {
         case offForNow, offUntilUnlocked, offSavedLater, offAtLaunchNotSaved
         /// Any other line.
         case said(String)
+        /// The sign-in key couldn't be erased, after whatever else there is
+        /// to say (`CloudWords.signInKeyMayStay`).
+        indirect case keyStayed(after: Status?)
 
         var line: String {
             switch self {
@@ -52,12 +55,29 @@ public final class CloudHelp: ObservableObject {
             case .offSavedLater: CloudWords.offSavedLater
             case .offAtLaunchNotSaved: CloudWords.offAtLaunchNotSaved
             case .said(let line): line
+            case .keyStayed(let after): [after?.line, CloudWords.signInKeyMayStay].compactMap { $0 }.joined(separator: " ")
             }
         }
 
         var waitsForASave: Bool {
-            if case .said = self { false } else { true }
+            switch self {
+            case .said: false
+            case .keyStayed(let after): after?.waitsForASave ?? false
+            default: true
+            }
         }
+
+        /// What is still true once the save it waits for is made: only
+        /// that the key may still be here, if it may.
+        var afterTheSave: Status? {
+            if case .keyStayed = self { .keyStayed(after: nil) } else { nil }
+        }
+    }
+
+    /// `line`, followed by the key line while the sign-in key couldn't be
+    /// erased.
+    private func telling(_ line: Status?, keyGone: Bool) -> Status? {
+        keyGone ? line : .keyStayed(after: line)
     }
 
     /// The line for the home screen when launch couldn't save a stale yes
@@ -104,6 +124,9 @@ public final class CloudHelp: ObservableObject {
     public let memory: MemoryStore?
     private let store: any CloudHelpStoring
     private let auth: any CloudAuth
+    /// What the server keeps, and whether it needs a sign-in: the policy
+    /// this build was checked against, unless a test says otherwise.
+    private let policy: CloudPolicy
     private let makeTransport: @Sendable () -> any CloudTransport
     /// The file a setting that couldn't be opened would have read.
     private let unopenedFile: (@Sendable () throws -> any CloudHelpStoring)?
@@ -132,14 +155,21 @@ public final class CloudHelp: ObservableObject {
     /// True once anything has been handed to the cloud since launch.
     public var anythingSentThisSession: Bool { sent.value }
 
+    /// True while sign-in's key may still be on this device: the last
+    /// forget, turn on or launch asked to erase it and the Keychain kept
+    /// it. In memory only. Sign-in owes the removal too, and tries it
+    /// again before it would sign in, so the key is never sent again.
+    private(set) var signInKeyMayStay = false
+
     public convenience init(
         store: any CloudHelpStoring,
         endpoint: URL?,
         memory: MemoryStore?,
         auth: any CloudAuth = NoCloudAuth(),
+        policy: CloudPolicy = .current,
         transport: @escaping @Sendable () -> any CloudTransport = { URLSessionCloudTransport() }
     ) {
-        self.init(store: store, endpoint: endpoint, memory: memory, auth: auth, transport: transport,
+        self.init(store: store, endpoint: endpoint, memory: memory, auth: auth, policy: policy, transport: transport,
                   storeOpened: true, unopenedFile: nil)
     }
 
@@ -148,6 +178,7 @@ public final class CloudHelp: ObservableObject {
         endpoint: URL?,
         memory: MemoryStore?,
         auth: any CloudAuth,
+        policy: CloudPolicy = .current,
         transport: @escaping @Sendable () -> any CloudTransport,
         storeOpened: Bool,
         unopenedFile: (@Sendable () throws -> any CloudHelpStoring)?
@@ -157,6 +188,7 @@ public final class CloudHelp: ObservableObject {
         self.storeOpened = storeOpened
         self.memory = memory
         self.auth = auth
+        self.policy = policy
         self.makeTransport = transport
         self.unopenedFile = unopenedFile
         var read = storeOpened ? try? store.load() : nil
@@ -180,6 +212,11 @@ public final class CloudHelp: ObservableObject {
         settings = read ?? .off
         mayKeepUnseenWords = storeOpened ? read == nil : unopenedFile != nil
         if holdsOff { switchedOff.value = true }
+        // With the cloud off nothing should hold a sign-in key, so a key a
+        // forget couldn't erase before the app closed goes now, if it can.
+        if holdsOff || !ModelChoice.usesCloud(settings: settings, endpoint: storeOpened ? endpoint : nil) {
+            signInKeyMayStay = !auth.forgetLeftovers()
+        }
         // Set once every stored property is in place, so `didSet` runs and
         // the line is counted like any other. Marked as launch's after, as
         // `didSet` clears that.
@@ -309,7 +346,7 @@ public final class CloudHelp: ObservableObject {
             let session = CloudChatSession(handingOver: { sent.value = true })
             sessions.add(session)
             return CloudModel(
-                endpoint: url, transport: makeTransport(), reviewer: review, auth: auth,
+                endpoint: url, transport: makeTransport(), reviewer: review, auth: auth, policy: policy,
                 // Read fresh for each reply, on this device, so new notes
                 // and private words count right away. Notes or words that
                 // can't be read mean nothing is sent.
@@ -372,7 +409,7 @@ public final class CloudHelp: ObservableObject {
         // A marked off reads as off, so the line says whether it waits.
         if switchedOff.value, fresh.isOn || waiting {
             fresh.turnOff()
-            if (try? store.save(fresh)) != nil, waiting { state = nil }
+            if (try? store.save(fresh)) != nil, waiting { state = state?.afterTheSave }
         }
         settings = fresh
         mayKeepUnseenWords = false
@@ -399,19 +436,23 @@ public final class CloudHelp: ObservableObject {
 
     /// The yes to the turn on question, for this build's address only.
     /// Nothing reaches the network here: a sign-in, if the cloud needs one,
-    /// is a hop in the first preview, sent only by that preview's yes.
+    /// is a hop in the first preview, sent only by that preview's yes. A
+    /// fresh yes starts with no sign-in key kept, so any key still left
+    /// from before is erased first, and the line says so if it can't be.
     func confirmTurnOn() {
         guard isAvailable, let endpoint else { return }
+        let keyGone = auth.forgetLeftovers()
+        signInKeyMayStay = !keyGone
         let wasSwitchedOff = switchedOff.value
         switchedOff.value = false
         guard update({ $0.turnOn(for: endpoint) }).isDone else {
             // Still off, and still off for chats already open.
             switchedOff.value = wasSwitchedOff
             settings.turnOff()
-            state = .said(CloudWords.onNotSaved)
+            state = telling(.said(CloudWords.onNotSaved), keyGone: keyGone)
             return
         }
-        state = nil
+        state = telling(nil, keyGone: keyGone)
     }
 
     /// Off at once for every chat, before anything is saved: every cloud
@@ -425,24 +466,28 @@ public final class CloudHelp: ObservableObject {
     /// save fails because the file is damaged, or the disk, it is erased,
     /// since no file reads as off on the next launch; if that fails too it
     /// is marked off. Only when nothing holds could it read as on next
-    /// time, and the person is told so, locked or not.
+    /// time, and the person is told so, locked or not. If sign-in's key
+    /// couldn't be erased, the line ends by saying it may still be here.
     func turnOff() {
         switchedOff.value = true
         settings.turnOff()
         for session in sessions.allObjects { session.end(because: .off) }
         withdrawPreviews()
-        auth.forget()
+        let keyGone = auth.forget()
+        signInKeyMayStay = !keyGone
         let first = update { $0.turnOff() }
+        let line: Status?
         if first.isDone || update({ $0.turnOff() }).isDone {
-            state = nil
+            line = nil
         } else if first == .locked {
-            state = (try? store.markOff()) != nil ? .offUntilUnlocked : .offForNow
+            line = (try? store.markOff()) != nil ? .offUntilUnlocked : .offForNow
         } else if (try? store.erase()) != nil {
             settings = .off
-            state = .said(CloudWords.offButCleared)
+            line = .said(CloudWords.offButCleared)
         } else {
-            state = (try? store.markOff()) != nil ? .offSavedLater : .offForNow
+            line = (try? store.markOff()) != nil ? .offSavedLater : .offForNow
         }
+        state = telling(line, keyGone: keyGone)
     }
 
     /// A preview waiting for a yes was redacted with the private words as
@@ -507,9 +552,10 @@ public final class CloudHelp: ObservableObject {
     @discardableResult
     func forgetPrivateWords() throws -> Forgot {
         // First, whatever happens to the file: no open chat keeps a copy,
-        // and sign-in keeps nothing it learned.
+        // and sign-in keeps nothing it learned. Whether its key went is
+        // kept for Forget everything's line (`signInKeyMayStay`).
         endOpenCloudChats()
-        auth.forget()
+        signInKeyMayStay = !auth.forget()
         newPrivateWord = ""
         guard storeOpened else { return try eraseUnopenedFile() }
         let current = try? store.load()
@@ -1163,7 +1209,9 @@ struct CloudPreviewSheet: View {
         return [CloudWords.previewSignInFirst, CloudWords.previewSignInCovered]
             + (carriesAppleSignIn(preview) ? [CloudWords.previewSignInCarries] : [])
             + spokenLines(signIn, isSignInHop: true)
-            + [CloudWords.previewThenMessage] + spokenLines(preview.request, isSignInHop: false)
+            + [CloudWords.previewThenMessage]
+            + (preview.sessionHeader == nil ? [] : [CloudWords.previewSessionFromSignIn])
+            + spokenLines(preview.request, isSignInHop: false)
     }
 
     private static func spokenLines(_ request: CloudRequest, isSignInHop: Bool) -> [String] {
@@ -1215,6 +1263,11 @@ struct CloudPreviewSheet: View {
                         Label(CloudWords.previewSignInCarries, systemImage: "apple.logo")
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityIdentifier("cloudPreviewSignInCarries")
+                    }
+                    if preview.sessionHeader != nil {
+                        Label(CloudWords.previewSessionFromSignIn, systemImage: "key.horizontal")
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("cloudPreviewSessionFromSignIn")
                     }
                 }
                 .font(.subheadline.weight(.medium))

@@ -183,6 +183,16 @@ enum DevicePromise {
                 literal: "This stops any task still going, and removes every task, what you told me for it and any words you asked me to hide from this device. It can't be undone. Your notes aren't touched.",
                 reason: "CloudWords.forgetTasksAndWordsDetail, like TaskWords.forgetTasksDetail: \"from this device\" is "
                     + "the honest limit of what is erased, local files only, whatever the model is."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "I didn't send that. I couldn't erase an old sign-in key from this device, and I won't sign in while it's here. Please try again in a moment.",
+                reason: "CloudWords.oldKeyStayed. \"This device\" is where the Keychain kept a sign-in key it was asked to "
+                    + "erase; the line says something stayed that shouldn't have, the opposite of a promise, and that "
+                    + "nothing was sent (AppleCloudAuth refuses the sign-in)."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "I couldn't erase my sign-in key just now, so it may still be on this device. I won't sign in with it again, and I'll try erasing it next time.",
+                reason: "CloudWords.signInKeyMayStay, said when the Keychain kept the sign-in key a forget asked it to "
+                    + "remove. It owns up that the key may still be here, the opposite of a promise, and no sign-in reads "
+                    + "or sends that key while the removal is owed."),
         Allowed(file: "PebbleCore/Redactor.swift", literal: "[private]",
                 reason: "The mask that replaces a private word in the text that leaves. " + privateWordsName),
         Allowed(file: "PebbleCore/Redactor.swift", literal: "hidden private word",
@@ -228,6 +238,8 @@ enum DevicePromise {
         CloudWords.forgotWordsAndCloudNotNotes,
         CloudWords.forgotTasksAndWordsAndCloudNotNotes,
         CloudWords.forgetTasksAndWordsDetail,
+        CloudWords.oldKeyStayed,
+        CloudWords.signInKeyMayStay,
         Redaction.Kind.privateWord.mask,
         Redaction.Kind.privateWord.spoken,
     ] + CloudWords.askPoints.filter { !found(in: $0).isEmpty }

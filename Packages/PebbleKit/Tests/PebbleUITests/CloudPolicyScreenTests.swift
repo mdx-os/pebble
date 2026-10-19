@@ -25,7 +25,7 @@ struct CloudPolicyScreenTests {
         let auth = AppleCloudAuth(keychain: keychain)
         _ = try #require(auth.startAppleSignIn())
         try auth.accept(identityToken: Data(token.utf8))
-        #expect(auth.signIn(for: endpoint) != nil)
+        #expect(try auth.signIn(for: endpoint) != nil)
         #expect(keychain.all[AppleCloudAuth.deviceKeyAccount] != nil, "the key is made on the device")
         _ = try #require(auth.startAppleSignIn())
         try auth.accept(identityToken: Data(token.utf8))
@@ -65,7 +65,7 @@ struct CloudPolicyScreenTests {
         help.turnOff()
         #expect(keychain.all.isEmpty)
         #expect(!auth.holdsTokenOrNonce)
-        #expect(auth.signIn(for: endpoint) == nil)
+        #expect(try auth.signIn(for: endpoint) == nil)
     }
 
     /// Forget everything removes them too, on or off.

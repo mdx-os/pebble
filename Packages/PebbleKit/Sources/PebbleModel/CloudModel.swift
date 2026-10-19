@@ -160,18 +160,40 @@ public struct CloudPreview: Sendable, Equatable, Identifiable {
     public let id: UUID
     /// The sign-in hop that goes first, if the cloud needs one.
     public let signIn: CloudRequest?
+    /// The message. With `sessionHeader`, it already carries that header
+    /// with an empty value, so the card shows it as a sign-in line, its
+    /// value covered; the session the hop's answer brings back fills it in
+    /// (`message(carrying:)`), and nothing else changes.
     public let request: CloudRequest
     public let hidden: [Redaction.Kind: Int]
+    /// The header on the message that carries the session from this
+    /// preview's sign-in hop. Nil without a hop, or for a hop that brings
+    /// none back.
+    public let sessionHeader: String?
 
-    public init(id: UUID = UUID(), signIn: CloudRequest? = nil, request: CloudRequest, hidden: [Redaction.Kind: Int]) {
+    public init(id: UUID = UUID(), signIn: CloudRequest? = nil, request: CloudRequest, hidden: [Redaction.Kind: Int],
+                sessionHeader: String? = nil) {
         self.id = id
         self.signIn = signIn
         self.request = request
         self.hidden = hidden
+        self.sessionHeader = signIn == nil ? nil : sessionHeader
     }
 
-    /// Every request the yes sends, in order.
+    /// Every request the yes sends, in order, as the card shows them.
     public var hops: [CloudRequest] { [signIn, request].compactMap { $0 } }
+
+    /// The message as it goes after the sign-in hop: `request` with only
+    /// the session header's value filled in by `session`. Nil without a
+    /// session header, or for a session that is empty or could go other
+    /// than one plain line.
+    public func message(carrying session: String) -> CloudRequest? {
+        guard let sessionHeader, request.headers[sessionHeader] == "", !session.isEmpty,
+              !session.unicodeScalars.contains(where: { $0 == "\r" || $0 == "\n" }) else { return nil }
+        var headers = request.headers
+        headers[sessionHeader] = session
+        return CloudRequest(method: request.method, url: request.url, headers: headers, body: request.body)
+    }
 
     /// Everything the yes sends, as the preview shows it: the sign-in hop
     /// first when there is one, then the message.
@@ -213,11 +235,17 @@ public struct CloudSignIn: Sendable, Equatable {
     public let path: String
     public let headers: [String: String]
     public let body: Data
+    /// The header the message carries once this sign-in is answered, if
+    /// any: the session the answer brings back. The preview shows it on
+    /// the message as a sign-in line, its value covered, and it is the one
+    /// thing added to the message after the answer (`CloudPreview`).
+    public let sessionHeader: String?
 
-    public init(path: String, headers: [String: String] = [:], body: Data) {
+    public init(path: String, headers: [String: String] = [:], body: Data, sessionHeader: String? = nil) {
         self.path = path
         self.headers = headers
         self.body = body
+        self.sessionHeader = sessionHeader
     }
 
     /// The longest value a sign-in body may hold, in characters. Only a
@@ -328,13 +356,21 @@ public protocol CloudAuth: Sendable {
     /// The sign-in to send before the next message, or nil when none is
     /// needed. Asked while the preview is built, like `headers(for:)`.
     /// Its headers and body carry only credentials or a device token,
-    /// never chat, notes or private words.
-    func signIn(for endpoint: URL) -> CloudSignIn?
+    /// never chat, notes or private words. Throws when it can't sign in
+    /// safely, and then nothing is shown or sent.
+    func signIn(for endpoint: URL) throws -> CloudSignIn?
+
+    /// True while this device holds a session from the server at
+    /// `endpoint`, so a message may go without a sign-in hop. Asked while
+    /// the preview is built, and again once a sign-in hop is answered.
+    func isSignedIn(to endpoint: URL) -> Bool
 
     /// The answer to a sign-in hop, after the person's yes sent it. Kept on
     /// this device for the next message's headers, which that message's own
-    /// preview shows. A header learned here never changes the message the
-    /// same yes sends, since that message was shown before it was learned.
+    /// preview shows. The one header a message takes from it is the hop's
+    /// own `CloudSignIn.sessionHeader`, which the same preview already
+    /// showed as a sign-in line with its value covered; nothing else
+    /// learned here changes the message the same yes sends.
     /// Only handed over while the cloud is still on and the chat still
     /// open, the second checked under the chat's lock
     /// (`CloudChatSession.handOver`). A switch off and Forget everything
@@ -343,21 +379,34 @@ public protocol CloudAuth: Sendable {
     /// lock held, so it must not reach back into the chat.
     func signedIn(_ answer: Data)
 
-    /// Lets go of everything `signedIn` kept, such as a token. Called when
-    /// the cloud is turned off and by Forget everything.
-    func forget()
+    /// Lets go of everything `signedIn` kept, such as a token, and of
+    /// anything kept on this device for signing in, such as a key. Called
+    /// when the cloud is turned off and by Forget everything. True when all
+    /// of it is gone; false when something couldn't be let go, which the
+    /// caller then says. What couldn't go is owed: the next forget tries
+    /// again, and no sign-in uses it meanwhile. No default, so every
+    /// sign-in decides what it keeps.
+    @discardableResult func forget() -> Bool
+
+    /// Lets go of anything still kept for signing in that nothing should
+    /// hold now: asked at launch while the cloud is off, and when it is
+    /// turned on, since a fresh yes starts with nothing kept. True when
+    /// nothing is left; when something is, it is owed as after `forget`.
+    @discardableResult func forgetLeftovers() -> Bool
 }
 
 extension CloudAuth {
-    public func signIn(for endpoint: URL) -> CloudSignIn? { nil }
+    public func signIn(for endpoint: URL) throws -> CloudSignIn? { nil }
+    public func isSignedIn(to endpoint: URL) -> Bool { false }
     public func signedIn(_ answer: Data) {}
-    public func forget() {}
+    public func forgetLeftovers() -> Bool { true }
 }
 
 /// Adds nothing and signs in to nothing.
 public struct NoCloudAuth: CloudAuth {
     public init() {}
     public func headers(for url: URL) -> [String: String] { [:] }
+    public func forget() -> Bool { true }
 }
 
 public enum CloudModelError: Error, Equatable, Sendable {
@@ -375,6 +424,15 @@ public enum CloudModelError: Error, Equatable, Sendable {
     case unreadableReply
     /// Forget everything ended this chat. Nothing more goes from it.
     case ended
+    /// The cloud takes messages only from a device signed in to it, and
+    /// there is no session and no sign-in to show. Nothing was sent.
+    case needsSignIn
+    /// The sign-in hop went, but its answer brought no session the message
+    /// could carry. Nothing more was sent, so the message stayed here.
+    case noSession
+    /// A sign-in key a forget couldn't erase is still on this device, and
+    /// erasing it again failed, so no sign-in uses it. Nothing was sent.
+    case oldKeyStayed
 }
 
 /// The body sent to the cloud model.
@@ -424,13 +482,20 @@ public struct CloudPayload: Codable, Sendable, Equatable {
 ///    notes or private words can't be read, nothing is sent. A chat never
 ///    gets less private: see `CloudChatSession`.
 /// 3. The person sees the exact request, and any sign-in hop before it,
-///    and chooses to send them or not.
-/// 4. Only then do those same bytes go to the transport, once each.
+///    and chooses to send them or not. When the policy needs sign-in, a
+///    message goes only with a session or a sign-in hop in its preview.
+/// 4. Only then do those same bytes go to the transport, once each. The
+///    one exception is the session a sign-in hop brings back, which fills
+///    in the message's session line the preview showed covered. A hop
+///    that brings none back stops the reply there.
 public struct CloudModel: ModelClient {
     /// Where requests go, under the configured address.
     public static let path = "v1/reply"
 
     public let endpoint: URL
+    /// The policy the server at `endpoint` keeps: the one this build was
+    /// checked against.
+    public let policy: CloudPolicy
     private let transport: any CloudTransport
     private let reviewer: any CloudReviewing
     private let auth: any CloudAuth
@@ -453,11 +518,13 @@ public struct CloudModel: ModelClient {
         transport: any CloudTransport,
         reviewer: any CloudReviewing,
         auth: any CloudAuth = NoCloudAuth(),
+        policy: CloudPolicy = .current,
         redactor: @escaping @Sendable () throws -> Redactor = { Redactor() },
         isOn: @escaping @Sendable () throws -> Bool = { true },
         session: CloudChatSession = CloudChatSession()
     ) {
         self.endpoint = endpoint
+        self.policy = policy
         self.transport = transport
         self.reviewer = reviewer
         self.auth = auth
@@ -484,10 +551,19 @@ public struct CloudModel: ModelClient {
             // take out, so nothing goes.
             throw CloudModelError.notesUnreadable
         }
+        let redactor = try session.widened(by: current)
         let preview = try Self.preview(
-            for: transcript, endpoint: endpoint, redactor: try session.widened(by: current),
+            for: transcript, endpoint: endpoint, redactor: redactor,
             headers: auth.headers(for: Self.url(for: endpoint)), signIn: auth.signIn(for: endpoint)
         )
+        // A server that takes messages only from a signed in device is
+        // never sent one without a session or a sign-in to show first.
+        // Checked once the preview is built, so words that must stay here
+        // still say so, and before it is shown.
+        if policy.needsSignIn, preview.signIn == nil, !auth.isSignedIn(to: endpoint) {
+            CloudLog.note("no session and no sign-in, nothing sent")
+            throw CloudModelError.needsSignIn
+        }
         guard await reviewer.review(preview) == .send else {
             CloudLog.note("preview declined")
             throw CloudModelError.notSent
@@ -496,8 +572,11 @@ public struct CloudModel: ModelClient {
         // everything ends this chat even between sends, when nothing is on
         // the wire and nothing may be hidden yet.
         return try await session.replying {
-            // Each hop is the very request the person saw, unchanged, and
-            // each is checked again just before it goes.
+            // Each hop is the very request the person saw, and each is
+            // checked again just before it goes. The message changes in
+            // one way only: the session line the card showed covered gets
+            // the session the sign-in answer brought.
+            var message = preview.request
             if let signIn = preview.signIn {
                 try readyToSend()
                 let answer = try await session.send(signIn, through: transport)
@@ -510,14 +589,36 @@ public struct CloudModel: ModelClient {
                 // under the lock, so neither can land between the two.
                 try checkOn()
                 try session.handOver { auth.signedIn(answer) }
+                message = try Self.message(after: preview, auth: auth, endpoint: endpoint, redactor: redactor)
             }
             try readyToSend()
-            let data = try await session.send(preview.request, through: transport)
+            let data = try await session.send(message, through: transport)
             guard let reply = try? JSONDecoder().decode(CloudPayload.Reply.self, from: data) else {
                 throw CloudModelError.unreadableReply
             }
             return reply.reply
         }
+    }
+
+    /// The message to send once `preview`'s sign-in hop is answered. Throws
+    /// `noSession`, so nothing more goes, when the answer left no session,
+    /// or when the preview showed a session line and sign-in has no plain
+    /// value for it. Refuses a session value `redactor` would change, as
+    /// for every sign-in value, since the card covers it.
+    static func message(after preview: CloudPreview, auth: any CloudAuth, endpoint: URL,
+                        redactor: Redactor) throws -> CloudRequest {
+        guard auth.isSignedIn(to: endpoint) else {
+            CloudLog.note("sign-in answer brought no session, nothing more sent")
+            throw CloudModelError.noSession
+        }
+        guard let name = preview.sessionHeader else { return preview.request }
+        guard let value = auth.headers(for: preview.request.url)[name],
+              let message = preview.message(carrying: value) else {
+            CloudLog.note("sign-in answer brought no session, nothing more sent")
+            throw CloudModelError.noSession
+        }
+        guard redactor.redact(value).isUnchanged else { throw CloudTransportError.signInCarriesPersonalDetails }
+        return message
     }
 
     /// Still asked for, still on, and the chat still open.
@@ -556,7 +657,9 @@ public struct CloudModel: ModelClient {
     ///
     /// The hop's body is `CloudSignIn.encoded` of the checked fields, not
     /// the body sign-in handed over, so what is checked, what the card
-    /// draws and what goes are one thing.
+    /// draws and what goes are one thing. A hop with a `sessionHeader`
+    /// puts that header on the message now, empty, so the card shows the
+    /// session line the answer fills in.
     public static func preview(
         for transcript: [ChatTurn],
         endpoint: URL,
@@ -580,10 +683,20 @@ public struct CloudModel: ModelClient {
         // After redaction: masks must never turn into words of crisis either.
         if messages.contains(where: { CareCheck.needsCare($0.text) }) { throw CloudModelError.staysHere }
         let body = try CloudPayload(messages: messages, version: CloudPayload.currentVersion).encoded()
-        let messageHeaders = try CloudHeaders.merged(with: headers)
+        // The session line the hop's answer fills in, shown on the message
+        // now with an empty value, which the card covers like every sign-in
+        // value. Its name may not be a fixed one, which the fixed value
+        // would replace, nor one the message already carries.
+        var sessionLine: [String: String] = [:]
+        if let signIn, let name = signIn.sessionHeader {
+            let taken = Set((Array(CloudHeaders.fixed.keys) + Array(headers.keys)).map { $0.lowercased() })
+            if taken.contains(name.lowercased()) { throw CloudTransportError.signInHeaderRefused(name) }
+            sessionLine[name] = ""
+        }
+        let messageHeaders = try CloudHeaders.merged(with: headers.merging(sessionLine) { $1 })
         // Names as well as values: a name shows on the card, but it still
         // goes, so a private word can't ride in one either.
-        var signInTexts = Array(headers.keys) + Array(headers.values)
+        var signInTexts = Array(headers.keys) + Array(headers.values) + Array(sessionLine.keys)
         let signInRequest = try signIn.map {
             guard let url = $0.url(under: endpoint) else { throw CloudTransportError.signInPathRefused($0.path) }
             guard let fields = $0.fields else { throw CloudTransportError.signInBodyRefused }
@@ -597,7 +710,8 @@ public struct CloudModel: ModelClient {
         return CloudPreview(
             signIn: signInRequest,
             request: CloudRequest(url: url(for: endpoint), headers: messageHeaders, body: body),
-            hidden: hidden
+            hidden: hidden,
+            sessionHeader: sessionLine.keys.first
         )
     }
 }

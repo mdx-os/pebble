@@ -93,8 +93,8 @@ chooses one.
   chat first. Sign-in is a `CloudAuth`: the app's is `AppleCloudAuth`,
   Sign in with Apple with no scopes and a fresh nonce each time, whose hop
   carries exactly `appleToken`, `nonce` and `deviceKey`. The token and
-  nonce are held only in memory until the hop is made, then dropped, and
-  are never kept or logged. A sign-in is a hop shown in the same preview, its values
+  nonce move into the one sign-in request, in memory only, and are gone
+  once it is sent, declined or cancelled; they are never kept or logged. A sign-in is a hop shown in the same preview, its values
   covered on screen, and sent only by its yes, so no request of ours goes
   unshown. Its values are covered, though not their combined length,
   which the hop's Content-Length still shows. Since its values are

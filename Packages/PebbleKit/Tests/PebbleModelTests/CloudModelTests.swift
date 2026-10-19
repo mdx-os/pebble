@@ -55,7 +55,7 @@ struct CloudModelTests {
         privateWords: [String] = [], isOn: @escaping @Sendable () throws -> Bool = { true }
     ) -> CloudModel {
         let notes = notes
-        return CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer,
+        return CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer, policy: .noSignInForTests,
                           redactor: { Redactor(memory: notes, privateWords: privateWords) }, isOn: isOn)
     }
 
@@ -335,13 +335,46 @@ struct CloudModelTests {
             #expect(wire.path == hop.url.path, "\(wire.path)")
         }
     }
+
+    /// With Sign in with Apple, what reaches the wire is what the card
+    /// showed, line for line: the hop as shown, and the message as shown
+    /// with only its session line filled in by the session the hop's
+    /// answer brought.
+    @Test func theWireCarriesTheSessionLineTheCardShowedCovered() async throws {
+        let server = try LoopbackServer()
+        let port = await server.start()
+        defer { server.stop() }
+        let endpoint = try #require(URL(string: "http://127.0.0.1:\(port)"))
+        let auth = AppleCloudAuth(keychain: InMemoryCloudKeychain())
+        _ = try #require(auth.startAppleSignIn())
+        try auth.accept(identityToken: Data(MadeUpToken.joined("eyJ", "eyJ", "sig").utf8))
+        let reviewer = RecordingReviewer(answer: .send)
+        let cloud = CloudModel(endpoint: endpoint, transport: URLSessionCloudTransport(loopbackForTests: ()),
+                               reviewer: reviewer, auth: auth)
+        _ = try await cloudChat().sending("Plan my week", with: cloud)
+        let preview = try #require(reviewer.seen.first)
+        let seen = server.requests
+        #expect(seen.count == 2)
+        let message = try #require(preview.message(carrying: server.session))
+        for (hop, wire) in zip([try #require(preview.signIn), message], seen) {
+            let shown = CloudRequest.shownHeaders(url: hop.url, headers: hop.headers, body: hop.body)
+                .map { "\($0.name.lowercased()): \($0.value)" }.sorted()
+            #expect(wire.lines.sorted() == shown, "\(wire.path)")
+            #expect(wire.body == hop.body, "\(wire.path)")
+        }
+        // The message's lines are the card's, but for the session's value.
+        let card = CloudRequest.shownHeaders(url: preview.request.url, headers: preview.request.headers,
+                                             body: preview.request.body).map { $0.name.lowercased() }.sorted()
+        #expect(seen.last?.lines.map { String($0.prefix { $0 != ":" }) }.sorted() == card)
+        #expect(seen.last?.headers["cloud-session"] == server.session)
+    }
     #endif
 
     // MARK: Sign-in
 
     @Test func signInHeadersAreShownAndNothingByDefault() throws {
         #expect(NoCloudAuth().headers(for: endpoint).isEmpty)
-        #expect(NoCloudAuth().signIn(for: endpoint) == nil)
+        #expect(try NoCloudAuth().signIn(for: endpoint) == nil)
         var turns = cloudChat().turns
         turns.append(ChatTurn(id: UUID(), speaker: .person, text: "Plan my week"))
         let preview = try CloudModel.preview(for: turns, endpoint: endpoint, redactor: Redactor(),
@@ -726,7 +759,7 @@ struct CloudModelTests {
                     forgot.value = true
                     #expect(session.sendsOnTheWire == 0, "the hop is off the wire")
                     if session.holdsAnything { session.end() }
-                    auth.forget()
+                    _ = auth.forget()
                 }
                 return true
             },
@@ -812,7 +845,7 @@ struct CloudModelTests {
         let wire = HangingTransport()
         let session = CloudChatSession()
         let cloud = CloudModel(endpoint: endpoint, transport: wire, reviewer: RecordingReviewer(answer: .send),
-                               redactor: { Redactor(names: ["Sam"], privateWords: ["lemon cake"]) }, session: session)
+                               policy: .noSignInForTests, redactor: { Redactor(names: ["Sam"], privateWords: ["lemon cake"]) }, session: session)
         let reply = Task { try await cloudChat().sending("Ask Sam about the lemon cake", with: cloud) }
         await wire.started()
         #expect(session.hiddenSoFar.privateWords == ["lemon cake"])
@@ -839,13 +872,13 @@ struct CloudModelTests {
         let transport = RecordingTransport()
         let session = CloudChatSession(handingOver: { handed.value = true })
         let cancelled = CloudModel(endpoint: endpoint, transport: transport, reviewer: RecordingReviewer(answer: .cancel),
-                                   session: session)
+                                   policy: .noSignInForTests, session: session)
         _ = try? await cloudChat().sending("Plan my week", with: cancelled)
         #expect(!handed.value)
         // The transport notes the flag as each send reaches it: already set.
         let witness = WitnessTransport(flag: handed)
         let sent = CloudModel(endpoint: endpoint, transport: witness, reviewer: RecordingReviewer(answer: .send),
-                              session: session)
+                              policy: .noSignInForTests, session: session)
         _ = try await cloudChat().sending("Plan my week", with: sent)
         #expect(witness.seen == [true])
         #expect(handed.value)
@@ -875,7 +908,7 @@ struct CloudModelTests {
     @Test func unreadableNotesSendNothingAndShowNothing() async {
         let transport = RecordingTransport()
         let reviewer = RecordingReviewer(answer: .send)
-        let cloud = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer,
+        let cloud = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer, policy: .noSignInForTests,
                                redactor: { throw MemoryStore.Unavailable() })
         await #expect(throws: CloudModelError.notesUnreadable) {
             try await cloudChat().sending("Write to Sam", with: cloud)
@@ -892,7 +925,7 @@ struct CloudModelTests {
         let transport = RecordingTransport()
         let reviewer = RecordingReviewer(answer: .send)
         let forgotten = Flag(false)
-        let cloud = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer, redactor: {
+        let cloud = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer, policy: .noSignInForTests, redactor: {
             forgotten.value ? Redactor() : Redactor(names: ["Sam"], privateWords: ["lemon cake"])
         })
         let first = try await cloudChat().sending("Ask Sam to bring the lemon cake.", with: cloud)
@@ -906,7 +939,8 @@ struct CloudModelTests {
         #expect(transport.sent[1].text.contains("Ask [name] to bring the [private]."))
         #expect(transport.sent[1].text.contains("And remind [name] again tomorrow."))
         // A new chat starts from the list as it is now.
-        let fresh = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer, redactor: { Redactor() })
+        let fresh = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer, policy: .noSignInForTests,
+                               redactor: { Redactor() })
         _ = try await cloudChat().sending("Sam", with: fresh)
         #expect(transport.sent.last?.text.contains("\"Sam\"") == true)
     }
@@ -968,7 +1002,7 @@ struct CloudModelTests {
         let reviewer = TurningOffReviewer(flag: flag)
         await #expect(throws: CloudModelError.off) {
             try await cloudChat().sending("Plan my week", with: CloudModel(
-                endpoint: endpoint, transport: transport, reviewer: reviewer, isOn: { flag.value }))
+                endpoint: endpoint, transport: transport, reviewer: reviewer, policy: .noSignInForTests, isOn: { flag.value }))
         }
         #expect(transport.sent.isEmpty)
     }
@@ -1100,7 +1134,8 @@ struct CloudModelTests {
         let transport = BrokenTransport()
         await #expect(throws: CloudModelError.unreadableReply) {
             try await cloudChat().sending("Plan my week", with: CloudModel(
-                endpoint: endpoint, transport: transport, reviewer: RecordingReviewer(answer: .send)))
+                endpoint: endpoint, transport: transport, reviewer: RecordingReviewer(answer: .send),
+                policy: .noSignInForTests))
         }
     }
 }
@@ -1259,8 +1294,11 @@ final class KeepingAuth: CloudAuth, @unchecked Sendable {
         }
     }
 
-    func forget() {
+    func isSignedIn(to endpoint: URL) -> Bool { token != nil }
+
+    func forget() -> Bool {
         lock.withLock { _token = nil }
+        return true
     }
 }
 
@@ -1352,8 +1390,11 @@ final class LoopbackServer: @unchecked Sendable {
         }
     }
 
+    /// What the sign-in answer hands back as the session, made at run time.
+    let session = AppleCloudAuth.letters(UUID().uuidString)
+
     private func answer(_ connection: NWConnection, signIn: Bool) {
-        let body = #"{"reply":"Here's a short note you can send."}"#
+        let body = signIn ? #"{"session":"\#(session)"}"# : #"{"reply":"Here's a short note you can send."}"#
         var head = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \(body.utf8.count)\r\n"
         if signIn { head += "Set-Cookie: session=made-up-cookie; Path=/; Max-Age=3600\r\n" }
         head += "Connection: close\r\n\r\n"
@@ -1403,9 +1444,15 @@ final class SampleAuth: CloudAuth, @unchecked Sendable {
 
     func signIn(for endpoint: URL) -> CloudSignIn? { hop }
 
+    /// Its own headers stand for a session it already holds, and so does
+    /// any answer it was handed.
+    func isSignedIn(to endpoint: URL) -> Bool { !fixed.isEmpty || !answers.isEmpty }
+
     func signedIn(_ answer: Data) {
         lock.withLock { _answers.append(answer) }
     }
+
+    func forget() -> Bool { true }
 }
 
 /// A transport that holds every send until it is cancelled, and says so.

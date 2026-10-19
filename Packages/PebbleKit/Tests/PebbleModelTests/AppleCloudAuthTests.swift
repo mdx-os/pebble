@@ -42,7 +42,7 @@ struct AppleCloudAuthTests {
         let keychain = InMemoryCloudKeychain()
         let auth = AppleCloudAuth(keychain: keychain)
         let hashed = try signInToApple(auth)
-        let hop = try #require(auth.signIn(for: endpoint))
+        let hop = try #require(try auth.signIn(for: endpoint))
         #expect(hop.path == "v1/sign-in")
         #expect(hop.headers.isEmpty)
         let fields = try Self.fields(hop.body)
@@ -62,7 +62,7 @@ struct AppleCloudAuthTests {
         }
         // The same key on the next sign-in, until it is forgotten.
         try signInToApple(auth)
-        #expect(try Self.fields(try #require(auth.signIn(for: endpoint)).body)["deviceKey"] == key)
+        #expect(try Self.fields(try #require(try auth.signIn(for: endpoint)).body)["deviceKey"] == key)
     }
 
     /// The preview takes the hop: its values pass every check, even with
@@ -91,21 +91,54 @@ struct AppleCloudAuthTests {
         }
     }
 
+    /// A contact name made only of the letters a to p, like Bob or Ada, is
+    /// never found in a sign-in value: the redactor matches names as whole
+    /// words, and each value is one long run of letters. So the sign-in
+    /// is never refused for one, even when the token's letters, the nonce
+    /// and the key are full of them. The same names in the message are
+    /// still hidden.
+    @Test func namesOfTheLettersAToPNeverRefuseTheSignIn() throws {
+        let names = ["Bob", "Ada", "Abe", "Deb", "Ed", "Pam", "Jo", "Kim", "Mo", "Cleo"]
+        #expect(names.allSatisfy { $0.lowercased().allSatisfy { ("a"..."p").contains($0) } })
+        let redactor = Redactor(names: names, privateWords: ["Ned", "Jim"])
+        let run = String(repeating: "bobadaabedebpamjokimmocleo", count: 3)
+        // "P0" is "fada" in letters, so Ada is in the token's letters too.
+        let token = MadeUpToken.joined("P0P0", "eyJ", "sig")
+        #expect(AppleCloudAuth.letters(token).contains("ada"))
+        let auth = AppleCloudAuth(keychain: InMemoryCloudKeychain(), makeKey: { run }, makeNonce: { run })
+        try signInToApple(auth, token: token)
+        let turns = [ChatTurn(id: UUID(), speaker: .person, text: "Ask Bob and Ada about Friday")]
+        let preview = try CloudModel.preview(for: turns, endpoint: endpoint, redactor: redactor,
+                                             signIn: auth.signIn(for: endpoint))
+        let fields = try Self.fields(try #require(preview.signIn).body)
+        #expect(fields["nonce"] == run)
+        #expect(fields["deviceKey"] == run)
+        #expect(fields["appleToken"] == AppleCloudAuth.letters(token))
+        #expect(preview.hidden[.name] == 2)
+        #expect(!preview.request.text.contains("Bob") && !preview.request.text.contains("Ada"))
+        // A value that is a name, whole, is still refused.
+        let named = AppleCloudAuth(keychain: InMemoryCloudKeychain(), makeKey: { "bob" })
+        try signInToApple(named)
+        #expect(throws: CloudTransportError.signInCarriesPersonalDetails) {
+            try CloudModel.preview(for: turns, endpoint: endpoint, redactor: redactor, signIn: named.signIn(for: endpoint))
+        }
+    }
+
     /// Without a token there is no hop and no key is made, and a token
     /// with no sign-in under way is refused.
     @Test func noTokenMeansNoHopAndNoKey() throws {
         let keychain = InMemoryCloudKeychain()
         let auth = AppleCloudAuth(keychain: keychain)
-        #expect(auth.signIn(for: endpoint) == nil)
+        #expect(try auth.signIn(for: endpoint) == nil)
         #expect(auth.headers(for: endpoint).isEmpty)
         #expect(throws: AppleCloudAuth.Refused.noSignInUnderWay) { try auth.accept(identityToken: Data(Self.token.utf8)) }
-        #expect(auth.signIn(for: endpoint) == nil)
+        #expect(try auth.signIn(for: endpoint) == nil)
         #expect(keychain.all.isEmpty)
         // A key that can't be made means no hop, never a weak key, and the
         // token is let go all the same.
         let noKey = AppleCloudAuth(keychain: InMemoryCloudKeychain(), makeKey: { nil })
         try signInToApple(noKey)
-        #expect(noKey.signIn(for: endpoint) == nil)
+        #expect(try noKey.signIn(for: endpoint) == nil)
         #expect(!noKey.holdsTokenOrNonce)
         // A nonce that can't be made means no sign-in starts.
         let noNonce = AppleCloudAuth(keychain: InMemoryCloudKeychain(), makeNonce: { nil })
@@ -124,7 +157,7 @@ struct AppleCloudAuthTests {
                 try auth.accept(identityToken: Data(odd.utf8))
             }
             #expect(!auth.holdsTokenOrNonce)
-            #expect(auth.signIn(for: endpoint) == nil)
+            #expect(try auth.signIn(for: endpoint) == nil)
         }
         _ = try #require(auth.startAppleSignIn())
         #expect(throws: Never.self) {
@@ -143,7 +176,7 @@ struct AppleCloudAuthTests {
             let hashed = try signInToApple(auth)
             #expect(hashes.insert(hashed).inserted)
             #expect(throws: AppleCloudAuth.Refused.noSignInUnderWay) { try auth.accept(identityToken: Data(Self.token.utf8)) }
-            let hop = try #require(auth.signIn(for: endpoint))
+            let hop = try #require(try auth.signIn(for: endpoint))
             let nonce = try #require(try Self.fields(hop.body)["nonce"])
             #expect(nonce.count == 64)
             #expect(nonces.insert(nonce).inserted)
@@ -152,7 +185,7 @@ struct AppleCloudAuthTests {
         // A sign-in started again before the last token went drops it.
         try signInToApple(auth)
         _ = try #require(auth.startAppleSignIn())
-        #expect(auth.signIn(for: endpoint) == nil)
+        #expect(try auth.signIn(for: endpoint) == nil)
         // The SHA-256 is the standard one, written as Apple takes it.
         #expect(AppleCloudAuth.sha256("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
     }
@@ -314,7 +347,7 @@ struct AppleCloudAuthTests {
         let keychain = InMemoryCloudKeychain()
         let auth = AppleCloudAuth(keychain: keychain)
         try signInToApple(auth)
-        let first = try Self.fields(try #require(auth.signIn(for: endpoint)).body)["deviceKey"]
+        let first = try Self.fields(try #require(try auth.signIn(for: endpoint)).body)["deviceKey"]
         // A token waiting for the next preview, and a session, both held.
         try signInToApple(auth)
         auth.signedIn(Data(#"{"session":"abcdefghijklmnopqrstuvwxyz"}"#.utf8))
@@ -324,9 +357,9 @@ struct AppleCloudAuthTests {
         #expect(!auth.holdsTokenOrNonce)
         #expect(keychain.all.isEmpty)
         #expect(auth.headers(for: endpoint).isEmpty)
-        #expect(auth.signIn(for: endpoint) == nil)
+        #expect(try auth.signIn(for: endpoint) == nil)
         try signInToApple(auth)
-        let second = try Self.fields(try #require(auth.signIn(for: endpoint)).body)["deviceKey"]
+        let second = try Self.fields(try #require(try auth.signIn(for: endpoint)).body)["deviceKey"]
         #expect(first != second)
     }
 
@@ -339,12 +372,12 @@ struct AppleCloudAuthTests {
             auth.signedIn(Data(bad.utf8))
             #expect(auth.headers(for: endpoint).isEmpty, "\(bad)")
             try signInToApple(auth)
-            #expect(auth.signIn(for: endpoint) != nil, "\(bad)")
+            #expect(try auth.signIn(for: endpoint) != nil, "\(bad)")
         }
         try signInToApple(auth)
         auth.signedIn(Data(#"{"session":"abcdefghijklmnopQRSTUV"}"#.utf8))
         #expect(auth.headers(for: endpoint) == ["Cloud-Session": "abcdefghijklmnopQRSTUV"])
-        #expect(auth.signIn(for: endpoint) == nil, "signed in, so no hop")
+        #expect(try auth.signIn(for: endpoint) == nil, "signed in, so no hop")
         #expect(!auth.holdsTokenOrNonce, "and the token is let go")
     }
 
@@ -355,7 +388,7 @@ struct AppleCloudAuthTests {
         for answer in [CloudConsent.cancel, .send] {
             let auth = AppleCloudAuth(keychain: InMemoryCloudKeychain())
             try signInToApple(auth)
-            let transport = RecordingTransport()
+            let transport = SessionServer()
             let reviewer = RecordingReviewer(answer: answer)
             let model = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer, auth: auth,
                                    redactor: { Redactor(memory: notes) })

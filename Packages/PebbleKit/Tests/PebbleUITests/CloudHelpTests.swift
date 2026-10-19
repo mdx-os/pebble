@@ -171,8 +171,12 @@ final class CountingAuth: CloudAuth, @unchecked Sendable {
     /// How many times it was asked to let go of what it kept.
     var forgets: Int { lock.withLock { _forgets } }
 
-    func forget() {
+    /// Its header stands for a session it already holds.
+    func isSignedIn(to endpoint: URL) -> Bool { true }
+
+    func forget() -> Bool {
         lock.withLock { _forgets += 1 }
+        return true
     }
 }
 
@@ -232,9 +236,13 @@ final class WitnessAuth: CloudAuth, @unchecked Sendable {
         lock.withLock { _signIns += 1 }
     }
 
-    func forget() {
+    /// Without `needsSignIn` it stands for a device already signed in.
+    func isSignedIn(to endpoint: URL) -> Bool { !needsSignIn || signIns > 0 }
+
+    func forget() -> Bool {
         let found = onForget?() ?? false
         lock.withLock { _seen.append(found) }
+        return true
     }
 }
 
@@ -425,9 +433,9 @@ struct CloudHelpTests {
 
     func help(_ settings: CloudHelpSettings = .off, endpoint: URL?, maker: TransportMaker,
               memory: MemoryStore? = nil, store: InMemoryCloudHelpStore? = nil,
-              auth: any CloudAuth = NoCloudAuth()) -> CloudHelp {
+              auth: any CloudAuth = NoCloudAuth(), policy: CloudPolicy = .noSignInForTests) -> CloudHelp {
         CloudHelp(store: store ?? InMemoryCloudHelpStore(settings), endpoint: endpoint, memory: memory ?? scratchMemory(),
-                  auth: auth, transport: { maker.make() })
+                  auth: auth, policy: policy, transport: { maker.make() })
     }
 
     /// A chat on whatever model the setting picks, with its own preview
@@ -531,7 +539,8 @@ struct CloudHelpTests {
     // MARK: Turning it off fails closed
 
     func cloud(_ store: any CloudHelpStoring, maker: TransportMaker) -> CloudHelp {
-        CloudHelp(store: store, endpoint: endpoint, memory: scratchMemory(), transport: { maker.make() })
+        CloudHelp(store: store, endpoint: endpoint, memory: scratchMemory(), policy: .noSignInForTests,
+                  transport: { maker.make() })
     }
 
     /// The save fails twice, so the file is erased: off now, in chats
@@ -1087,7 +1096,7 @@ struct CloudHelpTests {
     /// turn is taken back and a resend doesn't carry it twice.
     @Test func aRequestRefusedForItsLabelsTakesTheTurnBack() async throws {
         let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)), endpoint: endpoint,
-                              memory: scratchMemory(), transport: { RefusingTransport() })
+                              memory: scratchMemory(), policy: .noSignInForTests, transport: { RefusingTransport() })
         let controller = chat(cloud)
         let review = try #require(controller.review)
         controller.submit("Plan my week")
@@ -1667,6 +1676,16 @@ struct CloudHelpTests {
         // Refused before sending, for labels that weren't shown or are reserved.
         #expect(ChatController.nothingWasSent(CloudTransportError.headersNotShown))
         #expect(ChatController.nothingWasSent(CloudTransportError.reservedHeader("Authorization")))
+        // No sign-in, no session after one, or an old key kept: the
+        // message never went, so the words go back to the composer.
+        #expect(ChatController.failureLine(for: CloudModelError.needsSignIn) == CloudWords.needsSignIn)
+        #expect(ChatController.failureLine(for: CloudModelError.noSession) == CloudWords.noSession)
+        #expect(ChatController.failureLine(for: CloudModelError.oldKeyStayed) == CloudWords.oldKeyStayed)
+        for error in [CloudModelError.needsSignIn, .noSession, .oldKeyStayed] {
+            #expect(ChatController.nothingWasSent(error), "\(error)")
+        }
+        #expect(CloudWords.needsSignIn.contains("sign in with Apple"))
+        #expect(CloudWords.needsSignIn.contains("can't do that yet"))
     }
 
     // MARK: VoiceOver, privacy and size

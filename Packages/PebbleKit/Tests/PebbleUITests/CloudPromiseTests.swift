@@ -20,9 +20,9 @@ struct CloudPromiseTests {
 
     func help(_ settings: CloudHelpSettings = .off, maker: TransportMaker = TransportMaker(),
               memory: MemoryStore? = nil, store: (any CloudHelpStoring)? = nil,
-              auth: any CloudAuth = NoCloudAuth()) -> CloudHelp {
+              auth: any CloudAuth = NoCloudAuth(), policy: CloudPolicy = .noSignInForTests) -> CloudHelp {
         CloudHelp(store: store ?? InMemoryCloudHelpStore(settings), endpoint: endpoint,
-                  memory: memory ?? scratchMemory(), auth: auth, transport: { maker.make() })
+                  memory: memory ?? scratchMemory(), auth: auth, policy: policy, transport: { maker.make() })
     }
 
     /// A new chat made the way the home screen makes one.

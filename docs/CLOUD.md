@@ -48,7 +48,9 @@ token it gives back. The sign-in hop then carries exactly three values, and
 nothing else:
 
 - `appleToken`: Apple's identity token, its bytes written as letters, two
-  letters from `a` to `p` for each byte, high half first.
+  letters from `a` to `p` for each byte, high half first (`a` is 0, `p` is
+  15). The server turns each pair back into its byte, which gives Apple's
+  token exactly, before it checks Apple's signature.
 - `nonce`: the nonce itself, sent once, for that one sign-in.
 - `deviceKey`: a random key made on the device, kept in the Keychain for
   this device only. It is never synced and never restored to another device
@@ -58,20 +60,29 @@ All three are letters only, so the check that hides personal details can
 never mistake one for a phone number or a card number and refuse the
 sign-in.
 
-The token and the nonce live only in memory, for that one hop. Building the
-preview takes them for the hop, so after that nothing in the app holds them,
-whatever happens next: sent, refused, or not sent. Apple's sign-in ending
-without a token, switching the cloud off and Forget everything drop them
-too. They are never written to the Keychain, a file, UserDefaults or the
-log. The cloud code logs only fixed words, through one logger that takes
-nothing made at run time (`CloudLog`).
+The token and the nonce live only in memory. Building the preview moves
+them into the one sign-in request it shows, still in memory only, and they
+are gone once that request is sent, declined or cancelled. Apple's sign-in
+ending without a token, switching the cloud off and Forget everything drop
+them too. They are never written to the Keychain, a file, UserDefaults or
+the log. The cloud code logs only fixed words, through one logger that
+takes nothing made at run time (`CloudLog`).
 
 The hop is shown in the same preview as the message, above it, with its
 values covered, and only the person's yes sends it. Its answer is
 `{"session": "..."}`, a session made only of letters, at least 16 of them.
-The app keeps it in memory only, and sends it on later messages as the
-`Cloud-Session` header, which the preview shows, covered. Any other answer
-is dropped, and the next message needs a new Apple sign-in.
+The app keeps it in memory only, and sends it as the `Cloud-Session` header
+on the message the same yes sends and on later ones. The preview already
+shows that header on the message, covered, and says the message carries
+the session signing in brings back; the session is the one thing added to
+the message after the hop. Any other answer is dropped, nothing more is
+sent, the message stays on the device, and the next message needs a new
+Apple sign-in.
+
+The server takes messages only from a signed in device, so with no session
+and no sign-in to show, the app sends nothing and says that help from the
+cloud needs signing in with Apple. Until the owner sets up Sign in with
+Apple (below), that is every message.
 
 The app says:
 
@@ -110,8 +121,12 @@ The app says:
 
 Both end every open cloud chat, then remove the device key from the
 Keychain and drop the session and any token or nonce still held, so the
-next sign-in starts fresh with a new key. What was already sent can't be
-erased from the device. The service never kept a message; the ID and key it
+next sign-in starts fresh with a new key. If the Keychain won't remove the
+key, the app says it may still be on this device, and the removal is owed:
+it is tried again on the next forget, when the cloud is turned on, and at
+launch while the cloud is off. Until it goes, no sign-in reads or sends that
+key; signing in tries the removal once more and, if it still fails, sends
+nothing and says so. What was already sent can't be erased from the device. The service never kept a message; the ID and key it
 kept for sign-in stay with it.
 
 The app says:

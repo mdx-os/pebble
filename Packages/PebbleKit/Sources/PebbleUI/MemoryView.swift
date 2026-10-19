@@ -28,6 +28,7 @@ public struct MemoryView: View {
         _model = StateObject(wrappedValue: MemoryModel(store: store, place: place,
                                                        endsCloudChats: Self.endsCloudChats(cloud),
                                                        alsoForget: Self.alsoForget(cloud),
+                                                       keyStayed: Self.keyStayed(cloud),
                                                        onForgetEverything: onForgetEverything))
         self.place = place
         self.cloud = cloud
@@ -54,6 +55,13 @@ public struct MemoryView: View {
     static func alsoForget(_ cloud: CloudHelp?) -> (@MainActor () throws -> CloudHelp.Forgot)? {
         guard let cloud else { return nil }
         return { try cloud.forgetPrivateWords() }
+    }
+
+    /// Whether sign-in's key may still be on this device after Forget
+    /// everything erased the rest, when there is a cloud setting.
+    static func keyStayed(_ cloud: CloudHelp?) -> (@MainActor () -> Bool)? {
+        guard let cloud else { return nil }
+        return { cloud.signInKeyMayStay }
     }
 
     /// What Forget everything does before anything else, when there is a
@@ -517,17 +525,22 @@ final class MemoryModel: ObservableObject {
     /// Runs first of all: ends every open cloud chat, and says whether
     /// anything was handed to the cloud this session.
     private let endsCloudChats: (@MainActor () -> Bool)?
+    /// Asked once `alsoForget` has run: true when sign-in's key may still
+    /// be on this device, so the line says so.
+    private let keyStayed: (@MainActor () -> Bool)?
 
     /// Forgets what lives outside the memory file, such as tasks.
     private let onForgetEverything: @MainActor () -> ClearedTasks
 
     init(store: MemoryStore, place: PrivacyPlace, endsCloudChats: (@MainActor () -> Bool)? = nil,
          alsoForget: (@MainActor () throws -> CloudHelp.Forgot)? = nil,
+         keyStayed: (@MainActor () -> Bool)? = nil,
          onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) {
         self.store = store
         self.place = place
         self.endsCloudChats = endsCloudChats
         self.alsoForget = alsoForget
+        self.keyStayed = keyStayed
         self.onForgetEverything = onForgetEverything
         refresh()
     }
@@ -606,8 +619,11 @@ final class MemoryModel: ObservableObject {
         let rest = alsoForget.map { forget in try? forget() }
         // A step said yes to may have happened, so the line says so here too.
         let underway = tasks.underwayLine.map { " " + $0 } ?? ""
+        // Never "gone" alone while the sign-in key the Keychain kept may
+        // still be here.
+        let key = keyStayed?() == true ? " " + CloudWords.signInKeyMayStay : ""
         status = Self.forgotLine(notesGone: notesGone, rest: rest, tasksGone: tasks.forgotten > 0, sent: sent)
-            + underway
+            + underway + key
         let restGone = rest.map { $0 != nil } == true
         if notesGone || restGone || tasks.forgotten > 0 { forgottenCount += 1 }
         refresh()

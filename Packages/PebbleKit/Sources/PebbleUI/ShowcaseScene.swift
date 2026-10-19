@@ -410,5 +410,8 @@ struct SampleSignIn: CloudAuth {
         let body = (try? JSONEncoder().encode([bodyKey: device])) ?? Data()
         return CloudSignIn(path: "v1/sign-in", body: body)
     }
+
+    /// Keeps nothing, so there is nothing to let go of.
+    func forget() -> Bool { true }
 }
 #endif

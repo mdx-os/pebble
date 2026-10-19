@@ -523,6 +523,9 @@ public enum CloudWords {
     public static let previewSignInCovered = "Sign-in values are covered with dots here, so they never show on screen. They still go when you send this."
     /// Said before the message itself when a sign-in hop comes first.
     public static let previewThenMessage = "Then, your message:"
+    /// Said when the message carries the session the sign-in brings back,
+    /// on the card and aloud. Its line shows on the message, covered.
+    public static let previewSessionFromSignIn = "Your message also carries the session that signing in brings back, covered with dots too. If signing in brings none back, I don't send your message."
     public static func spokenMessage(role: String, text: String) -> String {
         switch role {
         case "person": "You said: \(text)"
@@ -584,6 +587,18 @@ public enum CloudWords {
     /// name, a private word or another personal detail in it, or a body
     /// that isn't a few short labelled values. Nothing was shown or sent.
     public static let signInRefused = "I didn't send that. Signing in to the cloud asked to carry more than a sign-in should, so I stopped before anything left."
+    /// The cloud takes messages only after signing in with Apple, and this
+    /// build has no way to sign in yet, so nothing was sent.
+    public static let needsSignIn = "I didn't send that. Help from the cloud needs me to sign in with Apple first, and this version of the app can't do that yet. What you wrote is still here."
+    /// The sign-in went, but its answer brought nothing the message could
+    /// go with, so the message stayed here.
+    public static let noSession = "I signed in, but the cloud didn't let me in, so I didn't send your message. What you wrote is still here."
+    /// A sign-in key a forget couldn't erase is still on this device, and
+    /// it still couldn't be erased, so nothing was sent.
+    public static let oldKeyStayed = "I didn't send that. I couldn't erase an old sign-in key from this device, and I won't sign in while it's here. Please try again in a moment."
+    /// Turning off, turning on or Forget everything couldn't erase the
+    /// sign-in key. Said after whatever else the line says.
+    public static let signInKeyMayStay = "I couldn't erase my sign-in key just now, so it may still be on this device. I won't sign in with it again, and I'll try erasing it next time."
     /// Forget everything erased all it kept, after something went to the
     /// cloud this session. Said in place of `MemoryWords.forgotten`, whose
     /// "I no longer have it" can't speak for a copy that already left.
@@ -613,5 +628,6 @@ public enum CloudWords {
         tasksAndWordsAndCloudForgotten, tasksForgottenNotWords,
         chatEnded, signInRefused, forgotAfterSending, forgotAndCloudOffAfterSending, sentCantBeErased,
         policyTitle, previewPolicy, previewSignInCarries,
+        previewSessionFromSignIn, needsSignIn, noSession, oldKeyStayed, signInKeyMayStay,
     ] + askPoints + policyLines + Redaction.Kind.allCases.map(\.spoken)
 }

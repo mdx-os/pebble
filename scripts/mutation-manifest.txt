@@ -17,6 +17,8 @@
 #   testThePreviewShowsTheRequestAndReadsWell (the Apple hop, what it
 #     carries and the policy line): theSignInHopCarriesExactlyTheThreeValues,
 #     thePreviewSaysWhatTheAppleHopCarries, theSettingAndThePreviewShowThePolicy
+#   testThePreviewShowsTheRequestAndReadsWell (the session line on the
+#     message): thePreviewShowsTheSessionLineCovered
 #   testTheSettingSaysWhoRunsItAndWhatItKeeps: theSettingAndThePreviewShowThePolicy,
 #     theLinesArePinnedToTheirVersion
 # A new UI test that guards a promise gets a twin here before it lands.
@@ -53,12 +55,12 @@ perl: s~launchStatus = \(try\? store\.markOff\(\)\) != nil \? \.offSavedLater : 
 
 test: aStaleYesThatCantBeSavedOffKeepsTheWordsAndSaysSo aSwitchOffWhileTheDeviceIsLockedKeepsThePrivateWords aSwitchOffThatCantBeSavedOrErasedStaysOffForTheSession
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~if \(try\? store\.save\(fresh\)\) != nil, waiting \{ state = nil \}~_ = try? store.save(fresh)~
+perl: s~if \(try\? store\.save\(fresh\)\) != nil, waiting \{ state = state\?\.afterTheSave \}~_ = try? store.save(fresh)~
 
 # Whether a line waits for a save is decided where it is set, not by its words.
 test: aStaleYesThatCantBeSavedOffKeepsTheWordsAndSaysSo aSwitchOffThatCantBeSavedOrErasedStaysOffForTheSession aSwitchOffWhileLockedThatCantBeMarkedSaysItMayReadAsOn
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~if case \.said = self \{ false \} else \{ true \}~if case .said = self { false } else { false }~
+perl: s~(case \.keyStayed\(let after\): after\?\.waitsForASave \?\? false\n\s*)default: true~${1}default: false~
 
 # The launch line reaches the home screen, and says plainly what it couldn't save.
 test: aStaleYesThatCantBeSavedOffKeepsTheWordsAndSaysSo theLaunchLineShowsOnTheHomeScreenOnlyWhileItHolds
@@ -101,16 +103,16 @@ perl: s~memory: memory, auth: auth, file: openStore\)~memory: memory, auth: auth
 # A switch off holds after a relaunch, even when it couldn't be saved.
 test: aSwitchOffWhileLockedStaysOffAfterARelaunch
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~state = \(try\? store\.markOff\(\)\) != nil \? \.offUntilUnlocked : \.offForNow~state = .offForNow~
+perl: s~line = \(try\? store\.markOff\(\)\) != nil \? \.offUntilUnlocked : \.offForNow~line = .offForNow~
 
 # Locked and not even marked off: the line never says the switch off will hold.
 test: aSwitchOffWhileLockedThatCantBeMarkedSaysItMayReadAsOn
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~state = \(try\? store\.markOff\(\)\) != nil \? \.offUntilUnlocked : \.offForNow~state = (try? store.markOff()) != nil ? .offUntilUnlocked : .offUntilUnlocked~
+perl: s~line = \(try\? store\.markOff\(\)\) != nil \? \.offUntilUnlocked : \.offForNow~line = (try? store.markOff()) != nil ? .offUntilUnlocked : .offUntilUnlocked~
 
 test: aSwitchOffThatCantBeSavedIsMarkedOffAndReadsOffAfterARelaunch
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~state = \(try\? store\.markOff\(\)\) != nil \? \.offSavedLater : \.offForNow~state = .offForNow~
+perl: s~line = \(try\? store\.markOff\(\)\) != nil \? \.offSavedLater : \.offForNow~line = .offForNow~
 
 # The real off mark can be made while the device is locked.
 test: theOffMarkCanBeWrittenWhileTheDeviceIsLocked
@@ -144,7 +146,7 @@ perl: s~case \.locked: state = \.said\(CloudWords\.privateLocked\)~case .locked:
 
 test: turningOffAndForgettingTellSignInToForget
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~withdrawPreviews\(\)\n\s*auth\.forget\(\)\n~withdrawPreviews()\n~
+perl: s~withdrawPreviews\(\)\n(\s*)let keyGone = auth\.forget\(\)\n~withdrawPreviews()\n$1let keyGone = true\n~
 
 # Turning off ends every cloud chat's session, before sign-in forgets, saying the cloud is off.
 test: turningOffEndsEveryCloudChatBeforeSignInForgets
@@ -153,7 +155,7 @@ perl: s~\n\s*for session in sessions\.allObjects \{ session\.end\(because: \.off
 
 test: turningOffEndsEveryCloudChatBeforeSignInForgets
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~for session in sessions\.allObjects \{ session\.end\(because: \.off\) \}\n(\s*)withdrawPreviews\(\)\n(\s*)auth\.forget\(\)\n~auth.forget()\n$1withdrawPreviews()\n$2for session in sessions.allObjects { session.end(because: .off) }\n~
+perl: s~for session in sessions\.allObjects \{ session\.end\(because: \.off\) \}\n(\s*)withdrawPreviews\(\)\n(\s*)let keyGone = auth\.forget\(\)\n~let keyGone = auth.forget()\n$1withdrawPreviews()\n$2for session in sessions.allObjects { session.end(because: .off) }\n~
 
 test: turningOffEndsEveryCloudChatBeforeSignInForgets
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
@@ -161,7 +163,7 @@ perl: s~session\.end\(because: \.off\)~session.end()~
 
 test: turningOffAndForgettingTellSignInToForget
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~endOpenCloudChats\(\)\n\s*auth\.forget\(\)\n~endOpenCloudChats()\n~
+perl: s~endOpenCloudChats\(\)\n\s*signInKeyMayStay = !auth\.forget\(\)\n~endOpenCloudChats()\n~
 
 # Forget everything ends every open cloud chat first, and says what it can't erase.
 test: forgetEverythingFirstEndsEveryOpenCloudChat forgetEverythingWithNothingSentEndsTheChatAndSaysGone forgetEverythingEndsEveryOpenCloudChatNotOnlyTheHeldOne
@@ -184,7 +186,7 @@ perl: s~let sent = endsCloudChats\?\(\) \?\? false~let sent = true~
 
 test: forgettingEndsAnOpenCloudChat
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~\n\s*// First, whatever happens to the file: no open chat keeps a copy,\n\s*// and sign-in keeps nothing it learned\.\n\s*endOpenCloudChats\(\)~~
+perl: s~\n\s*// First, whatever happens to the file: no open chat keeps a copy,\n\s*// and sign-in keeps nothing it learned\. Whether its key went is\n\s*// kept for Forget everything's line \(`signInKeyMayStay`\)\.\n\s*endOpenCloudChats\(\)~~
 
 test: onlyTheHeldChatIsReplacedWhenItEnds
 file: Packages/PebbleKit/Sources/PebbleUI/HomeView.swift
@@ -413,7 +415,7 @@ perl: s~request\.httpShouldHandleCookies = false~request.httpShouldHandleCookies
 
 test: theYesToTurningOnReachesNoNetwork
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~(state = \.said\(CloudWords\.onNotSaved\)\n\s*return\n\s*\}\n\s*state = nil\n)~$1        _ = makeTransport()\n~
+perl: s~(state = telling\(\.said\(CloudWords\.onNotSaved\), keyGone: keyGone\)\n\s*return\n\s*\}\n\s*state = telling\(nil, keyGone: keyGone\)\n)~$1        _ = makeTransport()\n~
 
 test: theQuestionSaysSignInIsInThePreview
 file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
@@ -616,7 +618,7 @@ perl: s~(session = nil\n\s*waitingNonce = nil)\n\s*unsent = nil~$1~
 
 test: afterTheHopTheAuthHoldsNoTokenOrNonce
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
-perl: s~(public func forget\(\) \{\n\s*lock\.withLock \{\n\s*session = nil)\n\s*waitingNonce = nil~$1~
+perl: s~(public func forget\(\) -> Bool \{\n\s*let gone = lock\.withLock \{\n\s*session = nil)\n\s*waitingNonce = nil~$1~
 
 test: afterTheHopTheAuthHoldsNoTokenOrNonce
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
@@ -624,11 +626,11 @@ perl: s~lock\.withLock \{ waitingNonce = nil \}~lock.withLock { }~
 
 test: theSessionIsKeptOnlyWhenItIsLetters
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
-perl: s~guard let fields = takeSignInFields\(\), !signedIn,~guard let fields = takeSignInFields(),~
+perl: s~guard let fields = try takeSignInFields\(\), !signedIn,~guard let fields = try takeSignInFields(),~
 
 test: theSessionIsKeptOnlyWhenItIsLetters
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
-perl: s~guard let fields = takeSignInFields\(\), !signedIn,~guard !signedIn, let fields = takeSignInFields(),~
+perl: s~guard let fields = try takeSignInFields\(\), !signedIn,~guard !signedIn, let fields = try takeSignInFields(),~
 
 test: theTokenIsNeverKeptOrLogged nothingInTheCloudCodeLogsAValue
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
@@ -696,19 +698,19 @@ perl: s~- "MDx checks Apple's token once~- "MDx checks the token once~
 
 test: forgetRemovesTheDeviceKey turningTheCloudOffRemovesTheDeviceKey forgetEverythingRemovesTheDeviceKey
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
-perl: s~\n\s*try\? keychain\.remove\(Self\.deviceKeyAccount\)~~
+perl: s~let gone = \(try\? keychain\.remove\(Self\.deviceKeyAccount\)\) != nil~let gone = true~
 
 test: forgetRemovesTheDeviceKey
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
-perl: s~(public func forget\(\) \{\n\s*lock\.withLock \{\n\s*)session = nil~$1_ = 0~
+perl: s~(public func forget\(\) -> Bool \{\n\s*let gone = lock\.withLock \{\n\s*)session = nil~$1_ = 0~
 
 test: turningTheCloudOffRemovesTheDeviceKey
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~withdrawPreviews\(\)\n(\s*)auth\.forget\(\)\n(\s*)let first = update~withdrawPreviews()\n$2let first = update~
+perl: s~withdrawPreviews\(\)\n(\s*)let keyGone = auth\.forget\(\)\n~withdrawPreviews()\n$1let keyGone = true\n~
 
 test: forgetEverythingRemovesTheDeviceKey
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~endOpenCloudChats\(\)\n(\s*)auth\.forget\(\)\n(\s*)newPrivateWord = ""~endOpenCloudChats()\n$2newPrivateWord = ""~
+perl: s~endOpenCloudChats\(\)\n(\s*)signInKeyMayStay = !auth\.forget\(\)\n~endOpenCloudChats()\n~
 
 test: theSessionIsKeptOnlyWhenItIsLetters
 file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
@@ -1250,7 +1252,7 @@ perl: s~CloudHelp\(store: store, endpoint: endpoint, memory: memory, auth: auth\
 
 test: theAppLetsAnUnopenedSettingEraseItsFile theFallbackMemoryScreenErasesKeptPrivateWords theFallbackMemoryScreenSaysWhenTheCloudWentOffWithTheWords forgetEverythingErasesWordsKeptInASettingThatCouldntBeOpened turningOffAndForgettingTellSignInToForget
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~(endOpenCloudChats\(\)\n)\s*auth\.forget\(\)\n(\s*newPrivateWord = "")~$1$2~
+perl: s~(endOpenCloudChats\(\)\n)\s*signInKeyMayStay = !auth\.forget\(\)\n(\s*newPrivateWord = "")~$1$2~
 
 # Each newer line is in CloudWords.all, which every copy check reads.
 test: everyCloudLineIsInTheCopyLists
@@ -1279,3 +1281,111 @@ perl: s~(import XCTest\n)~$1let whole = #"eyJhbGci\x2eeyJzdWIi\x2ec2ln"#\n~
 test: theSweepFindsATokenShapedLiteral
 file: Packages/PebbleKit/Tests/PebbleCoreTests/TokenLiteralTests.swift
 perl: s~\\\.\[A-Za-z0-9_-\]\+/ \}~/ }~
+
+# A sign-in key the Keychain kept is said, owed, retried, and never sent again.
+test: aKeyTheKeychainKeptIsNeverSentAgain launchWithTheCloudOffErasesALeftoverKey
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~keyRemovalOwed = !gone~keyRemovalOwed = false~
+
+test: aKeyTheKeychainKeptIsNeverSentAgain turningOffSaysTheKeyMayStillBeHere forgetEverythingSaysTheKeyMayStillBeHere launchWithTheCloudOffErasesALeftoverKey
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~if keyRemovalOwed \{~if false {~
+
+test: aKeyTheKeychainKeptIsNeverSentAgain
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~(public func forget\(\) -> Bool \{[\s\S]*?)return gone\n~${1}return true\n~
+
+test: aKeyTheKeychainKeptIsNeverSentAgain launchWithTheCloudOffErasesALeftoverKey
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~let gone = lock\.withLock \{ removeKey\(\) \}~let gone = lock.withLock { removeKey() } || true~
+
+test: turningOffSaysTheKeyMayStillBeHere
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~state = telling\(line, keyGone: keyGone\)~state = line~
+
+test: turningOffSaysTheKeyMayStillBeHere
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~let keyGone = auth\.forgetLeftovers\(\)~let keyGone = true~
+
+test: forgetEverythingSaysTheKeyMayStillBeHere
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~let key = keyStayed\?\(\) == true \?~let key = false ?~
+
+test: forgetEverythingSaysTheKeyMayStillBeHere
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~signInKeyMayStay = !auth\.forget\(\)~_ = auth.forget()~
+
+test: forgetEverythingSaysTheKeyMayStillBeHere
+file: Packages/PebbleKit/Sources/PebbleUI/HomeView.swift
+perl: s~ keyStayed: MemoryView\.keyStayed\(cloud\),~~
+
+test: launchWithTheCloudOffErasesALeftoverKey
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~if holdsOff \|\| !ModelChoice\.usesCloud~if holdsOff \&\& !ModelChoice.usesCloud~
+
+test: launchWithTheCloudOffErasesALeftoverKey
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~!ModelChoice\.usesCloud\(settings: settings, endpoint: storeOpened \? endpoint : nil\)~true~
+
+# The first message after a sign-in carries its session, shown covered; no session, nothing more goes.
+test: theFirstMessageAfterSignInCarriesItsSession theWireCarriesTheSessionLineTheCardShowedCovered
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~message = try Self\.message\(after: preview, auth: auth, endpoint: endpoint, redactor: redactor\)~_ = try Self.message(after: preview, auth: auth, endpoint: endpoint, redactor: redactor)~
+
+test: theFirstMessageAfterSignInCarriesItsSession thePreviewShowsTheSessionLineCovered theWireCarriesTheSessionLineTheCardShowedCovered
+file: Packages/PebbleKit/Sources/PebbleModel/AppleCloudAuth.swift
+perl: s~body: body, sessionHeader: Self\.sessionHeader\)~body: body)~
+
+test: theFirstMessageAfterSignInCarriesItsSession thePreviewShowsTheSessionLineCovered
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~sessionLine\[name\] = ""~_ = name~
+
+test: aSignInAnswerWithNoSessionSendsNothingMore
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~guard auth\.isSignedIn\(to: endpoint\) else \{\n~guard true else {\n~
+
+test: aSignInAnswerWithNoSessionSendsNothingMore
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~guard let value = auth\.headers\(for: preview\.request\.url\)\[name\],\n\s*let message = preview\.message\(carrying: value\) else \{~guard let message = Optional(preview.request), let value = Optional("") else {~
+
+test: thePreviewShowsTheSessionLineCovered
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~\n\s*\+ \(preview\.sessionHeader == nil \? \[\] : \[CloudWords\.previewSessionFromSignIn\]\)~~
+
+test: thePreviewShowsTheSessionLineCovered
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~Label\(CloudWords\.previewSessionFromSignIn, systemImage: "key\.horizontal"\)~Text(CloudWords.previewSessionFromSignIn)~
+
+# With a policy that needs sign-in, no session and no sign-in means nothing is shown or sent.
+test: noSessionAndNoSignInSendsNothing withNoSignInAChatSendsNothingAndSaysWhy
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~if policy\.needsSignIn, preview\.signIn == nil, !auth\.isSignedIn\(to: endpoint\) \{~if false {~
+
+test: noSessionAndNoSignInSendsNothing withNoSignInAChatSendsNothingAndSaysWhy
+file: Packages/PebbleKit/Sources/PebbleCore/CloudPolicy.swift
+perl: s~public var needsSignIn: Bool \{ !signInFields\.isEmpty \}~public var needsSignIn: Bool { false }~
+
+test: withNoSignInAChatSendsNothingAndSaysWhy
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~self\.policy = policy~self.policy = CloudPolicy(version: "", runBy: "", keepsWhatIsSent: false, countsKeptForDays: 0, signInFields: [])~
+
+test: eachFailureHasItsOwnLine
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~\n\s*case \.needsSignIn: CloudWords\.needsSignIn~~
+
+test: eachFailureHasItsOwnLine
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~\n\s*case \.noSession: CloudWords\.noSession~~
+
+test: eachFailureHasItsOwnLine
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~\n\s*case \.oldKeyStayed: CloudWords\.oldKeyStayed~~
+
+test: eachFailureHasItsOwnLine
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~\.ended, \.needsSignIn, \.noSession, \.oldKeyStayed: true\n(\s*)case \.unreadableReply, nil: false~.ended: true\n$1case .unreadableReply, .needsSignIn, .noSession, .oldKeyStayed, nil: false~
+
+# A name of the letters a to p never matches inside a sign-in value: names match as whole words.
+test: namesOfTheLettersAToPNeverRefuseTheSignIn
+file: Packages/PebbleKit/Sources/PebbleCore/Redactor.swift
+perl: s~return regex\(#"\(\?<!\[~return regex(#"(?<=[~

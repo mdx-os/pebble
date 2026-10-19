@@ -74,6 +74,10 @@ public final class AppleCloudAuth: CloudAuth, @unchecked Sendable {
     /// Apple's token and its nonce, from Apple's answer until the next
     /// preview takes them for its hop.
     private var unsent: (token: String, nonce: String)?
+    /// True while the Keychain kept a key a forget asked it to remove. In
+    /// memory only. Every forget tries again, and so does every sign-in,
+    /// which refuses rather than send the old key.
+    private var keyRemovalOwed = false
 
     public init(keychain: any CloudKeychain = SystemCloudKeychain(),
                 makeKey: @escaping @Sendable () -> String? = AppleCloudAuth.randomKey,
@@ -170,10 +174,22 @@ public final class AppleCloudAuth: CloudAuth, @unchecked Sendable {
     /// or nil when there is no token yet or no key can be kept. Takes the
     /// token and its nonce, so nothing here holds them after, even when no
     /// hop can be made. The key is made here the first time, on this device.
-    package func takeSignInFields() -> [String: String]? {
-        lock.withLock {
+    ///
+    /// While a forget's removal is owed, the key in the Keychain is one the
+    /// person asked to erase, so it is never read: the removal is tried
+    /// again, and if it still fails this throws `oldKeyStayed` and no hop
+    /// is made.
+    package func takeSignInFields() throws -> [String: String]? {
+        try lock.withLock {
             guard let held = unsent else { return nil }
             unsent = nil
+            if keyRemovalOwed {
+                guard (try? keychain.remove(Self.deviceKeyAccount)) != nil else {
+                    CloudLog.note("old device key still kept, sign-in refused")
+                    throw CloudModelError.oldKeyStayed
+                }
+                keyRemovalOwed = false
+            }
             var key = try? keychain.read(Self.deviceKeyAccount)
             if key == nil || key?.isEmpty == true {
                 guard let made = makeKey(), (try? keychain.write(made, for: Self.deviceKeyAccount)) != nil else { return nil }
@@ -195,14 +211,21 @@ public final class AppleCloudAuth: CloudAuth, @unchecked Sendable {
         lock.withLock { session.map { [Self.sessionHeader: $0] } ?? [:] }
     }
 
+    public func isSignedIn(to endpoint: URL) -> Bool {
+        lock.withLock { session != nil }
+    }
+
     /// The hop, once Apple has given a token and while not yet signed in to
-    /// the server. Takes the token either way.
-    public func signIn(for endpoint: URL) -> CloudSignIn? {
+    /// the server. Takes the token either way. Its answer's session goes
+    /// on the message as `sessionHeader`, which the preview shows covered.
+    /// Throws `oldKeyStayed` while a key a forget couldn't erase is still
+    /// kept (`takeSignInFields`).
+    public func signIn(for endpoint: URL) throws -> CloudSignIn? {
         let signedIn = lock.withLock { session != nil }
-        guard let fields = takeSignInFields(), !signedIn,
+        guard let fields = try takeSignInFields(), !signedIn,
               let body = try? CloudSignIn.encoded(fields) else { return nil }
         CloudLog.note("sign-in hop made for the preview")
-        return CloudSignIn(path: Self.signInPath, body: body)
+        return CloudSignIn(path: Self.signInPath, body: body, sessionHeader: Self.sessionHeader)
     }
 
     /// Keeps the server's `{"session": "..."}` in memory, when it is only
@@ -221,15 +244,38 @@ public final class AppleCloudAuth: CloudAuth, @unchecked Sendable {
     }
 
     /// Removes the key from the Keychain, and drops the session and any
-    /// token or nonce. Each is let go even when the key can't be.
-    public func forget() {
-        lock.withLock {
+    /// token or nonce. Each is let go even when the key can't be. False
+    /// when the Keychain kept the key: the removal is owed then, tried
+    /// again by the next forget and by the next sign-in, which never sends
+    /// that key (`takeSignInFields`).
+    @discardableResult
+    public func forget() -> Bool {
+        let gone = lock.withLock {
             session = nil
             waitingNonce = nil
             unsent = nil
-            try? keychain.remove(Self.deviceKeyAccount)
+            return removeKey()
         }
-        CloudLog.note("sign-in forgotten")
+        CloudLog.note(gone ? "sign-in forgotten" : "sign-in forgotten, device key still kept")
+        return gone
+    }
+
+    /// Removes any key while nothing should hold one, as at launch with the
+    /// cloud off, or as it is turned on. Owed, as after `forget`, when the
+    /// Keychain keeps it.
+    @discardableResult
+    public func forgetLeftovers() -> Bool {
+        let gone = lock.withLock { removeKey() }
+        if !gone { CloudLog.note("leftover device key still kept") }
+        return gone
+    }
+
+    /// Removes the key, and notes whether the removal is still owed. Called
+    /// with the lock held.
+    private func removeKey() -> Bool {
+        let gone = (try? keychain.remove(Self.deviceKeyAccount)) != nil
+        keyRemovalOwed = !gone
+        return gone
     }
 
     /// The SHA-256 of `nonce`'s bytes as lowercase hex, as Apple's request
