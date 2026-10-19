@@ -49,11 +49,13 @@ public enum PrivacyRules {
         "AsyncImage", "CKContainer", "NSUbiquitousKeyValueStore",
         "WebView", "WebPage", "MCSession", "MCBrowserViewController",
     ]
-    /// Initializers that load a remote resource when given one by url: or contentsOf:.
+    /// Initializers that load a remote resource when given one by a URL label.
     static let remoteInitializers: Set<String> = [
         "NSImage", "AVPlayer", "XMLParser", "NSDictionary",
         "NSArray", "NSAttributedString", "AVURLAsset", "AVAsset", "NSXMLDocument",
     ]
+    /// The labels that hand an initializer a URL to load.
+    static let urlLabels: Set<String> = ["contentsOf", "url", "byReferencing"]
     public static func hasNetwork(_ source: SyntaxSource) -> Bool {
         !network(source, "").isEmpty
     }
@@ -65,11 +67,13 @@ public enum PrivacyRules {
                 || $0.hasPrefix("CFStream") || $0.hasPrefix("CFReadStream") || $0.hasPrefix("CFWriteStream")
                 || $0.hasPrefix("CFSocket") || $0.hasPrefix("MCNearbyService")
         }
-        // These initializers can load remote resources too. Require review even
-        // for an initializer reference, whose eventual argument is not visible.
-        for token in identifiers(source) where remoteInitializers.contains(SyntaxSource.name(token)) {
+        // These initializers can load remote resources too, however this file
+        // spells them. Require review even for an initializer reference,
+        // whose eventual argument is not visible.
+        let remoteTypes = aliases(of: remoteInitializers, in: source)
+        for token in identifiers(source) where remoteTypes.contains(SyntaxSource.name(token)) {
             if let call = ancestor(token, FunctionCallExprSyntax.self),
-               call.arguments.contains(where: { ["url", "contentsOf"].contains($0.label.map(SyntaxSource.name) ?? "") }) {
+               call.arguments.contains(where: { urlLabels.contains($0.label.map(SyntaxSource.name) ?? "") }) {
                 hits.append(Finding("privacy.network", at: token, in: source, "network code outside the opt-in cloud client"))
             } else if let member = ancestor(token, MemberAccessExprSyntax.self), SyntaxSource.name(member.declName.baseName) == "init" {
                 hits.append(Finding("privacy.network", at: token, in: source, "network code outside the opt-in cloud client"))
@@ -85,18 +89,24 @@ public enum PrivacyRules {
     static func urlRead(_ source: SyntaxSource, _ file: String) -> [Finding] {
         var hits: [Finding] = []
         let types = aliases(of: readTypes, in: source)
-        // Any initializer given contentsOf:, however its type is spelled:
-        // `.init`, an alias, `Self` or a module name. Methods such as
-        // `append(contentsOf:)` read nothing.
-        for call in source.nodes(FunctionCallExprSyntax.self)
-        where call.arguments.contains(where: { $0.label.map(SyntaxSource.name) == "contentsOf" }) && initializerCallee(call.calledExpression) {
+        let declared = typeNames(in: source)
+        let plain = plainTypes(in: source)
+        // Any initializer given a URL label, however its type is spelled:
+        // `.init`, an alias of any case, `Self` or a module name. Methods
+        // such as `append(contentsOf:)` read nothing. url: and byReferencing:
+        // are network labels, so the cloud client and a plain type this file
+        // makes may take them.
+        for call in source.nodes(FunctionCallExprSyntax.self) where initializerCallee(call.calledExpression, declared) {
+            let labels = Set(call.arguments.compactMap { $0.label.map(SyntaxSource.name) })
+            guard labels.contains("contentsOf")
+                    || (file != cloud && !labels.isDisjoint(with: urlLabels) && !plain.contains(calleeName(call.calledExpression))) else { continue }
             hits.append(Finding("privacy.urlRead", at: call, in: source, SyntaxSource.code(call)))
         }
         for member in source.nodes(MemberAccessExprSyntax.self) {
             let name = SyntaxSource.name(member.declName.baseName)
             if let call = member.parent?.as(FunctionCallExprSyntax.self), call.calledExpression.id == member.id { continue }
             if name == "init", namesReadType(member.base, types)
-                || member.declName.argumentNames?.arguments.contains(where: { SyntaxSource.name($0.name) == "contentsOf" }) == true {
+                || member.declName.argumentNames?.arguments.contains(where: { urlLabels.contains(SyntaxSource.name($0.name)) }) == true {
                 hits.append(Finding("privacy.urlRead", at: member, in: source, SyntaxSource.code(member)))
             } else if urlReaders.contains(name) {
                 hits.append(Finding("privacy.urlRead", at: member, in: source, SyntaxSource.code(member)))
@@ -104,6 +114,15 @@ public enum PrivacyRules {
         }
         for component in source.nodes(KeyPathPropertyComponentSyntax.self) where urlReaders.contains(SyntaxSource.name(component.declName.baseName)) {
             hits.append(Finding("privacy.urlRead", at: component, in: source, "\\." + SyntaxSource.code(component)))
+        }
+        // Inside an extension of URL, `lines` and `resourceBytes` alone are
+        // self's, the same readers with `self.` left off.
+        let urls = aliases(of: ["URL"], in: source)
+        for reference in source.nodes(DeclReferenceExprSyntax.self) where urlReaders.contains(SyntaxSource.name(reference.baseName)) {
+            if let member = reference.parent?.as(MemberAccessExprSyntax.self), member.declName.id == reference.id { continue }
+            if let call = reference.parent?.as(FunctionCallExprSyntax.self), call.calledExpression.id == reference.id { continue }
+            guard let extended = ancestor(reference, ExtensionDeclSyntax.self), extendsURL(extended, urls) else { continue }
+            hits.append(Finding("privacy.urlRead", at: reference, in: source, SyntaxSource.code(reference)))
         }
         // copyItem(at:to:) downloads when its source is not a file URL.
         for reference in source.nodes(DeclReferenceExprSyntax.self) where SyntaxSource.name(reference.baseName) == "copyItem" {
@@ -145,21 +164,54 @@ public enum PrivacyRules {
         return extended.extendedType.tokens(viewMode: .sourceAccurate).map(SyntaxSource.name).contains(where: types.contains)
     }
 
-    /// Whether a call is made to an initializer: `T(...)`, `T.init(...)`,
-    /// `.init(...)`, `Self(...)`, `M.T(...)` or `T<U>(...)`. Methods and
-    /// functions are named in lower case. A shape not read here counts.
-    static func initializerCallee(_ callee: ExprSyntax) -> Bool {
+    /// Every type name this file declares, aliases included, in any case.
+    static func typeNames(in source: SyntaxSource) -> Set<String> {
+        Set(source.nodes(TypeAliasDeclSyntax.self).map { SyntaxSource.name($0.name) })
+            .union(source.nodes(AssociatedTypeDeclSyntax.self).map { SyntaxSource.name($0.name) })
+            .union(plainTypes(in: source))
+    }
+
+    /// Types this file makes whose initializers are all written here: a
+    /// struct, enum or actor, or a class that inherits from nothing. A
+    /// subclass might inherit an initializer that loads its URL.
+    static func plainTypes(in source: SyntaxSource) -> Set<String> {
+        Set(source.nodes(StructDeclSyntax.self).map { SyntaxSource.name($0.name) })
+            .union(source.nodes(EnumDeclSyntax.self).map { SyntaxSource.name($0.name) })
+            .union(source.nodes(ActorDeclSyntax.self).map { SyntaxSource.name($0.name) })
+            .union(source.nodes(ClassDeclSyntax.self).filter { $0.inheritanceClause == nil }.map { SyntaxSource.name($0.name) })
+    }
+
+    /// `extension URL`, `extension Foundation.URL` or an alias of it.
+    static func extendsURL(_ extended: ExtensionDeclSyntax, _ urls: Set<String>) -> Bool {
+        extended.extendedType.tokens(viewMode: .sourceAccurate).map(SyntaxSource.name).contains(where: urls.contains)
+    }
+
+    /// The type or member a call names, as in `T` for `T(...)` or `M.T<U>(...)`.
+    static func calleeName(_ callee: ExprSyntax) -> String {
+        var expression = callee
+        if let generic = expression.as(GenericSpecializationExprSyntax.self) { expression = generic.expression }
+        if let member = expression.as(MemberAccessExprSyntax.self) { return SyntaxSource.name(member.declName.baseName) }
+        if let reference = expression.as(DeclReferenceExprSyntax.self) { return SyntaxSource.name(reference.baseName) }
+        return ""
+    }
+
+    /// Whether a call may be made to an initializer: `T(...)`, `T.init(...)`,
+    /// `.init(...)`, `Self(...)`, `M.T(...)`, `T<U>(...)`, or a bare name,
+    /// which may be an alias of any case from another file. Members named in
+    /// lower case are methods unless this file declares that name as a type.
+    /// A shape not read here counts.
+    static func initializerCallee(_ callee: ExprSyntax, _ declared: Set<String>) -> Bool {
         var expression = callee
         if let generic = expression.as(GenericSpecializationExprSyntax.self) { expression = generic.expression }
         let name: String
         if let member = expression.as(MemberAccessExprSyntax.self) {
             name = SyntaxSource.name(member.declName.baseName)
-        } else if let reference = expression.as(DeclReferenceExprSyntax.self) {
-            name = SyntaxSource.name(reference.baseName)
+        } else if expression.is(DeclReferenceExprSyntax.self) {
+            return true // A bare name, of any case.
         } else {
             return true
         }
-        return name == "init" || name.first.map { $0.isUppercase || $0 == "_" } ?? true
+        return name == "init" || declared.contains(name) || name.first.map { $0.isUppercase || $0 == "_" } ?? true
     }
 
     /// Accept only the actual cloud argument of ModelChoice.model, never a

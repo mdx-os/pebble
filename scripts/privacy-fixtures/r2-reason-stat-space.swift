@@ -1,3 +1,4 @@
 // into: App/Sources
-// expect: required-reason API (NSPrivacyAccessedAPICategoryFileTimestamp)
+// remove-category: NSPrivacyAccessedAPICategoryFileTimestamp
+// expect: App/Sources/Fixturer2reasonstatspace.swift:4: required-reason API (NSPrivacyAccessedAPICategoryFileTimestamp)
 let result = stat (path, &info)

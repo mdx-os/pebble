@@ -452,7 +452,7 @@ perl: s~where urlReaders\.contains\(SyntaxSource\.name\(component\.declName\.bas
 # with a type annotation is let by.
 test: privacyRulesCatchEveryWrongCase
 file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
-perl: s~&& initializerCallee\(call\.calledExpression\)~&& call.calledExpression.tokens(viewMode: .sourceAccurate).map(SyntaxSource.name).contains(where: types.contains)~
+perl: s~where initializerCallee\(call\.calledExpression, declared\) \{~where call.calledExpression.tokens(viewMode: .sourceAccurate).map(SyntaxSource.name).contains(where: types.contains) {~
 
 # A typealias of Data not followed, so Bytes.init is let by.
 test: privacyRulesCatchEveryWrongCase
@@ -467,7 +467,7 @@ perl: s~guard names\.contains\("Self"\),~guard false,~
 # An initializer reference named init(contentsOf:...) on another base let by.
 test: privacyRulesCatchEveryWrongCase
 file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
-perl: s~\n\s*\|\| member\.declName\.argumentNames\?\.arguments\.contains\(where: \{ SyntaxSource\.name\(\$0\.name\) == "contentsOf" \}\) == true~~
+perl: s~\n\s*\|\| member\.declName\.argumentNames\?\.arguments\.contains\(where: \{ urlLabels\.contains\(SyntaxSource\.name\(\$0\.name\)\) \}\) == true~~
 
 # A capture list counted as inside the cloud closure.
 test: privacyRulesCatchEveryWrongCase
@@ -517,6 +517,73 @@ perl: s~guard package == Self\.package, \(packages\[package\] as\? \[String: Any
 test: privacyProjectFailsOnFormsItCannotRead
 file: Tools/GuardKit/Sources/GuardScan/PrivacyProject.swift
 perl: s~\} else \{\n\s*throw Unreadable\("target \\\(name\) has a dependency on [^\n]*\n\s*\}~}~
+
+# Round 4. A bare call read by its case, so a lowercase alias from another
+# file, bytes(contentsOf:), is let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\} else if expression\.is\(DeclReferenceExprSyntax\.self\) \{\n(\s*)return true // A bare name, of any case\.~} else if let reference = expression.as(DeclReferenceExprSyntax.self) {\n$1name = SyntaxSource.name(reference.baseName)~
+
+# A lowercase alias this file declares, called as a member, let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~name == "init" \|\| declared\.contains\(name\) \|\|~name == "init" ||~
+
+# An initializer given url: let by unless its type is a known remote one.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\["contentsOf", "url", "byReferencing"\]~["contentsOf", "byReferencing"]~
+
+# NSImage(byReferencing:) let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\["contentsOf", "url", "byReferencing"\]~["contentsOf", "url"]~
+
+# An alias of a remote initializer, Player = AVPlayer, not followed.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~let remoteTypes = aliases\(of: remoteInitializers, in: source\)~let remoteTypes = remoteInitializers~
+
+# resourceBytes and lines with self. left off, inside an extension of URL, let by.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~guard let extended = ancestor\(reference, ExtensionDeclSyntax\.self\), extendsURL\(extended, urls\) else \{ continue \}~continue~
+
+# An extension of an alias of URL not taken for one of URL.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~let urls = aliases\(of: \["URL"\], in: source\)~let urls: Set<String> = ["URL"]~
+
+# A subclass made here taken for a plain type, though it may inherit an
+# initializer that loads its URL.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\.filter \{ \$0\.inheritanceClause == nil \}~~
+
+# A plain type made here, or the cloud client's request, made to need review.
+test: privacyRulesAllowReviewedContexts
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~ && !plain\.contains\(calleeName\(call\.calledExpression\)\)~~
+
+test: privacyRulesAllowReviewedContexts
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~file != cloud && !labels~!labels~
+
+# The chat's starters. A draft taken for a suggestion by its words, so
+# typed words that match one are replaced.
+test: wordsThatMatchASuggestionAreStillThePersons
+file: Packages/PebbleKit/Sources/PebbleUI/ChatStyle.swift
+perl: s~fromSuggestion \|\| draft\.trimmingCharacters~FirstConversation.jobs.map(\\.prompt).contains(draft.trimmingCharacters(in: .whitespacesAndNewlines)) || draft.trimmingCharacters~
+
+# A suggestion's mark that an edit never clears.
+test: wordsThatMatchASuggestionAreStillThePersons
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~if draft != oldValue, !fillingSuggestion \{ draftIsSuggestion = false \}~~
+
+# The first run. A new page left where the last one was scrolled to.
+test: eachPageOpensAtItsTop
+file: Packages/PebbleKit/Sources/PebbleUI/OnboardingView.swift
+perl: s~scroller\.scrollTo\(Self\.topID, anchor: \.top\)~_ = scroller~
 
 # Grants. Only the sheet's answer makes one, and each covers only its own
 # action, its own exact target, inside its scope.

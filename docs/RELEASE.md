@@ -58,8 +58,10 @@ keys that never enter the repo.
   Swift source is parsed by GuardScan in the separate Tools/GuardKit package.
   All compiled App sources are enumerated; languages the checker cannot
   read fail until a parser and fixtures are added.
-- **Required-reason APIs:** only `UserDefaults`, with reason `CA92.1`
-  (the app's own settings, read only by the app). The check scans `App/`
+- **Required-reason APIs:** `UserDefaults`, with reason `CA92.1`
+  (the app's own settings, read only by the app), and file timestamps,
+  with reason `C617.1` (`lstat` on the grants file and its marker in the
+  app's container, only to learn whether each is there). The check scans `App/`
   and every PebbleKit target the app links, with their dependencies.
 - **Encryption:** the system's file protection on notes
   (`.completeFileProtection`) and HTTPS through `URLSession` in the cloud

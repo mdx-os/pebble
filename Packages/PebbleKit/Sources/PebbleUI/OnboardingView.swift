@@ -29,36 +29,80 @@ public struct OnboardingView: View {
         draftName: String = "",
         onFinish: @escaping @MainActor (_ firstMessage: String?) -> Void
     ) {
-        self.place = place
-        _model = StateObject(wrappedValue: OnboardingModel(
+        self.init(model: OnboardingModel(
             brand: brand, names: names, store: store, looks: looks,
             page: page, draftName: draftName, onFinish: onFinish
-        ))
+        ), place: place)
     }
+
+    /// Shows a first run whose model the caller keeps, so a test can turn
+    /// its pages.
+    init(model: @autoclosure @escaping () -> OnboardingModel, place: PrivacyPlace) {
+        self.place = place
+        _model = StateObject(wrappedValue: model())
+    }
+
+    /// The top of every page, where a new page starts.
+    static let topID = "firstRunTop"
+
+    /// True once the character has made its entrance.
+    @State private var introduced = false
+
+    /// The character shows from the start in a still screenshot, and
+    /// arrives with a gentle rise everywhere else: only a fade with Reduce
+    /// Motion on.
+    private var characterShown: Bool { introduced || holdsStill }
 
     public var body: some View {
         ZStack {
             Backdrop()
-            VStack(spacing: 0) {
-                progress
-                    .padding(.top, Theme.Space.s)
-                Spacer(minLength: Theme.Space.s)
-                CharacterView(look: model.look, size: model.page == .hello ? 132 : 96, isCheerful: model.page == .ideas)
-                    .animation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.75), value: model.page)
-                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.35), value: model.look)
-                content
-                    .id(model.page)
-                    .transition(reduceMotion ? .opacity : .asymmetric(
-                        insertion: .move(edge: .trailing).combined(with: .opacity),
-                        removal: .move(edge: .leading).combined(with: .opacity)
-                    ))
-                Spacer(minLength: Theme.Space.s)
+            GeometryReader { proxy in
+                // Scrolls only when the words outgrow the screen, as at the
+                // largest text sizes; otherwise everything sits centered.
+                ScrollViewReader { scroller in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        progress
+                            .padding(.top, Theme.Space.m)
+                            .id(Self.topID)
+                        Spacer(minLength: Theme.Space.xl)
+                        CharacterView(look: model.look, size: model.page == .hello ? 140 : 100,
+                                      isCheerful: model.page == .ideas)
+                            .opacity(characterShown ? 1 : 0)
+                            .scaleEffect(characterShown || reduceMotion ? 1 : 0.86)
+                            .offset(y: characterShown || reduceMotion ? 0 : Theme.Space.m)
+                            .animation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.75), value: model.page)
+                            .animation(reduceMotion ? nil : .easeInOut(duration: 0.35), value: model.look)
+                        content
+                            .id(model.page)
+                            .transition(reduceMotion ? .opacity : .asymmetric(
+                                insertion: .move(edge: .trailing).combined(with: .opacity),
+                                removal: .move(edge: .leading).combined(with: .opacity)
+                            ))
+                        Spacer(minLength: Theme.Space.xxl)
+                    }
+                    .padding(.horizontal, Theme.gutter)
+                    .frame(maxWidth: Theme.readableWidth)
+                    .frame(maxWidth: .infinity, minHeight: proxy.size.height)
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                // The scroll view stays as the pages change, so each new
+                // page starts back at the top, its heading in view, however
+                // far the last one was scrolled to reach Continue.
+                .onChange(of: model.page) {
+                    scroller.scrollTo(Self.topID, anchor: .top)
+                }
+                }
             }
-            .padding(.horizontal, Theme.gutter)
-            .frame(maxWidth: Theme.readableWidth)
-            .frame(maxWidth: .infinity)
         }
         .animation(reduceMotion ? .easeInOut(duration: 0.2) : .spring(response: 0.45, dampingFraction: 0.85), value: model.page)
+        .onAppear {
+            guard !introduced else { return }
+            withAnimation(reduceMotion ? .easeInOut(duration: 0.3)
+                          : .spring(response: 0.7, dampingFraction: 0.72).delay(0.1)) {
+                introduced = true
+            }
+        }
     }
 
     private var progress: some View {
@@ -97,10 +141,12 @@ public struct OnboardingView: View {
                     .font(Theme.TypeScale.body)
                     .foregroundStyle(Theme.secondaryText)
                     .multilineTextAlignment(.center)
+                    .lineSpacing(ChatStyle.lineSpacing)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(.top, Theme.Space.l)
+        .padding(.top, Theme.Space.xl)
+        .padding(.bottom, Theme.Space.xxs)
     }
 
     private var hello: some View {
@@ -108,12 +154,12 @@ public struct OnboardingView: View {
             heading(FirstRunWords.hello, FirstRunWords.helloDetail(place))
             Button(FirstRunWords.beginTitle) { model.advance() }
                 .buttonStyle(PrimaryButtonStyle())
-                .padding(.top, Theme.Space.s)
+                .padding(.top, Theme.Space.m)
         }
     }
 
     private var naming: some View {
-        VStack(spacing: Theme.Space.l) {
+        VStack(spacing: Theme.Space.xl) {
             heading(FirstRunWords.nameQuestion, FirstRunWords.nameDetail)
             TextField(FirstConversation.namePlaceholder, text: $model.draftName)
                 .font(Theme.TypeScale.displayTitle.weight(.semibold))
@@ -141,7 +187,7 @@ public struct OnboardingView: View {
     }
 
     private var lookPicker: some View {
-        VStack(spacing: Theme.Space.l) {
+        VStack(spacing: Theme.Space.xl) {
             heading(FirstRunWords.lookQuestion, FirstRunWords.lookDetail)
             HStack(spacing: Theme.Space.s) {
                 ForEach(AgentLook.allCases, id: \.self) { look in
@@ -196,7 +242,7 @@ public struct OnboardingView: View {
     }
 
     private var ideas: some View {
-        VStack(spacing: Theme.Space.m) {
+        VStack(spacing: Theme.Space.l) {
             heading(FirstRunWords.greeting(named: model.displayName), FirstRunWords.ideasDetail)
             VStack(spacing: Theme.Space.s) {
                 ForEach(Array(model.starters.enumerated()), id: \.element.id) { index, job in
@@ -220,14 +266,7 @@ struct IdeaCardButton: View {
     /// Reduce Motion, or a screenshot that needs the screen to settle.
     private var reduceMotion: Bool { systemReduceMotion || holdsStill }
 
-    private var symbol: String {
-        switch job.id {
-        case "morning": "sun.horizon"
-        case "talk": "bubble.left.and.bubble.right"
-        case "remember": "bookmark"
-        default: "sparkles"
-        }
-    }
+    private var symbol: String { ChatStyle.symbol(forStarter: job.id) }
 
     var body: some View {
         Button(action: action) {
@@ -246,6 +285,7 @@ struct IdeaCardButton: View {
                     .foregroundStyle(Theme.secondaryText)
             }
             .padding(Theme.Space.m)
+            // Raised, so each idea sits a touch above the backdrop.
             .cardSurface()
             .pointerHover(in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
         }

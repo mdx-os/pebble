@@ -1069,6 +1069,21 @@ extension GuardWrongCaseTests {
         WrongCase(rule: "privacy.urlRead", text: "let x = type(of: data).init(contentsOf:options:)", file: "App/Sources/Wrong.swift"),
         WrongCase(rule: "privacy.urlRead", text: "try FileManager.default.copyItem(at: remote, to: local)", file: "App/Sources/Wrong.swift"),
         WrongCase(rule: "privacy.urlRead", text: "let x = FileManager.default.copyItem(at:to:)", file: "App/Sources/Wrong.swift"),
+        // Round 4. An alias of any case, from this file or another.
+        WrongCase(rule: "privacy.urlRead", text: "typealias bytes = Data\nlet x = try bytes(contentsOf: remote)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "let x = try bytes(contentsOf: remote)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "enum Kinds { typealias bytes = Data }\nlet x = try Kinds.bytes(contentsOf: remote)", file: "App/Sources/Wrong.swift"),
+        // A remote initializer through an alias, inference or another label.
+        WrongCase(rule: "privacy.network", text: "typealias Player = AVPlayer\nlet x = Player(url: remote)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.network", text: "let x = NSImage(byReferencing: remote)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "let x: AVPlayer = .init(url: remote)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "let x: NSImage = .init(byReferencing: remote)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "let x = Loader(url: remote)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "class Loader: AVPlayer {}\nlet x = Loader(url: remote)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "let x = remotes.map(Loader.init(url:))", file: "App/Sources/Wrong.swift"),
+        // The URL readers with self. left off.
+        WrongCase(rule: "privacy.urlRead", text: "extension URL { func f() async throws { for try await b in resourceBytes { _ = b } } }", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "typealias Link = URL\nextension Link { var x: AsyncLineSequence<URL.AsyncBytes> { lines } }", file: "App/Sources/Wrong.swift"),
         // A capture list runs before consent is checked.
         WrongCase(rule: "privacy.transport", text: "let x = ModelChoice.model(local: local) { [t = URLSessionCloudTransport()] url in t }", file: PrivacyRules.gate),
         WrongCase(rule: "privacy.transport", text: "let x = ModelChoice.model(local: local, cloud: { [t = makeTransport()] _ in t })", file: PrivacyRules.gate),
@@ -1094,9 +1109,16 @@ extension GuardWrongCaseTests {
             #expect(!PrivacyRules.findings(in: SyntaxSource(text), file: PrivacyRules.gate).contains { $0.rule == "privacy.transport" })
         }
         // contentsOf: on a method, a method named lines, and a copy by path read nothing.
-        for text in ["all.append(contentsOf: more)", "let x = announcer.lines(for: list)", "try FileManager.default.copyItem(atPath: a, toPath: b)"] {
+        // A plain type made here may take a url:, a method's url: reads nothing,
+        // and lines outside an extension of URL is just a name.
+        for text in ["all.append(contentsOf: more)", "let x = announcer.lines(for: list)", "try FileManager.default.copyItem(atPath: a, toPath: b)",
+                     "struct Source { var url: URL }\nlet x = Source(url: link)", "final class Box { init(url: URL) {} }\nlet x = Box(url: link)",
+                     "let x = shown.title(url: link)", "var lines = [\"a\"]\nlines.append(\"b\")",
+                     "extension URL { var name: String { lastPathComponent } }"] {
             #expect(!PrivacyRules.findings(in: SyntaxSource(text), file: "App/Sources/Right.swift").contains { $0.rule == "privacy.urlRead" }, "\(text)")
         }
+        // The cloud client may hand its request a url:.
+        #expect(!PrivacyRules.findings(in: SyntaxSource("let x = URLRequest(url: url)"), file: PrivacyRules.cloud).contains { $0.rule == "privacy.urlRead" })
         #expect(!PrivacyRules.findings(in: SyntaxSource("static func makeSession() {}"), file: PrivacyRules.cloud).contains { $0.rule == "privacy.sessionFactory" })
     }
 
