@@ -3,7 +3,7 @@
 The repo builds everything except the signature. `make archive` produces
 unsigned Release archives for iOS (iPhone and iPad) and macOS and checks
 them for what App Store Connect reads. Signing and upload happen on the
-machine of whoever holds the Apple Developer account (Mandeep today), with
+machine of the account holder, who holds the Apple Developer account, with
 keys that never enter the repo.
 
 ## What is already in place
@@ -13,25 +13,62 @@ keys that never enter the repo.
 | Version and build number, for every target | `Config/Version.xcconfig` |
 | Product name | `Config/Brand.xcconfig` |
 | App icon, iOS (1024 single size) and macOS (16 to 1024) | `App/Resources/Assets.xcassets/AppIcon.appiconset`, drawn by `scripts/app-icon.swift` |
-| Launch screen, the backdrop color in light and dark | `UILaunchScreen` in `project.yml`, color `LaunchBackground` |
+| Launch screen, the backdrop color in light and dark, each also in high contrast | `UILaunchScreen` in `project.yml`, color `LaunchBackground` |
 | Privacy manifest | `App/Resources/PrivacyInfo.xcprivacy`, kept honest by `make privacy-check` |
 | Export compliance | `ITSAppUsesNonExemptEncryption = NO` in `project.yml` |
-| Mac sandbox for Release | `ENABLE_APP_SANDBOX` in `project.yml`, nothing asked beyond it |
+| Mac sandbox for Release | `ENABLE_APP_SANDBOX` in `project.yml`, with `App/Mac-Release.entitlements` asking only for outgoing connections |
 | Unsigned archives and their check | `make archive`, `scripts/release-check.sh` |
 
 ### Why the answers are what they are
 
-- **Data collected: none. Tracking: none.** The app does no networking.
-  Notes, the agent's name and its look stay in the app's own files and
-  defaults on the device. `make privacy-check` fails if the app's code starts
-  using the network, so this answer gets a fresh look when it does.
+- **Data collected: none. Tracking: none.** Notes, the agent's name and its
+  look stay in the app's own files and defaults on the device. The one way
+  anything leaves is the opt-in cloud client (`CloudModel`): off by default,
+  turned on only by the person, and every request shown to them, redacted,
+  before it goes.
+- **The rule that keeps "Data Not Collected" true.** It holds only while
+  every request goes to a server the person chose and runs themselves:
+  - no default endpoint. Release builds ship with `PebbleCloudEndpoint`
+    empty, and `release-check` fails if an archive carries one. An address
+    in `Config/Cloud.local.xcconfig` is for trying a server on one machine,
+    never for a build that ships.
+  - no key of ours. No API key, token or account of the project's goes in
+    the app. The xAI key in CI is for `make pulse`, the competitor watch,
+    which the app never links.
+
+  If any build sends notes or chats to a provider using our key or our
+  endpoint, that provider is a third-party partner, and the manifest's
+  `NSPrivacyCollectedDataTypes` and the App Privacy answers need User
+  Content entries before it ships.
+- **Network code** lives only in `Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift`,
+  and its transport is made only in `CloudHelpView.swift`, inside the
+  closure `ModelChoice.model` calls with the cloud setting on.
+  `make privacy-check` fails on network code anywhere else, in `App/` or
+  any PebbleKit target the app reaches, and if the gate or its tests
+  (`offByDefaultMakesNoTransportAndKeepsChatsOnDevice`,
+  `anEmptyAddressMeansDisabledEvenIfSavedOn`) go away. It also fails on
+  system APIs that send the person's data to Apple: `CLGeocoder`,
+  `MKLocalSearch`, and `SFSpeechRecognizer` without on-device recognition.
 - **Required-reason APIs:** only `UserDefaults`, with reason `CA92.1`
   (the app's own settings, read only by the app). The check scans `App/`
-  and every package product the app links.
-- **Encryption:** the only encryption is the system's file protection on
-  notes (`.completeFileProtection`), which is exempt. No HTTPS, no
-  CryptoKit. When a model adapter talks to a server, look again: HTTPS
-  through the system is still exempt, but the answer must be checked.
+  and every PebbleKit target the app links, with their dependencies.
+- **Encryption:** the system's file protection on notes
+  (`.completeFileProtection`) and HTTPS through `URLSession` in the cloud
+  client. Both come from the system, so both are exempt, and
+  `ITSAppUsesNonExemptEncryption = NO` is true. It stays true only while
+  TLS and every cipher come from the system: `make privacy-check` fails on
+  `import CryptoKit`, `CommonCrypto`, `SecKeyCreateEncryptedData`, `NIOSSL`
+  or BoringSSL, and certificate pinning. If one of them is ever needed,
+  answer export compliance again (the encryption questions in App Store
+  Connect, and maybe a year-end self-classification report) before it ships.
+- **Mac sandbox:** Release asks for `com.apple.security.network.client`
+  (outgoing connections) and nothing else. `release-check` reads
+  `ENABLE_APP_SANDBOX` and the entitlements from the Release build settings,
+  requires outgoing connections whenever there is network code, and fails
+  on `NSAllowsArbitraryLoads` or an `NSExceptionDomains` entry no one has
+  reviewed. The app has no save panel, file exporter or drag out, so it
+  doesn't need `files.user-selected.read-write`; `release-check` fails if
+  one appears without it.
 
 ## Cutting a build
 
@@ -40,7 +77,9 @@ keys that never enter the repo.
    has already seen for the same version. Change `MARKETING_VERSION` when
    the version people see should change.
 2. Run `make verify`. It includes `make archive`, so the unsigned archives
-   and their check must pass.
+   and their check must pass. Archive on a machine without
+   `Config/Cloud.local.xcconfig`, or with it empty: a Release build
+   carries no cloud address.
 3. Merge to `main` the usual way, then sign and upload from a clean checkout
    of that commit, as below.
 
@@ -91,6 +130,25 @@ Nothing below is committed. Each value lives on the signing machine.
    - TestFlight test information: a beta description, a feedback email,
      and, for testers outside the team, a review contact and a privacy
      policy URL.
+
+## Tester notes: Mac data from a Debug build
+
+Release builds for the Mac are sandboxed and Debug builds are not (so
+`make screenshots` can write its PNG anywhere), so the two keep their data
+in different places. Anyone who ran a Debug build from Xcode or
+`make build` has a second copy that the TestFlight app never sees, and
+Forget everything in the TestFlight app can't reach it:
+
+| What | Debug (unsandboxed) | Release and TestFlight (sandboxed) |
+| --- | --- | --- |
+| Notes, private words, the cloud setting, the morning summary and its switch | `~/Library/Application Support/pebble/memory/` | `~/Library/Containers/com.mdxos.pebble/Data/Library/Application Support/pebble/memory/` |
+| Saved tasks, receipts and nudges | `~/Library/Application Support/kept-tasks/` | the same, under `~/Library/Containers/com.mdxos.pebble/Data/Library/Application Support/` |
+| The agent's name and look, and other settings | `~/Library/Preferences/com.mdxos.pebble.plist` | `~/Library/Containers/com.mdxos.pebble/Data/Library/Preferences/com.mdxos.pebble.plist` |
+
+Put this in the TestFlight notes for Mac testers who also build from
+source: to remove everything, use Forget everything in a Debug build too,
+or delete the Debug paths above by hand. iPhone and iPad builds are always
+sandboxed, so this is only about the Mac.
 
 ## What never goes in the repo
 

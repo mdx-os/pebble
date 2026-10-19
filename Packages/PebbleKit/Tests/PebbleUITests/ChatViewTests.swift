@@ -9,29 +9,23 @@ struct ChatViewTests {
     let brand = Brand(name: "Nova")
 
     @MainActor
-    @Test(arguments: [
+    @Test("Smoke: the chat draws at each device size", arguments: [
         CGSize(width: 393, height: 852),   // iPhone
         CGSize(width: 1032, height: 1376), // iPad
         CGSize(width: 1280, height: 800),  // Mac window
     ])
-    func rendersAtEachDeviceSize(size: CGSize) throws {
-        let renderer = ImageRenderer(
-            content: ChatView(brand: brand, names: InMemoryAgentNameStore())
-                .frame(width: size.width, height: size.height)
-        )
-        let image = try #require(renderer.cgImage)
-        #expect(image.width == Int(size.width * renderer.scale))
+    func smokeAtEachDeviceSize(size: CGSize) throws {
+        try smokeRender(ChatView(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore()).frame(width: size.width, height: size.height))
     }
 
+    /// The chosen name is the one the chat shows, from the store.
     @MainActor
-    @Test func rendersAChosenName() throws {
-        let size = CGSize(width: 393, height: 852)
-        let renderer = ImageRenderer(
-            content: ChatView(brand: brand, names: InMemoryAgentNameStore(stored: "Pip"))
-                .frame(width: size.width, height: size.height)
-        )
-        let image = try #require(renderer.cgImage)
-        #expect(image.width == Int(size.width * renderer.scale))
+    @Test func showsAChosenName() throws {
+        let controller = ChatController.make(brand: brand, model: LocalStubModel(),
+                                             names: InMemoryAgentNameStore(stored: "Pip"), conversation: nil)
+        #expect(controller.displayName.text == "Pip")
+        #expect(controller.conversation.turns.first?.text.hasPrefix("Hi, I'm Pip.") == true)
+        try smokeRender(ChatView(controller: controller, look: nil, firstMessage: nil).frame(width: 393, height: 852))
     }
 }
 
@@ -88,7 +82,7 @@ struct ChatRenameTests {
         #expect(store.loadDisplayName() == "Pip")
         #expect(controller.displayName.text == "Pip")
         #expect(controller.brand.name == brand.name)
-        #expect(controller.conversation.turns.first?.text == FirstConversation.opening(named: "Pip", onDevice: true))
+        #expect(controller.conversation.turns.first?.text == FirstConversation.opening(named: "Pip", place: .onDevice))
         #expect(!controller.showsNameInvitation)
         #expect(controller.renameTitle == FirstConversation.changeNameTitle)
     }
@@ -102,7 +96,7 @@ struct ChatRenameTests {
         #expect(store.loadDisplayName() == nil)
         #expect(controller.nameHint == FirstConversation.needsAName)
         #expect(controller.isChoosingName)
-        #expect(controller.conversation.turns.first?.text == FirstConversation.opening(named: brand.name, onDevice: true))
+        #expect(controller.conversation.turns.first?.text == FirstConversation.opening(named: brand.name, place: .onDevice))
     }
 
     @Test func aNameChosenEarlierIsRestored() {
@@ -110,7 +104,7 @@ struct ChatRenameTests {
         let controller = ChatController(brand: brand, model: LocalStubModel(), names: store)
         #expect(controller.displayName.text == "Pip")
         #expect(controller.brand.name == brand.name)
-        #expect(controller.conversation.turns.first?.text == FirstConversation.opening(named: "Pip", onDevice: true))
+        #expect(controller.conversation.turns.first?.text == FirstConversation.opening(named: "Pip", place: .onDevice))
         #expect(!controller.showsNameInvitation)
     }
 
@@ -127,16 +121,19 @@ struct ChatRenameTests {
         #expect(controller.conversation.turns.map(\.text) == spoken)
     }
 
-    @Test func onlyNewAgentLinesAreReadAloud() throws {
-        let start = Conversation.firstRun(named: "Pip", onDevice: true)
-        #expect(ChatView.announcement(for: start, covered: false) == nil)
-        let asked = try start.appendingPerson("gym")
-        #expect(ChatView.announcement(for: asked, covered: false) == nil)
-        let answered = Conversation(
-            turns: asked.turns + [ChatTurn(id: UUID(), speaker: .agent, text: "Here's a plan")],
-            onDevice: true
-        )
-        #expect(ChatView.announcement(for: answered, covered: false) == "Here's a plan")
+    /// The opening and the person's own lines are never read as a reply;
+    /// only a reply that came back from the model is, once.
+    @Test func onlyNewAgentLinesAreReadAloud() async throws {
+        let controller = ChatController(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
+                                        replyBeat: .zero)
+        #expect(ChatView.replyLanded(in: controller, covered: false) == nil, "the opening")
+        controller.submit("Help me plan my morning.")
+        #expect(ChatView.replyLanded(in: controller, covered: false) == nil, "the person's own line")
+        await controller.replyTask?.value
+        let reply = try #require(controller.conversation.turns.last)
+        #expect(reply.speaker == .agent)
+        #expect(ChatView.replyLanded(in: controller, covered: false) == reply.text)
+        #expect(ChatView.replyLanded(in: controller, covered: false) == nil, "read once")
     }
 
     @Test func theAppModelOpensWithAnHonestPrivacyLine() {

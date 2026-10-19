@@ -3,17 +3,23 @@ import Foundation
 import SwiftUI
 import Testing
 @testable import PebbleUI
+import SourceScan
 
-/// Words stay readable: every pair in `Theme.textPairs` clears 4.5 to 1 in
-/// light and dark, and no screen colors words in a way the pairs don't
-/// cover. A new color for words means a new pair, or this fails.
+/// Words stay readable: every pair in `Theme.textPairs` clears its minimum
+/// (4.5 to 1 for words, 3 to 1 for a field's edge) in light and dark, and no
+/// screen colors words in a way the pairs don't cover. A new color for words
+/// means a new pair, or this fails. The scan of every screen reads Swift, so
+/// it lives in Tools/GuardKit: its rules are `ContrastLint` in GuardScan,
+/// the sweep is `ContrastSweepTests`, and what each rule must catch is in
+/// `GuardWrongCaseTests`.
 struct ContrastGuardTests {
     @Test(arguments: [ColorScheme.light, .dark])
     func everyThemePairIsReadable(scheme: ColorScheme) {
         let pairs = Theme.textPairs(scheme)
         #expect(pairs.count > 50)
         for pair in pairs {
-            #expect(pair.contrast >= 4.5,
+            #expect(pair.minimum >= 3)
+            #expect(pair.contrast >= pair.minimum,
                     "\(pair.text) on \(pair.background) in \(scheme) is \(String(format: "%.2f", pair.contrast)) to 1")
         }
     }
@@ -39,100 +45,75 @@ struct ContrastGuardTests {
         #expect(systemGray.contrast(with: .white) < 4.5)
     }
 
+    /// Why a selected sidebar row and a confirmation button get their own
+    /// tint: the root tint is `accentText`, light in dark mode, and the
+    /// white words those controls write on it would read near 2 to 1.
+    @Test func whiteOnTheWordTintIsWhyTheFillTintExists() {
+        #expect(Theme.RGB.white.contrast(with: Theme.accentText.rgb(.dark)) < 3)
+        for scheme in [ColorScheme.light, .dark] {
+            #expect(Theme.RGB.white.contrast(with: Theme.tintFill.rgb(scheme)) >= 4.5)
+            let pairs = Theme.textPairs(scheme)
+            #expect(pairs.contains { $0.text == "white" && $0.background == "tintFill" })
+            #expect(pairs.contains { $0.text == "onAccent" && $0.background == "accent" })
+            #expect(pairs.contains { $0.text == "placeholder" })
+            #expect(pairs.contains { $0.text == "field edge" })
+        }
+    }
+
     // MARK: The source scan
 
     /// Every source file in PebbleUI, by name.
     static func sources() throws -> [(name: String, text: String)] {
-        let folder = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Sources/PebbleUI")
-        let names = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasSuffix(".swift") }
-        return try names.sorted().map { ($0, try String(contentsOf: folder.appendingPathComponent($0), encoding: .utf8)) }
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        return try SwiftSource.files(under: root.appendingPathComponent("Packages/PebbleKit/Sources/PebbleUI"))
     }
 
-    @Test func noScreenColorsWordsOutsideThePairs() throws {
-        let files = try Self.sources()
-        #expect(files.count > 5)
-        for file in files {
-            for problem in ContrastLint.problems(in: file.text) {
-                Issue.record("\(file.name):\(problem.line): \(problem.reason)")
-            }
-        }
+    /// Every screen's source: PebbleUI and the app target, which draws the
+    /// Mac snapshot and could grow screens of its own.
+    static func screenSources() throws -> [(name: String, text: String)] {
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        let app = try SwiftSource.files(under: root.appendingPathComponent("App"))
+        return try sources().map { ("PebbleUI/\($0.name)", $0.text) } + app.map { ("App/\($0.name)", $0.text) }
     }
 
-    /// The scan itself catches what it is for, and lets the right things by.
-    @Test func theScanCatchesEachMistake() {
-        let wrong = [
-            #"Text("Open").foregroundStyle(Theme.accent)"#,
-            #".foregroundStyle(asks ? Theme.onAccent : Theme.accent)"#,
-            #".foregroundColor(Theme.accent)"#,
-            #".tint(Theme.accent)"#,
-            #".tint(.orange)"#,
-            #"Color.orange.opacity(0.18)"#,
-            #".buttonStyle(.bordered)"#,
-            #".buttonStyle(.borderedProminent)"#,
-            #".foregroundStyle(.secondary)"#,
-            #".foregroundStyle(.tertiary)"#,
-            #".foregroundStyle(source == .inferred ? Color.primary : Color.secondary)"#,
-            #".foregroundStyle(.white)"#,
-            "Text(\"Hi\")\n    .font(.body)\n    .foregroundStyle(Theme.accentSymbol)",
-        ]
-        for line in wrong {
-            #expect(!ContrastLint.problems(in: line).isEmpty, "missed: \(line)")
-        }
-        let right = [
-            #"Text("Open").foregroundStyle(Theme.accentText)"#,
-            #".foregroundStyle(Theme.secondaryText)"#,
-            #".background(Theme.accent, in: Capsule())"#,
-            #".tint(Theme.accentText)"#,
-            "Image(systemName: \"sparkles\")\n    .font(.largeTitle)\n    .foregroundStyle(Theme.accentSymbol)",
-            "// .foregroundStyle(Theme.accent) is wrong",
-        ]
-        for line in right {
-            #expect(ContrastLint.problems(in: line).isEmpty, "flagged: \(line)")
-        }
-    }
-}
-
-/// The rules the source scan applies, one line at a time.
-enum ContrastLint {
-    struct Problem {
-        let line: Int
-        let reason: String
+    /// The scan wants `.sharedBackgroundVisibility(.hidden)` right after the
+    /// item, with no `if #available` around it. That API is iOS 26 and
+    /// macOS 26, so it holds only while both minimums are 26 or later.
+    @Test func theDoneRingNeedsNoAvailabilityCheck() throws {
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        let package = try String(contentsOf: root.appendingPathComponent("Packages/PebbleKit/Package.swift"), encoding: .utf8)
+        #expect(package.contains("platforms: [.iOS(.v26), .macOS(.v26)]"))
+        let project = try String(contentsOf: root.appendingPathComponent("project.yml"), encoding: .utf8)
+        #expect(project.range(of: #"deploymentTarget:\s*\n\s*iOS: "26\.0"\s*\n\s*macOS: "26\.0""#,
+                              options: .regularExpression) != nil)
     }
 
-    static let rules: [(pattern: String, reason: String)] = [
-        (#"\b(foregroundStyle|foregroundColor)\(.*\bTheme\.accent\b(?![A-Za-z])"#,
-         "the raw accent is too faint for words; use Theme.accentText, or Theme.accentSymbol on an Image"),
-        (#"\.tint\((?!Theme\.accentText\))"#,
-         "a tint colors the words of system controls; tint with Theme.accentText only"),
-        (#"\.orange\b"#, "the brand color comes from Theme, never the system orange"),
-        (#"\.buttonStyle\(\.bordered"#,
-         "system bordered buttons color their words with the tint; use SoftButtonStyle or AccentButtonStyle"),
-        (#"\b(foregroundStyle|foregroundColor)\(.*(\.secondary|\.tertiary)\b"#,
-         "the system gray is about 3.5 to 1 on white; use Theme.secondaryText"),
-        (#"\b(foregroundStyle|foregroundColor)\(\s*(Color)?\.white\s*\)"#,
-         "white is too faint on the accent; use Theme.onAccent"),
-    ]
+    /// Lines still count after a `\` joins two lines of a multi-line
+    /// string, and a paren in a string inside an interpolation never
+    /// throws the count off. GuardKit's `ContrastSweepTests` checks the
+    /// same for the guards' own reading.
+    @Test func theScanCountsLinesThroughEveryKindOfString() {
+        let joined = "let a = \"\"\"\n    one \\\n    two\n    \"\"\"\nText(\"x\")\n"
+        #expect(SwiftSource(joined).literals.map(\.line) == [1, 5])
+        let paren = "let a = \"\\(f(\"(\"))\"\nText(\"x\")\n    .foregroundStyle(Theme.accent)\n"
+        #expect(SwiftSource(paren).literals.map(\.line) == [1, 2])
+    }
 
-    static func problems(in text: String) -> [Problem] {
-        let lines = text.components(separatedBy: "\n")
-        var found: [Problem] = []
-        for (index, raw) in lines.enumerated() {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            if line.hasPrefix("//") { continue }
-            for rule in rules where line.range(of: rule.pattern, options: .regularExpression) != nil {
-                found.append(Problem(line: index + 1, reason: rule.reason))
-            }
-            // The accent symbol is for an Image just above it, never words.
-            if line.contains("Theme.accentSymbol") {
-                let above = lines[max(0, index - 3)...index].joined(separator: "\n")
-                if !above.contains("Image(") {
-                    found.append(Problem(line: index + 1, reason: "Theme.accentSymbol is only for an Image"))
-                }
-            }
+    /// Names come out right when the folder is reached through a symlink,
+    /// as `/var` is for `/private/var`.
+    @Test func filesAreNamedFromTheFolderThroughSymlinks() throws {
+        let real = FileManager.default.temporaryDirectory.appendingPathComponent("scan-\(UUID().uuidString)")
+        let link = FileManager.default.temporaryDirectory.appendingPathComponent("scan-link-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: link)
+            try? FileManager.default.removeItem(at: real)
         }
-        return found
+        try FileManager.default.createDirectory(at: real.appendingPathComponent("Sub"), withIntermediateDirectories: true)
+        try "let a = 1".write(to: real.appendingPathComponent("A.swift"), atomically: true, encoding: .utf8)
+        try "let b = 2".write(to: real.appendingPathComponent("Sub/B.swift"), atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        #expect(try SwiftSource.files(under: real).map(\.name) == ["A.swift", "Sub/B.swift"])
+        #expect(try SwiftSource.files(under: link).map(\.name) == ["A.swift", "Sub/B.swift"])
     }
 }
 #endif

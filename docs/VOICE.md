@@ -3,7 +3,8 @@
 How the agent talks, everywhere: the first run, the chat, memory, and the
 questions it asks before it acts. Read this before writing any words a
 person will see. The words themselves live in `PebbleCore` (`FirstRunWords`,
-`FirstConversation`, `MemoryWords`, `ConfirmationWords`, `FeedWords`, `TaskWords` and friends), so a
+`FirstConversation`, `MemoryWords`, `ConfirmationWords`, `FeedWords`, `TaskWords`, `BackgroundWords`,
+`ReconWords` and friends), so a
 change here usually means a change there.
 
 ## Who the agent is
@@ -74,7 +75,9 @@ when the code makes them true.
   and passed down by the app. There is no second flag. Every device line
   takes it: `FirstConversation.opening` and `presence`,
   `FirstRunWords.helloDetail`, `MemoryWords.empty`, `saved` and
-  `privacyNote`, and `FeedWords.sampleNote`. Memory lines follow it too: notes never reach a model,
+  `privacyNote`, `FeedWords.sampleNote`, `ReconWords.offer` (for example
+  pages) and `rememberDetail`, and `CloudWords.offDetail`. Memory lines
+  follow it too: notes never reach a model,
   but with a cloud model the chat does leave the device, so a promise on
   the memory screen would mislead. `PrivacyPlaceTests` pins every line.
 - When the flag is off, say nothing about the device. Drop the sentence
@@ -86,6 +89,12 @@ when the code makes them true.
   Don't claim more about the device's storage than the code can check.
 - A promise about what happens next must have a button or a behavior
   behind it. "I'll look again" needs a Try again or a re-check.
+- Help from the cloud (`CloudWords`) is off until the person says yes to
+  a question that names what changes. Before anything from a chat leaves,
+  the person sees "Here is exactly what leaves your device" with the very
+  bytes that will be sent. `CloudModel` reports `.mayLeaveDevice`, so a
+  chat on the cloud, and every line that reads the flag from it, never
+  says "on this device".
 
 ## When someone may be in danger
 
@@ -125,9 +134,11 @@ action.
 - Bad: "No data."
 
 An empty state promises only what exists today. Today's empty state says
-"It's just us for now. Write to me below, and we'll start a chat." with the
-composer under it, and says nothing about work done in the background until
-a real feed source ships.
+"It's just us for now. Write to me below, and I'll answer in the chat." with
+the composer under it. It is true whether or not a chat is already going, so
+it never promises a new one. Background work is a real feed source now, and
+the line still holds: it shows only while nothing has been made, so it never
+hides a card, and it never promises a summary the system may not give time for.
 
 Examples are always labeled. Sample cards start with "Example" for
 VoiceOver, and a sample opened to read or a sample question says "This is
@@ -137,8 +148,11 @@ an example. Nothing here was really done."
 
 Words a person reads clear 4.5 to 1 against what they sit on, in light and
 dark. Use `Theme.accentText` for words in the accent's warmth,
-`Theme.secondaryText` for quieter words, and `Theme.onAccent` on the accent
-fill. The raw accent and the system grays are too faint for words.
+`Theme.secondaryText` for quieter words and placeholders, and `Theme.onAccent`
+on the accent fill. A system control that fills with the tint and writes
+white on it (the selected sidebar row, Done) takes `Theme.tintFill`, and only
+those: it is a fill, never words, and the sidebar's icons in it clear 3 to 1. The raw
+accent and the system grays are too faint for words.
 `ContrastGuardTests` checks every pair in `Theme.textPairs` and scans the
 screens for colors outside them.
 
@@ -167,6 +181,71 @@ Approve tapped after its question timed out. Forget everything says it
 stops tasks still going. If a step said yes to was under way, a short line
 stays on Today to say it may be done, naming nothing the task held. A
 scripted task's card says "Example", like every other example.
+
+### Looking into something
+
+When the person asks the agent to look into something, the chat offers
+first and starts nothing on its own: "Want me to look into this?" A
+summary says only what its sources say. Every point names where it came
+from, and when sources don't agree, the card says so plainly instead of
+picking a side. A point names only the sources that say it; the other
+side is named in the disagreement, and a remembered point keeps that
+disagreement with it. It says when it was gathered, so the person knows how
+fresh it is. Saving a point to memory happens only on a tap. While the
+only pages to read are examples, the offer says so. Points the cloud put
+into words say so under the card and under the points in Open sources,
+since they are a retelling, not quotes. Remembered, such a point says
+"put into words in the cloud, from the sources it was given" and names no
+publisher, in the note or its label: which page the cloud said a line came
+from was never checked on the device. The overview above a card worded in
+the cloud is the plain one that only says what was read. A kept point is
+the person's own note: it stays when the card goes, and the remember sheet
+says so. A point from example pages is never kept. Sources that couldn't
+be read are a failure, said plainly, never "nothing found". Asked again for
+a topic already going, the agent says it is on it; once that one is ready,
+"That one's ready." A note under a card never says nothing went to the
+cloud after the person said send.
+
+### Work while you're away
+
+Background work is off until the person turns it on, from the switch on the
+memory screen, and the line under the switch says what it does and when:
+"I try to make it overnight if you've unlocked since your last restart, and
+otherwise when you open the app." on iPhone and iPad, since the summary's
+file opens only after that first unlock, and the system may not give it
+time even then. It says "try", never that it will. On the Mac it says
+"while the app is open". It
+names "what finished overnight" only when there are tasks to count and the
+app keeps running, as on the Mac: on iPhone and iPad a summary made while
+closed almost never knows what finished. It says
+"when there's something to tell you", since a quiet morning leaves no card.
+Under it, "I'll look next at 7:00 AM tomorrow." says when it looks, not that
+a card comes. It always ends by saying nothing is sent, bought or shared
+without asking.
+
+The morning summary only counts what is really there, and says so in the
+past tense ("One thing was waiting for you."), since a question may have
+timed out by the time it is read. Opened, it says where to look ("at the top
+of Today, under Needs you") and from when it counted. A summary made late
+says why, once: "I waited until you unlocked, so this came later than
+planned." What is waiting is open now, so it is always said when Needs you
+can be seen. A count it couldn't know, because nothing could be counted or the
+app wasn't running for the whole time, is left out, never said as zero. It
+says "overnight" only for one night, and "since Tuesday" for longer. With
+tasks to count, a morning that never ran gets its own card that names the
+day and the reason, and promises nothing about the next one; several missed
+in a row share one card that names them all and says only what is true of
+each. With no tasks to count, that morning would almost always have been
+quiet, so no card claims a summary was missed. None of these lines
+mention the device: they are about time and power, not where words go.
+The words live in `BackgroundWords`.
+
+Forget everything says what went in plain words, and names only what was
+really there: the notes and the tasks only when there were some, and the
+words to hide only when they were erased. If the summaries' file couldn't
+be erased, it says so and asks to try again. It never says "no trace": once
+an earlier version's setting was seen, an empty marker file stays beside the
+switch, holding nothing, but its being there shows the switch was once set.
 
 ### Confirmations
 

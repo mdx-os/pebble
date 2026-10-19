@@ -2,6 +2,7 @@
 import Foundation
 import PebbleCore
 import PebbleModel
+import SourceScan
 import SwiftUI
 import Testing
 @testable import PebbleUI
@@ -10,14 +11,55 @@ import Testing
 struct FirstRunScreensTests {
     let brand = Brand(name: "Nova")
 
-    @Test(arguments: ShowcaseScene.allCases, [ColorScheme.light, .dark])
-    func everyScreenRendersInLightAndDark(scene: ShowcaseScene, scheme: ColorScheme) throws {
-        let size = CGSize(width: 393, height: 852)
-        let renderer = ImageRenderer(content: scene.view(brand: brand)
+    @Test("Smoke: every showcase screen draws in light and dark", arguments: ShowcaseScene.allCases, [ColorScheme.light, .dark])
+    func smokeEveryScreenInLightAndDark(scene: ShowcaseScene, scheme: ColorScheme) throws {
+        try smokeRender(scene.view(brand: brand)
             .environment(\.colorScheme, scheme)
-            .frame(width: size.width, height: size.height))
-        let image = try #require(renderer.cgImage)
-        #expect(image.width == Int(size.width * renderer.scale))
+            .frame(width: 393, height: 852))
+    }
+
+    /// Each view of the first run that reads Reduce Motion also holds still
+    /// for the screenshots, so its entrances settle and two shots match.
+    @Test func theFirstRunHoldsStillForTheScreenshots() throws {
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        let text = try String(contentsOf: root.appendingPathComponent("Packages/PebbleKit/Sources/PebbleUI/OnboardingView.swift"),
+                              encoding: .utf8)
+        #expect(Self.stillProblems(in: text) == [])
+        #expect(text.contains("struct OnboardingView") && text.contains("struct IdeaCardButton"))
+        let wrong = [
+            "struct A: View {\n    @Environment(\\.accessibilityReduceMotion) private var reduceMotion\n}",
+            "struct A: View {\n    @Environment(\\.accessibilityReduceMotion) private var systemReduceMotion\n"
+                + "    @Environment(\\.holdsStill) private var holdsStill\n    private var reduceMotion: Bool { systemReduceMotion }\n}",
+            "struct A: View {\n    @Environment(\\.accessibilityReduceMotion) private var systemReduceMotion\n"
+                + "    @Environment(\\.holdsStill) private var holdsStill\n"
+                + "    private var reduceMotion: Bool { systemReduceMotion || holdsStill }\n}\n"
+                + "struct B: View {\n    @Environment(\\.accessibilityReduceMotion) private var reduceMotion\n}",
+        ]
+        for text in wrong {
+            #expect(!Self.stillProblems(in: text).isEmpty, "missed: \(text)")
+        }
+    }
+
+    /// Each struct in `text` that reads Reduce Motion without folding in
+    /// `holdsStill`, read through its own braces.
+    static func stillProblems(in text: String) -> [String] {
+        let source = SwiftSource(text)
+        let code = String(source.code)
+        var problems: [String] = []
+        var at = code.startIndex
+        while let found = code.range(of: #"\bstruct\s+(\w+)"#, options: .regularExpression, range: at..<code.endIndex) {
+            at = found.upperBound
+            let offset = code.distance(from: code.startIndex, to: found.lowerBound)
+            guard let braces = source.braces(after: offset) else { continue }
+            let body = source.contents(of: braces)
+            guard body.contains(#"\.accessibilityReduceMotion"#) else { continue }
+            if !body.contains(#"@Environment(\.holdsStill)"#)
+                || body.range(of: #"var\s+reduceMotion\s*:\s*Bool\s*\{\s*systemReduceMotion\s*\|\|\s*holdsStill\s*\}"#,
+                              options: .regularExpression) == nil {
+                problems.append("\(code[found]) reads Reduce Motion without holdsStill")
+            }
+        }
+        return problems
     }
 
     @Test func finishingTheFirstRunSavesNameLookAndFlag() throws {
@@ -72,9 +114,12 @@ struct FirstRunScreensTests {
         #expect(model.displayName == brand.name)
     }
 
-    @Test func theProactivityPageIsHiddenUntilThereIsAChoice() {
+    @Test func theProactivityPageIsHiddenUntilThereIsAChoice() throws {
+        let suite = "first-run.hidden.\(UUID().uuidString)"
+        let looks = try #require(UserDefaults(suiteName: suite))
+        defer { looks.removePersistentDomain(forName: suite) }
         let model = OnboardingModel(brand: brand, names: InMemoryAgentNameStore(), store: InMemoryOnboardingStore(),
-                                    looks: UserDefaults(suiteName: "pebble.ui.hidden")!, page: .hello, draftName: "", onFinish: { _ in })
+                                    looks: looks, page: .hello, draftName: "", onFinish: { _ in })
         #expect(!model.visiblePages.contains(.proactivity))
     }
 
@@ -114,10 +159,10 @@ struct FirstRunScreensTests {
         #expect(!FileManager.default.fileExists(atPath: url.path))
     }
 
-    @Test(arguments: [MemorySource.toldMe, .fromApp("Calendar"), .inferred], [ColorScheme.light, .dark])
-    func sourceLabelsRender(source: MemorySource, scheme: ColorScheme) throws {
-        let renderer = ImageRenderer(content: SourceLabel(source: source).environment(\.colorScheme, scheme))
-        #expect(try #require(renderer.cgImage).width > 0)
+    @Test("Smoke: the source labels draw",
+          arguments: [MemorySource.toldMe, .fromApp("Calendar"), .inferred], [ColorScheme.light, .dark])
+    func smokeSourceLabels(source: MemorySource, scheme: ColorScheme) throws {
+        try smokeRender(SourceLabel(source: source).environment(\.colorScheme, scheme))
     }
 
     @Test func theMemoryScreenShowsWhereEachNoteCameFrom() {

@@ -14,6 +14,8 @@ public struct FeedItem: Identifiable, Sendable, Equatable {
         case needsYou
         /// Longer work, shown live on a task card.
         case task
+        /// What the person said yes to, and what came of it.
+        case receipt
     }
 
     public let id: String
@@ -54,7 +56,14 @@ public struct FeedItem: Identifiable, Sendable, Equatable {
         case .noticed: FeedWords.noticedLabel
         case .needsYou: FeedWords.needsYouHeading
         case .task: task?.state.label ?? TaskWords.runningLabel
+        case .receipt: ReceiptWords.label
         }
+    }
+
+    /// The receipt this card shows, when it is a receipt card.
+    public var receipt: Receipt? {
+        if kind == .receipt, case .receipt(let receipt) = action { return receipt }
+        return nil
     }
 }
 
@@ -73,6 +82,11 @@ public enum FeedAction: Sendable, Equatable {
     /// question sheet as `review`, for the question the task's engine asked
     /// through `AskFirst`. Holds the task without live progress.
     case task(AgentTask)
+    /// Starts looking into this topic, as a task that lands back in the
+    /// feed. The tap is the person's go ahead; nothing starts without it.
+    case lookInto(String)
+    /// A receipt card, whose one button clears it.
+    case receipt(Receipt)
 
     public var title: String {
         switch self {
@@ -80,6 +94,8 @@ public enum FeedAction: Sendable, Equatable {
         case .talk: FeedWords.talkTitle
         case .review: FeedWords.reviewTitle
         case .task(let task): task.waitsForApproval ? TaskWords.approveTitle : FeedWords.openTitle
+        case .lookInto: ReconWords.lookIntoTitle
+        case .receipt: TaskWords.dismissTitle
         }
     }
 
@@ -90,6 +106,8 @@ public enum FeedAction: Sendable, Equatable {
         case .talk: FeedWords.talkHint
         case .review: FeedWords.reviewHint
         case .task(let task): task.waitsForApproval ? FeedWords.reviewHint : FeedWords.openHint
+        case .lookInto: ReconWords.lookIntoHint
+        case .receipt: ReceiptWords.clearHint
         }
     }
 }
@@ -149,6 +167,12 @@ public struct SampleFeedSource: FeedSource {
                 title: "Sam's birthday is coming up",
                 body: "It's on \((now + 12 * day).formatted(.dateTime.month(.wide).day())), and Sam loves lemon cake. Want a few ideas?",
                 action: .talk("Help me plan something for Sam's birthday.")
+            ),
+            FeedItem(
+                id: "sample:pool", kind: .noticed, time: now - 3.1 * hour,
+                title: "The Riverside pool may be reopening soon",
+                body: "You asked about swim lessons last week. Want me to look into when it opens?",
+                action: .lookInto(SampleSources.poolTopic)
             ),
             FeedItem(
                 id: "sample:grocery-list", kind: .did, time: now - day + 7.5 * hour,
@@ -470,9 +494,12 @@ public enum FeedWords {
     public static let talkHint = "Opens the chat with a line ready. Nothing is sent."
     public static let reviewHint = "Opens the question."
     public static let emptyTitle = "A quiet start"
-    /// Only what is true today: the chat is right below. Nothing here says
-    /// the agent works in the background until a real feed source does.
-    public static let empty = "It's just us for now. Write to me below, and we'll start a chat."
+    /// Only what is true today: the chat is right below. It shows only while
+    /// nothing has been made, background work included, so it never hides
+    /// a card or promises a summary the system may not give time for.
+    /// True whether or not a chat is already going, so it never promises a
+    /// new one: a line sent from here joins the chat there is.
+    public static let empty = "It's just us for now. Write to me below, and I'll answer in the chat."
     /// VoiceOver's hint on Today's composer, which shares the chat's
     /// placeholder, so the person knows where the words go.
     public static let composerHint = "Sends to the chat and opens it."

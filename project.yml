@@ -21,11 +21,11 @@ targets:
     supportedDestinations: [iOS, macOS]
     sources:
       - App/Sources
-      # The app icon, the launch color and the privacy manifest.
+      # The app icon, the launch color and Apple's required-reason manifest.
       - App/Resources
     dependencies:
       - package: PebbleKit
-        products: [PebbleCore, PebbleModel, PebbleUI]
+        products: [PebbleCore, PebbleModel, PebbleUI, PebbleBackground]
     info:
       path: App/Info.plist
       properties:
@@ -33,10 +33,14 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         PebbleBrandName: $(BRAND_NAME)
+        # Empty unless set in Config/Cloud.xcconfig. Empty means no cloud model.
+        PebbleCloudEndpoint: $(PEBBLE_CLOUD_ENDPOINT)
         LSApplicationCategoryType: public.app-category.productivity
-        # The app does no networking and no encryption of its own. The only
-        # encryption is the system's file protection, which is exempt.
-        # Look again when a model adapter talks to a server.
+        # No encryption of the app's own. The system's file protection is
+        # exempt, and so is HTTPS through URLSession, the only way the opt-in
+        # CloudModel reaches the network. `make archive` fails on
+        # CryptoKit, CommonCrypto, a TLS library or pinning; see "Encryption"
+        # in docs/RELEASE.md before changing this.
         ITSAppUsesNonExemptEncryption: false
         # The launch screen is the backdrop's color, light or dark, so the
         # first screen comes in without a flash.
@@ -54,6 +58,12 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
+        # Background work on iPhone and iPad, off until the person turns it
+        # on. Must match BackgroundIdentifiers in PebbleCore; BackgroundTests checks.
+        BGTaskSchedulerPermittedIdentifiers:
+          - $(PRODUCT_BUNDLE_IDENTIFIER).background.refresh
+        UIBackgroundModes:
+          - fetch
     scheme:
       testTargets: [PebbleAppUITests]
     settings:
@@ -71,10 +81,13 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: ""
       configs:
         # The Mac App Store and TestFlight for Mac need the sandbox. Debug
-        # stays outside it so `make screenshots` can write its PNG anywhere.
-        # The app asks for nothing beyond the sandbox itself.
+        # stays outside it so `make screenshots` can write its PNG anywhere,
+        # so a Debug build keeps its data in a different place; see
+        # docs/RELEASE.md. Inside the sandbox the app asks only for outgoing
+        # connections, which the opt-in CloudModel needs.
         Release:
           "ENABLE_APP_SANDBOX[sdk=macosx*]": YES
+          "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": App/Mac-Release.entitlements
   # Drives the iOS app in the Simulator: the iPad sidebar, keyboard
   # shortcuts, and screenshots in each orientation. `make ui-test`.
   PebbleAppUITests:

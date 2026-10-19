@@ -34,15 +34,18 @@ public struct MemoryNote: Identifiable, Codable, Sendable, Equatable {
 
 /// Where a memory came from.
 ///
-/// On disk this is `{"kind":"toldMe"}`, `{"kind":"fromApp","app":"Calendar"}`
-/// or `{"kind":"inferred"}`. `MemorySourceTests` pins that format. An unknown
-/// kind reads as `inferred`, the least trusted label, rather than breaking
-/// the file.
+/// On disk this is `{"kind":"toldMe"}`, `{"kind":"fromApp","app":"Calendar"}`,
+/// `{"kind":"lookedUp","app":"Riverside Gazette"}` or `{"kind":"inferred"}`.
+/// `MemorySourceTests` pins that format. An unknown kind reads as
+/// `inferred`, the least trusted label, rather than breaking the file.
 public enum MemorySource: Codable, Sendable, Equatable, Hashable {
     /// The person said or typed it.
     case toldMe
     /// Read from a connected app, such as Calendar.
     case fromApp(String)
+    /// A point from something the agent looked into, kept because the
+    /// person tapped Remember. Names the source, such as "Riverside Gazette".
+    case lookedUp(String)
     /// The agent worked it out. It may be wrong.
     case inferred
 
@@ -55,6 +58,7 @@ public enum MemorySource: Codable, Sendable, Equatable, Hashable {
         switch try c.decodeIfPresent(String.self, forKey: .kind) {
         case "toldMe": self = .toldMe
         case "fromApp": self = .fromApp(try c.decodeIfPresent(String.self, forKey: .app) ?? "")
+        case "lookedUp": self = .lookedUp(try c.decodeIfPresent(String.self, forKey: .app) ?? "")
         default: self = .inferred
         }
     }
@@ -66,6 +70,9 @@ public enum MemorySource: Codable, Sendable, Equatable, Hashable {
         case .fromApp(let app):
             try c.encode("fromApp", forKey: .kind)
             try c.encode(app, forKey: .app)
+        case .lookedUp(let source):
+            try c.encode("lookedUp", forKey: .kind)
+            try c.encode(source, forKey: .app)
         case .inferred: try c.encode("inferred", forKey: .kind)
         }
     }
@@ -75,11 +82,19 @@ public enum MemorySource: Codable, Sendable, Equatable, Hashable {
         switch self {
         case .toldMe: return "You told me"
         case .fromApp(let name):
-            let tidy = name.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
-            guard !tidy.isEmpty else { return "From an app" }
-            return "From \(tidy.count > Self.maxAppNameLength ? String(tidy.prefix(Self.maxAppNameLength)) + "..." : tidy)"
+            guard let tidy = Self.tidy(name) else { return "From an app" }
+            return "From \(tidy)"
+        case .lookedUp(let source):
+            guard let tidy = Self.tidy(source) else { return "From something I looked into" }
+            return "From \(tidy)"
         case .inferred: return "My guess"
         }
+    }
+
+    private static func tidy(_ name: String) -> String? {
+        let tidy = name.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
+        guard !tidy.isEmpty else { return nil }
+        return tidy.count > Self.maxAppNameLength ? String(tidy.prefix(Self.maxAppNameLength)) + "..." : tidy
     }
 
     /// SF Symbol for the label.
@@ -87,6 +102,7 @@ public enum MemorySource: Codable, Sendable, Equatable, Hashable {
         switch self {
         case .toldMe: return "person.wave.2"
         case .fromApp: return "app.connected.to.app.below.fill"
+        case .lookedUp: return "doc.text.magnifyingglass"
         case .inferred: return "sparkles"
         }
     }
@@ -100,7 +116,9 @@ public enum MemoryWords {
     // when `place` says every word stays here. Notes live only in
     // `MemoryStore`'s file, left out of backups, and nothing passes them to a
     // `ModelClient`, but a cloud model would still hear the chat, so the
-    // promise follows the model, not the notes.
+    // promise follows the model, not the notes. `Redactor` reads notes on
+    // this device to know which names to take out of a cloud request; the
+    // notes themselves are never sent.
     public static func empty(_ place: PrivacyPlace) -> String {
         place.staysOnDevice
             ? "Tell me something worth keeping, like a birthday or how you take your tea. It stays on this device, and you can change or remove it anytime."
@@ -129,8 +147,16 @@ public enum MemoryWords {
     // engine on this device, whatever the model is, so this is true even
     // with a cloud model. It makes no promise about the chat. Don't gate it
     // like the lines above. Forget everything forgets tasks too, so it says
-    // running ones stop.
-    public static let forgetEverythingDetail = "This removes every note and every task from this device, and stops any task still going. It can't be undone."
+    // running ones stop. With `background`, work while away is on or has
+    // summaries to erase, and it says that turns off and its summaries,
+    // kept in the same folder as the notes, are erased. Without, it never
+    // promises to turn off what is already off, or to erase what isn't there.
+    // Either way the nudge choice stays, since it holds nothing of the person's.
+    public static func forgetEverythingDetail(background: Bool) -> String {
+        background
+            ? "This removes every note, every task and every morning summary from this device, stops any task still going, and turns off work while you're away. It can't be undone. Your choice about nudges stays as it is."
+            : "This removes every note and every task from this device, and stops any task still going. It can't be undone. Your choice about nudges stays as it is."
+    }
     /// See the note above `empty`.
     public static func privacyNote(_ place: PrivacyPlace) -> String {
         place.staysOnDevice ? "Kept only on this device. Removing a note erases it." : "Removing a note erases it."
@@ -147,6 +173,92 @@ public enum MemoryWords {
     public static let couldNotForget = "Sorry, I couldn't erase that just now. Please try again in a moment."
     /// Forget everything when the tasks went but the notes couldn't be erased.
     public static let couldNotForgetNotes = "I forgot your tasks, but I couldn't erase your notes just now. Please try again in a moment."
+    /// How a Forget everything line opens when the summaries' file stayed:
+    /// "I forgot your notes and tasks, and turned off work while you're
+    /// away". It names only what went: the notes and the tasks only when
+    /// there were some, and the hidden words only when they were erased.
+    /// With none of them, it says only that work while away is off.
+    public static func forgotAndTurnedOff(notes: Bool, tasks: Bool, words: Bool) -> String {
+        let yours = (notes ? ["notes"] : []) + (tasks ? ["tasks"] : [])
+        let went = yours + (words ? ["any words you asked me to hide"] : [])
+        guard let last = went.last else { return "I turned off work while you're away" }
+        let listed = went.count == 1 ? last : went.dropLast().joined(separator: ", ") + " and " + last
+        let named = (yours.isEmpty ? "" : "your ") + listed
+        return went.count == 1
+            ? "I forgot \(named) and turned off work while you're away"
+            : "I forgot \(named), and turned off work while you're away"
+    }
+    /// Forget everything when the rest went but the morning summaries'
+    /// file couldn't be erased. Work while you're away is off either way.
+    /// It opens with what went (`forgotAndTurnedOff`).
+    public static func couldNotForgetSummaries(notes: Bool, tasks: Bool, words: Bool) -> String {
+        forgotAndTurnedOff(notes: notes, tasks: tasks, words: words)
+            + ", but I couldn't erase your morning summaries just now. Please try Forget everything again in a moment."
+    }
+    /// Every form of `couldNotForgetSummaries`, for the word checks.
+    public static let couldNotForgetSummariesLines = [false, true].flatMap { notes in
+        [false, true].flatMap { tasks in
+            [false, true].map { couldNotForgetSummaries(notes: notes, tasks: tasks, words: $0) }
+        }
+    }
+    /// Follows a Forget everything line that says something else stayed,
+    /// when the morning summaries' file was erased.
+    public static let summariesGone = "Your morning summaries are gone, and work while you're away is off."
+    /// The same, when the summaries' file couldn't be erased either.
+    public static let summariesStayed = "Work while you're away is off, but I couldn't erase your morning summaries either."
+    /// Where the notes couldn't be opened, the morning summaries can still
+    /// be forgotten on their own, and the words say the rest stays.
+    public static let forgetSummariesTitle = "Forget morning summaries"
+    public static let forgetSummariesQuestion = "Forget morning summaries?"
+    public static let forgetSummariesDetail = "This erases every morning summary and turns off work while you're away. It can't be undone. Your notes and tasks aren't touched."
+    /// When their file couldn't be erased there.
+    public static let couldNotForgetSummariesAlone = "I turned off work while you're away, but I couldn't erase your morning summaries just now. Please try again in a moment."
+    /// The advice that ends a Forget everything line when something stayed.
+    /// Whatever is said after such a line goes before it, so it comes last.
+    public static let retryAdvice = ["Please try Forget everything again in a moment.", "Please try again in a moment."]
+}
+
+extension Data.WritingOptions {
+    /// How a store writes its staged copy: never over a file already there,
+    /// and on iPhone and iPad with `protection`. The rename that follows
+    /// keeps the class, so the file has it too.
+    package static func staged(_ protection: FileProtectionType) -> Data.WritingOptions {
+        #if os(macOS)
+        staged(protection, protecting: false)
+        #else
+        staged(protection, protecting: true)
+        #endif
+    }
+
+    /// `protecting` is false on the Mac, which keeps no protection classes.
+    package static func staged(_ protection: FileProtectionType, protecting: Bool) -> Data.WritingOptions {
+        guard protecting else { return .withoutOverwriting }
+        switch protection {
+        case .completeUntilFirstUserAuthentication:
+            return [.withoutOverwriting, .completeFileProtectionUntilFirstUserAuthentication]
+        case .completeUnlessOpen:
+            return [.withoutOverwriting, .completeFileProtectionUnlessOpen]
+        case .none:
+            return [.withoutOverwriting, .noFileProtection]
+        default:
+            return [.withoutOverwriting, .completeFileProtection]
+        }
+    }
+}
+
+/// Writes a store's staged copy with the store's protection class. Each
+/// store takes one, so a test can see the class every save really asks for.
+package struct ProtectedWriter: Sendable {
+    package let write: @Sendable (Data, URL, FileProtectionType) throws -> Void
+
+    package init(_ write: @escaping @Sendable (Data, URL, FileProtectionType) throws -> Void) {
+        self.write = write
+    }
+
+    /// The real write, with `Data.WritingOptions.staged(_:)`.
+    package static let disk = ProtectedWriter { data, url, protection in
+        try data.write(to: url, options: .staged(protection))
+    }
 }
 
 /// Notes the agent keeps, stored only on this device.
@@ -160,6 +272,9 @@ public final class MemoryStore: @unchecked Sendable {
         case needsWords
         case tooLong
         case notFound
+        /// A point from something looked into that may not be kept: one
+        /// from an example, or one that didn't come with its summary.
+        case notKept
     }
 
     public static let maxLength = 500
@@ -168,11 +283,11 @@ public final class MemoryStore: @unchecked Sendable {
 
     /// The file is there but its words can't be decoded. Writes refuse rather
     /// than replace notes that may still be recoverable.
-    public struct Unreadable: Error, Equatable {}
+    public struct Unreadable: Error, Equatable { public init() {} }
 
     /// The file is there but can't be opened right now, for example while an
     /// iPhone is locked. Try again later; this is not damage.
-    public struct Unavailable: Error, Equatable {}
+    public struct Unavailable: Error, Equatable { public init() {} }
 
     /// What the memory screen should show.
     public enum Contents: Equatable, Sendable {
@@ -181,13 +296,19 @@ public final class MemoryStore: @unchecked Sendable {
         case unavailable
     }
 
+    /// The notes can be opened only while the device is unlocked, on iPhone
+    /// and iPad. The strictest class: nothing that runs while locked reads them.
+    public static let fileProtection: FileProtectionType = .complete
+
     public let fileURL: URL
+    private let writer: ProtectedWriter
     private let lock = NSLock()
 
     /// Package access: the app uses `onDevice()` so there is one store per
     /// file. Tests and screenshots point a store at a scratch file.
-    package init(fileURL: URL) {
+    package init(fileURL: URL, writer: ProtectedWriter = .disk) {
         self.fileURL = fileURL
+        self.writer = writer
     }
 
     /// The only other file this store ever writes: the next version of the
@@ -206,6 +327,16 @@ public final class MemoryStore: @unchecked Sendable {
         sharedLock.lock()
         defer { sharedLock.unlock() }
         if let shared { return shared }
+        let store = MemoryStore(fileURL: try onDeviceFolder(fileManager: fileManager).appendingPathComponent("memory.json"))
+        shared = store
+        return store
+    }
+
+    /// The folder the notes live in, inside Application Support and left
+    /// out of backups. Other things that must stay on this device, like the
+    /// words the person always wants hidden and the background runner's
+    /// morning summaries, are kept here too.
+    public static func onDeviceFolder(fileManager: FileManager = .default) throws -> URL {
         let base = try fileManager.url(
             for: .applicationSupportDirectory, in: .userDomainMask,
             appropriateFor: nil, create: true
@@ -214,9 +345,7 @@ public final class MemoryStore: @unchecked Sendable {
             .appendingPathComponent("memory", isDirectory: true)
         try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
         try excludeFromBackup(&folder)
-        let store = MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
-        shared = store
-        return store
+        return folder
     }
 
     /// Marks a folder so backups skip it. Notes stay on this device only.
@@ -257,11 +386,30 @@ public final class MemoryStore: @unchecked Sendable {
             || FileManager.default.fileExists(atPath: stagingURL.path)
     }
 
-    /// Adds a note. Every writer comes through here, so notes that can't be
-    /// read or opened are refused first, before the words are even looked
-    /// at, and the file is never touched.
+    /// Adds a note. Every writer comes through here or through
+    /// `remember(_:from:at:)`, so notes that can't be read or opened are
+    /// refused first, before the words are even looked at, and the file is
+    /// never touched.
+    ///
+    /// A `.lookedUp` note is refused here, in every build: it may only come
+    /// with the summary it is from, so an example's made up point can't be
+    /// saved as a sourced note by a caller that forgot to ask.
     @discardableResult
     public func remember(_ proposed: String, at date: Date = Date(), source: MemorySource) throws -> Decision {
+        if case .lookedUp = source { return .notKept }
+        return try keep(proposed, at: date, source: source)
+    }
+
+    /// Keeps one point of a summary, in the words and with the source the
+    /// summary gives it. Never one from an example, which has neither.
+    @discardableResult
+    public func remember(_ point: ReconPoint, from summary: ReconSummary, at date: Date = Date()) throws -> Decision {
+        guard !summary.isSample, summary.points.contains(point),
+              let note = summary.note(for: point), let source = summary.memorySource(for: point) else { return .notKept }
+        return try keep(note, at: date, source: source)
+    }
+
+    private func keep(_ proposed: String, at date: Date, source: MemorySource) throws -> Decision {
         lock.lock()
         defer { lock.unlock() }
         var all = try load()
@@ -337,11 +485,7 @@ public final class MemoryStore: @unchecked Sendable {
         // Stage under one known name, then rename over the real file. The
         // system never makes a copy somewhere this store can't clean up.
         try removeStaged()
-        #if os(macOS)
-        try data.write(to: stagingURL, options: [.withoutOverwriting])
-        #else
-        try data.write(to: stagingURL, options: [.withoutOverwriting, .completeFileProtection])
-        #endif
+        try writer.write(data, stagingURL, Self.fileProtection)
         guard rename(stagingURL.path, fileURL.path) == 0 else {
             try? removeStaged()
             throw CocoaError(.fileWriteUnknown)

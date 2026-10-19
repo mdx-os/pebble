@@ -4,15 +4,18 @@ import SwiftUI
 
 /// The agent's character: a soft glowing stone with a friendly face.
 ///
-/// It breathes slowly and blinks now and then. With Reduce Motion on it
-/// holds still.
+/// It breathes slowly and blinks now and then. With Reduce Motion on, or
+/// `holdsStill` for the screenshots, it holds still.
 public struct CharacterView: View {
     let look: AgentLook
     let size: CGFloat
     var isCheerful: Bool
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.holdsStill) private var holdsStill
     @State private var breathing = false
+
+    private var reduceMotion: Bool { systemReduceMotion || holdsStill }
 
     public init(look: AgentLook, size: CGFloat = 120, isCheerful: Bool = false) {
         self.look = look

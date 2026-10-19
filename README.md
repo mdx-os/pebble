@@ -34,6 +34,11 @@ make screenshots  # writes build/screenshots/{iphone,ipad,mac}.png
 `make generate` creates `Pebble.xcodeproj` from `project.yml`. The project file
 is generated, not committed.
 
+The package tests run in Debug only, as `make test` and CI run them. The UI
+tests use the showcase (`ShowcaseScene.morning`, `ShowcaseScene.emptyMemory()`),
+which is Debug only, so `swift test -c release` does not build them. Release
+is checked by `make build-release` instead.
+
 Signing and uploading a TestFlight build is in [docs/RELEASE.md](docs/RELEASE.md).
 
 When `make pulse` finds a real change, it also writes `build/pulse/notify.md`
@@ -73,6 +78,56 @@ A real adapter is another `Sendable` type in `PebbleModel` that implements
 
 `PebbleCore` does not do networking. A cloud model stays off until the person
 chooses one.
+
+- Cloud: `CloudModel` sends to the address in `Config/Cloud.local.xcconfig`,
+  which git ignores and which doesn't exist by default, so the setting can't
+  be turned on. Turning it on (What I remember, then Help from the cloud)
+  asks first and counts from the next new chat. Every request is redacted on
+  the device by `Redactor` and shown to the person in full, method, address,
+  headers and body, before it is sent. Redirects are refused. Words of crisis
+  and chats that promised to stay on the device are never sent, and nothing
+  is sent when the notes or private words can't be read. The setting and the
+  private words are kept next to the notes, out of backups. Sign-in is a
+  `CloudAuth` hook that adds nothing by default and may only use the network
+  after the person says yes; no keys live in the repo. `CloudModel` reports
+  `PrivacyPlace.mayLeaveDevice`, so a chat started with the cloud on makes
+  no device promise anywhere.
+
+## Looking into things
+
+Say "look into ..." (or "research ...", "find out about ...") in the chat
+and the agent offers to do it; nothing starts until you tap Look into it. A
+feed card can offer the same with one tap. Words of crisis always get care
+first and never become a task.
+
+The request runs as a task (`ReconTask`, run by `ReconRunner` on the task
+engine): plan a few questions, read the sources, check their dates, put a
+summary together. It lands in Today as a card with a short summary, a few
+key points, every point marked with its sources, a plain line wherever the
+sources disagree, and when it was gathered. From the card you can open the
+sources and ask a follow-up in the chat. A card that wasn't read from
+examples also offers to remember a point.
+
+Sources come through `SourceProvider`. The only one so far is
+`SampleSources`, a set of made up documents kept on the device, so results
+are labelled as examples, and no point from them can be remembered: the
+card doesn't offer it, and the notes store refuses one (`ReconRunner.keepsPoints`,
+`MemoryStore.remember(_:from:at:)`). With the cloud off, the summary is put
+together on the device. With it on, the request goes through the same
+redaction and preview as a chat, and choosing not to send keeps it on the
+device. A recon asked for from a chat that stays on the device is put
+together on the device too, whatever the cloud setting.
+
+Once real sources are plugged in, a point you keep is saved with the source
+`lookedUp`. One put together on the device is labelled with its first
+source's publisher and lists each source in the note. One put into words in
+the cloud names no publisher, since no one here checked which page said it:
+it is labelled "From something I looked into" and the note says it was put
+into words in the cloud. Builds from before looking into things can't read
+that kind, so if you go back to one, those notes show as "My guess"
+(`inferred`), the least trusted label. Their words are kept, but once that
+older build saves the notes again, where they came from is lost and they
+stay "My guess".
 
 ## The agent's name
 

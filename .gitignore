@@ -5,6 +5,8 @@ xcuserdata/
 .swiftpm/
 Packages/*/.build/
 Packages/*/.swiftpm/
+Tools/*/.build/
+Tools/*/.swiftpm/
 pulse/digest.json
 # Signing stays out of the repo. See docs/RELEASE.md.
 Config/Signing.local.xcconfig
@@ -14,3 +16,5 @@ Config/Signing.local.xcconfig
 *.p8
 *.cer
 *.certSigningRequest
+# A real cloud address for one machine. Never committed.
+Config/Cloud.local.xcconfig
