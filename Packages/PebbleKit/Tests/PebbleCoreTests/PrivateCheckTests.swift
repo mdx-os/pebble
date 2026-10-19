@@ -355,6 +355,54 @@ struct PrivateCheckTests {
         #expect(!result.output.lowercased().contains(Self.word))
     }
 
+    /// A word written in capitals inside a camel case name ends where the
+    /// next part starts, before the last capital of the run: the R of
+    /// OpenFOORelay.
+    @Test(arguments: ["Open%Relay", "%Relay", "open%Relay", "Open2%Relay"])
+    func review6CapitalizedWordInACamelCaseNameIsFound(name: String) throws {
+        let scratch = try Scratch()
+        let planted = name.replacingOccurrences(of: "%", with: Self.word.uppercased())
+        try scratch.write("Sources/Relay.swift", "First line.\nstruct \(planted) {}\n")
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("Sources/Relay.swift:2: a private word"), "\(result.output)")
+        // A failed expectation prints its values, so only a bool is checked.
+        let named = result.output.lowercased().contains(Self.word)
+        #expect(!named, "the output names what was planted")
+    }
+
+    /// The split never makes a word out of part of one: a capitalized run
+    /// that only starts with the word is still another word.
+    @Test func review6CapitalizedRunsAreStillWholeWords() throws {
+        let scratch = try Scratch()
+        try scratch.write("Sources/Relay.swift", "struct Open\(Self.word.uppercased())SRelay {}\n")
+        let result = try scratch.run()
+        #expect(result.status == 0, "\(result.output)")
+    }
+
+    @Test func review6CapitalizedWordInAPathIsRedacted() throws {
+        let scratch = try Scratch()
+        try scratch.write("docs/Open\(Self.word.uppercased())Relay/notes.md", "First line.\n\(Self.word)\n")
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("docs/[redacted]/notes.md:2: a private word"), "\(result.output)")
+        let named = result.output.lowercased().contains(Self.word)
+        #expect(!named, "the output names what was planted")
+    }
+
+    /// Two readings of a file can decode the same line, here UTF-16 LE after
+    /// its BOM and the whole file with the BOM as U+FEFF. It is one problem.
+    @Test func review6ALineFoundInTwoReadingsIsReportedOnce() throws {
+        let scratch = try Scratch()
+        var data = Data([0xff, 0xfe])
+        data.append(try #require("\(Self.word)\n".data(using: .utf16LittleEndian)))
+        try data.write(to: scratch.root.appendingPathComponent("README.md"))
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.components(separatedBy: "README.md:1: a private word").count == 2, "\(result.output)")
+        #expect(result.output.contains("1 found."), "\(result.output)")
+    }
+
     @Test(arguments: [
         ("relay.example" + ".herokuapp.com", "a hosting provider's hostname"),
         ("https://run-" + "abc.fly" + ".dev/v1", "a hosting provider's hostname"),

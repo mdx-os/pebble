@@ -16,7 +16,7 @@
 //
 // A word is a run of letters and digits, compared in lowercase. A word
 // written in camel case is also read in its parts, so a listed word inside
-// a name such as fooBarRelay is found. Each line of the hash file after the
+// a name such as fooBarRelay or FOORelay is found. Each line of the hash file after the
 // salt is the lowercase hex SHA-256 of "<salt>:<word>".
 import CryptoKit
 import Foundation
@@ -117,14 +117,20 @@ func words(_ line: Substring) -> Set<String> {
         guard !run.isEmpty else { return }
         found.insert(run.lowercased())
         var part = ""
-        var previous: Character?
-        for character in run {
-            if let before = previous, character.isUppercase, before.isLowercase || before.isNumber {
-                found.insert(part.lowercased())
-                part = ""
+        let characters = Array(run)
+        for (index, character) in characters.enumerated() {
+            // A part starts at a capital after a small letter or a digit
+            // (fooBar, v2Bar), and at the last capital of a run of them
+            // followed by a small letter (the R of FOORelay).
+            if index > 0, character.isUppercase {
+                let before = characters[index - 1]
+                let after = index + 1 < characters.count ? characters[index + 1] : nil
+                if before.isLowercase || before.isNumber || before.isUppercase && after?.isLowercase == true {
+                    found.insert(part.lowercased())
+                    part = ""
+                }
             }
             part.append(character)
-            previous = character
         }
         found.insert(part.lowercased())
         run = ""
@@ -229,14 +235,20 @@ func check(_ repo: URL) {
         }
         let path = diagnosticPath(file, salt: salt, hashes: hashes)
         let checkHosts = hostFolders.contains { file.hasPrefix($0) }
+        // Two readings can decode the same line. It is one problem.
+        var reported: Set<String> = []
+        func report(_ line: Int, _ kind: String) {
+            guard reported.insert("\(line): \(kind)").inserted else { return }
+            print("private-check: \(path):\(line): \(kind)")
+            problems += 1
+        }
         for text in decodedTexts(data) {
             for (index, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
                 for word in words(line) {
                     let listed = seen[word] ?? hashes.contains(hash(salt, word))
                     seen[word] = listed
                     if listed {
-                        print("private-check: \(path):\(index + 1): a private word")
-                        problems += 1
+                        report(index + 1, "a private word")
                         break
                     }
                 }
@@ -244,8 +256,7 @@ func check(_ repo: URL) {
                 let string = String(line)
                 let range = NSRange(string.startIndex..., in: string)
                 for (kind, rule) in hostRules where rule.firstMatch(in: string, range: range) != nil {
-                    print("private-check: \(path):\(index + 1): \(kind)")
-                    problems += 1
+                    report(index + 1, kind)
                 }
             }
         }

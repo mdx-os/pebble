@@ -435,7 +435,7 @@ perl: s~found\.insert\(part\.lowercased\(\)\)\n\s*part = ""~part = ""~
 # The word printed with its place.
 test: aPlantedWordFailsWithItsPlaceButNotTheWord
 file: scripts/private-check.swift
-perl: s~: a private word"\)~: a private word \\(word)")~
+perl: s~report\(index \+ 1, "a private word"\)~report(index + 1, "a private word \\(word)")~
 
 test: aPlantedHostFailsWithItsPlaceButNotTheHost
 file: scripts/private-check.swift
@@ -616,6 +616,32 @@ perl: s~\.unicodeScalars\.filter \{ !CharacterSet\.controlCharacters~.unicodeSca
 test: review5BOMNeverStopsTheOtherReadings
 file: scripts/private-check.swift
 perl: s~(bigEndian: bom\.bigEndian\)\)\n    \}\n)~$1    if !fitting.isEmpty {\n        add(String(decoding: data, as: UTF8.self))\n        return texts\n    }\n~
+
+# Round-6 relay review: a word in capitals inside a camel case name, in
+# text and in a path, and a line two readings both find.
+test: review6CapitalizedWordInACamelCaseNameIsFound review6CapitalizedWordInAPathIsRedacted
+file: scripts/private-check.swift
+perl: s~ \|\| before\.isUppercase && after\?\.isLowercase == true~~
+
+test: review6ALineFoundInTwoReadingsIsReportedOnce
+file: scripts/private-check.swift
+perl: s~guard reported\.insert\("\\\(line\): \\\(kind\)"\)\.inserted else \{ return \}~~
+
+# The chat's starters. A draft taken for a suggestion by its words, so
+# typed words that match one are replaced.
+test: wordsThatMatchASuggestionAreStillThePersons
+file: Packages/PebbleKit/Sources/PebbleUI/ChatStyle.swift
+perl: s~fromSuggestion \|\| draft\.trimmingCharacters~FirstConversation.jobs.map(\\.prompt).contains(draft.trimmingCharacters(in: .whitespacesAndNewlines)) || draft.trimmingCharacters~
+
+# A suggestion's mark that an edit never clears.
+test: wordsThatMatchASuggestionAreStillThePersons
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~if draft != oldValue, !fillingSuggestion \{ draftIsSuggestion = false \}~~
+
+# The first run. A new page left where the last one was scrolled to.
+test: eachPageOpensAtItsTop
+file: Packages/PebbleKit/Sources/PebbleUI/OnboardingView.swift
+perl: s~scroller\.scrollTo\(Self\.topID, anchor: \.top\)~_ = scroller~
 
 # Grants. Only the sheet's answer makes one, and each covers only its own
 # action, its own exact target, inside its scope.

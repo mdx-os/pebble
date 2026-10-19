@@ -27,7 +27,7 @@ enum Motion {
     static func dot(_ index: Int, at time: TimeInterval, reduceMotion: Bool,
                     increasedContrast: Bool = false) -> (opacity: Double, lift: CGFloat) {
         guard !reduceMotion else { return (increasedContrast ? 1 : dotFloor, 0) }
-        let period = 1.4
+        let period = 1.6
         let phase = (time / period - Double(index) * 0.18).truncatingRemainder(dividingBy: 1)
         let wave = (sin(2 * .pi * phase) + 1) / 2
         let opacity = increasedContrast ? 1 : dotFloor + (1 - dotFloor) * wave
@@ -107,9 +107,12 @@ struct ThinkingDots: View {
                         .offset(y: -dot.lift)
                 }
             }
-            .padding(.horizontal, Theme.Space.m)
+            .padding(.horizontal, Theme.Space.l)
             .padding(.vertical, Theme.Space.m)
-            .background(Color.primary.opacity(Theme.bubbleTint), in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+            // The agent's bubble, tail and all, so the dots read as its
+            // next line on the way.
+            .background(Color.primary.opacity(Theme.bubbleTint),
+                        in: ChatStyle.bubbleShape(.agent, ChatStyle.Grouping(isFirst: true, isLast: true)))
         }
         .accessibilityElement()
         .accessibilityLabel(FirstConversation.thinking)
