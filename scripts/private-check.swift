@@ -14,10 +14,13 @@
 // ignores and only the owner's machines have. It keeps the salt already in
 // the file, so the same list makes the same file.
 //
-// A word is a run of letters and digits, compared in lowercase. A word
+// A word is a run of letters and digits, compared in lowercase and in
+// Unicode NFC, so a letter written as one scalar (U+00E9) or as a base
+// letter and a combining mark (e and U+0301) is the same word. A word
 // written in camel case is also read in its parts, so a listed word inside
-// a name such as fooBarRelay or FOORelay is found. Each line of the hash file after the
-// salt is the lowercase hex SHA-256 of "<salt>:<word>".
+// a name such as fooBarRelay, FOORelay or FOOs is found. Each line of the
+// hash file after the salt is the lowercase hex SHA-256 of "<salt>:<word>",
+// the word in lowercase NFC.
 import CryptoKit
 import Foundation
 
@@ -77,6 +80,13 @@ func git(_ repo: URL, _ arguments: [String]) -> String {
     return String(decoding: data, as: UTF8.self)
 }
 
+/// A word as it is compared and hashed: in lowercase, then in Unicode NFC.
+/// The plain list, file contents and paths all go through this one function,
+/// so the same word in either spelling makes the same hash.
+func key(_ word: some StringProtocol) -> String {
+    word.lowercased().precomposedStringWithCanonicalMapping
+}
+
 func hash(_ salt: String, _ word: String) -> String {
     SHA256.hash(data: Data("\(salt):\(word)".utf8)).map { String(format: "%02x", $0) }.joined()
 }
@@ -108,31 +118,45 @@ func readHashes(_ repo: URL) -> (salt: String, hashes: Set<String>)? {
     return (salt, hashes)
 }
 
-/// The words of a line: each run of letters and digits in lowercase, and
-/// the parts of one written in camel case.
+/// The words of a line, each as `key` makes it: each run of letters and
+/// digits, and the parts of one written in camel case.
 func words(_ line: Substring) -> Set<String> {
     var found: Set<String> = []
     var run = ""
     func end() {
         guard !run.isEmpty else { return }
-        found.insert(run.lowercased())
-        var part = ""
+        found.insert(key(run))
         let characters = Array(run)
-        for (index, character) in characters.enumerated() {
-            // A part starts at a capital after a small letter or a digit
-            // (fooBar, v2Bar), and at the last capital of a run of them
-            // followed by a small letter (the R of FOORelay).
-            if index > 0, character.isUppercase {
-                let before = characters[index - 1]
-                let after = index + 1 < characters.count ? characters[index + 1] : nil
-                if before.isLowercase || before.isNumber || before.isUppercase && after?.isLowercase == true {
-                    found.insert(part.lowercased())
-                    part = ""
+        // A part starts at a capital after a small letter or a digit
+        // (fooBar, v2Bar). The second reading also starts one at the last
+        // capital of a run of them followed by a small letter (the R of
+        // FOORelay). Both are kept, so the second only ever adds words:
+        // useACMECorp still gives acmecorp.
+        for capitalRuns in [false, true] {
+            var part = ""
+            for (index, character) in characters.enumerated() {
+                if index > 0, character.isUppercase {
+                    let before = characters[index - 1]
+                    let after = index + 1 < characters.count ? characters[index + 1] : nil
+                    if before.isLowercase || before.isNumber || capitalRuns && before.isUppercase && after?.isLowercase == true {
+                        found.insert(key(part))
+                        part = ""
+                    }
                 }
+                part.append(character)
             }
-            part.append(character)
+            found.insert(key(part))
         }
-        found.insert(part.lowercased())
+        // A run of two or more capitals with one small s after it, at the
+        // end or before the next part, is also read without the s: FOOs,
+        // OpenFOOs and FOOsRelay give foo.
+        for (index, character) in characters.enumerated()
+        where character == "s" && index >= 2 && characters[index - 1].isUppercase && characters[index - 2].isUppercase
+            && (index + 1 == characters.count || !characters[index + 1].isLowercase) {
+            var start = index - 2
+            while start > 0, characters[start - 1].isUppercase { start -= 1 }
+            found.insert(key(String(characters[start..<index])))
+        }
         run = ""
     }
     for character in line {
@@ -280,14 +304,14 @@ func makeHashes(_ repo: URL) {
         guard line.allSatisfy({ $0.isLetter || $0.isNumber }) else {
             fail("\(diagnosticPath(plainList, in: repo)):\(index + 1) is not one word of letters and digits")
         }
-        hashes.insert(hash(salt, line.lowercased()))
+        hashes.insert(hash(salt, key(line)))
     }
     let head = """
         # The private words check (make private-check) fails on any file in git
         # with a word whose hash is below. The words themselves live only in
         # \(plainList), which git ignores. Make this file again
         # with make hash-private-words. Each line after the salt is the SHA-256
-        # of "<salt>:<word>", the word in lowercase.
+        # of "<salt>:<word>", the word in lowercase and then Unicode NFC.
         salt \(salt)
 
         """

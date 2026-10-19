@@ -430,7 +430,7 @@ perl: s~                if listed \{~                if false {~
 # A listed word inside a camel case name is let by.
 test: aPlantedWordFailsWithItsPlaceButNotTheWord
 file: scripts/private-check.swift
-perl: s~found\.insert\(part\.lowercased\(\)\)\n\s*part = ""~part = ""~
+perl: s~found\.insert\(key\(part\)\)\n\s*part = ""~part = ""~
 
 # The word printed with its place.
 test: aPlantedWordFailsWithItsPlaceButNotTheWord
@@ -621,11 +621,25 @@ perl: s~(bigEndian: bom\.bigEndian\)\)\n    \}\n)~$1    if !fitting.isEmpty {\n 
 # text and in a path, and a line two readings both find.
 test: review6CapitalizedWordInACamelCaseNameIsFound review6CapitalizedWordInAPathIsRedacted
 file: scripts/private-check.swift
-perl: s~ \|\| before\.isUppercase && after\?\.isLowercase == true~~
+perl: s~ \|\| capitalRuns && before\.isUppercase && after\?\.isLowercase == true~~
 
 test: review6ALineFoundInTwoReadingsIsReportedOnce
 file: scripts/private-check.swift
 perl: s~guard reported\.insert\("\\\(line\): \\\(kind\)"\)\.inserted else \{ return \}~~
+
+# Round-7 relay review: a word in either Unicode spelling, in text and in
+# a path, the split before the capital run split, and a capital plural.
+test: review7EitherSpellingOfAWordIsFound review7EitherSpellingOfAWordInAPathIsRedacted
+file: scripts/private-check.swift
+perl: s~word\.lowercased\(\)\.precomposedStringWithCanonicalMapping~word.lowercased()~
+
+test: review7CapitalRunSplitOnlyAddsParts
+file: scripts/private-check.swift
+perl: s~for capitalRuns in \[false, true\]~for capitalRuns in [true]~
+
+test: review7PluralOfACapitalRunIsFound
+file: scripts/private-check.swift
+perl: s~found\.insert\(key\(String\(characters\[start\.\.<index\]\)\)\)~_ = start~
 
 # The task ledger (PebbleCore/TaskLedger.swift). Every task ends with one
 # line that says how, a done only with proof, and a task that goes quiet

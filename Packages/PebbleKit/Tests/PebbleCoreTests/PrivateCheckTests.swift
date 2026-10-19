@@ -13,16 +13,22 @@ struct PrivateCheckTests {
     /// The made up word the committed placeholder list was built from.
     static let word = "zorble" + "frump"
 
-    /// A scratch repository that ignores the plain list, holding `word` in
-    /// it and a hash file made from it.
+    /// Made up like `word`, with an e acute: one scalar (U+00E9), or e and
+    /// a combining acute (U+0301) when `decomposed`.
+    static func accented(decomposed: Bool) -> String {
+        "zorbl" + (decomposed ? "e\u{301}" : "\u{E9}") + "frump"
+    }
+
+    /// A scratch repository that ignores the plain list, holding `listed`
+    /// in it and a hash file made from it.
     final class Scratch {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("private-\(UUID().uuidString)")
 
-        init() throws {
+        init(listed: String = PrivateCheckTests.word.capitalized) throws {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             _ = try git("init", "-q")
             try write(".gitignore", "Config/private-words.local.txt\n")
-            try write("Config/private-words.local.txt", "# made up\n\(PrivateCheckTests.word.capitalized)\n")
+            try write("Config/private-words.local.txt", "# made up\n\(listed)\n")
             let made = try run("hash")
             #expect(made.status == 0, "\(made.output)")
             try write("README.md", "Nothing to see here.\n")
@@ -34,6 +40,21 @@ struct PrivateCheckTests {
             let url = root.appendingPathComponent(path)
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try text.write(to: url, atomically: true, encoding: .utf8)
+        }
+
+        /// Like `write`, but through the POSIX calls, which keep each
+        /// name's Unicode spelling. Foundation makes them decomposed.
+        func writeKeepingNames(_ path: String, _ text: String) throws {
+            var folder = root.path
+            for segment in path.split(separator: "/").dropLast() {
+                folder += "/" + segment
+                guard mkdir(folder, 0o755) == 0 || errno == EEXIST else { throw POSIXError(.EIO) }
+            }
+            let file = open(root.path + "/" + path, O_CREAT | O_WRONLY | O_TRUNC, 0o644)
+            guard file >= 0 else { throw POSIXError(.EIO) }
+            defer { Darwin.close(file) }
+            let bytes = Array(text.utf8)
+            guard Darwin.write(file, bytes, bytes.count) == bytes.count else { throw POSIXError(.EIO) }
         }
 
         func git(_ arguments: String...) throws -> Int32 {
@@ -401,6 +422,79 @@ struct PrivateCheckTests {
         #expect(result.status != 0)
         #expect(result.output.components(separatedBy: "README.md:1: a private word").count == 2, "\(result.output)")
         #expect(result.output.contains("1 found."), "\(result.output)")
+    }
+
+    /// Whether the output holds the accented word in either spelling. Only
+    /// a bool is checked, since a failed expectation prints its values.
+    static func namesAccented(_ output: String) -> Bool {
+        let text = Data(output.lowercased().precomposedStringWithCanonicalMapping.utf8)
+        return text.range(of: Data(accented(decomposed: false).utf8)) != nil
+    }
+
+    /// A listed word and the same word written in the other Unicode
+    /// spelling are one word: precomposed in the list and decomposed in the
+    /// file, and the other way round.
+    @Test(arguments: [false, true])
+    func review7EitherSpellingOfAWordIsFound(listDecomposed: Bool) throws {
+        let listed = Self.accented(decomposed: listDecomposed)
+        let written = Self.accented(decomposed: !listDecomposed)
+        #expect(Array(listed.utf8) != Array(written.utf8))
+        let scratch = try Scratch(listed: listed.capitalized)
+        try scratch.write("notes/plan.md", "First line.\nAsk \(written) about it.\nstruct Open\(written.capitalized)Relay {}\n")
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("notes/plan.md:2: a private word"), "\(result.output)")
+        #expect(result.output.contains("notes/plan.md:3: a private word"), "\(result.output)")
+        let named = Self.namesAccented(result.output)
+        #expect(!named, "the output names what was planted")
+    }
+
+    /// A path segment in the other Unicode spelling of a listed word is
+    /// redacted too. Git on a Mac makes file names precomposed unless told
+    /// not to, so the scratch repository keeps them as written.
+    @Test(arguments: [false, true])
+    func review7EitherSpellingOfAWordInAPathIsRedacted(listDecomposed: Bool) throws {
+        let listed = Self.accented(decomposed: listDecomposed)
+        let written = Self.accented(decomposed: !listDecomposed)
+        let scratch = try Scratch(listed: listed.capitalized)
+        #expect(try scratch.git("config", "core.precomposeunicode", "false") == 0)
+        let host = "relay.corp" + ".internal"
+        try scratch.writeKeepingNames("docs/\(written)/Open\(written.capitalized)Relay.md", "First line.\n\(host)\n")
+        let names = try FileManager.default.contentsOfDirectory(atPath: scratch.root.path + "/docs")
+        #expect(names.map { Array($0.utf8) } == [Array(written.utf8)], "the folder name kept its spelling")
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("docs/[redacted]/[redacted]:2: a .internal or .local host"), "\(result.output)")
+        let named = Self.namesAccented(result.output)
+        #expect(!named, "the output names what was planted")
+    }
+
+    /// The split at the end of a capital run only adds parts: the part the
+    /// split before it made is still read, so a listed word written as an
+    /// acronym joined to a word after a prefix is found.
+    @Test func review7CapitalRunSplitOnlyAddsParts() throws {
+        let scratch = try Scratch()
+        let name = "use" + Self.word.prefix(6).uppercased() + Self.word.dropFirst(6).capitalized
+        try scratch.write("Sources/Relay.swift", "First line.\nlet \(name) = true\n")
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("Sources/Relay.swift:2: a private word"), "\(result.output)")
+        let named = result.output.lowercased().contains(Self.word)
+        #expect(!named, "the output names what was planted")
+    }
+
+    /// A capital run with one small s after it is a plural: FOOs, OpenFOOs
+    /// and FOOsRelay all hold FOO.
+    @Test(arguments: ["%s", "Open%s", "%sRelay"])
+    func review7PluralOfACapitalRunIsFound(name: String) throws {
+        let scratch = try Scratch()
+        let planted = name.replacingOccurrences(of: "%", with: Self.word.uppercased())
+        try scratch.write("Sources/Relay.swift", "First line.\nlet \(planted) = 2\n")
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("Sources/Relay.swift:2: a private word"), "\(result.output)")
+        let named = result.output.lowercased().contains(Self.word)
+        #expect(!named, "the output names what was planted")
     }
 
     @Test(arguments: [
