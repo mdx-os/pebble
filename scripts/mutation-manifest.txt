@@ -1056,3 +1056,29 @@ perl: s~changed \|\| all != grantsBefore \|\| unsavedNow~changed || unsavedNow~
 test: aMarkerThatCannotBeRemovedNeverSilentlyLosesANewGrant
 file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
 perl: s~dirty \|\| !addedWhileUnread\.isEmpty \?~dirty ?~
+
+# The fallback router. A leaving hop never goes without a grant for that
+# exact action and target: without one it asks first.
+test: fallbackAsksFirstWithoutAGrantForThatExactActionAndTarget
+file: Packages/PebbleKit/Sources/PebbleCore/FallbackRouter.swift
+perl: s~covered\.map\(RouteClearance\.granted\) \?\? \.askFirst~covered.map(RouteClearance.granted) ?? .ready~
+
+# A leaving hop always carries the preview of what goes.
+test: fallbackLeavingHopsAlwaysShowThePreview
+file: Packages/PebbleKit/Sources/PebbleCore/FallbackRouter.swift
+perl: s~preview: hop\.leavesDevice \? action\.map\(RoutePreview\.init\) : nil~preview: nil~
+
+# The hops are tried in one fixed order.
+test: fallbackTriesTheHopsInTheirFixedOrder
+file: Packages/PebbleKit/Sources/PebbleCore/FallbackRouter.swift
+perl: s~\[\.deviceContext, \.deviceFramework, \.relayFetch, \.remoteRun, \.askPerson\]~[.deviceContext, .deviceFramework, .remoteRun, .relayFetch, .askPerson]~
+
+# Outside help off skips both leaving hops, and the decision says so.
+test: fallbackOutsideHelpOffSkipsLeavingHopsAndSaysSo
+file: Packages/PebbleKit/Sources/PebbleCore/FallbackRouter.swift
+perl: s~ *guard context\.outsideHelp\.isOn else \{ return \.failure\(\.outsideOff\) \}\n~~g
+
+# Every decision is written to the task's ledger.
+test: fallbackWritesEachDecisionToTheLedger
+file: Packages/PebbleKit/Sources/PebbleCore/FallbackRouter.swift
+perl: s~ledger\.append\(\.working\(step: decision\.ledgerLine\), at: time, artifacts: artifacts\)~true~
