@@ -1053,10 +1053,10 @@ struct FeedView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
-    /// Two cards side by side once each can be at least this wide. Grows
-    /// with the text size, so large text gets one roomy column.
-    @ScaledMetric(relativeTo: .body) private var cardMinimum: CGFloat = 320
-    @ScaledMetric(relativeTo: .body) private var columnWidth: CGFloat = Theme.feedWidth
+    /// Cards side by side once each can be at least this wide. Grows with
+    /// the text size, so large text gets fewer, roomier columns.
+    @ScaledMetric(relativeTo: .body) private var cardMinimum: CGFloat = FeedStyle.cardMinimum
+    @ScaledMetric(relativeTo: .body) private var columnWidth: CGFloat = FeedStyle.wideFeedWidth
 
     static let cardSpacing: CGFloat = 14
     /// The room between Today's sections. Fixed, not scaled, so it is the
@@ -1159,11 +1159,11 @@ struct FeedView: View {
 
     /// How many cards fit side by side, each at least `minimum` wide. One
     /// plain column at accessibility text sizes or when even one card at
-    /// `minimum` would not fit, and never more than two.
+    /// `minimum` would not fit, and never more than `FeedStyle.maxColumns`.
     static func columnCount(for width: CGFloat, minimum: CGFloat, accessibilityText: Bool) -> Int {
         guard !accessibilityText, minimum > 0 else { return 1 }
         let fit = Int((width + cardSpacing) / (minimum + cardSpacing))
-        return min(2, max(1, fit))
+        return min(FeedStyle.maxColumns, max(1, fit))
     }
 
     /// Flexible columns share whatever width there is, so a card is never
@@ -1232,7 +1232,8 @@ struct FeedView: View {
 
     private var empty: some View {
         VStack(spacing: Theme.Space.m) {
-            CharacterView(look: look, size: 72)
+            QuietIllustration(look: look)
+                .padding(.bottom, Theme.Space.xxs)
             Text(FeedWords.emptyTitle)
                 .font(Theme.TypeScale.displayTitle3)
                 .multilineTextAlignment(.center)
@@ -1247,7 +1248,9 @@ struct FeedView: View {
                 .frame(maxWidth: Theme.readableWidth)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, Theme.Space.xxxl)
+        // More room than a card gets, as the illustration's glow reaches
+        // past its frame.
+        .padding(.vertical, Theme.Space.xxxl + Theme.Space.m)
         .accessibilityElement(children: .contain)
     }
 }
@@ -1297,15 +1300,11 @@ struct FeedCard: View {
 
     private func content(actionTitle: String?) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
-                Label {
-                    Text(item.spokenKind)
-                } icon: {
+            HStack(alignment: .center, spacing: Theme.Space.xs) {
+                KindBadge(text: item.spokenKind) {
                     Image(systemName: Self.symbol(item.kind))
                         .foregroundStyle(Theme.accentSymbol)
                 }
-                .font(Theme.TypeScale.footnote.weight(.semibold))
-                .foregroundStyle(Theme.secondaryText)
                 Spacer(minLength: Theme.Space.xs)
                 Text(time)
                     .font(Theme.TypeScale.footnote)
@@ -1335,7 +1334,7 @@ struct FeedCard: View {
         }
         .padding(Theme.Space.m)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .elevation(.raised, in: shape, edge: asks ? Theme.accent.opacity(0.55) : nil, edgeWidth: asks ? 1.5 : 1)
+        .feedCardSurface(asks: asks)
         .contentShape(shape)
     }
 
@@ -1403,7 +1402,7 @@ struct ForgotUnderwayNotice: View {
         }
         .padding(Theme.Space.m)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .cardSurface()
+        .feedCardSurface()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(identifier)
     }
