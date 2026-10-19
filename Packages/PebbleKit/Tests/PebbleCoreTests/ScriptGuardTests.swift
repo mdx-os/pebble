@@ -497,9 +497,13 @@ struct ScriptGuardTests {
     /// can be slipped in anywhere in it.
     @Test func ciRunsTheFullMutationCheckInItsOwnJob() throws {
         let workflow = try String(contentsOf: Self.root.appendingPathComponent(".github/workflows/ci.yml"), encoding: .utf8)
-        // The triggers are pinned too: every pull request, whatever its
-        // target, and every push to main.
-        #expect(workflow.hasPrefix("name: CI\n\non:\n  push:\n    branches: [main]\n  pull_request:\n\npermissions:"))
+        // Everything before the jobs is pinned too: every pull request,
+        // whatever its target, every push to main, and no settings the jobs
+        // inherit. No job may set its own environment or defaults either.
+        #expect(workflow.hasPrefix(Self.workflowHead))
+        for inherited in ["env:", "defaults:", "MAKEFLAGS"] {
+            #expect(!workflow.contains(inherited), "\(inherited)")
+        }
         #expect(workflow.contains("    name: Verify on Mac, iPhone and iPad\n"))
         for filter in ["paths:", "paths-ignore", "branches-ignore", "types:"] {
             #expect(!workflow.contains(filter), "\(filter)")
@@ -520,6 +524,27 @@ struct ScriptGuardTests {
         let limit = try #require(rest.split(separator: "\n").first { $0.hasPrefix("    timeout-minutes: ") })
         #expect((Int(limit.dropFirst("    timeout-minutes: ".count)) ?? 0) >= 90)
     }
+
+    /// The start of ci.yml, up to its first job, exactly.
+    static let workflowHead = """
+    name: CI
+
+    on:
+      push:
+        branches: [main]
+      pull_request:
+
+    permissions:
+      contents: read
+
+    concurrency:
+      group: ci-${{ github.ref }}
+      cancel-in-progress: true
+
+    jobs:
+      verify:
+
+    """
 
     /// The mutation job in ci.yml, exactly. Changing it means changing this
     /// on purpose.

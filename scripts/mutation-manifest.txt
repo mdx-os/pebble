@@ -870,6 +870,14 @@ test: ciRunsTheFullMutationCheckInItsOwnJob
 file: .github/workflows/ci.yml
 perl: s~  pull_request:\n~  pull_request:\n    branches: [release]\n~
 
+test: ciRunsTheFullMutationCheckInItsOwnJob
+file: .github/workflows/ci.yml
+perl: s~\nconcurrency:\n~\nenv:\n  MAKEFLAGS: --dry-run\n\nconcurrency:\n~
+
+test: ciRunsTheFullMutationCheckInItsOwnJob
+file: .github/workflows/ci.yml
+perl: s~    timeout-minutes: 150\n~    timeout-minutes: 150\n    env:\n      MAKEFLAGS: --dry-run\n~
+
 # The lint reads a Swift string of several lines as a string, so a URL in one is no comment.
 test: theCommentLintCatchesReviewHistoryAndNames
 file: scripts/comment-lint.sh
