@@ -13,6 +13,11 @@ import PackageDescription
 //                Imports PebbleCore. Scheduling decisions are pure
 //                functions in `BackgroundPlan`; the runner, its store and
 //                its switch live in PebbleCore's `Background.swift`.
+//   PebbleConnectors  reads what the person keeps in other apps, read
+//                only: the calendar and reminders through EventKit.
+//                Imports none of ours, so nothing it reads can reach a
+//                file, a log or the cloud model; `ConnectorGate` in
+//                Tools/GuardKit holds it to that.
 //   PebbleUI     SwiftUI views shared by Mac, iPhone and iPad.
 //                Imports PebbleCore and PebbleModel.
 // SourceScan is not a layer. It lives under Tests and only tests use it,
@@ -35,6 +40,7 @@ let package = Package(
         .library(name: "PebblePulse", targets: ["PebblePulse"]),
         .library(name: "PebbleModel", targets: ["PebbleModel"]),
         .library(name: "PebbleBackground", targets: ["PebbleBackground"]),
+        .library(name: "PebbleConnectors", targets: ["PebbleConnectors"]),
         .library(name: "PebbleUI", targets: ["PebbleUI"]),
         .library(name: "SourceScan", targets: ["SourceScan"]),
         .library(name: "PromiseWords", targets: ["PromiseWords"]),
@@ -45,6 +51,7 @@ let package = Package(
         .target(name: "PebblePulse", dependencies: ["PebbleCore"]),
         .target(name: "PebbleModel", dependencies: ["PebbleCore"]),
         .target(name: "PebbleBackground", dependencies: ["PebbleCore"]),
+        .target(name: "PebbleConnectors"),
         .target(name: "PebbleUI", dependencies: ["PebbleCore", "PebbleModel"]),
         .executableTarget(name: "pulse", dependencies: ["PebbleCore", "PebblePulse"]),
         .target(name: "SourceScan", path: "Tests/SourceScan"),
@@ -57,6 +64,7 @@ let package = Package(
         .testTarget(name: "PebbleModelTests", dependencies: ["PebbleModel", "PebbleCore"]),
         .testTarget(name: "PebbleBackgroundTests",
                     dependencies: ["PebbleBackground", "PebbleCore", "SourceScan", "TestScratch"]),
+        .testTarget(name: "PebbleConnectorsTests", dependencies: ["PebbleConnectors", "PromiseWords"]),
         .testTarget(name: "PebbleUITests",
                     dependencies: ["PebbleUI", "PebbleModel", "PebbleCore", "PebbleBackground", "SourceScan",
                                    "ReconTestSupport", "TestScratch"]),
