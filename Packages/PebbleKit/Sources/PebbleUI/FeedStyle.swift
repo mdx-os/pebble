@@ -2,17 +2,12 @@ import PebbleCore
 #if canImport(SwiftUI)
 import SwiftUI
 
-/// The look of Today's cards: one surface, one padding, one way to show a
-/// card's kind, a source and a small fact. Built only from `Theme`'s
-/// tokens, so every word stays on a pair `Theme.textPairs` checks, or on
-/// the warm card in dark that `FeedStyleTests` checks the same way.
+/// What only Today's cards need beyond `Theme`: the grid, the kind badge,
+/// and the card surface's few extras. Built only from `Theme`'s tokens and
+/// colors, so every word stays on a pair `Theme.textPairs` checks, or on
+/// the card in dark that `FeedStyleTests` checks the same way. Paddings,
+/// spacings, corners and type come straight from `Theme`.
 enum FeedStyle {
-    /// The room inside every card on Today. Kept to the height cards had,
-    /// so a small phone still shows as much of the feed above the composer.
-    static let cardPadding: CGFloat = 16
-    /// The room between a card's parts: its kind line, title and body.
-    static let cardStack: CGFloat = 10
-
     /// The narrowest a card on Today may be before the grid drops a column.
     /// Scaled with the text, so large text gets fewer, roomier columns.
     static let cardMinimum: CGFloat = 280
@@ -23,15 +18,15 @@ enum FeedStyle {
     /// in landscape. The chat and the readers keep their own, narrower ones.
     static let wideFeedWidth: CGFloat = 1180
 
-    /// How much of the accent warms a card in dark, so it reads as a warm
-    /// charcoal rather than a cool gray. None in light, where the card is
-    /// already near white on the warm backdrop.
+    /// How much of the accent tints a card. None in either scheme: the
+    /// backdrop is already a warm off-white in light and a warm charcoal in
+    /// dark, and the blue accent laid over a dark card would cool it.
     static func warmth(_ scheme: ColorScheme) -> Double {
-        scheme == .dark ? 0.03 : 0
+        0
     }
 
-    /// The card in dark as it reaches the eye over `base`: the usual card,
-    /// then the warmth. `FeedStyleTests` holds every word on it to 4.5 to 1.
+    /// The card as it reaches the eye over `base`: the usual card, then the
+    /// warmth. `FeedStyleTests` holds every word on it to 4.5 to 1.
     static func warmCard(over base: Contrast.RGB, _ scheme: ColorScheme) -> Contrast.RGB {
         let card = Contrast.RGB.white.over(base, opacity: Theme.cardOpacity(scheme))
         return Theme.accentRGB.over(card, opacity: warmth(scheme))
@@ -44,14 +39,13 @@ enum FeedStyle {
     static let badgeOverhang: CGFloat = 3
 }
 
-/// A card's surface on Today: the card fill, a hairline, and a soft shadow
-/// that lifts it off the backdrop. A card that asks for a yes gets the
-/// accent edge. With Increase Contrast the edge is the field edge, which
-/// clears 3 to 1, and with Reduce Transparency the card sits on a solid
-/// base of the backdrop's own color, so nothing shows through it.
+/// A card's surface on Today: a raised `Theme` card. A card that asks for a
+/// yes gets the accent edge. With Increase Contrast the edge is the field
+/// edge, which clears 3 to 1, and with Reduce Transparency the card sits on
+/// a solid base of the backdrop's own color, so nothing shows through it.
 struct FeedCardSurface: ViewModifier {
     var asks = false
-    var corner: CGFloat = Theme.corner
+    var corner: CGFloat = Theme.Radius.card
     @Environment(\.colorScheme) private var scheme
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -60,32 +54,26 @@ struct FeedCardSurface: ViewModifier {
         RoundedRectangle(cornerRadius: corner, style: .continuous)
     }
 
-    private var edge: AnyShapeStyle {
-        if asks { return AnyShapeStyle(Theme.accent.opacity(contrast == .increased ? 1 : 0.55)) }
-        return contrast == .increased ? AnyShapeStyle(Theme.fieldEdge) : AnyShapeStyle(Theme.hairline(scheme))
+    private var edge: Color? {
+        if asks { return Theme.accent.opacity(contrast == .increased ? 1 : 0.55) }
+        return contrast == .increased ? Theme.fieldEdge.rgb(scheme, increasedContrast: true).color : nil
     }
 
     func body(content: Content) -> some View {
         content
+            .background(shape.fill(Theme.accent.opacity(FeedStyle.warmth(scheme))))
+            .elevation(.raised, in: shape, edge: edge, edgeWidth: asks ? 1.5 : 1)
             .background {
-                ZStack {
-                    if reduceTransparency {
-                        shape.fill(Theme.backdropEnds(scheme).top.color)
-                    }
-                    shape.fill(Theme.card(scheme))
-                    shape.fill(Theme.accent.opacity(FeedStyle.warmth(scheme)))
+                if reduceTransparency {
+                    shape.fill(Theme.backdropEnds(scheme).top.color)
                 }
-                // Two soft shadows: a close one for the edge, a wide one for depth.
-                .shadow(color: .black.opacity(scheme == .dark ? 0.28 : 0.04), radius: 2, y: 1)
-                .shadow(color: .black.opacity(scheme == .dark ? 0.32 : 0.06), radius: 14, y: 6)
             }
-            .overlay(shape.strokeBorder(edge, lineWidth: asks ? 1.5 : 1))
     }
 }
 
 extension View {
     /// See `FeedCardSurface`.
-    func feedCardSurface(asks: Bool = false, corner: CGFloat = Theme.corner) -> some View {
+    func feedCardSurface(asks: Bool = false, corner: CGFloat = Theme.Radius.card) -> some View {
         modifier(FeedCardSurface(asks: asks, corner: corner))
     }
 }
@@ -98,15 +86,15 @@ struct KindBadge<Icon: View>: View {
     @ScaledMetric(relativeTo: .footnote) private var size: CGFloat = FeedStyle.badge
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Theme.Space.xs) {
             icon
-                .font(.caption.weight(.bold))
+                .font(Theme.TypeScale.caption.weight(.bold))
                 .frame(width: size, height: size)
                 .background(Theme.accent.opacity(Theme.accentWash), in: Circle())
                 .padding(.vertical, -FeedStyle.badgeOverhang)
                 .accessibilityHidden(true)
             Text(text)
-                .font(.footnote.weight(.semibold))
+                .font(Theme.TypeScale.footnote.weight(.semibold))
                 .foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -128,10 +116,10 @@ struct ProofChip: View {
                 .foregroundStyle(Theme.secondaryText)
                 .accessibilityHidden(true)
         }
-        .font(.caption.weight(.medium))
+        .font(Theme.TypeScale.caption.weight(.medium))
         .foregroundStyle(Theme.secondaryText)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
+        .padding(.horizontal, Theme.Space.s)
+        .padding(.vertical, Theme.Space.xxs)
         .background(Color.primary.opacity(Theme.fieldTint), in: Capsule())
     }
 }
@@ -151,7 +139,7 @@ struct SourceChip: View {
     }
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
             SourceNumber(number: number)
             VStack(alignment: .leading, spacing: 2) {
                 Label {
@@ -162,21 +150,21 @@ struct SourceChip: View {
                     Image(systemName: "globe")
                         .foregroundStyle(Theme.secondaryText)
                 }
-                .font(.footnote.weight(.medium))
+                .font(Theme.TypeScale.footnote.weight(.medium))
                 if let host = Self.host(source.url) {
                     Text(host)
-                        .font(.caption)
+                        .font(Theme.TypeScale.caption)
                         .foregroundStyle(Theme.secondaryText)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.horizontal, Theme.Space.s)
+        .padding(.vertical, Theme.Space.xs)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.primary.opacity(Theme.fieldTint),
-                    in: RoundedRectangle(cornerRadius: Theme.smallCorner, style: .continuous))
+                    in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
     }
 }
 
@@ -202,9 +190,14 @@ struct QuietIllustration: View {
             Circle()
                 .fill(Theme.accent.opacity(Theme.accentWash * 0.6))
                 .frame(width: size * 2.6, height: size * 2.6)
+            // Each symbol is drawn to a frame that grows with `size`, so it
+            // scales with the text like the rest without a fixed font size.
             ForEach(Self.symbols, id: \.name) { symbol in
                 Image(systemName: symbol.name)
-                    .font(.system(size: size * symbol.scale, weight: .semibold))
+                    .resizable()
+                    .scaledToFit()
+                    .fontWeight(.semibold)
+                    .frame(width: size * symbol.scale, height: size * symbol.scale)
                     .foregroundStyle(Theme.accentSymbol.opacity(0.7))
                     .offset(x: symbol.x * size, y: symbol.y * size)
             }

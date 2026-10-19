@@ -232,14 +232,14 @@ public struct ConfirmationSheet: View {
     }
 
     private var content: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: Theme.Space.l) {
             if isExample {
                 ExampleLabel()
             }
             ZStack(alignment: .bottomTrailing) {
                 CharacterView(look: look, size: 64)
                 Image(systemName: symbol)
-                    .font(.footnote.weight(.bold))
+                    .font(Theme.TypeScale.footnote.weight(.bold))
                     .foregroundStyle(Theme.onAccent)
                     .frame(width: 30, height: 30)
                     .background(Theme.accent, in: Circle())
@@ -247,12 +247,12 @@ public struct ConfirmationSheet: View {
                     .offset(x: -10, y: -10)
                     .accessibilityHidden(true)
             }
-            VStack(spacing: 6) {
+            VStack(spacing: Theme.Space.xs) {
                 Text(ConfirmationWords.heading)
-                    .font(.subheadline.weight(.medium))
+                    .font(Theme.TypeScale.subheadline.weight(.medium))
                     .foregroundStyle(Theme.secondaryText)
                 Text(action.question)
-                    .font(.system(.title2, design: .rounded).weight(.bold))
+                    .font(Theme.TypeScale.displayTitle)
                     .multilineTextAlignment(.center)
                     .accessibilityAddTraits(.isHeader)
             }
@@ -262,14 +262,13 @@ public struct ConfirmationSheet: View {
                     self.row(row.label, row.value)
                 }
             }
-            .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
+            .cardSurface()
             Text(state.footnote)
-                .font(.footnote)
+                .font(Theme.TypeScale.footnote)
                 .foregroundStyle(Theme.secondaryText)
                 .multilineTextAlignment(.center)
                 .accessibilityFocused($footnoteFocused)
-            VStack(spacing: 6) {
+            VStack(spacing: Theme.Space.xs) {
                 Button(state.primaryTitle) { state.tapPrimary() }
                     .buttonStyle(PrimaryButtonStyle())
                 if state.showsNotNow {
@@ -319,14 +318,14 @@ public struct ConfirmationSheet: View {
     private func row(_ label: String, _ value: String) -> some View {
         LabeledRow(stacked: Self.stacksLabels(at: typeSize), labelWidth: labelWidth, spacing: Self.labelSpacing) {
             Text(label)
-                .font(.subheadline)
+                .font(Theme.TypeScale.subheadline)
                 .foregroundStyle(Theme.secondaryText)
         } value: {
             Text(value)
-                .font(.body.weight(.medium))
+                .font(Theme.TypeScale.body.weight(.medium))
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .padding(.horizontal, Theme.Space.m)
+        .padding(.vertical, Theme.Space.m)
         .accessibilityElement(children: .combine)
     }
 

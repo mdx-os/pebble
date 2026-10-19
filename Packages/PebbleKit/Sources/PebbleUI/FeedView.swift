@@ -1052,20 +1052,20 @@ struct FeedView: View {
             ScrollViewReader { scroller in
             ScrollView {
                 VStack(alignment: .leading, spacing: Self.sectionSpacing) {
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
                         Text(model.dateLine)
-                            .font(.subheadline.weight(.medium))
+                            .font(Theme.TypeScale.subheadline.weight(.medium))
                             .foregroundStyle(Theme.secondaryText)
                         // Said first, so no example is ever taken for real work.
                         if model.isSample && !model.feed.isEmpty {
                             Text(FeedWords.sampleNote(model.place))
-                                .font(.footnote)
+                                .font(Theme.TypeScale.footnote)
                                 .foregroundStyle(Theme.secondaryText)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .accessibilityIdentifier("sampleNote")
                         }
                     }
-                    .padding(.bottom, -12)
+                    .padding(.bottom, -Theme.Space.s)
                     if let line = model.forgotUnderway {
                         ForgotUnderwayNotice(line: line, onDismiss: model.dismissForgotUnderway)
                             .transition(Motion.arrival(reduceMotion: reduceMotion))
@@ -1106,8 +1106,8 @@ struct FeedView: View {
                         section(group.title, detail: nil, items: group.items, columns: columns)
                     }
                 }
-                .padding(.top, 8)
-                .padding(.bottom, 24)
+                .padding(.top, Theme.Space.xs)
+                .padding(.bottom, Theme.Space.xl)
                 .readableColumn(columnWidth)
                 .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.45, dampingFraction: 0.9),
                            value: model.feed)
@@ -1154,14 +1154,14 @@ struct FeedView: View {
     }
 
     private func section(_ title: String, detail: String?, items: [FeedItem], columns: [GridItem]) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(.title3, design: .rounded).weight(.semibold))
+                    .font(Theme.TypeScale.displayTitle3)
                     .accessibilityAddTraits(.isHeader)
                 if let detail {
                     Text(detail)
-                        .font(.subheadline)
+                        .font(Theme.TypeScale.subheadline)
                         .foregroundStyle(Theme.secondaryText)
                 }
             }
@@ -1211,24 +1211,26 @@ struct FeedView: View {
     }
 
     private var empty: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: Theme.Space.m) {
             QuietIllustration(look: look)
-                .padding(.bottom, 4)
+                .padding(.bottom, Theme.Space.xxs)
             Text(FeedWords.emptyTitle)
-                .font(.system(.title3, design: .rounded).weight(.semibold))
+                .font(Theme.TypeScale.displayTitle3)
                 .multilineTextAlignment(.center)
                 .accessibilityAddTraits(.isHeader)
             // The composer below is the one thing to do, so there is no
             // button here.
             Text(FeedWords.empty)
-                .font(.body)
+                .font(Theme.TypeScale.body)
                 .foregroundStyle(Theme.secondaryText)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: Theme.readableWidth)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 56)
+        // More room than a card gets, as the illustration's glow reaches
+        // past its frame.
+        .padding(.vertical, Theme.Space.xxxl + Theme.Space.m)
         .accessibilityElement(children: .contain)
     }
 }
@@ -1242,7 +1244,6 @@ struct FeedCard: View {
     /// True for an example card, so VoiceOver says so before anything else.
     var isSample = false
     let perform: () -> Void
-    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         if let action = item.action {
@@ -1267,7 +1268,7 @@ struct FeedCard: View {
     }
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: Theme.corner, style: .continuous)
+        RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
     }
 
     private var asks: Bool { item.kind == .needsYou }
@@ -1278,40 +1279,40 @@ struct FeedCard: View {
     }
 
     private func content(actionTitle: String?) -> some View {
-        VStack(alignment: .leading, spacing: FeedStyle.cardStack) {
-            HStack(alignment: .center, spacing: 8) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            HStack(alignment: .center, spacing: Theme.Space.xs) {
                 KindBadge(text: item.spokenKind) {
                     Image(systemName: Self.symbol(item.kind))
                         .foregroundStyle(Theme.accentSymbol)
                 }
-                Spacer(minLength: 8)
+                Spacer(minLength: Theme.Space.xs)
                 Text(time)
-                    .font(.footnote)
+                    .font(Theme.TypeScale.footnote)
                     .foregroundStyle(Theme.secondaryText)
             }
             Text(item.title)
-                .font(.system(.headline, design: .rounded))
+                .font(Theme.TypeScale.displayHeadline)
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
             if !item.body.isEmpty {
                 Text(item.body)
-                    .font(.subheadline)
+                    .font(Theme.TypeScale.subheadline)
                     .foregroundStyle(Theme.secondaryText)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let actionTitle {
                 Text(actionTitle)
-                    .font(.subheadline.weight(.semibold))
+                    .font(Theme.TypeScale.subheadline.weight(.semibold))
                     .foregroundStyle(asks ? AnyShapeStyle(Theme.onAccent) : AnyShapeStyle(Theme.accentText))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, Theme.Space.m)
+                    .padding(.vertical, Theme.Space.xs)
                     .background(asks ? Theme.accent : Theme.accent.opacity(Theme.accentWash), in: Capsule())
                     .padding(.top, 2)
             }
         }
-        .padding(FeedStyle.cardPadding)
+        .padding(Theme.Space.m)
         .frame(maxWidth: .infinity, alignment: .leading)
         .feedCardSurface(asks: asks)
         .contentShape(shape)
@@ -1369,18 +1370,17 @@ struct ForgotUnderwayNotice: View {
     let line: String
     let onDismiss: () -> Void
     var identifier = "forgotUnderway"
-    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             Text(line)
-                .font(.subheadline)
+                .font(Theme.TypeScale.subheadline)
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
             Button(TaskWords.forgotUnderwayDismissTitle, action: onDismiss)
                 .buttonStyle(CardButtonStyle(kind: .quiet))
         }
-        .padding(FeedStyle.cardPadding)
+        .padding(Theme.Space.m)
         .frame(maxWidth: .infinity, alignment: .leading)
         .feedCardSurface()
         .accessibilityElement(children: .contain)
@@ -1393,11 +1393,11 @@ struct ForgotUnderwayNotice: View {
 struct ExampleLabel: View {
     var body: some View {
         Text(FeedWords.sampleLabel)
-            .font(.footnote.weight(.medium))
+            .font(Theme.TypeScale.footnote.weight(.medium))
             .foregroundStyle(Theme.secondaryText)
             .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.horizontal, Theme.Space.s)
+            .padding(.vertical, Theme.Space.xs)
             .background(Color.primary.opacity(Theme.fieldTint), in: Capsule())
             .accessibilityIdentifier("sampleLabel")
     }
@@ -1419,26 +1419,26 @@ struct FeedReader: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
                     if isSample {
                         ExampleLabel()
                     }
                     Label(item.spokenKind, systemImage: FeedCard.symbol(item.kind))
-                        .font(.footnote.weight(.semibold))
+                        .font(Theme.TypeScale.footnote.weight(.semibold))
                         .foregroundStyle(Theme.secondaryText)
                     Text(item.title)
-                        .font(.system(.title2, design: .rounded).weight(.bold))
+                        .font(Theme.TypeScale.displayTitle)
                         .accessibilityAddTraits(.isHeader)
                     Text(time)
-                        .font(.footnote)
+                        .font(Theme.TypeScale.footnote)
                         .foregroundStyle(Theme.secondaryText)
                     Text(text)
-                        .font(.body)
+                        .font(Theme.TypeScale.body)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 8)
+                        .padding(.top, Theme.Space.xs)
                 }
-                .padding(.vertical, 20)
+                .padding(.vertical, Theme.Space.l)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .readableColumn(Theme.readableWidth)
             }
