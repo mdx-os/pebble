@@ -190,7 +190,7 @@ struct FirstRunScreensTests {
         #expect(model.notes.map(\.text) == ["Prefers tea"])
         #expect(model.status == MemoryWords.forgotten)
         let bytes = try Data(contentsOf: url)
-        #expect(!String(decoding: bytes, as: UTF8.self).contains("4417"))
+        #expect(!String(decoding: bytes, as: UTF8.self).contains("Door code"))
 
         let tea = try #require(model.notes.first)
         model.beginEdit(tea)
