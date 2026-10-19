@@ -43,7 +43,9 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     case askWaiting, askSheet, askAnswered, askClosed, askLive
     /// A task's question to send something, with how long the yes is for,
     /// and the memory screen listing what the agent may do without asking.
-    case confirmScopes, memoryGrants
+    /// `memoryUnavailableGrants` is the screen in its place when the notes
+    /// couldn't be opened, still listing them.
+    case confirmScopes, memoryGrants, memoryUnavailableGrants
 
     /// The launch argument that picks a scene. No name in it, product or
     /// codename, as `make brand-check` asks of new code.
@@ -157,6 +159,8 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
             case .memoryGrants:
                 MemoryView(store: Self.emptyMemory(), place: LocalStubModel().privacyPlace,
                            grants: Self.sampleGrants(at: morning))
+            case .memoryUnavailableGrants:
+                MemoryUnavailableView(hasTasks: false, grants: Self.sampleGrants(at: morning), onForgetTasks: {})
             case .memorySaved:
                 MemoryView(model: Self.savedNoteMemory(place: LocalStubModel().privacyPlace),
                            place: LocalStubModel().privacyPlace)

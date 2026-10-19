@@ -562,3 +562,38 @@ perl: s~Rule\("grant\.grantingStateOutsideSheet", grantingStateOutsideSheet\)~Ru
 test: onlyTheQuestionSheetMakesGrants
 file: Packages/PebbleKit/Sources/PebbleUI/ShowcaseScene.swift
 perl: s~onApprove: \{ _ = engine\.resume\(task\.id, with: \$0\) \}, onDecline: \{\}\)~onApprove: { _ = engine.resume(task.id, with: \$0) }, onGrant: { _ in }, onDecline: {})~
+
+# A forget whose delete failed, taken as done because the file can't be seen.
+test: aForgetTheFolderWouldNotLetThroughIsCarriedOutOnceItOpens
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~guard Self\.delete\(fileURL\) else \{ return false \}~_ = Self.delete(fileURL)~
+
+# A file that can't be looked at, taken as not there.
+test: aForgetTheFolderWouldNotLetThroughIsCarriedOutOnceItOpens aFileThatCanNotBeLookedAtIsNotTakenAsNone
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~return lstat\(url\.path, &info\) != 0 && errno == ENOENT~return lstat(url.path, &info) != 0~
+
+# A grants file read as none whenever it can't be seen.
+test: aFileThatCanNotBeLookedAtIsNotTakenAsNone
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~if Self\.isAbsent\(fileURL\) \{ return \.empty \}~if !FileManager.default.fileExists(atPath: fileURL.path) { return .empty }~
+
+# The screen with no notes handed no grants, so none can be removed there.
+test: aGrantIsListedAndRemovedWhenTheNotesCouldNotOpen
+file: Packages/PebbleKit/Sources/PebbleUI/HomeView.swift
+perl: s~erasesWords: cloud != nil, background: background, grants: feed\.grants,~erasesWords: cloud != nil, background: background,~
+
+# The screen with no notes that never lists its grants.
+test: aGrantIsListedAndRemovedWhenTheNotesCouldNotOpen
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~            if let grants \{\n                AllowedFallbackSection\(model: AllowedModel\(grants: grants\)\)\n                    \.padding\(\.top, 8\)\n            \}\n~~
+
+# Its Remove that takes nothing away.
+test: aGrantIsListedAndRemovedWhenTheNotesCouldNotOpen
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~let removed = grants\.remove\(grant\.id\)~let removed = true~
+
+# Its Remove that couldn't be saved, said to no one.
+test: aGrantIsListedAndRemovedWhenTheNotesCouldNotOpen
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~ else if let unsaved \{\n            announce\(GrantWords\.unsaved\(unsaved\)\)\n        \}~~

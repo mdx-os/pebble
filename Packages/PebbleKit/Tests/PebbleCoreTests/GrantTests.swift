@@ -625,6 +625,51 @@ struct GrantStoreTests {
         #expect(!FileManager.default.fileExists(atPath: file.path))
         #expect(!FileManager.default.fileExists(atPath: marker.path))
     }
+
+    /// A forget the grants folder won't let through is never taken as done:
+    /// with its folder shut, the file can't be deleted and can't be seen
+    /// either. The marker stays, and once the folder opens again a later
+    /// launch carries the forget out and has nothing back.
+    @Test(.scratchFiles) func aForgetTheFolderWouldNotLetThroughIsCarriedOutOnceItOpens() throws {
+        let base = Scratch.url("support").deletingPathExtension()
+        let (file, marker) = GrantFileStore.location(base: base, app: TaskStore.appFolder)
+        let folder = file.deletingLastPathComponent()
+        let manager = FileManager.default
+        try manager.createDirectory(at: folder, withIntermediateDirectories: true)
+        try manager.createDirectory(at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let book = GrantBook(store: GrantFileStore(fileURL: file, forgetMarker: marker), now: { F.morning })
+        book.add(try #require(try F.grant(.always, for: F.send())))
+        #expect(manager.fileExists(atPath: file.path))
+        // Read and write, but no way in, so nothing in it can be reached.
+        try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: folder.path)
+        defer { try? manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path) }
+        book.forget()
+        #expect(book.grants.isEmpty)
+        #expect(book.unsaved == .removal, "never called done")
+        #expect(manager.fileExists(atPath: marker.path), "the forget is still owed")
+        #expect(GrantBook(store: GrantFileStore(fileURL: file, forgetMarker: marker), now: { F.morning }).grants.isEmpty,
+                "a launch while it is still shut reads nothing")
+        try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path)
+        #expect(manager.fileExists(atPath: file.path), "the old file is still there to forget")
+        let relaunched = GrantBook(store: GrantFileStore(fileURL: file, forgetMarker: marker), now: { F.morning })
+        #expect(relaunched.grants.isEmpty, "nothing forgotten comes back")
+        #expect(!manager.fileExists(atPath: file.path))
+        #expect(!manager.fileExists(atPath: marker.path))
+    }
+
+    /// A grants file that can't be looked at is never taken as no file: its
+    /// grants are unknown, so none is listed, and nothing is written over it.
+    @Test(.scratchFiles) func aFileThatCanNotBeLookedAtIsNotTakenAsNone() throws {
+        let base = Scratch.url("support").deletingPathExtension()
+        let (file, marker) = GrantFileStore.location(base: base, app: TaskStore.appFolder)
+        let folder = file.deletingLastPathComponent()
+        let manager = FileManager.default
+        GrantBook(store: GrantFileStore(fileURL: file, forgetMarker: marker), now: { F.morning })
+            .add(try #require(try F.grant(.always, for: F.send())))
+        try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: folder.path)
+        defer { try? manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path) }
+        #expect(GrantFileStore(fileURL: file, forgetMarker: marker).read() == .unavailable)
+    }
 }
 
 extension GrantWords {

@@ -292,7 +292,7 @@ public final class GrantFileStore: GrantStoring, @unchecked Sendable {
         markerURL = forgetMarker
         forgetOnly = true
         lock.lock()
-        if FileManager.default.fileExists(atPath: markerURL.path) { _ = eraseOwed() }
+        if !Self.isAbsent(markerURL) { _ = eraseOwed() }
         lock.unlock()
     }
 
@@ -335,9 +335,9 @@ public final class GrantFileStore: GrantStoring, @unchecked Sendable {
     public func read() -> GrantFile {
         lock.lock(); defer { lock.unlock() }
         if forgetOnly { return held.map(GrantFile.data) ?? .empty }
-        let manager = FileManager.default
-        if manager.fileExists(atPath: markerURL.path), !eraseOwed() { return .unavailable }
-        guard manager.fileExists(atPath: fileURL.path) else { return .empty }
+        // A marker or a file that can't be looked at is never taken as none.
+        if !Self.isAbsent(markerURL), !eraseOwed() { return .unavailable }
+        if Self.isAbsent(fileURL) { return .empty }
         guard let data = try? Data(contentsOf: fileURL) else { return .unavailable }
         return .data(data)
     }
@@ -348,9 +348,8 @@ public final class GrantFileStore: GrantStoring, @unchecked Sendable {
             held = data
             return true
         }
-        let manager = FileManager.default
-        if manager.fileExists(atPath: markerURL.path), !eraseOwed() { return false }
-        try? manager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if !Self.isAbsent(markerURL), !eraseOwed() { return false }
+        try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         return (try? data.write(to: fileURL, options: Self.fileWriting())) != nil
     }
 
@@ -365,13 +364,31 @@ public final class GrantFileStore: GrantStoring, @unchecked Sendable {
         return eraseOwed()
     }
 
-    /// Deletes the file, then the marker. Called with the lock held.
+    /// Deletes the file, then the marker. Done only when the file was
+    /// deleted or is known not to be there: a folder that won't let the
+    /// delete through hides the file too, so the marker stays and the
+    /// forget is still owed. Called with the lock held.
     private func eraseOwed() -> Bool {
-        let manager = FileManager.default
-        try? manager.removeItem(at: fileURL)
-        guard !manager.fileExists(atPath: fileURL.path) else { return false }
-        try? manager.removeItem(at: markerURL)
+        guard Self.delete(fileURL) else { return false }
+        _ = Self.delete(markerURL)
         return true
+    }
+
+    /// False unless `url` is gone: deleted now, or not there at all.
+    private static func delete(_ url: URL) -> Bool {
+        do {
+            try FileManager.default.removeItem(at: url)
+            return true
+        } catch {
+            return isAbsent(url)
+        }
+    }
+
+    /// True only when the system says nothing is at `url`. A folder on the
+    /// way that can't be searched, or any other failure, is not proof.
+    private static func isAbsent(_ url: URL) -> Bool {
+        var info = stat()
+        return lstat(url.path, &info) != 0 && errno == ENOENT
     }
 }
 

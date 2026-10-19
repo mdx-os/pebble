@@ -348,6 +348,9 @@ struct MemoryUnavailableView: View {
     /// Background work, whose switch and summaries need no notes, so they
     /// are here too. Nil hides them.
     var background: BackgroundRunner?
+    /// The person's grants, kept apart from the notes, so they can still be
+    /// seen and removed here. Nil hides the list.
+    var grants: GrantBook?
     let onForgetTasks: @MainActor () -> Void
     @State private var asking = false
     /// The button goes once the tasks do, so VoiceOver goes to the line
@@ -418,6 +421,10 @@ struct MemoryUnavailableView: View {
                         // the same pass that adds it, SwiftUI drops it.
                         Task { @MainActor in statusFocused = true }
                     }
+            }
+            if let grants {
+                AllowedFallbackSection(model: AllowedModel(grants: grants))
+                    .padding(.top, 8)
             }
             if let background {
                 BackgroundFallbackSection(model: BackgroundSettingModel(runner: background))
@@ -511,6 +518,75 @@ struct AllowedSection: View {
         .padding(.leading, 16)
         .padding(.trailing, 8)
         .padding(.vertical, 10)
+    }
+}
+
+/// The list of what the agent may do without asking, on the screen with
+/// no notes. Grants never need the notes, so they are always listed, each
+/// with Remove, and a change that couldn't be saved is said under it.
+struct AllowedFallbackSection: View {
+    @StateObject private var model: AllowedModel
+
+    init(model: @autoclosure @escaping () -> AllowedModel) {
+        _model = StateObject(wrappedValue: model())
+    }
+
+    var body: some View {
+        AllowedSection(grants: model.allowed, unsaved: model.unsaved, now: model.currentDate) { model.remove($0) }
+            .haptic(.forgotten, trigger: model.removedCount)
+    }
+}
+
+/// The grants on their own, for the screen with no notes. The memory
+/// screen's own model lists them the same way.
+@MainActor
+final class AllowedModel: ObservableObject {
+    let grants: GrantBook
+    /// Every grant in force, newest first, as the list shows them.
+    @Published private(set) var allowed: [Grant] = []
+    /// What couldn't be saved yet, said under the list. Nil once saved.
+    @Published private(set) var unsaved: GrantBook.Unsaved?
+    /// Goes up by one each time a grant is removed, for a light tap.
+    @Published private(set) var removedCount = 0
+    private let now: () -> Date
+    private var watch: GrantBook.Observation?
+    /// Speaks a line to VoiceOver. Tests listen in.
+    var announce: @MainActor (String) -> Void = { AccessibilityNotification.Announcement($0).post() }
+
+    /// The time the list's lines are told against.
+    var currentDate: Date { now() }
+
+    init(grants: GrantBook, now: @escaping () -> Date = { Date() }) {
+        self.grants = grants
+        self.now = now
+        refresh()
+        watch = grants.observe { [weak self] in
+            Task { @MainActor in self?.refresh() }
+        }
+    }
+
+    deinit {
+        if let watch { grants.stopObserving(watch) }
+    }
+
+    func refresh() {
+        let now = grants.grants
+        if allowed != now { allowed = now }
+        let still = grants.unsaved
+        if unsaved != still { unsaved = still }
+    }
+
+    /// Takes one grant away, at once. When the change couldn't be saved,
+    /// VoiceOver hears that instead of "Removed".
+    func remove(_ grant: Grant) {
+        let removed = grants.remove(grant.id)
+        refresh()
+        if removed {
+            removedCount += 1
+            announce(GrantWords.removed)
+        } else if let unsaved {
+            announce(GrantWords.unsaved(unsaved))
+        }
     }
 }
 

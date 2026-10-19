@@ -2,6 +2,7 @@
 import Foundation
 @testable import PebbleCore
 import PebbleModel
+import SourceScan
 import SwiftUI
 import Testing
 import TestScratch
@@ -238,6 +239,72 @@ struct GrantSheetTests {
         memory.refreshGrants()
         #expect(memory.grantsUnsaved == nil)
         #expect(GrantBook(store: store, now: { Self.morning }).grants.isEmpty)
+    }
+
+    /// With notes that couldn't be opened, the screen in their place still
+    /// lists every grant, which still lets steps go ahead, and Remove there
+    /// takes one away for good. A change it couldn't save is said there too.
+    @Test(.scratchFiles) func aGrantIsListedAndRemovedWhenTheNotesCouldNotOpen() throws {
+        let base = Scratch.url("support").deletingPathExtension()
+        let (file, marker) = GrantFileStore.location(base: base, app: TaskStore.appFolder)
+        let given = GrantBook(store: GrantFileStore(fileURL: file, forgetMarker: marker), now: { Self.morning })
+        let state = try sheet(Self.send, rule: AskFirst.isolated(grants: given), granted: { given.add($0) })
+        state.choose(.always)
+        state.tapPrimary()
+        #expect(given.grants.count == 1)
+
+        // The next launch: the grants open, the notes don't.
+        let book = GrantBook(store: GrantFileStore(fileURL: file, forgetMarker: marker), now: { Self.morning })
+        let rule = AskFirst.isolated(grants: book)
+        let feed = HomeView.feedModel(sources: [], needsYou: NeedsYou(rule: rule), place: .onDevice,
+                                      now: { Self.morning })
+        let screen = MemoryUnavailableView(hasTasks: false, grants: feed.grants, onForgetTasks: {})
+        let list = AllowedModel(grants: try #require(screen.grants), now: { Self.morning })
+        var heard: [String] = []
+        list.announce = { heard.append($0) }
+        let grant = try #require(list.allowed.first)
+        #expect(list.allowed.count == 1)
+        #expect(grant.scope == .always && grant.target == Self.sam)
+        try smokeRender(screen.frame(width: 393, height: 852))
+        list.remove(grant)
+        #expect(list.allowed.isEmpty)
+        #expect(list.unsaved == nil)
+        #expect(list.removedCount == 1)
+        #expect(heard == [GrantWords.removed])
+        guard case .asking = rule.ask(Self.send, forTask: "engine/task:2") else {
+            Issue.record("a removed grant let a step go")
+            return
+        }
+        #expect(GrantBook(store: GrantFileStore(fileURL: file, forgetMarker: marker), now: { Self.morning })
+            .grants.isEmpty, "gone for good")
+
+        // A removal the store takes none of is said under the list.
+        let store = GrantMemoryStore()
+        let failing = GrantBook(store: store, now: { Self.morning })
+        let again = try sheet(Self.send, rule: AskFirst.isolated(grants: failing), granted: { failing.add($0) })
+        again.choose(.always)
+        again.tapPrimary()
+        let shaky = AllowedModel(grants: failing, now: { Self.morning })
+        shaky.announce = { heard.append($0) }
+        store.failing = true
+        store.failingErase = true
+        shaky.remove(try #require(shaky.allowed.first))
+        #expect(shaky.allowed.isEmpty)
+        #expect(shaky.unsaved == .removal)
+        #expect(shaky.removedCount == 0)
+        #expect(heard.last == GrantWords.unsaved(.removal))
+
+        // The home screen hands the rule's grants to the screen with no
+        // notes, which lists them whenever there are some to list.
+        let root = SwiftSource.repositoryRoot(from: #filePath).appendingPathComponent("Packages/PebbleKit/Sources/PebbleUI")
+        let home = SwiftSource(try String(contentsOf: root.appendingPathComponent("HomeView.swift"), encoding: .utf8))
+        let fallback = try #require(home.calls(named: ["MemoryUnavailableView"]).first)
+        #expect(fallback.arguments.contains("grants: feed.grants"))
+        let memory = String(SwiftSource(try String(contentsOf: root.appendingPathComponent("MemoryView.swift"),
+                                                   encoding: .utf8)).code)
+        let shown = try #require(memory.range(of: "if let grants {"), "shown whenever there are grants")
+        #expect(memory[shown.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+            .hasPrefix("AllowedFallbackSection(model: AllowedModel(grants: grants))"))
     }
 
     // MARK: Words are not a grant

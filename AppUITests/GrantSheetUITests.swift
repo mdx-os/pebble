@@ -57,4 +57,19 @@ final class GrantSheetUITests: XCTestCase {
         XCTAssertTrue(remove.waitForNonExistence(timeout: 5))
         XCTAssertEqual(rows.count, 2)
     }
+
+    /// With notes that couldn't be opened, the screen in their place still
+    /// lists each grant, and Remove there takes it off the list at once.
+    func testWithNoNotesTheListStillShowsAndRemoveTakesItAway() throws {
+        let app = launch("memoryUnavailableGrants")
+        let rows = app.descendants(matching: .any).matching(identifier: "grantRow")
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["What I'm allowed to do"].exists)
+        XCTAssertEqual(rows.count, 3)
+        let remove = app.buttons["Remove send messages to Sam"]
+        XCTAssertTrue(remove.exists)
+        remove.tap()
+        XCTAssertTrue(remove.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(rows.count, 2)
+    }
 }

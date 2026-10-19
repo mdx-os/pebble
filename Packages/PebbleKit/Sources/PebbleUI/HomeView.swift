@@ -869,9 +869,13 @@ struct HomeScreen: View {
             //
             // Background work keeps its own file, so its switch and a way to
             // forget its summaries are here whenever its runner was built.
+            //
+            // Grants keep their own file too, and still let steps go ahead
+            // and can still be given on Today, so their list, with Remove
+            // and what couldn't be saved, is here whenever the rule has them.
             MemoryUnavailableView(hasTasks: feed.hasSomethingToForget, forgotten: feed.tasksForgotten,
                                   underway: feed.forgotUnderway, wordsErased: wordsErased,
-                                  erasesWords: cloud != nil, background: background,
+                                  erasesWords: cloud != nil, background: background, grants: feed.grants,
                                   onForgetTasks: forgetTasksWithoutNotes)
         }
     }
