@@ -215,6 +215,13 @@ Things no test here can reach. Check each on a real iPhone before a release.
   generous limit (about 60 s). The pool starves on a busy runner, and a wait
   with no limit turns a regression into a hung run instead of a failure.
   `TaskLedgerRunTests` and `TaskLedgerCardTests` follow this.
+- A check made off the main actor can go stale before the main actor acts on
+  it. A cloud preview asks whether the cloud is on again where it goes on
+  screen, on the main actor, where the switch is turned off.
+  `aSwitchOffJustAfterTheCheckNeverShowsAPreview` guards this.
+- The Recon UI tests' `eventually` waits up to 60 s and their suites allow 3
+  minutes: main-actor tests queue behind each other, about 16 s on a fast Mac
+  and past 30 s on CI.
 
 ## Never
 

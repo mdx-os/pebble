@@ -449,7 +449,14 @@ public final class CloudReview: ObservableObject, CloudReviewing {
     public init() {}
 
     public func review(_ preview: CloudPreview) async -> CloudConsent {
-        if Task.isCancelled { return .withdrawn }
+        await review(preview, whileOn: { true })
+    }
+
+    /// Asks `isOn` here on the main actor, where `CloudHelp.turnOff` runs,
+    /// so a preview is either up when the switch goes off, and withdrawn by
+    /// it, or never shown.
+    public func review(_ preview: CloudPreview, whileOn isOn: @escaping @Sendable () -> Bool) async -> CloudConsent {
+        if Task.isCancelled || !isOn() { return .withdrawn }
         // An older question from the same asker is not sent: a chat's, or
         // the same summary's. Another summary's waits its own turn.
         for older in queue where older.preview.run == preview.run { answer(.withdrawn, for: older.preview.id) }
