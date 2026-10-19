@@ -121,6 +121,14 @@ protocol OnDeviceGenerating: Sendable {
     func drain() async
 }
 
+/// Weights that open on the processor, before a reply takes its turn on
+/// the graphics chip. Leaving the app during this must return at once:
+/// the load sends the chip nothing, so the background callback must not
+/// wait for it.
+protocol ProcessorLoading: Sendable {
+    func loadOffTheChip() async throws
+}
+
 /// Remembers that the weights opened, and tells one listener, including a
 /// listener set after the fact.
 final class LoadSignal: @unchecked Sendable {
@@ -208,6 +216,15 @@ public final class MLXChatModel: ModelClient, Sendable {
             throw ModelClientError.noPersonTurn
         }
         let generator = generator
+        // The load is not a turn. Holding the turn for it would make
+        // leaving wait until the weights opened, which is too late: the
+        // callback has to return while a first load can still be running,
+        // and nothing from that load may reach the graphics chip.
+        if let loader = generator as? any ProcessorLoading {
+            if runner.isAway { throw MLXChatModelError.interrupted }
+            try await loader.loadOffTheChip()
+            if runner.isAway { throw MLXChatModelError.interrupted }
+        }
         return try await runner.run({ try await generator.reply(to: transcript) },
                                     drain: { await generator.drain() })
     }
@@ -234,12 +251,12 @@ protocol OnDeviceEngine: Sendable {
 
 /// Loads the folder once, on the first reply, and answers with its engine.
 ///
-/// The load runs on its own, on the processor, and is never stopped. A
-/// reply stopped while it waits for the load, as when the app leaves, ends
-/// at once without having sent the graphics chip anything, and the load
-/// goes on and is kept for the next reply. A failed load is remembered.
-/// The next reply throws the same error and does not load the folder again.
-actor MLXGenerator<Engine: OnDeviceEngine>: OnDeviceGenerating {
+/// The load runs on its own, on the processor, and is never stopped. It
+/// is not a reply's turn, so leaving the app while it runs returns without
+/// waiting and sends the graphics chip nothing. The load goes on and is
+/// kept for the next reply. A failed load is remembered. The next reply
+/// throws the same error and does not load the folder again.
+actor MLXGenerator<Engine: OnDeviceEngine>: OnDeviceGenerating, ProcessorLoading {
     private let directory: URL
     private let engine: Engine
     private let onLoaded: @Sendable (URL) -> Void
@@ -258,6 +275,12 @@ actor MLXGenerator<Engine: OnDeviceEngine>: OnDeviceGenerating {
     func drain() {
         guard usedChip else { return }
         engine.drain()
+    }
+
+    /// Opens the weights on the processor, if they are not open yet.
+    /// A stop ends the wait, not the load. Nothing here uses the graphics chip.
+    func loadOffTheChip() async throws {
+        _ = try await container()
     }
 
     func reply(to transcript: [ChatTurn]) async throws -> String {

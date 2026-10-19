@@ -1,7 +1,11 @@
 import Foundation
 
-/// Lets one on-device reply run at a time, from loading and reading the
-/// prompt to the last word or a stop, and none while the app is away.
+/// Lets one on-device reply run at a time, from reading the prompt to the
+/// last word or a stop, and none while the app is away.
+///
+/// The weight load is not a turn. It runs on the processor before `run`,
+/// so leaving during that first load finds the turn free and returns
+/// without waiting, and nothing is sent to the graphics chip.
 ///
 /// Each reply holds its own cache, about 450 MB at the full context, so two
 /// at once, as from two windows, would pass the memory the model was let in

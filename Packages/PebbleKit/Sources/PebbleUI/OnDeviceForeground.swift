@@ -78,8 +78,9 @@ public final class OnDeviceForeground {
 
     /// The app moved. Leaving closes the runner's gate and does not return
     /// until the reply under way has stopped and its work on the graphics
-    /// chip has drained. A reply waiting for the first load stops at once,
-    /// with nothing sent to the chip. Coming back opens the gate.
+    /// chip has drained. A first load holds no turn, so leaving returns
+    /// while it is still running, and that load never reaches the chip.
+    /// Coming back opens the gate.
     public func moved(to next: AppPlace) {
         guard stopsInBackground, next != place else { return }
         place = next
