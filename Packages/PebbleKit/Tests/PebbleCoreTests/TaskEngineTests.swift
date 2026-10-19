@@ -977,4 +977,26 @@ struct TaskAnnouncerTests {
         _ = announcer.lines(for: [], at: start)
         #expect(announcer.lines(for: [task("One")], at: start + .seconds(1)).count == 1)
     }
+
+    /// An ended task whose line changes, as when the person removes what
+    /// it kept, says nothing: they did it themselves.
+    @Test func anEndedTaskSaysNothingWhenOnlyItsLineChanges() {
+        var announcer = TaskAnnouncer()
+        _ = announcer.lines(for: [task("One")], at: start)
+        #expect(announcer.lines(for: [task(DigestWords.done, .done)], at: start + .seconds(10)).count == 1)
+        #expect(announcer.lines(for: [task(DigestWords.removed, .done)], at: start + .seconds(20)).isEmpty)
+        #expect(announcer.lines(for: [task(DigestWords.removed, .done)], at: start + .seconds(30)).isEmpty)
+        for line in [DigestWords.tookOut, DigestWords.hiddenQuote, DigestWords.done] {
+            #expect(announcer.lines(for: [task(line, .done)], at: start + .seconds(40)).isEmpty, "\(line)")
+        }
+    }
+
+    /// An ended task whose line changes for a reason that isn't the
+    /// person's own doing, such as the notes locking, is said.
+    @Test func anEndedTaskSaysALineThePersonDidntCause() {
+        var announcer = TaskAnnouncer()
+        _ = announcer.lines(for: [task(DigestWords.done, .done)], at: start)
+        let locked = announcer.lines(for: [task(DigestWords.notesLocked, .done)], at: start + .seconds(10))
+        #expect(locked == [TaskAnnouncer.Line(text: "Find a dentist. " + DigestWords.notesLocked, urgent: false)])
+    }
 }

@@ -353,6 +353,29 @@ test: diagnosticsCountCharacters
 file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
 perl: s~let column = String\(decoding: bytes\[start\.\.<min\(max\(start, offset\), bytes\.count\)\], as: UTF8\.self\)\.count \+ 1~let column = String(decoding: bytes[start..<min(max(start, offset), bytes.count)], as: UTF8.self).utf16.count + 1~
 
+# A note edit open in one window while another changes the note. The save
+# writes over whatever the note holds now, so words forgotten meanwhile
+# come back.
+test: aStaleDigestEditNeverSavesForgottenWords
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~store\.edit\(id, to: editDraft, ifStill: from\)~store.edit(id, to: editDraft, ifStill: nil)~
+
+# The store changes the note whatever it holds now.
+test: aStaleDigestEditNeverSavesForgottenWords
+file: Packages/PebbleKit/Sources/PebbleCore/Memory.swift
+perl: s~if let earlier, all\[index\]\.text != earlier \{ return \.notFound \}~~
+
+# The memory screen never hears a note changed in another window, so the
+# edit and the forget question stay open over words that went.
+test: aWindowPutsAwayAnEditOnceItHearsTheNoteChanged
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~Task \{ \@MainActor in self\?\.refresh\(\) \}\n        \}\n        backgroundWatch~Task { \@MainActor in _ = self }\n        }\n        backgroundWatch~
+
+# The screen hears, but keeps the edit and the question open.
+test: aWindowPutsAwayAnEditOnceItHearsTheNoteChanged
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~(private func dropStale\(\) \{)~$1\n        if true { return }~
+
 # The task ledger (PebbleCore/TaskLedger.swift). Every task ends with one
 # line that says how, a done only with proof, and a task that goes quiet
 # says so on its own. Each rule is broken on its own, and its tests must fail.
@@ -541,7 +564,7 @@ perl: s~        ledger\?\.watch\(\)\n~~
 # Today: a task no engine picked up at launch says it stopped.
 test: atLaunchATaskNoEngineHasSaysItStopped
 file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
-perl: s~        ledger\?\.launch\(live: tasks\?\.tasks \?\? \[\]\)\n~~
+perl: s~        ledger\?\.launch\(live: tasks\?\.tasks \?\? \[\],\n                       restorationComplete: keeper == nil \|\| store\?\.restorationComplete != false\)\n~~
 
 # Today: Forget everything takes the ledger, here and in another window.
 test: forgetEverythingEmptiesTheLedger

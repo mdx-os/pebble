@@ -245,13 +245,32 @@ public struct MorningSummary: Codable, Sendable, Equatable {
     public let since: Date
     /// Why it was made later than it was due, if it was held back.
     public let late: BackgroundHold?
+    /// True when the tasks are kept in a file that couldn't be opened, as
+    /// while the device is locked, so what finished couldn't be counted.
+    /// The summary says so, rather than leave it out.
+    public let tasksLocked: Bool
 
-    public init(waiting: Int?, finished: Int?, couldNotFinish: Int?, since: Date, late: BackgroundHold?) {
+    public init(waiting: Int?, finished: Int?, couldNotFinish: Int?, since: Date, late: BackgroundHold?,
+                tasksLocked: Bool = false) {
         self.waiting = waiting
         self.finished = finished
         self.couldNotFinish = couldNotFinish
         self.since = since
         self.late = late
+        self.tasksLocked = tasksLocked
+    }
+
+    private enum CodingKeys: String, CodingKey { case waiting, finished, couldNotFinish, since, late, tasksLocked }
+
+    /// A file from before `tasksLocked` was kept reads as not locked.
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        waiting = try values.decodeIfPresent(Int.self, forKey: .waiting)
+        finished = try values.decodeIfPresent(Int.self, forKey: .finished)
+        couldNotFinish = try values.decodeIfPresent(Int.self, forKey: .couldNotFinish)
+        since = try values.decode(Date.self, forKey: .since)
+        late = try values.decodeIfPresent(BackgroundHold.self, forKey: .late)
+        tasksLocked = try values.decodeIfPresent(Bool.self, forKey: .tasksLocked) ?? false
     }
 
     /// Counts what is really here: the open questions, and the tasks. A
@@ -262,16 +281,29 @@ public struct MorningSummary: Codable, Sendable, Equatable {
     /// no tasks to see, so nothing finished is counted.
     ///
     /// What is waiting is open now, so it is known whenever it can be seen.
-    /// What finished is about the whole window, so it is known only if
-    /// the tasks were watched for all of it: `watchedWindow`.
+    /// What finished is about the whole window. With `endings` kept on
+    /// disk it is counted from them, however long the app was closed.
+    /// Watched only in memory, it is known only if the tasks were watched
+    /// for all of it: `watchedWindow`. Locked, it isn't known, and the
+    /// summary says why.
     ///
     /// A `since` after `now`, as from a file whose last summary is later
     /// than the clock, as after the clock was set back, counts from `now`.
     public static func count(questions: [FeedItem]?, tasks: [AgentTask]?, since: Date, now: Date,
-                             late: BackgroundHold?, watchedWindow: Bool = true) -> MorningSummary {
+                             late: BackgroundHold?, watchedWindow: Bool = true,
+                             endings: TaskEndings = .watched) -> MorningSummary {
         let since = min(since, now)
         let window = since...now
-        let ended = watchedWindow ? tasks?.filter { !$0.isActive && window.contains($0.updatedAt) } : nil
+        let ended: [TaskEnd]?
+        switch endings {
+        case .watched:
+            ended = watchedWindow ? tasks?.filter { !$0.isActive }.map { TaskEnd(state: $0.state, at: $0.updatedAt) } : nil
+        case .kept(let all):
+            ended = tasks == nil ? nil : all
+        case .locked:
+            ended = nil
+        }
+        let inWindow = ended?.filter { window.contains($0.at) }
         let waitingTasks = tasks?.filter { $0.state == .waitingOnYou }
         let taskQuestions = Set((waitingTasks ?? []).compactMap { $0.question?.id })
         let asks = questions?.filter { item in
@@ -281,13 +313,16 @@ public struct MorningSummary: Codable, Sendable, Equatable {
         }
         return MorningSummary(
             waiting: asks.map { $0.count + (waitingTasks?.count ?? 0) },
-            finished: ended?.filter { $0.state == .done }.count,
-            couldNotFinish: ended?.filter { $0.state == .failed }.count,
-            since: since, late: late)
+            finished: inWindow?.filter { $0.state == .done }.count,
+            couldNotFinish: inWindow?.filter { $0.state == .failed }.count,
+            since: since, late: late, tasksLocked: tasks != nil && endings == .locked)
     }
 
-    /// Nothing to report: every count that could be known is zero.
-    public var isQuiet: Bool { (waiting ?? 0) == 0 && (finished ?? 0) == 0 && (couldNotFinish ?? 0) == 0 }
+    /// Nothing to report: every count that could be known is zero, and
+    /// none was kept from it by a lock.
+    public var isQuiet: Bool {
+        (waiting ?? 0) == 0 && (finished ?? 0) == 0 && (couldNotFinish ?? 0) == 0 && !tasksLocked
+    }
 }
 
 /// Something a run left for Today.
@@ -1310,6 +1345,9 @@ public final class BackgroundRunner: @unchecked Sendable {
         // Read outside the runner's lock: `NeedsYou` and the engine take
         // their own, and may call back.
         let questions = needsYou?.items(now: now)
+        // Endings first: an engine that reads its file then shows its
+        // tasks from it too.
+        let endings = tasks?.endings ?? .watched
         let taskList = tasks?.tasks
 
         lock.lock()
@@ -1373,7 +1411,9 @@ public final class BackgroundRunner: @unchecked Sendable {
                     changed = true
                     continue
                 case .run:
-                    if let result = run(job, now: now, questions: questions, tasks: taskList) { made.append(result) }
+                    if let result = run(job, now: now, questions: questions, tasks: taskList, endings: endings) {
+                        made.append(result)
+                    }
                     job.due = BackgroundPlan.nextMorning(after: now, calendar: calendar)
                     job.held = nil
                     job.holds = 0
@@ -1400,16 +1440,20 @@ public final class BackgroundRunner: @unchecked Sendable {
     /// One job's run, with the lock held. Nil `questions` or `tasks` has
     /// nothing to count from. Nil back on a quiet morning: nothing was
     /// waiting and nothing finished, so there is no card to leave.
-    private func run(_ job: BackgroundJob, now: Date, questions: [FeedItem]?, tasks: [AgentTask]?) -> BackgroundResult? {
+    private func run(_ job: BackgroundJob, now: Date, questions: [FeedItem]?, tasks: [AgentTask]?,
+                     endings: TaskEndings) -> BackgroundResult? {
         switch job.kind {
         case .morningSummary:
             // Since the last summary, or the evening before this one was due.
             let since = state.lastSummary ?? job.due - 12 * 60 * 60
             // What is waiting is open now, so it counts whenever it can be
-            // seen. What finished lives in memory, so it is known only if
-            // it was watched from the window's start.
+            // seen. What finished is read from the task store when the
+            // engine keeps it there, and said to be locked when the store
+            // won't open. Kept only in memory, it is known only if it was
+            // watched from the window's start.
             let summary = MorningSummary.count(questions: questions, tasks: tasks, since: since, now: now,
-                                               late: job.held, watchedWindow: watchingSince <= since)
+                                               late: job.held, watchedWindow: watchingSince <= since,
+                                               endings: endings)
             state.lastSummary = now
             guard !summary.isQuiet else { return nil }
             return BackgroundResult(madeAt: now, content: .morningSummary(summary))
@@ -1689,6 +1733,7 @@ public enum BackgroundWords {
         if let count = summary.waiting { lines.append(waiting(count)) }
         if let line = finishedLine(summary, now: now, calendar: calendar, locale: locale) { lines.append(line) }
         if let count = summary.couldNotFinish, count > 0 { lines.append(couldNotFinish(count)) }
+        if summary.tasksLocked { lines.append(tasksLocked) }
         if let hold = summary.late { lines.append(late(hold)) }
         return lines.joined(separator: " ")
     }
@@ -1712,10 +1757,15 @@ public enum BackgroundWords {
         }
         if let line = finishedLine(summary, now: now, calendar: calendar, locale: locale) { lines.append(line) }
         if let count = summary.couldNotFinish, count > 0 { lines.append(couldNotFinish(count)) }
+        if summary.tasksLocked { lines.append(tasksLocked) }
         lines.append(countedSince(summary.since, now: now, calendar: calendar, locale: locale))
         if let hold = summary.late { lines.append(late(hold)) }
         return lines.joined(separator: "\n\n")
     }
+
+    /// When the tasks' file couldn't be opened: it opens only while the
+    /// screen is unlocked, so nothing about them is said, not even zero.
+    public static let tasksLocked = "Your tasks stay locked away while your screen is locked, so I couldn't count what finished."
 
     static func waiting(_ count: Int) -> String {
         switch count {
