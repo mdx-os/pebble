@@ -2317,7 +2317,10 @@ struct BackgroundWordsTests {
     /// that still need file modes use the traits in `FileModes.swift`, which
     /// fail in CI rather than skip. So nothing else asks who it runs as, by
     /// any of the ways a test could, and nothing else turns a test on or off
-    /// by a condition of its own.
+    /// by a condition of its own. The one other is `OnDeviceLoadTests`:
+    /// `swift test` builds MLX without its programs for the graphics chip,
+    /// so they wait for `make model-test`, part of verify, which fails
+    /// rather than skip if MLX can't run there.
     @Test func noTestSkipsQuietlyAsRoot() throws {
         let tests = SwiftSource.repositoryRoot(from: #filePath).appendingPathComponent("Packages/PebbleKit/Tests")
         let asks = try NSRegularExpression(pattern: #"\bget(e)?uid\b|\buserName\b|\bNSUserName\b|\.enabled\(\s*if:|\.disabled\(\s*if:"#)
@@ -2325,7 +2328,7 @@ struct BackgroundWordsTests {
             let code = String(SwiftSource(file.text).code)
             return asks.firstMatch(in: code, range: NSRange(code.startIndex..., in: code)) != nil
         }
-        #expect(asking.map(\.name) == ["TestScratch/FileModes.swift"])
+        #expect(asking.map(\.name) == ["PebbleModelTests/OnDeviceLoadTests.swift", "TestScratch/FileModes.swift"])
         // The sweep would catch each way.
         for way in ["getuid() != 0", "geteuid() == 0", "ProcessInfo.processInfo.userName == \"root\"",
                     "@Test(.enabled(if: x))", "@Test(.disabled(if: x))", "NSUserName()"] {

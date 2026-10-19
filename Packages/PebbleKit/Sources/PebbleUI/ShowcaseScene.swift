@@ -43,6 +43,10 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// yes, and its card after Not now. `askLive` plays it in real time and
     /// keeps it while the app is closed, for the UI tests.
     case askWaiting, askSheet, askAnswered, askClosed, askLive
+    /// The memory screen scrolled to the on-device model's row, before it
+    /// is downloaded, and the chat answering honestly that it isn't yet.
+    /// The row's download fetches nothing here: its fetcher always fails.
+    case memoryModel, chatNotReady
     /// A task's question to send something, with how long the yes is for,
     /// and the memory screen listing what the agent may do without asking.
     /// `memoryUnavailableGrants` is the screen in its place when the notes
@@ -158,6 +162,17 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     .defaultScrollAnchor(.bottom)
             case .memoryEmpty:
                 MemoryView(store: Self.emptyMemory(), place: LocalStubModel().privacyPlace)
+            case .memoryModel:
+                MemoryView(store: Self.sampleMemory(), place: LocalStubModel().privacyPlace)
+                    .environment(\.onDeviceModelSetup, Self.sampleModelSetup())
+                    .defaultScrollAnchor(.bottom)
+            case .chatNotReady:
+                ZStack {
+                    Backdrop()
+                    ChatView(brand: brand, model: LocalStubModel(notReady: .notDownloaded),
+                             names: InMemoryAgentNameStore(stored: "Pip"), look: AgentLook.load(from: looks),
+                             firstMessage: nil, conversation: Self.notReadyChat())
+                }
             case .memoryGrants:
                 MemoryView(store: Self.emptyMemory(), place: LocalStubModel().privacyPlace,
                            grants: Self.sampleGrants(at: morning))
@@ -645,6 +660,34 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
             turns.append(ChatTurn(id: UUID(), speaker: .agent, text: reply))
         }
         return Conversation(turns: turns, place: LocalStubModel().privacyPlace)
+    }
+
+    /// A question asked before the on-device model is downloaded, and the
+    /// placeholder's honest answer.
+    static func notReadyChat() -> Conversation {
+        var turns = Conversation.firstRun(named: "Pip", place: LocalStubModel().privacyPlace).turns
+        turns.append(ChatTurn(id: UUID(), speaker: .person, text: "What should I cook tonight?"))
+        turns.append(ChatTurn(id: UUID(), speaker: .agent, text: OnDeviceModelWords.notReadyReply(.notDownloaded)))
+        return Conversation(turns: turns, place: LocalStubModel().privacyPlace)
+    }
+
+    /// The download row before anything is downloaded, on an empty scratch
+    /// folder. Its fetcher fails every request, so a tap shows the failed
+    /// row and nothing reaches the network.
+    @MainActor
+    static func sampleModelSetup() -> OnDeviceModelSetup {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("showcase-models", isDirectory: true)
+        return OnDeviceModelSetup(installer: ModelInstaller(folders: ModelFolders(root: root), fetcher: NoFetch(),
+                                                            freeSpace: { _ in nil }),
+                                  chat: OnDeviceChat(LocalStubModel(notReady: .notDownloaded)))
+    }
+
+    /// Fails every request, for the showcase.
+    private struct NoFetch: ModelFetching {
+        func fetch(_ request: URLRequest, to destination: URL, bytes: Int64,
+                   progress: @escaping @Sendable (Int64) -> Void) async throws {
+            throw URLError(.notConnectedToInternet)
+        }
     }
 
     /// The person has just asked for a morning plan and the dots are showing.

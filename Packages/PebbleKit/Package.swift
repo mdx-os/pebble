@@ -5,9 +5,11 @@ import PackageDescription
 // and SwiftPM enforces that through the dependency lists here.
 //   PebbleCore   plain types. No SwiftUI, no networking.
 //   PebblePulse  public source watch: fetching and snapshots. Imports PebbleCore.
-//   PebbleModel  model adapter. ModelClient, the on-device placeholder and
-//                CloudModel (off by default). Imports PebbleCore. A later
-//                MLX or Ollama adapter lives here.
+//   PebbleModel  model adapter. ModelClient, the on-device placeholder,
+//                CloudModel (off by default) and the MLX adapter. Imports
+//                PebbleCore. It downloads the pinned model's weights, with
+//                the network only in ModelDownload.swift, and MLX loads
+//                them from the device. An Ollama adapter can live here later.
 //   PebbleBackground  gives the background runner time: BGTaskScheduler on
 //                iPhone and iPad, NSBackgroundActivityScheduler on the Mac.
 //                Imports PebbleCore. Scheduling decisions are pure
@@ -25,8 +27,11 @@ import PackageDescription
 // lines allowed to say them with a written reason.
 // SourceScan and PromiseWords are products only so Tools/GuardKit, the
 // source guards' own package, can read them. The app never links them.
-// This package depends on nothing outside it: swift-syntax lives only in
-// Tools/GuardKit, and `make graph-check` fails if it ever comes in here.
+// Its only outside dependencies are MLX and swift-transformers, for the
+// model adapter, plus the local MLXLM package. That package is the two
+// libraries from mlx-swift-lm this adapter calls, without the macro that
+// depends on swift-syntax. swift-syntax lives only in Tools/GuardKit, and
+// `make graph-check` fails if it ever comes in here.
 let package = Package(
     name: "PebbleKit",
     platforms: [.iOS(.v26), .macOS(.v26)],
@@ -40,10 +45,33 @@ let package = Package(
         .library(name: "PromiseWords", targets: ["PromiseWords"]),
         .executable(name: "pulse", targets: ["pulse"]),
     ],
+    dependencies: [
+        .package(path: "../MLXLM"),
+        // Direct so the adapter can cap the memory cache. Package.resolved
+        // pins the exact revision.
+        .package(
+            url: "https://github.com/ml-explore/mlx-swift",
+            .upToNextMinor(from: "0.32.3")
+        ),
+        .package(
+            url: "https://github.com/huggingface/swift-transformers.git",
+            exact: "1.3.4"
+        ),
+    ],
     targets: [
         .target(name: "PebbleCore"),
         .target(name: "PebblePulse", dependencies: ["PebbleCore"]),
-        .target(name: "PebbleModel", dependencies: ["PebbleCore"]),
+        .target(
+            name: "PebbleModel",
+            dependencies: [
+                "PebbleCore",
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXLLM", package: "MLXLM"),
+                .product(name: "MLXLMCommon", package: "MLXLM"),
+                .product(name: "Hub", package: "swift-transformers"),
+                .product(name: "Tokenizers", package: "swift-transformers"),
+            ]
+        ),
         .target(name: "PebbleBackground", dependencies: ["PebbleCore"]),
         .target(name: "PebbleUI", dependencies: ["PebbleCore", "PebbleModel"]),
         .executableTarget(name: "pulse", dependencies: ["PebbleCore", "PebblePulse"]),

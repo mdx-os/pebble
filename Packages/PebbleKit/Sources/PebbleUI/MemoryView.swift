@@ -9,6 +9,8 @@ public struct MemoryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @FocusState private var addFocused: Bool
+    /// The app's model download. Nil, as in tests and screenshots, hides it.
+    @Environment(\.onDeviceModelSetup) private var modelSetup
     /// Nil keeps the place the model was made with.
     private let place: PrivacyPlace?
     private let cloud: CloudHelp?
@@ -130,6 +132,10 @@ public struct MemoryView: View {
                         BackgroundRow(isOn: Binding(get: { model.backgroundOn }, set: { model.setBackground($0) }),
                                       detail: model.backgroundDetail, nextDue: model.backgroundNext)
                             .padding(.top, Theme.Space.xs)
+                    }
+                    if let modelSetup {
+                        OnDeviceModelRow(setup: modelSetup)
+                            .padding(.top, 8)
                     }
                     forgetEverythingSection
                     if let cloud {
@@ -350,6 +356,8 @@ struct MemoryUnavailableView: View {
     /// seen and removed here. Nil hides the list.
     var grants: GrantBook?
     let onForgetTasks: @MainActor () -> Void
+    /// The model download needs no notes, so it is here too.
+    @Environment(\.onDeviceModelSetup) private var modelSetup
     @State private var asking = false
     /// The button goes once the tasks do, so VoiceOver goes to the line
     /// that says what happened rather than nowhere.
@@ -427,6 +435,10 @@ struct MemoryUnavailableView: View {
             if let background {
                 BackgroundFallbackSection(model: BackgroundSettingModel(runner: background))
                     .padding(.top, Theme.Space.xs)
+            }
+            if let modelSetup {
+                OnDeviceModelRow(setup: modelSetup)
+                    .padding(.top, 8)
             }
         }
         .padding(Theme.gutter)

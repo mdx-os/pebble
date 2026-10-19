@@ -36,10 +36,13 @@ public enum PromiseRules {
     /// The only receivers the gate reads `.staysOnDevice` from.
     public static let receivers: Set<String> = ["place", "self.place", "privacyPlace", "model.privacyPlace"]
 
-    /// The only files that make a `LocalStubModel`: the app, which wires it
-    /// in as the model, the Debug showcase, and the stub itself.
+    /// The only files that make a `LocalStubModel`: the model layer's choice
+    /// of model (`OnDeviceModel.model(for:)`), which stands it in, with the
+    /// reason, while the on-device model isn't ready, the Debug showcase,
+    /// and the stub itself. The app takes its model from that choice and
+    /// makes none of its own.
     public static let stubMakers: Set<String> = [
-        "App/Sources/PebbleApp.swift",
+        "PebbleModel/OnDeviceModel.swift",
         "PebbleUI/ShowcaseScene.swift",
         "PebbleModel/LocalStubModel.swift",
     ]
@@ -52,6 +55,10 @@ public enum PromiseRules {
         "PebbleModel/ModelClient.swift",
         "PebbleModel/LocalStubModel.swift",
         "PebbleModel/CloudModel.swift",
+        // The MLX adapter, whose weights run here, and the one client that
+        // holds it or the placeholder and refuses any model that doesn't.
+        "PebbleModel/MLXChatModel.swift",
+        "PebbleModel/OnDeviceChat.swift",
     ]
 
     static let placeFile = "PebbleCore/PrivacyPlace.swift"
@@ -243,7 +250,7 @@ public enum PromiseRules {
     @Sendable static func stubMade(_ source: SyntaxSource, _ file: String) -> [Finding] {
         guard !stubMakers.contains(file) else { return [] }
         let stub = "LocalStubModel"
-        let made = "LocalStubModel() is made only by the app's wiring and the showcase, "
+        let made = "LocalStubModel() is made only by the model layer's choice of model and the showcase, "
             + "so no screen takes its place without the real model"
         var found: [Finding] = []
         for reference in source.nodes(DeclReferenceExprSyntax.self) where SyntaxSource.name(reference.baseName) == stub {

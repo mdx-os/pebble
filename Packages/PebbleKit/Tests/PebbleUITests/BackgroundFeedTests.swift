@@ -829,6 +829,12 @@ struct BackgroundFeedTests {
             "CloudRequest.encoded turns the request into bytes in memory, for the preview and for the one ephemeral "
             + "session that sends it. The file writes nothing: no write(to, FileManager or UserDefaults, which this "
             + "same sweep checks.",
+        "PebbleModel/MLXChatModel.swift: FileManager":
+            "MLXChatModel checks that the model folder holds its config, tokenizer and weights before MLX reads them. "
+            + "It only reads that folder; the chat goes to the weights in memory and is never written.",
+        "PebbleModel/OnDeviceModel.swift: FileManager":
+            "OnDeviceModel looks at the model folder's files and sizes to choose a model at launch and after a "
+            + "download. It reads no chat and writes nothing.",
         "PebbleUI/CloudHelpView.swift: MemoryStore":
             "CloudHelp reads the notes' store to build the redactor, so names from the notes are taken out of a "
             + "cloud request. It only reads the notes; it never hands the store a chat.",
@@ -839,8 +845,9 @@ struct BackgroundFeedTests {
             "The showcase, Debug only, fills scratch notes stores with sample notes for its screens. Its sample "
             + "chats are made in memory and never put in a store.",
         "PebbleUI/ShowcaseScene.swift: FileManager":
-            "The showcase, Debug only, names scratch files in the temporary folder for its sample notes. No chat "
-            + "is written to them.",
+            "The showcase, Debug only, names scratch files in the temporary folder for its sample notes, and an "
+            + "empty scratch folder for the model download row, whose fetcher fails every request. No chat is "
+            + "written to either.",
         "PebbleUI/ShowcaseScene.swift: UserDefaults(":
             "The showcase, Debug only, uses a throwaway UserDefaults suite for the look it shows, emptied each "
             + "launch. It holds no chat.",

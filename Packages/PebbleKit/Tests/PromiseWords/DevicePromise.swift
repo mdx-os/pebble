@@ -61,6 +61,29 @@ public enum DevicePromise {
         Allowed(file: "PebbleModel/LocalStubModel.swift",
                 literal: "Tell me the detail in your own words. I'll say it back so you can check I heard it. It stays on this device.",
                 reason: "The stub's remember opener. Only the on-device stub says it."),
+        Allowed(file: "PebbleCore/OnDeviceModelWords.swift", literal: "On-device model",
+                reason: onDeviceModelName + " OnDeviceModelWords.title, the row's heading."),
+        Allowed(file: "PebbleCore/OnDeviceModelWords.swift", literal: "Download on-device model, about ",
+                reason: onDeviceModelName + " The download button, built with the download's size after it."),
+        Allowed(file: "PebbleCore/OnDeviceModelWords.swift",
+                literal: "Sorry, I can't really answer that yet. My on-device model isn't downloaded. To get it, open What I remember and choose Download on-device model. Until then I can plan a morning, say a detail back, or help you talk something through.",
+                reason: onDeviceModelName + " Only the placeholder says it, in place of an answer, while nothing is "
+                    + "downloaded; it names the button that gets the model."),
+        Allowed(file: "PebbleCore/OnDeviceModelWords.swift",
+                literal: "Sorry, I can't really answer that yet. Some of my on-device model's files are missing. Open What I remember to download it again.",
+                reason: onDeviceModelName + " Only the placeholder says it, while the downloaded folder isn't whole."),
+        Allowed(file: "PebbleCore/OnDeviceModelWords.swift",
+                literal: "Sorry, I can't really answer that yet. My on-device model's files didn't open. Open What I remember to download it again.",
+                reason: onDeviceModelName + " Only the placeholder says it, after the model's folder failed to load."),
+        Allowed(file: "PebbleCore/OnDeviceModelWords.swift",
+                literal: "Sorry, I can't really answer that here. There isn't enough memory free for my on-device model.",
+                reason: onDeviceModelName + " Only the placeholder says it, when the weights are too big for the memory "
+                    + "here."),
+        Allowed(file: "PebbleModel/MLXChatModel.swift",
+                literal: "You are the person's agent on this device. Reply in plain words. Stay with what they asked. Nothing from this conversation leaves the device.",
+                reason: "OnDeviceTranscript.instructions, the system line the model reads, never a person. Only "
+                    + "MLXChatModel sends it, to the weights it runs here (runsOnDevice is true), so the chat it "
+                    + "opens never leaves the device."),
         Allowed(file: "PebbleCore/PulseNotice.swift", literal: "Privacy: 0. Adapt this idea or leave it.",
                 reason: "The public source watch's note to the founder, never shown in the app. \"Privacy\" names the idea's "
                     + "privacy fit score, a number about someone else's product, and promises nothing about this one."),
@@ -91,6 +114,10 @@ public enum DevicePromise {
     /// device promise.
     public static let cloudSettingName = "\"Cloud\" names the setting that sends a new chat to a cloud model, or that model. "
         + "Naming it says words may leave, never that they stay."
+
+    public static let onDeviceModelName = "\"On-device model\" names the model the person downloads to run here, as its "
+        + "button and its row on the memory screen call it. It says where the model runs, never where a chat goes, "
+        + "so it is true with the cloud on or off."
 
     /// Each form of `CloudWords.forgotAndCloudOffNotSummaries`.
     public static let cloudSummariesStayed = "CloudWords.forgotAndCloudOffNotSummaries, a Forget everything status line, in "
@@ -364,13 +391,16 @@ public enum DevicePromise {
         ReconWords.forgotWhileInCloud,
         ReconWords.alreadyOnWithCloud,
         ReconWords.wordedInCloudMark,
-    ] + CloudWords.forgotAndCloudOffNotSummariesLines + CloudWords.askPoints.filter { !found(in: $0).isEmpty }
+        OnDeviceModelWords.title,
+    ] + OnDeviceModelNotReady.allCases.map(OnDeviceModelWords.notReadyReply)
+      + CloudWords.forgotAndCloudOffNotSummariesLines + CloudWords.askPoints.filter { !found(in: $0).isEmpty }
 
     /// Lines built at run time around an allowed literal, each with the
     /// literal it is built from. What is built around it adds no phrase.
     public static let allowedBuiltLines: [(line: String, literal: String)] = [
         (Redaction.Kind.privateWord.counted(1), "private word"),
         (Redaction.Kind.privateWord.counted(2), "private words"),
+        (OnDeviceModelWords.downloadTitle(bytes: 2_274_455_727), "Download on-device model, about "),
     ] + ReconWords.all.filter { $0.contains(ReconWords.wordedInCloudMark) && $0 != ReconWords.wordedInCloudMark }
         .map { ($0, ReconWords.wordedInCloudMark) }
 }

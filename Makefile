@@ -1,13 +1,13 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test repeat-test mutation-check build build-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-config-check graph-check graph-check-test secrets-check pulse clean
+.PHONY: verify generate test model-test repeat-test mutation-check build build-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-only-check local-only-check-test resolved-check local-config-check graph-check graph-check-test secrets-check pulse clean
 
 ## verify: everything CI runs. Run this before every PR. The graph check
 ## runs once the builds have made the project, so it reads that too. The
 ## screenshots are made after every other step and then checked against the
 ## working tree. Both are the recipe, so even with -j nothing runs beside
 ## them that could change the tree between the stamp and the check.
-verify: brand-check local-config-check screenshots-check-test graph-check-test test build build-release
+verify: brand-check local-only-check local-only-check-test resolved-check local-config-check screenshots-check-test graph-check-test test model-test build build-release
 	$(MAKE) graph-check
 	$(MAKE) screenshots
 	sh scripts/screenshot-stamp.sh check build/screenshots
@@ -15,12 +15,24 @@ verify: brand-check local-config-check screenshots-check-test graph-check-test t
 ## generate: create Pebble.xcodeproj from project.yml (the project file is not committed)
 generate:
 	xcodegen generate --quiet
+	mkdir -p Pebble.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
+	cp Config/Package.resolved Pebble.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
 ## test: unit tests for the shared packages, then the source guards, which
-## live in Tools/GuardKit so swift-syntax stays out of the app's graph
+## live in Tools/GuardKit so swift-syntax stays out of the app's graph. Each
+## uses its committed pin only
 test:
-	swift test --package-path Packages/PebbleKit --quiet
-	swift test --package-path Tools/GuardKit --quiet
+	swift test --package-path Packages/PebbleKit --disable-automatic-resolution --quiet
+	swift test --package-path Tools/GuardKit --disable-automatic-resolution --quiet
+
+## model-test: the tests that run MLX itself, on the Mac through xcodebuild,
+## since `swift test` builds MLX without its programs for the graphics chip
+## and MLX can't make an array there. They load a tiny model folder and
+## prove each step of a load runs on the processor
+model-test:
+	cd Packages/PebbleKit && TEST_RUNNER_MLX_MODEL_TEST=1 xcodebuild test -quiet -scheme PebbleKit-Package \
+		-destination 'platform=macOS,arch=arm64' -derivedDataPath ../../build/DerivedDataKit \
+		-onlyUsePackageVersionsFromResolvedFile -only-testing:PebbleModelTests/OnDeviceLoadTests
 
 ## repeat-test: run the package tests N times (default 30) to catch a flaky
 ## test. FILTER= narrows the run; without it the whole suite runs each time.
@@ -41,14 +53,14 @@ pulse:
 
 ## build: compile the app for macOS and the iOS Simulator
 build: generate
-	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -destination 'platform=macOS,arch=arm64' -derivedDataPath $(DERIVED)
-	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -destination 'generic/platform=iOS Simulator' -derivedDataPath $(DERIVED) CODE_SIGNING_ALLOWED=NO
+	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -destination 'platform=macOS,arch=arm64' -derivedDataPath $(DERIVED) -onlyUsePackageVersionsFromResolvedFile
+	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -destination 'generic/platform=iOS Simulator' -derivedDataPath $(DERIVED) -onlyUsePackageVersionsFromResolvedFile CODE_SIGNING_ALLOWED=NO
 
 ## build-release: compile the app in Release for macOS and the iOS Simulator, so
 ## code kept to Debug (the showcase screens) can never break a shipped build
 build-release: generate
-	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath $(DERIVED)
-	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath $(DERIVED) CODE_SIGNING_ALLOWED=NO
+	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath $(DERIVED) -onlyUsePackageVersionsFromResolvedFile
+	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath $(DERIVED) -onlyUsePackageVersionsFromResolvedFile CODE_SIGNING_ALLOWED=NO
 
 ## screenshots: first screen on iPhone, iPad and Mac, written to build/screenshots,
 ## plus the dark iPad sidebar and the sheets with Done, with
@@ -71,7 +83,7 @@ screenshots-check-test:
 ## ui-screenshots: showcase screens in light and dark on one simulator, written to
 ## build/screenshots/ui (or OUT=dir). DEVICE= names the simulator, SCREENS= the screens.
 ui-screenshots: generate
-	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -destination 'generic/platform=iOS Simulator' -derivedDataPath $(DERIVED) CODE_SIGNING_ALLOWED=NO
+	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -destination 'generic/platform=iOS Simulator' -derivedDataPath $(DERIVED) -onlyUsePackageVersionsFromResolvedFile CODE_SIGNING_ALLOWED=NO
 	PEBBLE_IPHONE="$(or $(DEVICE),iPhone 17 Pro)" PEBBLE_SCREENS="$(SCREENS)" sh scripts/ui-screenshots.sh $(or $(OUT),build/screenshots/ui)
 
 ## device-screenshots: showcase screens on iPad Pro 13-inch, iPad mini and iPhone,
@@ -100,6 +112,20 @@ ui-test: generate
 ## any case, and no new key or path may spell the codename in lowercase
 brand-check:
 	sh scripts/brand-check.sh
+
+## local-only-check: the app, PebbleCore, PebbleBackground and the model adapter
+## must not name a network client, except URLSession in the model download and
+## the cloud model, each named by exact path
+local-only-check:
+	sh scripts/local-only-check.sh
+
+## local-only-check-test: self-test for that check, in a scratch copy
+local-only-check-test:
+	sh scripts/local-only-check-test.sh
+
+## resolved-check: the package pin and the app pin must match
+resolved-check:
+	sh scripts/resolved-check.sh
 
 ## graph-check: fail if swift-syntax, which only Tools/GuardKit uses, can
 ## reach PebbleKit or the app project, named or through a dependency

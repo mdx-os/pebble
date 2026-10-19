@@ -24,6 +24,8 @@ enum SnapshotMode {
 
     static func runIfRequested(brand: Brand) {
         guard let path = UserDefaults.standard.string(forKey: "snapshotPath") else { return }
+        // Screenshots stay on the placeholder, even when a model directory is
+        // configured: every scene here builds its own LocalStubModel.
         #if DEBUG
         let scene = UserDefaults.standard.string(forKey: ShowcaseScene.launchKey).flatMap(ShowcaseScene.init(rawValue:)) ?? .hello
         let screen = AnyView(scene.view(brand: brand))

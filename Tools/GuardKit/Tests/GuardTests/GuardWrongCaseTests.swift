@@ -185,6 +185,8 @@ struct GuardWrongCaseTests {
         promise("stubMade", "let model = LocalStubModel\n    .init()"),
         promise("stubMade", "let make = LocalStubModel.init"),
         promise("stubMade", "HomeView(brand: brand, model: LocalStubModel())", file: "PebbleUI/HomeView.swift"),
+        // The app takes its model from the model layer's choice, never its own stub.
+        promise("stubMade", "HomeView(brand: brand, model: LocalStubModel())", file: "App/Sources/PebbleApp.swift"),
         promise("stubMade", "#Preview { Text(\"a\") }\nlet model = LocalStubModel()"),
         // A preview's scope ends at its own closing brace, whatever opens after it.
         promise("stubMade", "#Preview { Text(\"a\") }\nstruct Screen: View {\n    var body: some View {\n"
@@ -339,17 +341,17 @@ struct GuardWrongCaseTests {
         fine("// extension PrivacyPlace {}"),
         // The stub's own makers, written out here rather than read from
         // `stubMakers`, so a file added there is a change this suite sees.
-        fine("HomeView(brand: brand, model: LocalStubModel())", file: "App/Sources/PebbleApp.swift"),
+        fine("HomeView(brand: brand, model: LocalStubModel())", file: "PebbleModel/OnDeviceModel.swift"),
         fine("HomeView(brand: brand, model: LocalStubModel())", file: "PebbleUI/ShowcaseScene.swift"),
         fine("HomeView(brand: brand, model: LocalStubModel())", file: "PebbleModel/LocalStubModel.swift"),
-        fine("let model: LocalStubModel = .init()", file: "App/Sources/PebbleApp.swift"),
+        fine("let model: LocalStubModel = .init()", file: "PebbleModel/OnDeviceModel.swift"),
         fine("extension LocalStubModel { static let shared = Self() }", file: "PebbleModel/LocalStubModel.swift"),
     ]
 
     /// The files exempt from the stub rule, exactly. A file added to the
     /// exemption fails here until it is written into this list too.
     static let expectedStubMakers: Set<String> = [
-        "App/Sources/PebbleApp.swift",
+        "PebbleModel/OnDeviceModel.swift",
         "PebbleUI/ShowcaseScene.swift",
         "PebbleModel/LocalStubModel.swift",
     ]

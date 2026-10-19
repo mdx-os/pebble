@@ -7,6 +7,18 @@ import SwiftUI
 @main
 struct PebbleApp: App {
     private let brand: Brand
+    /// The one model client, made once at launch and shared by every chat.
+    /// The on-device model once it is downloaded, until then the placeholder
+    /// that says so.
+    private let model: OnDeviceChat
+    /// Getting the on-device model, from the memory screen. Nil if its
+    /// folder can't be found.
+    private let modelSetup: OnDeviceModelSetup?
+    /// Stops on-device replies when the app leaves the screen on iPhone and
+    /// iPad. Follows every window together, so one window going back
+    /// doesn't stop a reply in another still in front.
+    private let foreground = OnDeviceForeground()
+    @Environment(\.scenePhase) private var scenePhase
     /// The one notes store, shared by the memory screen and the cloud
     /// redactor, so both always see the same notes.
     private let memory: MemoryStore?
@@ -60,6 +72,10 @@ struct PebbleApp: App {
         #if os(macOS)
         SnapshotMode.runIfRequested(brand: brand)
         #endif
+        // Reads what is on disk only. The download waits for the person's tap.
+        let local = OnDeviceModelSetup.forApp(brand: brand)
+        model = local.model
+        modelSetup = local.setup
         // The person's grants, read only while the device is unlocked. The
         // rule consults them before it asks; only the question sheet adds one.
         AskFirst.shared.keepGrants(in: GrantBook.onDevice())
@@ -79,6 +95,9 @@ struct PebbleApp: App {
         tasks = wiring.tasks
         background = wiring.service
         background.start()
+        // Scene notifications, so leaving the screen drains graphics work
+        // before UIKit's own callback returns.
+        foreground.watchSystemScenes()
     }
 
     var body: some Scene {
@@ -99,12 +118,13 @@ struct PebbleApp: App {
             #endif
         }
         .commands { HomeCommands() }
+        .onChange(of: scenePhase, initial: true) { _, phase in foreground.follow(phase) }
     }
 
     private var home: some View {
         HomeView(
             brand: brand,
-            model: LocalStubModel(),
+            model: model,
             names: UserDefaultsAgentNameStore(),
             onboarding: UserDefaultsOnboardingStore(),
             memory: memory,
@@ -115,5 +135,6 @@ struct PebbleApp: App {
             cloud: cloud,
             background: background.runner
         )
+        .environment(\.onDeviceModelSetup, modelSetup)
     }
 }

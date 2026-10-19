@@ -15,8 +15,10 @@ words sent. Today is built to hold what the agent did, made and noticed, with
 any question that needs your yes pinned on top, but no real source of
 finished work ships yet, so for now it is a quiet place to start a chat. The
 feed shows sample cards, marked as examples, only in the showcase screens.
-Replies come from an on-device placeholder until a local model adapter is
-plugged in. See [the roadmap](#roadmap).
+Replies come from a small open model running on the device, through MLX,
+once you choose to download it from the memory screen. Until then an
+on-device placeholder says plainly that the model isn't ready. See
+[the roadmap](#roadmap).
 
 ## Build it
 
@@ -49,27 +51,66 @@ Config/Brand.xcconfig the product name, set once
 Packages/PebbleKit/   shared code, in layers
   PebbleCore            plain types, no UI, no networking
   PebblePulse           public source watch fetching and snapshots
-  PebbleModel           model adapter and the on-device placeholder
+  PebbleModel           model adapter, the on-device placeholder, MLX and its download
   PebbleUI              SwiftUI views
+Packages/MLXLM/       the two mlx-swift-lm libraries the model adapter uses, copied
 pulse/                source list and snapshots
 scripts/              build helpers
 ```
 
 ## The model
 
-The chat asks a `ModelClient` for each reply. The default is `LocalStubModel`,
-an on-device placeholder with fixed warm replies. The app, the tests, and the
-screenshots use it, so nobody has to download a model.
+The chat asks a `ModelClient` for each reply. The app makes one,
+`OnDeviceChat`, and shares it with every window. It answers with
+`MLXChatModel`, running Qwen3 4B Instruct 2507 (4-bit MLX weights, pinned in
+`PinnedModel`) on the device, once that model is downloaded. Until then it
+holds `LocalStubModel`, which says plainly that the model isn't ready and how
+to get it, instead of pretending to answer. Screenshots and the package tests
+use the placeholder, so they never download a model or load its weights, and
+they need no GPU. The model tests, which `make model-test` runs and CI runs
+too, do load a model on the Mac. They never download one.
 
-A real adapter is another `Sendable` type in `PebbleModel` that implements
-`reply(to:)`. Pass it to `ChatView` the same way the app passes
-`LocalStubModel`.
+The first reply loads the weights on the processor (`OnDeviceLoad`), so a
+load never uses the graphics chip, which iOS refuses to an app in the
+background. On iPhone and iPad, leaving the app stops the reply under way
+and waits for its work on the graphics chip to finish before the app goes
+inactive. A load under way goes on and is kept for the next reply.
+`MLXLLM` and `MLXLMCommon` come from `Packages/MLXLM`, an unchanged copy of
+those two libraries from mlx-swift-lm 3.32.3 under its MIT license, without
+the macro that would bring swift-syntax into the app's graph.
 
-- MLX: load an open-weight model on the device and generate from the
-  transcript. Keep the weights on the device. This path does not use the network.
-- Ollama: send the transcript to an Ollama server the person is already
-  running on this machine, at `127.0.0.1` port `11434`. That request stays in
-  `PebbleModel`.
+Getting the model is always the person's choice: What I remember, then
+Download on-device model, about 2.3 GB. Nothing is fetched at launch or on its
+own. The download fetches only the pinned files at the pinned revision from
+huggingface.co, with an ephemeral session, no cookies, no credentials and
+nothing from a chat. Files land in a temporary folder under
+`Application Support/<product name>/Models`, which backups skip; only once
+every file has its pinned size and SHA-256 does the folder take its finished
+name, and the chat moves to the model from its next reply. A stop, a failure
+or a mismatch removes what came, and Try again starts over. All the network
+code is in `PebbleModel/ModelDownload.swift`; `make local-only-check` lets
+`URLSession` appear there and in `CloudModel.swift`, by exact path, and
+nowhere else in the app, `PebbleCore`, `PebbleBackground` or `PebbleModel`.
+
+The model is used only if its weights leave 1 GB of the memory this process
+can draw on (`OnDeviceModel.headroomBytes`). That 1 GB is an admission
+estimate. On a Mac, short chats peaked 0.49 GB over the weights, and the
+reserve is about twice that for the cache, the MLX buffer and the app. It
+is not a measurement of peak memory while the weights load, or at the
+longest context, on iPhone 17e or the Mac.
+
+Developers can point the app at another folder: the environment variable
+`PEBBLE_MLX_MODEL`, or the UserDefaults key `onDeviceModelFolder`, wins over
+the download. The value can be an absolute path, a path that starts with `~`,
+or a `file://` URL with no host. The folder must contain `config.json`,
+`tokenizer.json`, and at least one `.safetensors` file. A blank value, a
+relative path, a remote address, a file URL with a host, a missing or
+unusable folder, or weights too large for the memory here keeps the
+placeholder, which says why.
+
+Ollama is not plugged in yet. When it is, it should send the transcript
+to an Ollama server the person is already running on this machine, at
+`127.0.0.1` port `11434`, and that request stays in `PebbleModel`.
 
 `PebbleCore` does not do networking. A cloud model stays off until the person
 chooses one.
@@ -134,7 +175,7 @@ first conversation. It is not someone in your contacts.
 
 1. A repo that proves itself: one command builds, tests and screenshots every platform.
 2. A daily pulse on what's new in AI and in other personal agents. Fetching, a digest of real changes, and idea cards drafted from that digest are in place.
-3. Mia talks: a named agent with a face and a first conversation. You can rename the agent on the device. The chat calls a local model adapter. The default is an on-device placeholder until MLX or Ollama is plugged in. (now)
+3. Mia talks: a named agent with a face and a first conversation. You can rename the agent on the device. The chat answers with a small open model through MLX, on the device, once the person downloads it; until then a placeholder says so. Ollama is not plugged in yet. (now)
 4. A daily briefing, ideas and activity inside the app.
 5. Mia improves Mia: small, verified changes every day.
 

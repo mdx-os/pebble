@@ -6,12 +6,24 @@ import PebbleCore
 /// and is honest that it is a small helper. See `ModelClient` for the MLX
 /// and Ollama adapters.
 public struct LocalStubModel: ModelClient {
-    public init() {}
+    /// Why the on-device model isn't answering, when the app stands this in
+    /// for it. Then anything outside the starter jobs gets that reason and
+    /// what to do, never a pretend answer. Nil, as in tests and screenshots,
+    /// keeps the starter's own fallback.
+    public let notReady: OnDeviceModelNotReady?
+
+    public init(notReady: OnDeviceModelNotReady? = nil) {
+        self.notReady = notReady
+    }
 
     public var runsOnDevice: Bool { true }
 
     public func reply(to transcript: [ChatTurn]) async throws -> String {
-        try Self.answer(to: transcript)
+        let answer = try Self.answer(to: transcript)
+        if let notReady, answer == Self.fallback {
+            return OnDeviceModelWords.notReadyReply(notReady)
+        }
+        return answer
     }
 
     /// Synchronous so previews and tests can build a transcript instantly.

@@ -29,6 +29,14 @@ struct ChatViewTests {
     }
 }
 
+/// Refuses every message as more than the on-device model can read.
+private struct TooLongModel: ModelClient {
+    var runsOnDevice: Bool { true }
+    func reply(to transcript: [ChatTurn]) async throws -> String {
+        throw MLXChatModelError.tooLong
+    }
+}
+
 /// Answers only after a long pause, so a test can act while a reply is coming.
 private struct SlowModel: ModelClient {
     var runsOnDevice: Bool { true }
@@ -134,6 +142,20 @@ struct ChatRenameTests {
         #expect(reply.speaker == .agent)
         #expect(ChatView.replyLanded(in: controller, covered: false) == reply.text)
         #expect(ChatView.replyLanded(in: controller, covered: false) == nil, "read once")
+    }
+
+    /// A message too long for the on-device model leaves the chat and goes
+    /// back to the composer with a plain line, so it can be shortened.
+    @Test func aMessageTooLongForTheModelComesBackToBeShortened() async throws {
+        let controller = ChatController(brand: brand, model: TooLongModel(), names: InMemoryAgentNameStore(),
+                                        replyBeat: .zero)
+        let before = controller.conversation.turns
+        controller.submit("A very long pasted document")
+        await controller.settled()
+        #expect(controller.failure == OnDeviceModelWords.tooLong)
+        #expect(controller.draft == "A very long pasted document")
+        #expect(controller.conversation.turns == before)
+        #expect(ChatController.pointsAtTheDraft(OnDeviceModelWords.tooLong))
     }
 
     @Test func theAppModelOpensWithAnHonestPrivacyLine() {

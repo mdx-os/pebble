@@ -351,6 +351,23 @@ test: diagnosticsCountCharacters
 file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
 perl: s~let column = String\(decoding: bytes\[start\.\.<min\(max\(start, offset\), bytes\.count\)\], as: UTF8\.self\)\.count \+ 1~let column = String(decoding: bytes[start..<min(max(start, offset), bytes.count)], as: UTF8.self).utf16.count + 1~
 
+# The on-device model. A reply that waits out the first load when the app
+# leaves, so leaving waits for the whole load. Only a test that looks
+# before the load is let go can see it.
+test: aReplyWaitingOnTheLoadStaysStoppedAfterComingBack
+file: Packages/PebbleKit/Sources/PebbleModel/MLXChatModel.swift
+perl: s~loading = load\n        return try await StopWaiting\.value\(of: load\)~loading = load\n        return try await load.value~
+
+# A load that ends after the app left, never reported, so never Ready.
+test: leavingDuringTheFirstLoadNeverReachesTheGraphicsChip
+file: Packages/PebbleKit/Sources/PebbleModel/MLXChatModel.swift
+perl: s~loaded = container\n            onLoaded\(directory\)~loaded = container~
+
+# Ready said of files whose weights haven't opened.
+test: readyIsPublishedOnlyAfterTheWeightsOpen aModelThatWontLoadShowsFailedAndDownloadAgainRepairsIt theAppUsesTheDownloadedModelWithNothingElseSet
+file: Packages/PebbleKit/Sources/PebbleUI/OnDeviceModelRow.swift
+perl: s~return model\.hasLoaded \? \.ready\(model\.folder\) : \.installed\(model\.folder\)~return .ready(model.folder)~
+
 # The task ledger (PebbleCore/TaskLedger.swift). Every task ends with one
 # line that says how, a done only with proof, and a task that goes quiet
 # says so on its own. Each rule is broken on its own, and its tests must fail.
