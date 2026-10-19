@@ -24,29 +24,23 @@ struct ReconCard: View {
     /// Takes the card away, with the summary and everything it read.
     var onDismiss: () -> Void = {}
 
-    @Environment(\.colorScheme) private var scheme
-
     /// The card keeps to the main points, so it stays easy to scroll past.
     /// Every point is in Open sources.
     static let pointsOnCard = 3
 
-    private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: Theme.corner, style: .continuous)
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
             header
             if !summary.points.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
                     ForEach(summary.points.prefix(Self.pointsOnCard)) { point in
                         ReconPointRow(point: point, summary: summary)
                     }
                     if summary.points.count > Self.pointsOnCard {
                         Text(ReconWords.morePoints(summary.points.count - Self.pointsOnCard))
-                            .font(.footnote)
+                            .font(Theme.TypeScale.footnote)
                             .foregroundStyle(Theme.secondaryText)
-                            .padding(.leading, 14)
+                            .padding(.leading, Theme.Space.m)
                     }
                 }
             }
@@ -56,10 +50,9 @@ struct ReconCard: View {
             footer
             buttons
         }
-        .padding(16)
+        .padding(Theme.Space.m)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.card(scheme), in: shape)
-        .overlay(shape.stroke(Theme.hairline(scheme)))
+        .cardSurface()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("recon:\(summary.id)")
     }
@@ -73,42 +66,42 @@ struct ReconCard: View {
 
     /// Only the title is a heading. The overview under it is read as body text.
     private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
                 Label {
                     Text(FeedWords.readyLabel)
                 } icon: {
                     Image(systemName: "doc.text.magnifyingglass")
                         .foregroundStyle(Theme.accentSymbol)
                 }
-                .font(.footnote.weight(.semibold))
+                .font(Theme.TypeScale.footnote.weight(.semibold))
                 .foregroundStyle(Theme.secondaryText)
                 if isSample {
                     // The same capsule as a scripted task's card.
                     Text(FeedWords.exampleMarker)
-                        .font(.caption.weight(.medium))
+                        .font(Theme.TypeScale.caption.weight(.medium))
                         .foregroundStyle(Theme.secondaryText)
-                        .padding(.horizontal, 8)
+                        .padding(.horizontal, Theme.Space.xs)
                         .padding(.vertical, 3)
                         .background(Color.primary.opacity(Theme.fieldTint), in: Capsule())
                         .accessibilityIdentifier("exampleTag")
                 }
-                Spacer(minLength: 8)
+                Spacer(minLength: Theme.Space.xs)
                 Text(time)
-                    .font(.footnote)
+                    .font(Theme.TypeScale.footnote)
                     .foregroundStyle(Theme.secondaryText)
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(spoken)
             Text(ReconWords.title(summary.topic))
-                .font(.system(.headline, design: .rounded))
+                .font(Theme.TypeScale.displayHeadline)
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
             // Never a blank line under the title for VoiceOver to land on.
             if let overview = shownOverview {
                 Text(overview)
-                    .font(.subheadline)
+                    .font(Theme.TypeScale.subheadline)
                     .foregroundStyle(Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -121,16 +114,16 @@ struct ReconCard: View {
     }
 
     private var sourcesList: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
             Text(ReconWords.sourcesHeading)
-                .font(.footnote.weight(.semibold))
+                .font(Theme.TypeScale.footnote.weight(.semibold))
                 .foregroundStyle(Theme.secondaryText)
                 .accessibilityAddTraits(.isHeader)
             ForEach(Array(summary.sources.enumerated()), id: \.element.id) { index, source in
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
                     SourceNumber(number: index + 1)
                     Text(Self.sourceLine(source, gatheredAt: summary.gatheredAt))
-                        .font(.footnote)
+                        .font(Theme.TypeScale.footnote)
                         .foregroundStyle(Theme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -155,13 +148,13 @@ struct ReconCard: View {
     }
 
     private var footer: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
             Text(gathered)
             if let note = summary.note {
                 Text(note)
             }
         }
-        .font(.footnote)
+        .font(Theme.TypeScale.footnote)
         .foregroundStyle(Theme.secondaryText)
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .ignore)
@@ -183,12 +176,12 @@ struct ReconCard: View {
     private var buttons: some View {
         let row = actions
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) { buttonViews(row) }
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) { buttonViews(Array(row.prefix(2))) }
-                HStack(spacing: 8) { buttonViews(Array(row.dropFirst(2))) }
+            HStack(spacing: Theme.Space.xs) { buttonViews(row) }
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                HStack(spacing: Theme.Space.xs) { buttonViews(Array(row.prefix(2))) }
+                HStack(spacing: Theme.Space.xs) { buttonViews(Array(row.dropFirst(2))) }
             }
-            VStack(alignment: .leading, spacing: 8) { buttonViews(row) }
+            VStack(alignment: .leading, spacing: Theme.Space.xs) { buttonViews(row) }
         }
         .padding(.top, 2)
     }
@@ -264,28 +257,28 @@ struct ReconPointRow: View {
 
     /// The source numbers, after the words on the same line.
     private func withRefs(_ words: String) -> Text {
-        Text("\(words) \(Text(refs).font(.caption.weight(.bold)).foregroundStyle(Theme.accentText))")
+        Text("\(words) \(Text(refs).font(Theme.TypeScale.caption.weight(.bold)).foregroundStyle(Theme.accentText))")
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
             if let pointLine {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
                     Circle()
                         .fill(Theme.accent)
                         .frame(width: 6, height: 6)
                         .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
                     withRefs(pointLine)
-                        .font(.subheadline)
+                        .font(Theme.TypeScale.subheadline)
                         .foregroundStyle(.primary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
             if let oldLabel {
                 Label(oldLabel, systemImage: "clock.arrow.circlepath")
-                    .font(.footnote)
+                    .font(Theme.TypeScale.footnote)
                     .foregroundStyle(Theme.secondaryText)
-                    .padding(.leading, 14)
+                    .padding(.leading, Theme.Space.m)
             }
             if let disagreement = point.disagreement {
                 Label {
@@ -295,14 +288,14 @@ struct ReconPointRow: View {
                     Image(systemName: "arrow.left.arrow.right")
                         .foregroundStyle(Theme.accentSymbol)
                 }
-                .font(.footnote)
+                .font(Theme.TypeScale.footnote)
                 .foregroundStyle(.primary)
-                .padding(10)
+                .padding(Theme.Space.s)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // The accent wash `Theme.textPairs` checks the words against.
                 .background(Theme.accent.opacity(Theme.accentWash),
-                            in: RoundedRectangle(cornerRadius: Theme.smallCorner, style: .continuous))
-                .padding(.leading, 14)
+                            in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+                .padding(.leading, Theme.Space.m)
             }
         }
         .accessibilityElement(children: .ignore)
@@ -316,9 +309,9 @@ struct SourceNumber: View {
 
     var body: some View {
         Text("\(number)")
-            .font(.caption2.weight(.bold).monospacedDigit())
+            .font(Theme.TypeScale.caption2.weight(.bold).monospacedDigit())
             .foregroundStyle(Theme.accentText)
-            .padding(.horizontal, 6)
+            .padding(.horizontal, Theme.Space.xs)
             .padding(.vertical, 2)
             .background(Theme.accent.opacity(Theme.accentWash), in: Capsule())
             .accessibilityLabel(ReconWords.sourceNumber(number))
@@ -331,7 +324,6 @@ struct ReconSourcesSheet: View {
     let summary: ReconSummary
     var isSample = false
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.colorScheme) private var scheme
 
     /// Under the points: how they were made. Here above all, beside each
     /// source's own text, a retelling from the cloud must never read as a quote.
@@ -352,49 +344,49 @@ struct ReconSourcesSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: Theme.Space.m) {
                     if isSample {
                         SampleTag()
                     }
                     Text(ReconWords.title(summary.topic))
-                        .font(.system(.title2, design: .rounded).weight(.bold))
+                        .font(Theme.TypeScale.displayTitle)
                         .accessibilityAddTraits(.isHeader)
                     if !summary.points.isEmpty {
-                        VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: Theme.Space.s) {
                             Text(ReconWords.pointsHeading)
-                                .font(.headline)
+                                .font(Theme.TypeScale.headline)
                                 .accessibilityAddTraits(.isHeader)
                             ForEach(points, id: \.point.id) { row in
                                 row
                             }
                             if let pointsNote {
                                 Text(pointsNote)
-                                    .font(.footnote)
+                                    .font(Theme.TypeScale.footnote)
                                     .foregroundStyle(Theme.secondaryText)
                                     .fixedSize(horizontal: false, vertical: true)
                                     .accessibilityIdentifier("pointsNote")
                             }
                         }
-                        .padding(16)
+                        .padding(Theme.Space.m)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .card(scheme)
+                        .cardSurface()
                     }
                     Text(ReconWords.sourcesHeading)
-                        .font(.headline)
+                        .font(Theme.TypeScale.headline)
                         .accessibilityAddTraits(.isHeader)
                     ForEach(Array(summary.sources.enumerated()), id: \.element.id) { index, source in
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
                                 SourceNumber(number: index + 1)
                                 Text(source.title)
-                                    .font(.headline)
+                                    .font(Theme.TypeScale.headline)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             Text(ReconCard.sourceLine(source, gatheredAt: summary.gatheredAt))
-                                .font(.footnote)
+                                .font(Theme.TypeScale.footnote)
                                 .foregroundStyle(Theme.secondaryText)
                             Text(source.text)
-                                .font(.body)
+                                .font(Theme.TypeScale.body)
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
                             // Only an https page opens. Any other kind of
@@ -403,20 +395,20 @@ struct ReconSourcesSheet: View {
                             if let link = link(for: source) {
                                 Link(destination: link) {
                                     Label(ReconWords.pageLinkTitle, systemImage: "safari")
-                                        .font(.subheadline.weight(.semibold))
+                                        .font(Theme.TypeScale.subheadline.weight(.semibold))
                                 }
                                 .tint(Theme.accentText)
                                 .frame(minHeight: 44)
                                 .accessibilityHint(ReconWords.pageLinkHint(link.host))
                             }
                         }
-                        .padding(16)
+                        .padding(Theme.Space.m)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .card(scheme)
+                        .cardSurface()
                         .accessibilityElement(children: .contain)
                     }
                 }
-                .padding(.vertical, 20)
+                .padding(.vertical, Theme.Space.l)
                 .readableColumn(Theme.readableWidth)
             }
             .background(Backdrop())
@@ -441,7 +433,6 @@ struct ReconRememberSheet: View {
     @ObservedObject var model: FeedModel
     let summary: ReconSummary
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.colorScheme) private var scheme
 
     static let title = ReconWords.rememberTitle
 
@@ -454,19 +445,19 @@ struct ReconRememberSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: Theme.Space.m) {
+                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
                         Text(ReconWords.rememberQuestion)
-                            .font(.system(.title2, design: .rounded).weight(.bold))
+                            .font(Theme.TypeScale.displayTitle)
                             .accessibilityAddTraits(.isHeader)
                         Text(ReconWords.rememberDetail(model.place))
-                            .font(.subheadline)
+                            .font(Theme.TypeScale.subheadline)
                             .foregroundStyle(Theme.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     ForEach(summary.points) { point in
                         let kept = model.isRemembered(point, in: summary)
-                        VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: Theme.Space.s) {
                             ReconPointRow(point: point, summary: summary)
                             Button {
                                 model.remember(point, in: summary)
@@ -478,9 +469,9 @@ struct ReconRememberSheet: View {
                             .disabled(kept)
                             .accessibilityLabel(Self.buttonLabel(point, kept: kept))
                         }
-                        .padding(16)
+                        .padding(Theme.Space.m)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .card(scheme)
+                        .cardSurface()
                         .accessibilityElement(children: .contain)
                     }
                     if let status = model.rememberStatus {
@@ -488,7 +479,7 @@ struct ReconRememberSheet: View {
                             .transition(.opacity)
                     }
                 }
-                .padding(.vertical, 20)
+                .padding(.vertical, Theme.Space.l)
                 .readableColumn(Theme.readableWidth)
             }
             .background(Backdrop())
@@ -517,11 +508,11 @@ struct ReconRememberSheet: View {
 struct SampleTag: View {
     var body: some View {
         Text(FeedWords.sampleLabel)
-            .font(.footnote.weight(.medium))
+            .font(Theme.TypeScale.footnote.weight(.medium))
             .foregroundStyle(Theme.secondaryText)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Color.primary.opacity(0.06), in: Capsule())
+            .padding(.horizontal, Theme.Space.s)
+            .padding(.vertical, Theme.Space.xs)
+            .background(Color.primary.opacity(Theme.fieldTint), in: Capsule())
             .accessibilityIdentifier("sampleLabel")
     }
 }

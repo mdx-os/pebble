@@ -95,7 +95,7 @@ struct ThinkingDots: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { context in
             let time = context.date.timeIntervalSinceReferenceDate
-            HStack(spacing: 5) {
+            HStack(spacing: Theme.Space.xxs) {
                 ForEach(0..<3, id: \.self) { index in
                     let dot = Motion.dot(index, at: time, reduceMotion: reduceMotion,
                                          increasedContrast: contrast == .increased)
@@ -107,9 +107,9 @@ struct ThinkingDots: View {
                         .offset(y: -dot.lift)
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            .background(Color.primary.opacity(Theme.bubbleTint), in: RoundedRectangle(cornerRadius: 16))
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.vertical, Theme.Space.m)
+            .background(Color.primary.opacity(Theme.bubbleTint), in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
         }
         .accessibilityElement()
         .accessibilityLabel(FirstConversation.thinking)
@@ -262,25 +262,25 @@ struct EmptyState: View {
     let action: () -> Void
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: Theme.Space.s) {
             Image(systemName: symbol)
-                .font(.largeTitle)
+                .font(Theme.TypeScale.largeTitle)
                 .foregroundStyle(Theme.accentSymbol)
                 .accessibilityHidden(true)
             Text(title)
-                .font(.system(.title3, design: .rounded).weight(.semibold))
+                .font(Theme.TypeScale.displayTitle3)
                 .multilineTextAlignment(.center)
             Text(detail)
-                .font(.body)
+                .font(Theme.TypeScale.body)
                 .foregroundStyle(Theme.secondaryText)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
             Button(actionTitle, action: action)
                 .buttonStyle(SoftButtonStyle())
-                .padding(.top, 4)
+                .padding(.top, Theme.Space.xxs)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
+        .padding(.vertical, Theme.Space.xxxl)
         .accessibilityElement(children: .contain)
     }
 }
@@ -291,25 +291,23 @@ struct GentleNotice: View {
     let text: String
     var actionTitle: String?
     var action: (() -> Void)?
-    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             Label {
                 Text(text).fixedSize(horizontal: false, vertical: true)
             } icon: {
                 Image(systemName: "info.circle").foregroundStyle(Theme.accentSymbol)
             }
-            .font(.subheadline)
+            .font(Theme.TypeScale.subheadline)
             if let actionTitle, let action {
                 Button(actionTitle, action: action)
                     .buttonStyle(SoftButtonStyle())
             }
         }
-        .padding(14)
+        .padding(Theme.Space.m)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.smallCorner, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: Theme.smallCorner, style: .continuous).stroke(Theme.hairline(scheme)))
+        .cardSurface(.flat, radius: Theme.Radius.small)
     }
 }
 #endif

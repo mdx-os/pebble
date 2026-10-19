@@ -206,6 +206,21 @@ test: theAccentGuardCatchesEveryWrongCase
 file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
 perl: s~Rule\("accent\.ink", ink\)~Rule("accent.ink", { _, _ in [] })~
 
+# The design token guard: no literal color or fixed font size in PebbleUI
+# outside Theme.swift.
+test: theTokenGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/TokenRules.swift
+perl: s~Rule\("token\.literalColor", literalColor\)~Rule("token.literalColor", { _, _ in [] })~
+
+test: theTokenGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/TokenRules.swift
+perl: s~Rule\("token\.fixedFont", fixedFont\)~Rule("token.fixedFont", { _, _ in [] })~
+
+# Theme.swift left out by prefix, so every file is let by.
+test: theTokenGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/TokenRules.swift
+perl: s~file\.hasPrefix\("PebbleUI/"\) && file != themeFile~file.hasPrefix("PebbleUI/") \&\& !file.hasPrefix("PebbleUI/")~
+
 # The row's `chosen` found by text, not by scope: the nearest function's
 # parameter list is never asked, so another function's `chosen` counts.
 test: theAccentGuardCatchesEveryWrongCase
