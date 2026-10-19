@@ -21,7 +21,10 @@ struct Composer: View {
     /// What VoiceOver adds after the field's name, when sending does more
     /// than the placeholder says.
     var hint: String?
+    /// Where the chat moves the cursor, as when a suggestion fills the field.
+    var focus: FocusState<Bool>.Binding?
     let send: (String) -> Void
+    @Environment(\.colorScheme) private var scheme
 
     /// The placeholder, in `Theme.secondaryText` on the field, a pair
     /// `Theme.textPairs` holds to 4.5 to 1.
@@ -34,13 +37,12 @@ struct Composer: View {
     }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        let bar = RoundedRectangle(cornerRadius: ChatStyle.composerCorner, style: .continuous)
+        HStack(alignment: .bottom, spacing: 6) {
             // Return sends and Shift Return starts a new line.
             // The system placeholder gray is too faint to read, so the
             // placeholder is drawn in the quieter words color.
-            TextField(text: text, prompt: Self.placeholder, axis: .vertical) {
-                Text(FirstConversation.composerPlaceholder)
-            }
+            field
                 .textFieldStyle(.plain)
                 .lineLimit(lines)
                 .submitLabel(.send)
@@ -48,11 +50,8 @@ struct Composer: View {
                 .accessibilityHint(hint.map { Text($0) } ?? Text(verbatim: ""))
                 // Keyboards are reported a moment after first asking, so ask early.
                 .onAppear { _ = Self.shiftIsDown }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Color.primary.opacity(Theme.fieldTint), in: RoundedRectangle(cornerRadius: 14))
-                // An edge that reads at 3 to 1, so the field can be found.
-                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.fieldEdge, lineWidth: 1))
+                .padding(.leading, 14)
+                .padding(.vertical, 11)
                 // One send path per platform: the draft binding reads a lone
                 // Return as Send on iOS, and onKeyPress handles it on the Mac.
                 #if os(macOS)
@@ -67,12 +66,38 @@ struct Composer: View {
                     return .handled
                 }
                 #endif
-            Button(FirstConversation.sendTitle) {
+            Button {
                 send(draft)
+            } label: {
+                Image(systemName: "arrow.up")
+                    .accessibilityLabel(FirstConversation.sendTitle)
             }
-            .buttonStyle(AccentButtonStyle())
+            .buttonStyle(SendButtonStyle())
             .keyboardShortcut(keyboardSends ? KeyboardShortcut(.return, modifiers: .command) : nil)
             .disabled(!canSend)
+        }
+        .padding(3)
+        // A floating bar on a soft material, tinted like a field so the
+        // words and placeholder sit on the pair `Theme.textPairs` checks.
+        // Reduce Transparency makes the material solid.
+        .background(.regularMaterial, in: bar)
+        .background(Color.primary.opacity(Theme.fieldTint), in: bar)
+        // An edge that reads at 3 to 1, so the field can be found.
+        // No shadow: on iPad one here drew a keyboard focus ring around the
+        // sidebar's chosen row on launch, over the fill the dark
+        // screenshots check.
+        .overlay(bar.stroke(Theme.fieldEdge, lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private var field: some View {
+        let field = TextField(text: text, prompt: Self.placeholder, axis: .vertical) {
+            Text(FirstConversation.composerPlaceholder)
+        }
+        if let focus {
+            field.focused(focus)
+        } else {
+            field
         }
     }
 

@@ -10,7 +10,10 @@ import UIKit
 public struct ChatView: View {
     @StateObject private var controller: ChatController
     @FocusState private var nameFieldFocused: Bool
+    /// The composer's cursor, so a suggestion can leave it ready to send.
+    @FocusState private var composerFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.sendsFromKeyboard) private var sendsFromKeyboard
     /// The pending "thinking" announcement, cancelled if the reply lands first.
     @State private var thinkingNotice: Task<Void, Never>?
@@ -97,6 +100,7 @@ public struct ChatView: View {
                             .padding(.bottom, 8)
                     }
                     transcript
+                        .padding(.top, headerScrolls ? 0 : 4)
                     if let offer = controller.reconOffer {
                         ReconOfferButtons(question: controller.conversation.turns.first { $0.id == offer.turnID }?.text,
                                           onYes: { controller.acceptReconOffer() },
@@ -110,7 +114,7 @@ public struct ChatView: View {
                     if controller.isReplying {
                         ThinkingDots()
                             .id(Self.thinkingID)
-                            .transition(Motion.arrival(reduceMotion: reduceMotion))
+                            .transition(ChatStyle.arrival(.agent, reduceMotion: reduceMotion))
                     }
                     if let failure = controller.failure {
                         GentleNotice(text: failure)
@@ -120,8 +124,17 @@ public struct ChatView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.bottom, 12)
                 .readableColumn(columnWidth)
-                .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.4, dampingFraction: 0.85),
-                           value: controller.isReplying)
+                .animation(ChatStyle.animation(reduceMotion: reduceMotion), value: controller.isReplying)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            // Lines that scroll up under the header fade out softly rather
+            // than stop at a hard edge.
+            .mask {
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                        .frame(height: headerScrolls ? 0 : 18)
+                    Color.black
+                }
             }
             .onAppear {
                 // Wait one pass so layout is done before jumping to the end.
@@ -163,13 +176,18 @@ public struct ChatView: View {
                 speak(Self.arrival(for: controller, covered: covered))
             }
             }
+            // The composer floats at the foot of the chat on its material,
+            // and rises with the keyboard.
             composer
-                .padding(.vertical, 16)
+                .zIndex(1)
+                .padding(.top, 8)
+                .padding(.bottom, 12)
                 .readableColumn(columnWidth)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.4, dampingFraction: 0.85),
-                   value: controller.conversation.turns.count)
+        .animation(ChatStyle.animation(reduceMotion: reduceMotion), value: controller.conversation.turns.count)
+        // A light tap as a reply lands, on iPhone only.
+        .replyTap(ChatStyle.ReplyMark(controller.conversation.turns))
         // The send's tap is played by `SendTap` around the whole home
         // screen, so it is felt whichever screen sent it.
         .onAppear {
@@ -194,13 +212,18 @@ public struct ChatView: View {
 
     private var header: some View {
         VStack(spacing: 8) {
+            // A new chat greets with a larger face; once talking, it steps
+            // back a little so the conversation has the room.
             if let look {
-                CharacterView(look: look, size: 72)
+                CharacterView(look: look, size: controller.conversation.isWaitingForPerson ? 88 : 64,
+                              isThinking: controller.isReplying)
+                    .animation(ChatStyle.animation(reduceMotion: reduceMotion),
+                               value: controller.conversation.isWaitingForPerson)
             } else {
                 AvatarView(initial: controller.displayName.initial)
             }
             Text(controller.displayName.text)
-                .font(.title.weight(.semibold))
+                .font(.system(.title, design: .rounded).weight(.semibold))
                 .multilineTextAlignment(.center)
             Text(FirstConversation.presence(controller.privacyPlace))
                 .font(.subheadline)
@@ -375,26 +398,39 @@ public struct ChatView: View {
     }
 
     private var transcript: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ForEach(controller.conversation.turns) { turn in
-                bubble(turn)
+        let turns = controller.conversation.turns
+        let groups = ChatStyle.grouping(of: turns)
+        return VStack(alignment: .leading, spacing: 0) {
+            ForEach(turns) { turn in
+                let grouping = groups[turn.id] ?? ChatStyle.Grouping(isFirst: true, isLast: true)
+                bubble(turn, grouping: grouping)
+                    .padding(.top, turn.id == turns.first?.id ? 0
+                             : grouping.isFirst ? ChatStyle.speakerSpacing : ChatStyle.groupedSpacing)
                     .id(turn.id)
-                    .transition(Motion.arrival(reduceMotion: reduceMotion))
+                    .transition(ChatStyle.arrival(turn.speaker, reduceMotion: reduceMotion))
             }
         }
     }
 
-    private func bubble(_ turn: ChatTurn) -> some View {
-        HStack(alignment: .bottom, spacing: 0) {
+    private func bubble(_ turn: ChatTurn, grouping: ChatStyle.Grouping) -> some View {
+        let shape = ChatStyle.bubbleShape(turn.speaker, grouping)
+        return HStack(alignment: .bottom, spacing: 0) {
             if turn.speaker == .person {
                 Spacer(minLength: 48)
             }
             Text(turn.text)
                 .font(.body)
+                .lineSpacing(2)
                 .multilineTextAlignment(.leading)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(bubbleFill(for: turn.speaker), in: RoundedRectangle(cornerRadius: 16))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 11)
+                .background(bubbleFill(for: turn.speaker), in: shape)
+                // With Increase Contrast, each bubble gets an edge too.
+                .overlay {
+                    if contrast == .increased {
+                        shape.stroke(Theme.fieldEdge, lineWidth: 1)
+                    }
+                }
                 .frame(maxWidth: bubbleWidth, alignment: turn.speaker == .agent ? .leading : .trailing)
             if turn.speaker == .agent {
                 Spacer(minLength: 48)
@@ -412,25 +448,31 @@ public struct ChatView: View {
     }
 
     /// The new chat's empty state: a few things to start with, so it never
-    /// opens on a blank page.
+    /// opens on a blank page. A suggestion only puts its words in the
+    /// composer, with the cursor there; nothing is sent until the person
+    /// sends it.
     private var starterJobs: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             Text(FirstConversation.startersHeading)
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(Theme.secondaryText)
                 .accessibilityAddTraits(.isHeader)
-                .padding(.top, 4)
-            ForEach(Array(FirstConversation.jobs.enumerated()), id: \.element.id) { index, job in
-                StarterChip(title: job.title, index: index) {
-                    controller.submit(job.prompt)
+                .padding(.top, 10)
+            FlowRows(spacing: 8) {
+                ForEach(Array(FirstConversation.jobs.enumerated()), id: \.element.id) { index, job in
+                    StarterChip(title: job.title, symbol: ChatStyle.symbol(forStarter: job.id), index: index) {
+                        controller.draft = ChatStyle.draft(filling: controller.draft, with: job.prompt)
+                        composerFocused = true
+                    }
+                    .disabled(controller.isReplying)
                 }
-                .disabled(controller.isReplying)
             }
         }
     }
 
     private var composer: some View {
-        Composer(draft: $controller.draft, isBusy: controller.isReplying, keyboardSends: sendsFromKeyboard) {
+        Composer(draft: $controller.draft, isBusy: controller.isReplying, keyboardSends: sendsFromKeyboard,
+                 focus: $composerFocused) {
             controller.send($0)
         }
     }
@@ -953,10 +995,12 @@ struct ReconOfferButtons: View {
     }
 }
 
-/// One starter in a new chat. The chips arrive one after another and give
-/// a little under a press.
+/// One starter in a new chat: a soft capsule with a symbol. The chips arrive
+/// one after another and give a little under a press. A tap fills the
+/// composer; it never sends.
 struct StarterChip: View {
     let title: String
+    var symbol = "sparkles"
     let index: Int
     let action: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -983,16 +1027,25 @@ struct StarterChip: View {
 
     var body: some View {
         Button(action: action) {
-            Text(title)
-                .font(.body.weight(.medium))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(Theme.accent.opacity(Theme.accentWash), in: RoundedRectangle(cornerRadius: 14))
-                .contentShape(RoundedRectangle(cornerRadius: 14))
-                .pointerHover(in: RoundedRectangle(cornerRadius: 14))
+            HStack(spacing: 8) {
+                Image(systemName: symbol)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.accentSymbol)
+                    .accessibilityHidden(true)
+                Text(title)
+                    .font(.subheadline.weight(.medium))
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 11)
+            .frame(minHeight: 44)
+            .background(Theme.accent.opacity(Theme.accentWash), in: Capsule())
+            .contentShape(Capsule())
+            .pointerHover(in: Capsule())
         }
         .buttonStyle(SoftPressStyle())
+        .accessibilityLabel(title)
         .opacity(shown ? 1 : 0)
         .offset(y: shown ? 0 : Motion.entranceOffset(reduceMotion: reduceMotion))
         .onAppear {

@@ -36,29 +36,55 @@ public struct OnboardingView: View {
         ))
     }
 
+    /// True once the character has made its entrance.
+    @State private var introduced = false
+
+    /// The character shows from the start in a still screenshot, and
+    /// arrives with a gentle rise everywhere else: only a fade with Reduce
+    /// Motion on.
+    private var characterShown: Bool { introduced || holdsStill }
+
     public var body: some View {
         ZStack {
             Backdrop()
-            VStack(spacing: 0) {
-                progress
-                    .padding(.top, 12)
-                Spacer(minLength: 12)
-                CharacterView(look: model.look, size: model.page == .hello ? 132 : 96, isCheerful: model.page == .ideas)
-                    .animation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.75), value: model.page)
-                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.35), value: model.look)
-                content
-                    .id(model.page)
-                    .transition(reduceMotion ? .opacity : .asymmetric(
-                        insertion: .move(edge: .trailing).combined(with: .opacity),
-                        removal: .move(edge: .leading).combined(with: .opacity)
-                    ))
-                Spacer(minLength: 12)
+            GeometryReader { proxy in
+                // Scrolls only when the words outgrow the screen, as at the
+                // largest text sizes; otherwise everything sits centered.
+                ScrollView {
+                    VStack(spacing: 0) {
+                        progress
+                            .padding(.top, 16)
+                        Spacer(minLength: 24)
+                        CharacterView(look: model.look, size: model.page == .hello ? 140 : 100,
+                                      isCheerful: model.page == .ideas)
+                            .opacity(characterShown ? 1 : 0)
+                            .scaleEffect(characterShown || reduceMotion ? 1 : 0.86)
+                            .offset(y: characterShown || reduceMotion ? 0 : 16)
+                            .animation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.75), value: model.page)
+                            .animation(reduceMotion ? nil : .easeInOut(duration: 0.35), value: model.look)
+                        content
+                            .id(model.page)
+                            .transition(reduceMotion ? .opacity : .asymmetric(
+                                insertion: .move(edge: .trailing).combined(with: .opacity),
+                                removal: .move(edge: .leading).combined(with: .opacity)
+                            ))
+                        Spacer(minLength: 32)
+                    }
+                    .padding(.horizontal, Theme.gutter)
+                    .frame(maxWidth: Theme.readableWidth)
+                    .frame(maxWidth: .infinity, minHeight: proxy.size.height)
+                }
+                .scrollBounceBehavior(.basedOnSize)
             }
-            .padding(.horizontal, Theme.gutter)
-            .frame(maxWidth: Theme.readableWidth)
-            .frame(maxWidth: .infinity)
         }
         .animation(reduceMotion ? .easeInOut(duration: 0.2) : .spring(response: 0.45, dampingFraction: 0.85), value: model.page)
+        .onAppear {
+            guard !introduced else { return }
+            withAnimation(reduceMotion ? .easeInOut(duration: 0.3)
+                          : .spring(response: 0.7, dampingFraction: 0.72).delay(0.1)) {
+                introduced = true
+            }
+        }
     }
 
     private var progress: some View {
@@ -87,7 +113,7 @@ public struct OnboardingView: View {
     }
 
     private func heading(_ title: String, _ detail: String) -> some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
             Text(title)
                 .font(.system(.largeTitle, design: .rounded).weight(.bold))
                 .multilineTextAlignment(.center)
@@ -97,23 +123,25 @@ public struct OnboardingView: View {
                     .font(.body)
                     .foregroundStyle(Theme.secondaryText)
                     .multilineTextAlignment(.center)
+                    .lineSpacing(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(.top, 20)
+        .padding(.top, 28)
+        .padding(.bottom, 4)
     }
 
     private var hello: some View {
-        VStack(spacing: 28) {
+        VStack(spacing: 32) {
             heading(FirstRunWords.hello, FirstRunWords.helloDetail(place))
             Button(FirstRunWords.beginTitle) { model.advance() }
                 .buttonStyle(PrimaryButtonStyle())
-                .padding(.top, 12)
+                .padding(.top, 16)
         }
     }
 
     private var naming: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 22) {
             heading(FirstRunWords.nameQuestion, FirstRunWords.nameDetail)
             TextField(FirstConversation.namePlaceholder, text: $model.draftName)
                 .font(.system(.title2, design: .rounded).weight(.semibold))
@@ -142,7 +170,7 @@ public struct OnboardingView: View {
     }
 
     private var lookPicker: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 24) {
             heading(FirstRunWords.lookQuestion, FirstRunWords.lookDetail)
             HStack(spacing: 12) {
                 ForEach(AgentLook.allCases, id: \.self) { look in
@@ -197,9 +225,9 @@ public struct OnboardingView: View {
     }
 
     private var ideas: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 20) {
             heading(FirstRunWords.greeting(named: model.displayName), FirstRunWords.ideasDetail)
-            VStack(spacing: 10) {
+            VStack(spacing: 12) {
                 ForEach(Array(model.starters.enumerated()), id: \.element.id) { index, job in
                     IdeaCardButton(job: job, index: index) { model.pick(job) }
                 }
@@ -222,14 +250,7 @@ struct IdeaCardButton: View {
     /// Reduce Motion, or a screenshot that needs the screen to settle.
     private var reduceMotion: Bool { systemReduceMotion || holdsStill }
 
-    private var symbol: String {
-        switch job.id {
-        case "morning": "sun.horizon"
-        case "talk": "bubble.left.and.bubble.right"
-        case "remember": "bookmark"
-        default: "sparkles"
-        }
-    }
+    private var symbol: String { ChatStyle.symbol(forStarter: job.id) }
 
     var body: some View {
         Button(action: action) {
@@ -247,9 +268,12 @@ struct IdeaCardButton: View {
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(Theme.secondaryText)
             }
-            .padding(14)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
             .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
+            // A soft lift, so each idea sits a touch above the backdrop.
+            .shadow(color: .black.opacity(scheme == .dark ? 0.25 : 0.05), radius: 10, y: 3)
             .pointerHover(in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
         }
         .buttonStyle(.plain)
