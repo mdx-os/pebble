@@ -82,9 +82,10 @@ device-screenshots: generate
 		sh scripts/device-screenshots.sh $(or $(OUT),build/screenshots/devices)
 
 ## ui-test: drive the app in the Simulator: the iPad sidebar, Return to send,
-## the keyboard shortcuts, the cloud screens, and the Needs you flow with its
-## nudge, on an iPad and an iPhone. The nudge test meets the system's own
-## question, so the app is removed from both simulators first.
+## the keyboard shortcuts, the cloud screens, the Needs you flow with its
+## nudge, and the question sheet's choice of how long a yes is for with the
+## list of what the agent may do, on an iPad and an iPhone. The nudge test
+## meets the system's own question, so the app is removed from both simulators first.
 ui-test: generate
 	sh scripts/ui-test-reset.sh "$(or $(PEBBLE_IPAD),iPad Pro 13-inch (M5))" "$(or $(PEBBLE_IPHONE),iPhone 17 Pro)"
 	xcodebuild test -quiet -project Pebble.xcodeproj -scheme Pebble -derivedDataPath $(DERIVED) \
@@ -92,7 +93,8 @@ ui-test: generate
 		-destination 'platform=iOS Simulator,name=$(or $(PEBBLE_IPHONE),iPhone 17 Pro)' \
 		-only-testing:PebbleAppUITests/HomeLayoutUITests \
 		-only-testing:PebbleAppUITests/CloudUITests \
-		-only-testing:PebbleAppUITests/NeedsYouFlowUITests
+		-only-testing:PebbleAppUITests/NeedsYouFlowUITests \
+		-only-testing:PebbleAppUITests/GrantSheetUITests
 
 ## brand-check: the product name must live only in Config/Brand.xcconfig, in
 ## any case, and no new key or path may spell the codename in lowercase
