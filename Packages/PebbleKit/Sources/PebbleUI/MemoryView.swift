@@ -1070,6 +1070,8 @@ final class MemoryModel: ObservableObject {
             case .needsWords: status = MemoryWords.needsWords
             case .tooLong: status = MemoryWords.tooLong
             case .notFound: status = nil; cancelEdit()
+            // Only a looked up point is refused this way, and none is added here.
+            case .notKept: status = nil
             }
         } catch is MemoryStore.Unavailable {
             status = MemoryWords.unavailable

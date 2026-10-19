@@ -364,7 +364,7 @@ struct CloudPromiseTests {
         cloud.addPrivateWord()
         #expect(review.pending == nil)
         await chat.settled()
-        #expect(chat.failure == CloudWords.notSent)
+        #expect(chat.failure == CloudWords.withdrawn)
         #expect(chat.draft == "Ask about the Riverside Clinic")
 
         chat.submit(chat.draft)
@@ -1142,6 +1142,32 @@ struct CloudPromiseTests {
         }
         #expect(slot.chat !== held)
         #expect(maker.wire.sent.count == 2)
+    }
+
+    /// A private word typed into another window's composer and never sent
+    /// goes with Forget everything too, though that chat holds nothing
+    /// else. Left there, it would outlive the erased list, and its next
+    /// preview would no longer hide it. A chat with nothing typed is left
+    /// open.
+    @Test func forgetEverythingClearsAnUnsentDraftInAnotherOpenChat() throws {
+        let maker = TransportMaker()
+        let memory = scratchMemory("Sam's birthday is May 14.")
+        let cloud = help(CloudHelpSettings(isOn: true, for: endpoint, privateWords: ["lemon cake"]), maker: maker,
+                         memory: memory)
+        let slot = HomeView.chatSlot(newChat(cloud), brand: brand, model: local,
+                                     names: InMemoryAgentNameStore(stored: "Pip"), cloud: cloud)
+        let held = try #require(slot.chat)
+        let other = newChat(cloud)
+        other.draft = "Bring the lemon cake on Friday"
+
+        HomeView.memoryModel(store: memory, place: .mayLeaveDevice, cloud: cloud).forgetEverything()
+
+        #expect(cloud.settings.privateWords.isEmpty)
+        #expect(other.hasEnded)
+        #expect(other.draft.isEmpty)
+        #expect(!held.hasEnded)
+        #expect(slot.chat === held)
+        #expect(maker.wire.sent.isEmpty)
     }
 
     /// The home screen's launch line draws only while there is one to say.

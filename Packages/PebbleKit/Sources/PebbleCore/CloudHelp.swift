@@ -505,6 +505,9 @@ public enum CloudWords {
 
     /// After the person chose not to send.
     public static let notSent = "Okay, I didn't send it. What you wrote is still here."
+    /// The preview was taken away before anyone answered it, as when the
+    /// cloud was turned off or the screen went away. No one chose anything.
+    public static let withdrawn = "Nothing went to the cloud. What you wrote is still here."
     /// The setting was turned off while this chat was using the cloud. It
     /// names only the setting and what happened to this message. Where the
     /// next chat answers depends on the local model, which this line can't
@@ -606,7 +609,7 @@ public enum CloudWords {
         spokenSignIn("X-Sample"), spokenSignInBody([]), spokenSignInBody(["device"]), previewSignInFirst,
         previewSignInCovered, previewThenMessage,
         spokenMessage(role: "person", text: "Hi"), spokenMessage(role: "agent", text: "Hi"),
-        notSent, turnedOff, staysHere, notesUnreadable, forgetEverythingDetail,
+        notSent, withdrawn, turnedOff, staysHere, notesUnreadable, forgetEverythingDetail,
         forgotNotesNotWords, forgotWordsNotNotes, forgotAndCloudOff, forgotWordsAndCloudNotNotes,
         forgotNotesAndTasksNotWords, forgotTasksAndWordsNotNotes, forgotTasksNotNotesOrWords,
         forgotTasksAndWordsAndCloudNotNotes, forgetTasksAndWordsDetail, tasksAndWordsForgotten,

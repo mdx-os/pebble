@@ -690,7 +690,8 @@ struct TodayFollowupsTests {
         }
         #expect(Set(showing) == [.confirm, .confirmTimedOut, .todayNeedsYou, .todaySummary,
                                  .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive,
-                                 .askWaiting, .askSheet, .askAnswered, .askClosed, .askLive])
+                                 .askWaiting, .askSheet, .askAnswered, .askClosed, .askLive,
+                                 .reconRunning, .reconReady])
     }
 
     /// A scripted task's question, opened from its card's Approve as Today

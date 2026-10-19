@@ -25,9 +25,11 @@ public struct HomeView: View {
 
     /// `feed` is where finished work comes from. Questions come only from
     /// `needsYou` and `tasks`, which both ask through `AskFirst`. `tasks`
-    /// shows long work on live cards. `background` is work done while the
-    /// app was closed: its cards join Today, its switch sits on the memory
-    /// screen, and Forget everything turns it off and clears it.
+    /// shows long work on live cards. Without one, looking into something
+    /// plays on the scripted engine with the sample sources, labelled as
+    /// examples. `background` is work done while the app was closed: its
+    /// cards join Today, its switch sits on the memory screen, and Forget
+    /// everything turns it off and clears it.
     public init(
         brand: Brand,
         model: any ModelClient,
@@ -64,11 +66,12 @@ public struct HomeView: View {
         needsYou: NeedsYou,
         tasks: (any TaskEngine)? = nil,
         drivesTasks: Bool = false,
+        sources: (any SourceProvider)? = nil,
         kept: TaskStore? = nil,
         notifier: (any QuestionNotifying)? = nil,
         opensQuestion: Bool = false,
         background: BackgroundRunner? = nil,
-        now: @escaping () -> Date = { Date() },
+        now: @escaping @Sendable () -> Date = HomeView.wallClock,
         cloud: CloudHelp? = nil,
         // Told each place the live screen works out, for tests that drive
         // a hosted screen.
@@ -76,9 +79,9 @@ public struct HomeView: View {
     ) {
         self.init(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                   looks: looks, conversation: conversation, section: section, feed: feed,
-                  needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, kept: kept, notifier: notifier,
-                  opensQuestion: opensQuestion, background: background, now: now, cloud: cloud,
-                  reportsPlace: reportsPlace, log: nil)
+                  needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, sources: sources, kept: kept,
+                  notifier: notifier, opensQuestion: opensQuestion, background: background, now: now,
+                  cloud: cloud, reportsPlace: reportsPlace, log: nil)
     }
 
     /// The same, writing down what the screen makes in `log`, for tests.
@@ -95,21 +98,56 @@ public struct HomeView: View {
         needsYou: NeedsYou,
         tasks: (any TaskEngine)? = nil,
         drivesTasks: Bool = false,
+        sources: (any SourceProvider)? = nil,
         kept: TaskStore? = nil,
         notifier: (any QuestionNotifying)? = nil,
         opensQuestion: Bool = false,
         background: BackgroundRunner? = nil,
-        now: @escaping () -> Date = { Date() },
+        now: @escaping @Sendable () -> Date = HomeView.wallClock,
         cloud: CloudHelp? = nil,
         reportsPlace: (@MainActor (PrivacyPlace) -> Void)? = nil,
         log: HomeScreenLog?
     ) {
         screen = HomeScreen(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
                             looks: looks, conversation: conversation, section: section, feed: feed,
-                            needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks, kept: kept,
-                            notifier: notifier, opensQuestion: opensQuestion, background: background,
-                            now: now, cloud: cloud, reportsPlace: reportsPlace, log: log)
+                            needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
+                            sources: Self.reconSources(sources, now: now), kept: kept, notifier: notifier,
+                            opensQuestion: opensQuestion, background: background, now: now, cloud: cloud,
+                            reportsPlace: reportsPlace, chatLine: nil, log: log)
     }
+
+    /// The screen's clock when none is given, as in the app: the wall clock,
+    /// so a recon says when it was really gathered.
+    static let wallClock: @Sendable () -> Date = { Date() }
+
+    /// Where looking into something reads, as the home screen gets it.
+    /// Without one given, the sample pages, dated by the screen's own
+    /// clock, so they and the time they were gathered agree.
+    ///
+    /// Only a provider that reads on this device is ever used. The chat's
+    /// promise that its words stay here covers the topic it asks for, so a
+    /// provider that would take it elsewhere gives way to one that reads
+    /// nothing, and Today never offers to look into anything with it.
+    static func reconSources(_ given: (any SourceProvider)?, now: @escaping @Sendable () -> Date) -> any SourceProvider {
+        guard let given else { return SampleSources(now: now) }
+        return given.runsOnDevice ? given : NoSources()
+    }
+
+    #if DEBUG
+    /// The same, with `chatLine` said in the chat as it opens, for the
+    /// showcase's screenshots of what follows. Only the showcase can say a
+    /// line the person didn't type, and only in a debug build.
+    init(brand: Brand, model: any ModelClient, names: any AgentNameStoring, onboarding: any OnboardingStoring,
+         memory: MemoryStore?, looks: UserDefaults, conversation: Conversation?, section: HomeSection,
+         feed: [any FeedSource], needsYou: NeedsYou, now: @escaping @Sendable () -> Date, chatLine: String) {
+        screen = HomeScreen(brand: brand, model: model, names: names, onboarding: onboarding, memory: memory,
+                            looks: looks, conversation: conversation, section: section, feed: feed,
+                            needsYou: needsYou, tasks: nil, drivesTasks: false,
+                            sources: Self.reconSources(nil, now: now), kept: nil, notifier: nil,
+                            opensQuestion: false, background: nil, now: now, cloud: nil, reportsPlace: nil,
+                            chatLine: chatLine, log: nil)
+    }
+    #endif
 
     /// Which model the screen was made for: its kind and where its words
     /// go. Either changing makes a new screen.
@@ -151,13 +189,13 @@ public struct HomeView: View {
     }
 
     /// The same, from a place already worked out, as the home screen does
-    /// with the cloud setting in it.
+    /// with the cloud setting in it. `memory` is where Remember this saves.
     static func feedModel(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)? = nil,
                           drivesTasks: Bool = false, flow: NeedsYouFlow? = nil,
-                          background: BackgroundRunner? = nil, place: PrivacyPlace,
+                          background: BackgroundRunner? = nil, place: PrivacyPlace, memory: MemoryStore? = nil,
                           now: @escaping () -> Date) -> FeedModel {
         FeedModel(sources: sources, needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
-                  place: place, flow: flow, background: background, now: now)
+                  place: place, memory: memory, flow: flow, background: background, now: now)
     }
 
     /// The memory screen's model, with its privacy place from the active
@@ -183,6 +221,76 @@ public struct HomeView: View {
         return memory
     }
 
+    /// The memory screen's model as the home screen makes it: Forget
+    /// everything erases the notes, kept points included, and the
+    /// background work, then forgets every task on `feed`, a recon still
+    /// going included, and closes an open summary.
+    static func memoryModel(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp?,
+                            background: BackgroundRunner? = nil, log: HomeScreenLog? = nil,
+                            feed: FeedModel) -> MemoryModel {
+        memoryModel(store: store, place: place, cloud: cloud, background: background, log: log,
+                    onForgetEverything: { [weak feed] in feed?.forgetEverything() ?? .none })
+    }
+
+    /// Today's model as the home screen makes it, with looking into things
+    /// in it. Every task, a recon's included, runs through one runner. With
+    /// no engine given, the scripted one plays in real time over `reading`.
+    ///
+    /// That engine is moved only while a card is live, so its own clock
+    /// falls behind whenever Today is quiet. Its card times and the time a
+    /// recon was gathered are read from `now` instead, the screen's clock,
+    /// so "Gathered today at 9:12" is when it was read. An engine passed in,
+    /// as the showcase's, keeps its own clock.
+    static func reconFeedModel(sources: [any FeedSource], needsYou: NeedsYou, tasks: (any TaskEngine)?,
+                               drivesTasks: Bool, reading: any SourceProvider, place: PrivacyPlace,
+                               memory: MemoryStore?, model: any ModelClient, cloud: CloudHelp?,
+                               flow: NeedsYouFlow? = nil, background: BackgroundRunner? = nil,
+                               now: @escaping @Sendable () -> Date) -> FeedModel {
+        let runner: ReconRunner
+        if let tasks {
+            runner = (tasks as? ReconRunner) ?? ReconRunner(engine: tasks, provider: reading)
+        } else {
+            runner = ReconRunner(engine: LocalFakeEngine(rule: needsYou.rule, wallClock: now), provider: reading, now: now)
+        }
+        let feed = feedModel(sources: sources, needsYou: needsYou, tasks: runner,
+                             drivesTasks: drivesTasks || tasks == nil, flow: flow, background: background,
+                             place: place, memory: memory, now: now)
+        // Asked at each start, so turning the cloud on or off counts from
+        // the next one, as it does for chats. A summary put together in the
+        // cloud asks through Today's own preview gate.
+        let review = feed.cloudReview
+        feed.summarizer = {
+            ReconSummarizers.choose(for: cloud?.chatModel(local: model, review: review, madeOnSend: true) ?? model)
+        }
+        if let cloud { feed.follow(cloudSettings: cloud.$settings.eraseToAnyPublisher()) }
+        return feed
+    }
+
+    /// Lets a chat offer to look into something. It starts only on the person's tap.
+    /// An on-device chat's recon stays on this device, whatever the cloud
+    /// setting is when the person taps. When Today can't start one at all,
+    /// the chat is left unable to offer, so "research X" gets a reply
+    /// rather than an offer whose tap could only fail.
+    static func wired(_ chat: ChatController, to feed: FeedModel) -> ChatController {
+        chat.lookInto = feed.canLookInto
+            ? { [weak feed] topic, place in feed?.start(lookingInto: topic, place: place) ?? .couldNotStart }
+            : nil
+        chat.reconReadsExamples = feed.readsExamples
+        // Forget everything, in this window or another, takes the offer too.
+        feed.whenForgotten { [weak chat] in
+            chat?.forgetReconOffer()
+            return chat != nil
+        }
+        return chat
+    }
+
+    /// What Today's `onTalk` does to the chat, apart from moving, so tests
+    /// can drive it: the line goes in the composer, ready, and nothing is
+    /// sent. Words the person already typed are never replaced.
+    static func draft(_ line: String, in chat: ChatController) {
+        if chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { chat.draft = line }
+    }
+
     /// The send itself, apart from moving, so tests can drive it.
     @discardableResult
     static func sendsFromToday(_ line: String, chat: ChatController) -> Bool {
@@ -205,11 +313,14 @@ public struct HomeView: View {
     }
 
     /// The home screen's chat slot, holding `first` and starting a fresh
-    /// chat whenever the one it holds is ended by Forget everything.
+    /// chat whenever the one it holds is ended by Forget everything. With
+    /// `feed`, the fresh chat can offer to look into things, as the first did.
     static func chatSlot(_ first: ChatController?, brand: Brand, model: any ModelClient,
-                         names: any AgentNameStoring, cloud: CloudHelp?) -> ChatSlot {
-        ChatSlot(first) {
-            newChat(brand: brand, model: model, names: names, cloud: cloud, conversation: nil)
+                         names: any AgentNameStoring, cloud: CloudHelp?, feed: FeedModel? = nil) -> ChatSlot {
+        ChatSlot(first) { [weak feed] in
+            let chat = newChat(brand: brand, model: model, names: names, cloud: cloud, conversation: nil)
+            guard let feed else { return chat }
+            return wired(chat, to: feed)
         }
     }
 
@@ -279,6 +390,11 @@ struct HomeScreen: View {
     /// A cloud chat's preview is waiting for its answer, on screen or held
     /// back until another sheet closes. It covers the home screen.
     @State private var previewWaiting = false
+    /// The same for Today's preview, of a summary put together in the cloud.
+    @State private var todayPreviewWaiting = false
+    /// True when Today's preview came first, so it shows and the chat's
+    /// waits; otherwise the chat's goes first. Only one sheet shows at a time.
+    @State private var todayPreviewFirst = false
     /// What the fallback memory screen did with the private words when
     /// the tasks went. Nil until it has tried.
     @State private var wordsErased: CloudHelp.WordsErased?
@@ -306,13 +422,15 @@ struct HomeScreen: View {
         needsYou: NeedsYou,
         tasks: (any TaskEngine)?,
         drivesTasks: Bool,
+        sources: any SourceProvider,
         kept: TaskStore?,
         notifier: (any QuestionNotifying)?,
         opensQuestion: Bool,
         background: BackgroundRunner?,
-        now: @escaping () -> Date,
+        now: @escaping @Sendable () -> Date,
         cloud: CloudHelp?,
         reportsPlace: (@MainActor (PrivacyPlace) -> Void)?,
+        chatLine: String?,
         log: HomeScreenLog?
     ) {
         self.brand = brand
@@ -333,30 +451,41 @@ struct HomeScreen: View {
         // People who named their agent before the first run existed count as finished.
         if !needed, !onboarding.hasFinished() { onboarding.markFinished() }
         _finished = State(initialValue: !needed)
-        // The chat starts after the first run so it opens with the chosen name.
-        // `StateObject` makes it only once, so a rebuild of this struct makes
-        // no chat, no preview gate and no cloud transport.
-        _chats = StateObject(wrappedValue: HomeView.chatSlot(
-            needed ? nil : HomeView.newChat(brand: brand, model: model, names: names, cloud: cloud,
-                                            conversation: conversation),
-            brand: brand, model: model, names: names, cloud: cloud))
         let newChatPlace = cloud?.privacyPlace(local: model) ?? model.privacyPlace
         _newChatPlace = State(initialValue: newChatPlace)
         // A chat made now gets the model the setting picks now, so this is
         // its place too. A rebuild must never work it out from a chat that
         // isn't the one open. The `onChange` of `surfacePlace` in `body`
         // keeps it true, and the memory screen hands it to the setting.
-        _feed = StateObject(wrappedValue: HomeView.feedModel(
-            sources: feed, needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
-            // A nudge says the name the person chose, read when it is sent.
-            flow: kept.map { HomeView.flow(store: $0, notifier: notifier, brand: brand, names: names) },
-            background: background, place: newChatPlace, now: now))
+        // Today is made once, for the feed and the chat wired to it both,
+        // whichever `StateObject` asks first.
+        let today = TodayMaker {
+            HomeView.reconFeedModel(sources: feed, needsYou: needsYou, tasks: tasks, drivesTasks: drivesTasks,
+                                    reading: sources, place: newChatPlace, memory: memory, model: model,
+                                    cloud: cloud,
+                                    // A nudge says the name the person chose, read when it is sent.
+                                    flow: kept.map { HomeView.flow(store: $0, notifier: notifier, brand: brand,
+                                                                   names: names) },
+                                    background: background, now: now)
+        }
+        // `StateObject` makes it only once, so a rebuild of this struct makes
+        // no chat, no preview gate and no cloud transport.
+        // The chat starts after the first run so it opens with the chosen name.
+        _chats = StateObject(wrappedValue: HomeView.chatSlot(needed ? nil : {
+            let chat = HomeView.wired(
+                HomeView.newChat(brand: brand, model: model, names: names, cloud: cloud, conversation: conversation),
+                to: today.feed)
+            if let chatLine { chat.submit(chatLine, byHand: false) }
+            return chat
+        }(), brand: brand, model: model, names: names, cloud: cloud, feed: today.feed))
+        _feed = StateObject(wrappedValue: today.feed)
         _section = State(initialValue: section)
         _cloudSettings = State(initialValue: cloud?.$settings.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher())
     }
 
     private func newChat() -> ChatController {
-        HomeView.newChat(brand: brand, model: model, names: names, cloud: cloud, conversation: nil)
+        HomeView.wired(HomeView.newChat(brand: brand, model: model, names: names, cloud: cloud, conversation: nil),
+                       to: feed)
     }
 
     private var chat: ChatController? { chats.chat }
@@ -480,10 +609,30 @@ struct HomeScreen: View {
         // so a line sent from Today's composer is previewed too. It waits,
         // unsent, while another sheet or a question is open, and while it
         // waits it covers the home screen like any sheet (`HomeCover`).
-        .cloudPreview(chat?.review, blocked: cover.anySheetOpen || cover.questionOpen,
+        .cloudPreview(chat?.review, blocked: cover.anySheetOpen || cover.questionOpen || previewTurn.chatWaits,
                       waiting: $previewWaiting)
+        // What a summary put together in the cloud would send, the same
+        // way, from Today's own gate. Whichever preview came first shows
+        // first; the other waits, unsent, for it to close.
+        // It says it is for Today's summary, and of what, since it can come
+        // up over the chat or the notes long after the tap that asked.
+        .cloudPreview(feed.cloudReview, blocked: cover.anySheetOpen || cover.questionOpen || previewTurn.todayWaits,
+                      waiting: $todayPreviewWaiting, purpose: CloudPreviewSheet.todayPurpose)
+        .onChange(of: todayPreviewWaiting) { _, waiting in
+            var turn = previewTurn
+            turn.todayChanged(to: waiting)
+            todayPreviewFirst = turn.todayFirst
+        }
+        .onChange(of: previewWaiting) { _, waiting in
+            var turn = previewTurn
+            turn.chatChanged(to: waiting)
+            todayPreviewFirst = turn.todayFirst
+        }
         // A preview can't wait on a window that is gone, so it is not sent.
-        .onDisappear { chat?.screenWentAway() }
+        .onDisappear {
+            chat?.screenWentAway()
+            feed.cloudReview.cancelPending()
+        }
         .sheet(isPresented: $showsShortcuts, onDismiss: sheetClosed) {
             KeyboardShortcutsView()
         }
@@ -498,6 +647,25 @@ struct HomeScreen: View {
         }
         .sheet(item: $feed.reading, onDismiss: sheetClosed) { item in
             FeedReader(item: item, time: feed.timeLabel(for: item.time), isSample: feed.isSample(item))
+        }
+        .sheet(item: $feed.readingSources, onDismiss: sheetClosed) { summary in
+            ReconSourcesSheet(summary: summary, isSample: feed.recon?.isSample(summary.id) == true)
+        }
+        .sheet(item: $feed.choosingPoint, onDismiss: sheetClosed) { summary in
+            ReconRememberSheet(model: feed, summary: summary)
+        }
+        .task(id: feed.ticks) {
+            // Scripted tasks play in real time, wherever the person is, and
+            // only while one is live. With nothing going, nothing ticks.
+            guard feed.ticks else { return }
+            var last = ContinuousClock.now
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+                let now = ContinuousClock.now
+                let step = now - last
+                last = now
+                feed.tick(Double(step.components.seconds) + Double(step.components.attoseconds) / 1e18)
+            }
         }
         // An alert, not a popover, so both choices show on iPad and Esc keeps the chat.
         .alert(HomeWords.newChatQuestion, isPresented: $asksNewChat) {
@@ -527,7 +695,7 @@ struct HomeScreen: View {
     /// typed are never replaced.
     private func talk(about line: String) {
         guard let chat else { return }
-        if chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { chat.draft = line }
+        HomeView.draft(line, in: chat)
         go(.chat)
     }
 
@@ -575,14 +743,22 @@ struct HomeScreen: View {
         if closesMemory { section = after }
         showsShortcuts = false
         feed.reading = nil
+        feed.readingSources = nil
+        feed.choosingPoint = nil
     }
 
     /// What covers the home screen right now, read in one place so
     /// Command Return, the handoff and the chat's quiet always agree.
     private var cover: HomeCover {
         HomeCover(usesSidebar: usesSidebar, section: section, showsShortcuts: showsShortcuts,
-                  readerOpen: feed.reading != nil, questionOpen: feed.reviewing != nil,
-                  previewOpen: previewWaiting)
+                  readerOpen: feed.reading != nil || feed.readingSources != nil || feed.choosingPoint != nil,
+                  questionOpen: feed.reviewing != nil,
+                  previewOpen: previewWaiting || todayPreviewWaiting)
+    }
+
+    /// Which of the two previews holds back for the other.
+    private var previewTurn: PreviewTurn {
+        PreviewTurn(chatPending: previewWaiting, todayPending: todayPreviewWaiting, todayFirst: todayPreviewFirst)
     }
 
     /// A sheet finished closing. What was waiting runs only if nothing is
@@ -693,11 +869,10 @@ struct HomeScreen: View {
             // on each pass through here. `place` then keeps its words in
             // step with the cloud setting and the open chat. The memory
             // model forgets the background work itself; Today's part of
-            // Forget everything then forgets the tasks and closes an open
-            // summary.
+            // Forget everything then forgets the tasks, recons included,
+            // and closes an open summary.
             MemoryView(model: HomeView.memoryModel(store: memory, place: surfacePlace, cloud: cloud,
-                                                   background: background, log: log,
-                                                   onForgetEverything: { feed.forgetEverything() }),
+                                                   background: background, log: log, feed: feed),
                        place: surfacePlace, cloud: cloud, holdsMore: feed.hasSomethingToForget)
         } else {
             // The store couldn't be opened. Say so rather than hide memory.
@@ -727,6 +902,14 @@ struct HomeScreen: View {
     }
 }
 
+/// Reads nothing, and says it doesn't read on this device, so no recon
+/// starts with it. Stands in for a provider the home screen won't use.
+struct NoSources: SourceProvider {
+    var runsOnDevice: Bool { false }
+    var isSample: Bool { false }
+    func sources(for task: ReconTask) throws -> [ReconSource] { [] }
+}
+
 /// The home screen's open chat. Starting a new one replaces it, which
 /// redraws the home screen. A chat Forget everything ends is replaced by a
 /// fresh one from `restart`, so the screen never shows a chat that holds
@@ -752,6 +935,46 @@ final class ChatSlot: ObservableObject {
             self.chat = self.restart()
         }
     }
+}
+
+/// Only one sheet shows at a time, so when a cloud chat and Today's summary
+/// both have a preview waiting, the one that came first shows and the other
+/// waits, unsent. One alone never waits for the other.
+struct PreviewTurn: Equatable {
+    var chatPending: Bool
+    var todayPending: Bool
+    /// Today's preview was waiting before the chat's.
+    var todayFirst: Bool
+
+    var chatWaits: Bool { todayPending && todayFirst }
+    var todayWaits: Bool { chatPending && !todayFirst }
+
+    /// Today's preview started or stopped waiting. It is first when no
+    /// chat preview was there before it.
+    mutating func todayChanged(to pending: Bool) {
+        todayPending = pending
+        if pending { todayFirst = !chatPending }
+    }
+
+    /// The chat's preview started or stopped waiting. When it closes with
+    /// Today's still waiting, Today's shows now, so it counts as first: a
+    /// new chat preview then waits for it, and never takes a sheet already
+    /// on screen away from the person.
+    mutating func chatChanged(to pending: Bool) {
+        chatPending = pending
+        if pending, !todayPending { todayFirst = false }
+        if !pending, todayPending { todayFirst = true }
+    }
+}
+
+/// Makes Today's model once, on first ask, so the feed and the first chat
+/// wired to it share it whichever `StateObject` is made first.
+@MainActor
+final class TodayMaker {
+    private let make: () -> FeedModel
+    private(set) lazy var feed: FeedModel = make()
+
+    init(_ make: @escaping () -> FeedModel) { self.make = make }
 }
 
 /// The chat's composer, at the foot of Today. It shares the chat's draft,

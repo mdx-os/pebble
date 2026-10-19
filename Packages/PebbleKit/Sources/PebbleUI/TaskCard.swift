@@ -81,6 +81,8 @@ struct TaskCard: View {
     let canApprove: Bool
     /// A scripted example, so the card says so where its buttons are.
     let isSample: Bool
+    /// False for work that can't change course, such as looking into one topic.
+    let canRedirect: Bool
     let onApprove: () -> Void
     /// Returns false when the engine couldn't take the words, so they stay.
     let onRedirect: (String) -> Bool
@@ -90,7 +92,7 @@ struct TaskCard: View {
     let onDismiss: () -> Void
 
     init(task: AgentTask, time: String, progress: LiveProgress? = nil, state: TaskCardState? = nil,
-         canApprove: Bool = false, isSample: Bool = false,
+         canApprove: Bool = false, isSample: Bool = false, canRedirect: Bool = true,
          onApprove: @escaping () -> Void = {}, onRedirect: @escaping (String) -> Bool = { _ in true },
          onStop: @escaping () -> Void = {}, onRetry: @escaping () -> Void = {},
          onOpen: @escaping () -> Void = {}, onDismiss: @escaping () -> Void = {}) {
@@ -100,6 +102,7 @@ struct TaskCard: View {
         _state = ObservedObject(wrappedValue: state ?? TaskCardState())
         self.canApprove = canApprove
         self.isSample = isSample
+        self.canRedirect = canRedirect
         self.onApprove = onApprove
         self.onRedirect = onRedirect
         self.onStop = onStop
@@ -350,7 +353,7 @@ struct TaskCard: View {
             var row: [Action] = []
             if task.waitsForApproval && canApprove { row.append(.approval) }
             if task.isStuck { row.append(.retry) }
-            if !redirecting { row.append(.redirect) }
+            if canRedirect && !redirecting { row.append(.redirect) }
             row.append(.stop)
             return row
         }

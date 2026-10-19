@@ -162,12 +162,22 @@ public struct CloudPreview: Sendable, Equatable, Identifiable {
     public let signIn: CloudRequest?
     public let request: CloudRequest
     public let hidden: [Redaction.Kind: Int]
+    /// Asked by a summary's work, not by a chat. Set by the code that built
+    /// the request, never read from its words, so nothing a person types
+    /// in a chat can make it look like a summary's.
+    public let forSummary: Bool
+    /// The summary's run that asked, so each run's preview is its own on
+    /// Today's gate (`CloudYes.run`). Nil for a chat.
+    public let run: String?
 
-    public init(id: UUID = UUID(), signIn: CloudRequest? = nil, request: CloudRequest, hidden: [Redaction.Kind: Int]) {
+    public init(id: UUID = UUID(), signIn: CloudRequest? = nil, request: CloudRequest, hidden: [Redaction.Kind: Int],
+                forSummary: Bool = false, run: String? = nil) {
         self.id = id
         self.signIn = signIn
         self.request = request
         self.hidden = hidden
+        self.forSummary = forSummary
+        self.run = run
     }
 
     /// Every request the yes sends, in order.
@@ -182,10 +192,15 @@ public struct CloudPreview: Sendable, Equatable, Identifiable {
     }
 }
 
-/// The person's answer to a preview.
+/// The answer to a preview.
 public enum CloudConsent: Sendable, Equatable {
+    /// The person said send.
     case send
+    /// The person said not to send.
     case cancel
+    /// Taken away before the person answered, as when the cloud was turned
+    /// off or the screen went away. Nothing is sent, and no one chose that.
+    case withdrawn
 }
 
 /// Shows the person a preview and waits for their answer. Nothing is sent
@@ -365,6 +380,9 @@ public enum CloudModelError: Error, Equatable, Sendable {
     case off
     /// The person chose not to send. Nothing was sent.
     case notSent
+    /// The preview was taken away before the person answered it. Nothing
+    /// was sent.
+    case withdrawn
     /// Words of crisis are answered on this device and never sent, and a
     /// chat that holds them is never sent again.
     case staysHere
@@ -486,9 +504,19 @@ public struct CloudModel: ModelClient {
         }
         let preview = try Self.preview(
             for: transcript, endpoint: endpoint, redactor: try session.widened(by: current),
-            headers: auth.headers(for: Self.url(for: endpoint)), signIn: auth.signIn(for: endpoint)
+            headers: auth.headers(for: Self.url(for: endpoint)), signIn: auth.signIn(for: endpoint),
+            forSummary: CloudAsk.forSummary,
+            run: CloudAsk.forSummary ? CloudYes.run : nil
         )
-        guard await reviewer.review(preview) == .send else { throw CloudModelError.notSent }
+        switch await reviewer.review(preview) {
+        case .send: break
+        case .cancel: throw CloudModelError.notSent
+        case .withdrawn: throw CloudModelError.withdrawn
+        }
+        try readyToSend()
+        // Past the yes: a summary's work notes that what it read may go, or
+        // refuses a yes that went stale, as for a summary stopped since.
+        if let heard = CloudYes.heard, !heard() { throw CancellationError() }
         // Under way from the yes until the reply is back, so Forget
         // everything ends this chat even between sends, when nothing is on
         // the wire and nothing may be hidden yet.
@@ -558,7 +586,9 @@ public struct CloudModel: ModelClient {
         endpoint: URL,
         redactor: Redactor,
         headers: [String: String] = [:],
-        signIn: CloudSignIn? = nil
+        signIn: CloudSignIn? = nil,
+        forSummary: Bool = false,
+        run: String? = nil
     ) throws -> CloudPreview {
         // Before redaction: the same decision Conversation makes.
         if CareCheck.answersWithCare(transcript) { throw CloudModelError.staysHere }
@@ -593,7 +623,9 @@ public struct CloudModel: ModelClient {
         return CloudPreview(
             signIn: signInRequest,
             request: CloudRequest(url: url(for: endpoint), headers: messageHeaders, body: body),
-            hidden: hidden
+            hidden: hidden,
+            forSummary: forSummary,
+            run: run
         )
     }
 }
@@ -632,6 +664,7 @@ public final class CloudChatSession: @unchecked Sendable {
 
     /// `handingOver` is told just before each request is handed to the
     /// transport, so the owner knows something may have left this session.
+    /// It runs under the session's lock, so it must not touch the session.
     public init(handingOver: @escaping @Sendable () -> Void = {}) {
         self.handingOver = handingOver
     }
@@ -686,7 +719,9 @@ public final class CloudChatSession: @unchecked Sendable {
     }
 
     /// Hands `request` to `transport`, unless the chat has ended. Ending it
-    /// cancels the send, as stopping the reply does.
+    /// cancels the send, as stopping the reply does. The `handingOver`
+    /// callback given at init runs under the session's lock, just before
+    /// the request is handed over, so it must not touch the session.
     package func send(_ request: CloudRequest, through transport: any CloudTransport) async throws -> Data {
         let id = UUID()
         let task: Task<Data, Error> = try lock.withLock {

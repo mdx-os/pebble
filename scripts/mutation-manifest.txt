@@ -168,6 +168,21 @@ file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
 perl: s~for chat in openChats\.allObjects where chat\.holdsAnything \{ chat\.end\(\) \}~for chat in openChats.allObjects where chat.holdsAnything \&\& chat.onEnded != nil { chat.end() }~
 perl: s~for session in sessions\.allObjects where session\.holdsAnything \{ session\.end\(\) \}~~
 
+# A summary's send is a cloud send like a chat's: a switch off ends it.
+test: turningOffEndsASummarysSendOnTheWire
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~for session in sessions\.allObjects \{ session\.end\(because: \.off\) \}\n~\n~
+
+# A yes for another address is no yes for a summary either.
+test: aSummaryUsesTheCloudOnlyWithTheYesForThisAddress
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~settings\.isOn\(for: endpoint\)~settings.isOn~
+
+# A word typed and never sent goes with Forget everything too.
+test: forgetEverythingClearsAnUnsentDraftInAnotherOpenChat
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~ \|\| !draft\.isEmpty \|\| cloudSession~ || cloudSession~
+
 test: forgetEverythingFirstEndsEveryOpenCloudChat afterSendingNoForgetLineSaysGone
 file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
 perl: s~let line = switch \(sent, notesGone, rest\)~let line = switch (false, notesGone, rest)~
@@ -208,7 +223,7 @@ test: endingAChatDropsWhatItHidAndCancelsTheSendOnTheWire forgetEverythingFirstE
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
 perl: s~(endedBy = reason \}\n)\s*hidden = Redactor\(\)\n~$1~
 
-test: handingARequestOverIsToldFirst forgetEverythingFirstEndsEveryOpenCloudChat
+test: handingARequestOverIsToldFirst forgetEverythingFirstEndsEveryOpenCloudChat forgetEverythingEndsASummarysSendOnTheWire
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
 perl: s~\n\s*handingOver\(\)\n~\n~
 
@@ -265,7 +280,7 @@ perl: s~\(isSignIn\(\$0\.name, \$0\.value\) \? signInMask : \$0\.value\)~\$0.val
 # Sign-in is a hop in the same preview, sent only by its yes.
 test: signInNeverGoesWithoutAYesToThePreviewThatShowsIt turningOnSendsNothingAndSignInWaitsForThePreviewsYes
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
-perl: s~(\n\s*guard await reviewer\.review\(preview\) == \.send)~\n        if let early = preview.signIn { auth.signedIn(try await session.send(early, through: transport)) }$1~
+perl: s~(\n\s*switch await reviewer\.review\(preview\) \{)~\n        if let early = preview.signIn { auth.signedIn(try await session.send(early, through: transport)) }$1~
 
 test: theYesSendsTheSignInHopThenTheMessageExactlyAsShown turningOnSendsNothingAndSignInWaitsForThePreviewsYes
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
@@ -562,7 +577,7 @@ perl: s~if on \{ return isAvailable && !usesCloudForNewChats \}~if on { confirmT
 test: theScreenUnderThePreviewKeepsItsStateWhenTheChatChanges
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
 perl: s~    func cloudPreview\(~    \@ViewBuilder func cloudPreview(~
-perl: s~-> ModifiedContent<Self, CloudPreviewPresenter> \{\n[^\n]*\n~-> some View {\n        if let review { modifier(CloudPreviewPresenter(review: review, blocked: blocked, waiting: waiting)) } else { self }\n~
+perl: s~-> ModifiedContent<Self, CloudPreviewPresenter> \{\n[^\n]*\n[^\n]*\n~-> some View {\n        if let review { modifier(CloudPreviewPresenter(review: review, blocked: blocked, waiting: waiting, purpose: purpose)) } else { self }\n~
 
 test: aSwitchOffWhileTheDeviceIsLockedKeepsThePrivateWords
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
