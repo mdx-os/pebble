@@ -1,5 +1,5 @@
 // append: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
-// expect: its own encryption or certificate pinning
+// expect: encryption or certificate pinning needs a fresh export review
 // Pinning inside the cloud client, the one file allowed network code.
 
 extension RefusesRedirects {

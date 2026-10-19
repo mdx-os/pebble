@@ -924,3 +924,71 @@ struct GuardScanTests {
         #expect(Finding(rule: "r", line: 2, column: 13, message: "m").report(in: "A.swift") == "A.swift:2:13: m")
     }
 }
+
+extension GuardWrongCaseTests {
+    static let privacyWrong: [WrongCase] = [
+        WrongCase(rule: "privacy.gateTests", text: "// func offByDefaultMakesNoTransportAndKeepsChatsOnDevice() { #expect(maker.made == 0) }", file: PrivacyRules.gateTests),
+        WrongCase(rule: "privacy.network", text: "let x = NSURLSession.sharedSession()", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.network", text: "let x = `socket`\n (AF_INET, SOCK_STREAM, 0)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "let x = try Data.init(\n contentsOf: url)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "let x = Data.init(contentsOf:)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.transport", text: "let x: URLSessionCloudTransport = .init()", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.transport", text: "let x = URLSessionCloudTransport.init", file: PrivacyRules.gate),
+        WrongCase(rule: "privacy.transport", text: "func f() { _ = ModelChoice.model(local: local) { _ in local }; makeTransport() }", file: PrivacyRules.gate),
+        WrongCase(rule: "privacy.transport", text: "let x = ModelChoice.model(local: { makeTransport() }()) { _ in local }", file: PrivacyRules.gate),
+        WrongCase(rule: "privacy.transport", text: "let x = makeTransport", file: PrivacyRules.gate),
+        WrongCase(rule: "privacy.sessionFactory", text: "public static func makeSession() -> URLSession { fatalError() }", file: PrivacyRules.cloud),
+        WrongCase(rule: "privacy.requiredReason", text: "let x = fstat\n (fd, &info)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.speech", text: "local.requiresOnDeviceRecognition = true\nrecognizer.recognitionTask(with: unrestricted) { _, _ in }", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.speech", text: "func unrestricted() { SFSpeechRecognizer() }", file: PrivacyRules.speechHelper),
+        WrongCase(rule: "privacy.upload", text: "let x = MKLocalSearch(request: request)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.encryption", text: "import CryptoKit", file: PrivacyRules.cloud),
+    ]
+
+    @Test func privacyRulesCatchEveryWrongCase() {
+        for item in Self.privacyWrong {
+            let hits = PrivacyRules.findings(in: SyntaxSource(item.text), file: item.file)
+            #expect(hits.contains { $0.rule == item.rule }, "\(item.rule) missed \(item.text)")
+        }
+    }
+
+    @Test func privacyRulesAllowReviewedContexts() {
+        let comments = SyntaxSource("/* URLSession /* stat() */ CryptoKit */\nlet x = \"socket()\"")
+        #expect(PrivacyRules.findings(in: comments, file: "App/Sources/Right.swift").isEmpty)
+        for text in [
+            "ModelChoice.model(settings: settings, endpoint: url, local: local) { _ in\n\n\n\n\n\n\n\n\n\n URLSessionCloudTransport() }",
+            "ModelChoice.model(settings: settings, endpoint: url, local: local, cloud: { _ in URLSessionCloudTransport.init() })",
+            "ModelChoice.model(settings: settings, endpoint: url, local: local) { _ in let x: URLSessionCloudTransport = .init(); return x }",
+        ] {
+            #expect(!PrivacyRules.findings(in: SyntaxSource(text), file: PrivacyRules.gate).contains { $0.rule == "privacy.transport" })
+        }
+        #expect(!PrivacyRules.findings(in: SyntaxSource("static func makeSession() {}"), file: PrivacyRules.cloud).contains { $0.rule == "privacy.sessionFactory" })
+    }
+
+    @Test func privacyReasonCodesBelongToTheirCategories() {
+        for (category, codes) in PrivacyAudit.allowedReasons {
+            #expect(!codes.isEmpty)
+            for code in codes { #expect(PrivacyAudit.validReason(code, category: category)) }
+            #expect(!PrivacyAudit.validReason("0000.0", category: category))
+        }
+        #expect(!PrivacyAudit.validReason("C617.1", category: "NSPrivacyAccessedAPICategoryUserDefaults"))
+        #expect(!PrivacyAudit.validReason("CA92.1", category: "invented"))
+    }
+
+    @Test func privacyRejectsUnreadableCompiledSources() {
+        #expect(PrivacyAudit.readableSource("App/Sources/Main.swift"))
+        for ext in ["m", "mm", "c", "cpp", "metal", "cc", "cxx", "s"] {
+            #expect(!PrivacyAudit.readableSource("App/Sources/Wrong." + ext))
+        }
+    }
+
+    @Test func privacyRequiresAllFiveCategories() {
+        let cases = ["UserDefaults": "`UserDefaults`\n .standard", "FileTimestamp": "fstat\n (fd, &info)",
+                     "SystemBootTime": "`mach_absolute_time`\n ()", "DiskSpace": "statfs\n (path, &info)",
+                     "ActiveKeyboards": "UITextInputMode\n .`activeInputModes`"]
+        for (category, text) in cases {
+            let hits = PrivacyRules.findings(in: SyntaxSource(text), file: "App/Sources/Wrong.swift")
+            #expect(hits.contains { $0.rule == "privacy.requiredReason" && $0.message == "NSPrivacyAccessedAPICategory" + category })
+        }
+    }
+}

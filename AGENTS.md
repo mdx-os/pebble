@@ -104,18 +104,6 @@ in lint, a skill, or CI.
 - After a Forget everything erases the summary's file, the switch file
   goes too, with the keys an earlier version kept in `UserDefaults`.
 
-## Manual checks before release
-
-Things no test here can reach. Check each on a real iPhone before a release.
-
-- `BackgroundStore.shutError` is `EPERM`. With "Work while you're away" on,
-  restart the phone in the evening and leave it locked, never unlocked,
-  until after 7:00. Unlock it but don't open the app, and download the
-  app's container from Xcode's Devices window: `background-switch.json`
-  (or the job in `background.json`) should hold `"locked"`. If neither
-  does, opening the file failed with another error, and the runner took
-  it as a disk error.
-
 ## The name
 
 - The product name lives only in `Config/Brand.xcconfig`. Code reads it from
@@ -170,6 +158,14 @@ Things no test here can reach. Check each on a real iPhone before a release.
 ## Manual checks before release
 
 Some things can't be proven by an automated test. Check these by hand before a release and note the result in the release PR:
+
+- `BackgroundStore.shutError` is `EPERM`. With "Work while you're away" on,
+  restart the phone in the evening and leave it locked, never unlocked,
+  until after 7:00. Unlock it but don't open the app, and download the
+  app's container from Xcode's Devices window: `background-switch.json`
+  (or the job in `background.json`) should hold `"locked"`. If neither
+  does, opening the file failed with another error, and the runner took
+  it as a disk error.
 
 - **Done's focus ring on the Mac:** turn on Full Keyboard Access, open a sheet, and Tab to Done. Exactly one ring shows around it, in light and in dark. If the system draws a second ring, add `.focusEffectDisabled()` to the button.
 - **Done's focus ring on iPad:** with a hardware keyboard, Tab to Done. The ring shows in light and in dark.

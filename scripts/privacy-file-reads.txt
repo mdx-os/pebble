@@ -1,9 +1,13 @@
-# Data(contentsOf:) and String(contentsOf:) calls the app ships, each read
-# and seen to open a file on the device, never a remote URL. Format: "path:
-# line", without the line number. scripts/privacy-check.sh fails on a call
-# missing from here and on a line here that no longer matches.
-Packages/PebbleKit/Sources/PebbleCore/Background.swift: guard faults?.openError == nil, let data = try? Data(contentsOf: url) else { throw Unavailable() }
-Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift: guard let data = try? Data(contentsOf: fileURL) else { throw MemoryStore.Unavailable() }
-Packages/PebbleKit/Sources/PebbleCore/Memory.swift: guard let data = try? Data(contentsOf: fileURL) else { throw Unavailable() }
-Packages/PebbleKit/Sources/PebbleCore/TaskStore.swift: guard let choiceURL, let data = try? Data(contentsOf: choiceURL),
-Packages/PebbleKit/Sources/PebbleCore/TaskStore.swift: guard let data = try? Data(contentsOf: fileURL) else { return }
+# Reviewed local URL reads and initializer references, one entry per occurrence. GuardScan writes
+# path: normalized call syntax (no trivia). Duplicate calls need duplicate
+# entries, so an added occurrence never inherits an existing approval.
+Packages/PebbleKit/Sources/PebbleCore/Background.swift: Data(contentsOf:url)
+Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift: Data(contentsOf:fileURL)
+Packages/PebbleKit/Sources/PebbleCore/Memory.swift: Data(contentsOf:fileURL)
+Packages/PebbleKit/Sources/PebbleCore/TaskStore.swift: Data(contentsOf:choiceURL)
+Packages/PebbleKit/Sources/PebbleCore/TaskStore.swift: Data(contentsOf:fileURL)
+Packages/PebbleKit/Sources/PebbleCore/AskFirst.swift: String.init
+Packages/PebbleKit/Sources/PebbleCore/IdeaDraft.swift: String.init
+Packages/PebbleKit/Sources/PebbleCore/IdeaDraft.swift: String.init
+Packages/PebbleKit/Sources/PebbleCore/IdeaDraft.swift: String.init
+Packages/PebbleKit/Sources/PebbleCore/SnapshotDiff.swift: String.init

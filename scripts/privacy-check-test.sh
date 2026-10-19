@@ -2,8 +2,8 @@
 # Self-test for scripts/privacy-check.sh. Copies what the check reads into a
 # scratch tree, requires the check to pass there, then adds each fixture in
 # scripts/privacy-fixtures on its own and requires the result its header
-# names. That proves each pattern still catches its case under the system's
-# grep, and that comments and allowed uses stay quiet.
+# names. This proves the complete runner catches each regression and that
+# comments and reviewed uses stay quiet.
 #
 # Each fixture's header, in // lines at its top:
 #   into: <dir>      copy the fixture into this folder of the scratch tree
@@ -11,6 +11,10 @@
 #   empty: <file>    or empty this file (the fixture's body is unused)
 #   link: <target>   with into: a new folder under Sources, make it a target
 #                    that PebbleModel depends on, so only a dependency reaches it
+#   filename: <name> optional source name, including a non-Swift extension
+#   reason: <code>   replace the first manifest entry's reason code
+#   category: <name> replace its category
+#   remove-category: <name> remove that manifest entry
 #   expect: <words>  privacy-check must fail and say these words, or "ok"
 #                    to require it to pass
 set -eu
@@ -30,9 +34,15 @@ fresh() {
 }
 
 run_check() {
-  (cd "$scratch/tree" && sh "$repo/scripts/privacy-check.sh") > "$scratch/out" 2>&1
+  (cd "$scratch/tree" && sh "${PRIVACY_CHECK_SCRIPT:-$repo/scripts/privacy-check.sh}") > "$scratch/out" 2>&1
 }
 
+# Use the current checker on scratch source trees without rebuilding per case.
+if [ -z "${PRIVACY_CHECK_SCRIPT:-}" ]; then
+  swift build --package-path "$repo/Tools/GuardKit" --product privacy-audit --quiet
+  PRIVACY_AUDIT_BIN="$(swift build --package-path "$repo/Tools/GuardKit" --show-bin-path)/privacy-audit"
+  export PRIVACY_AUDIT_BIN
+fi
 failures=0
 fresh
 if ! run_check; then
@@ -47,11 +57,12 @@ for fixture in "$fixtures"/*.swift; do
   header() { sed -n "s#^// $1: *##p" "$fixture" | head -n 1; }
   into="$(header into)"; append="$(header append)"; empty="$(header empty)"
   link="$(header link)"; expect="$(header expect)"
+  filename="$(header filename)"; reason="$(header reason)"; remove_category="$(header remove-category)"; category="$(header category)"
   [ -n "$expect" ] || { echo "privacy-check-test: $name has no expect: line"; failures=1; continue; }
   fresh
   if [ -n "$into" ]; then
     mkdir -p "$scratch/tree/$into"
-    cp "$fixture" "$scratch/tree/$into/Fixture$(echo "$name" | tr -d -- '-').swift"
+    cp "$fixture" "$scratch/tree/$into/${filename:-Fixture$(echo "$name" | tr -d -- '-').swift}"
     if [ -n "$link" ]; then
       perl -0pi -e "s~\.target\(name: \"PebbleModel\", dependencies: \[\"PebbleCore\"\]\),~.target(name: \"PebbleModel\", dependencies: [\"PebbleCore\", \"$link\"]),\n        .target(name: \"$link\"),~" \
         "$scratch/tree/Packages/PebbleKit/Package.swift"
@@ -67,6 +78,16 @@ for fixture in "$fixtures"/*.swift; do
   else
     echo "privacy-check-test: $name has no into:, append: or empty: line"; failures=1; continue
   fi
+  python3 -I - "$scratch/tree/App/Resources/PrivacyInfo.xcprivacy" "$reason" "$remove_category" "$category" <<'MANIFEST'
+import plistlib, sys
+path, reason, remove, category = sys.argv[1:]
+with open(path, "rb") as f: manifest = plistlib.load(f)
+entries = manifest["NSPrivacyAccessedAPITypes"]
+if remove: entries[:] = [e for e in entries if e["NSPrivacyAccessedAPIType"] != remove]
+if reason: entries[0]["NSPrivacyAccessedAPITypeReasons"] = [reason]
+if category: entries[0]["NSPrivacyAccessedAPIType"] = category
+with open(path, "wb") as f: plistlib.dump(manifest, f)
+MANIFEST
   count=$((count + 1))
   if run_check; then
     if [ "$expect" != ok ]; then

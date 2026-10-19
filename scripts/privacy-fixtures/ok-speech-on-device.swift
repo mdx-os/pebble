@@ -1,8 +1,9 @@
-// into: Packages/PebbleKit/Sources/PebbleCore
+// into: Packages/PebbleKit/Sources/PebbleModel
+// filename: OnDeviceSpeech.swift
 // expect: ok
 import Speech
 
-func fixtureListen(_ request: SFSpeechAudioBufferRecognitionRequest) -> SFSpeechRecognizer? {
+func recognizeOnDevice(_ request: SFSpeechAudioBufferRecognitionRequest) -> SFSpeechRecognizer? {
     request.requiresOnDeviceRecognition = true
     return SFSpeechRecognizer()
 }

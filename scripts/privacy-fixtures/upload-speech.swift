@@ -1,5 +1,5 @@
 // into: Packages/PebbleKit/Sources/PebbleCore
-// expect: without requiresOnDeviceRecognition = true
+// expect: speech recognition outside the reviewed helper
 import Speech
 
 let fixtureRecognizer = SFSpeechRecognizer()

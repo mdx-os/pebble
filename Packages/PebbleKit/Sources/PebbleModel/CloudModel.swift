@@ -464,7 +464,7 @@ public struct URLSessionCloudTransport: CloudTransport {
     /// A session that keeps nothing and adds nothing: no cookies, cache or
     /// saved passwords, no extra headers, and every redirect refused, so
     /// the request can't end up anywhere but the address shown.
-    public static func makeSession() -> URLSession {
+    static func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false

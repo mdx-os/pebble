@@ -1,5 +1,5 @@
 // into: Packages/PebbleKit/Sources/PebbleCore
-// expect: its own encryption or certificate pinning
+// expect: encryption or certificate pinning needs a fresh export review
 import Security
 
 func fixtureSeal(_ key: SecKey, _ data: CFData) -> CFData? {

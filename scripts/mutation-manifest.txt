@@ -347,3 +347,58 @@ perl: s~guard called \|\| reached, !source\.context\(of: reference\)\.inPreview 
 test: diagnosticsCountCharacters
 file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
 perl: s~let column = String\(decoding: bytes\[start\.\.<min\(max\(start, offset\), bytes\.count\)\], as: UTF8\.self\)\.count \+ 1~let column = String(decoding: bytes[start..<min(max(start, offset), bytes.count)], as: UTF8.self).utf16.count + 1~
+
+# Disable the privacy network rule.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~Rule\("privacy\.network", network\),~~
+
+# Disable the privacy urlRead rule.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~Rule\("privacy\.urlRead", urlRead\),~~
+
+# Disable the privacy transport rule.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~Rule\("privacy\.transport", transport\),~~
+
+# Disable the privacy sessionFactory rule.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~Rule\("privacy\.sessionFactory", sessionFactory\),~~
+
+# Disable the privacy requiredReason rule.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~Rule\("privacy\.requiredReason", requiredReason\),~~
+
+# Disable the privacy speech rule.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~Rule\("privacy\.speech", speech\),~~
+
+# Disable the privacy upload rule.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~Rule\("privacy\.upload", upload\),~~
+
+# Disable the privacy encryption rule.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~Rule\("privacy\.encryption", encryption\),~~
+
+# Accept a code under any category.
+test: privacyReasonCodesBelongToTheirCategories
+file: Tools/GuardKit/Sources/GuardScan/PrivacyAudit.swift
+perl: s~allowedReasons\[category\]\?\.contains\(code\) == true~allowedReasons.values.contains { \$0.contains(code) }~
+
+# Accept compiled languages the Swift parser cannot read.
+test: privacyRejectsUnreadableCompiledSources
+file: Tools/GuardKit/Sources/GuardScan/PrivacyAudit.swift
+perl: s~URL\(fileURLWithPath: path\)\.pathExtension == "swift"~true~
+
+# Disable structural consent test detection.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~Rule\("privacy\.gateTests", gateTestsPresent\),~~

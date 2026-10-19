@@ -48,19 +48,27 @@ keys that never enter the repo.
   (`offByDefaultMakesNoTransportAndKeepsChatsOnDevice`,
   `anEmptyAddressMeansDisabledEvenIfSavedOn`) go away. It also fails on
   system APIs that send the person's data to Apple: `CLGeocoder`,
-  `MKLocalSearch`, and `SFSpeechRecognizer` without on-device recognition.
+  `MKLocalSearch`, and speech recognition outside the reserved
+  `PebbleModel/OnDeviceSpeech.swift` helper named `recognizeOnDevice`.
+  No speech helper ships today. Adding it requires reviewing the exact
+  request passed to recognition and tests that keep recognition on device.
+  Swift source is parsed by GuardScan in the separate Tools/GuardKit package.
+  All compiled App sources are enumerated; languages the checker cannot
+  read fail until a parser and fixtures are added.
 - **Required-reason APIs:** only `UserDefaults`, with reason `CA92.1`
   (the app's own settings, read only by the app). The check scans `App/`
   and every PebbleKit target the app links, with their dependencies.
 - **Encryption:** the system's file protection on notes
   (`.completeFileProtection`) and HTTPS through `URLSession` in the cloud
   client. Both come from the system, so both are exempt, and
-  `ITSAppUsesNonExemptEncryption = NO` is true. It stays true only while
-  TLS and every cipher come from the system: `make privacy-check` fails on
-  `import CryptoKit`, `CommonCrypto`, `SecKeyCreateEncryptedData`, `NIOSSL`
-  or BoringSSL, and certificate pinning. If one of them is ever needed,
-  answer export compliance again (the encryption questions in App Store
-  Connect, and maybe a year-end self-classification report) before it ships.
+  `ITSAppUsesNonExemptEncryption = NO` is the current answer.
+  `make privacy-check` flags `CryptoKit`, `CommonCrypto`,
+  `SecKeyCreateEncryptedData`, `NIOSSL`, BoringSSL and certificate pinning
+  as tripwires. A hit requires a fresh export review before shipping; it
+  does not by itself prove that encryption is nonexempt. CryptoKit is a
+  system framework too. Review the actual use, the App Store Connect
+  questions and any reporting obligations before keeping or changing
+  the answer.
 - **Mac sandbox:** Release asks for `com.apple.security.network.client`
   (outgoing connections) and nothing else. `release-check` reads
   `ENABLE_APP_SANDBOX` and the entitlements from the Release build settings,
@@ -97,6 +105,10 @@ Nothing below is committed. Each value lives on the signing machine.
    With automatic signing (the project's style) that is enough for iOS.
    The Mac target is set to sign locally with an ad hoc identity (`-`) so
    anyone can build it; override that for a real build, as in step 3.
+   The target's `CODE_SIGN_IDENTITY` value of `-` takes precedence over
+   the local xcconfig. On the first Mac upload, check the signed archive
+   and exported app to confirm the intended distribution identity and
+   sandbox entitlements survived export.
 2. **Bundle ID.** The app uses `com.mdxos.pebble` on iOS and macOS, one
    record for both (universal purchase). If it must change, change
    `PRODUCT_BUNDLE_IDENTIFIER` in `project.yml` and `bundle_id` in
