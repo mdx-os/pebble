@@ -571,7 +571,7 @@ perl: s~guard Self\.delete\(fileURL\) else \{ return false \}~_ = Self.delete(fi
 # A file that can't be looked at, taken as not there.
 test: aForgetTheFolderWouldNotLetThroughIsCarriedOutOnceItOpens aFileThatCanNotBeLookedAtIsNotTakenAsNone
 file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
-perl: s~return lstat\(url\.path, &info\) != 0 && errno == ENOENT~return lstat(url.path, &info) != 0~
+perl: s~return failure == ENOENT \? \.absent : \.inaccessible~return .absent~
 
 # A grants file read as none whenever it can't be seen.
 test: aFileThatCanNotBeLookedAtIsNotTakenAsNone
@@ -597,3 +597,34 @@ perl: s~let removed = grants\.remove\(grant\.id\)~let removed = true~
 test: aGrantIsListedAndRemovedWhenTheNotesCouldNotOpen
 file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
 perl: s~ else if let unsaved \{\n            announce\(GrantWords\.unsaved\(unsaved\)\)\n        \}~~
+
+# Unknown marker state must never become a forget request.
+test: anInaccessibleMarkerNeverForgetsReadableGrants
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~case \.inaccessible: return false~case .inaccessible: return eraseOwed()~
+
+# The fallback initializer must also leave an unknown marker alone.
+test: anInaccessibleMarkerNeverForgetsReadableGrants
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~if Self\.presence\(markerURL\) == \.present~if Self.presence(markerURL) != .absent~
+
+# A stale marker cannot sit behind a successful write.
+test: aMarkerThatCannotBeRemovedNeverSilentlyLosesANewGrant
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~guard Self\.delete\(markerURL\) else \{ return false \}~_ = Self.delete(markerURL)~
+perl: s~pendingErase = !marked \|\| !erased~pendingErase = !erased~
+
+# Failing to record the forget must remain visible.
+test: aFailedMarkerWriteStaysVisibleUntilRetried
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~pendingErase = !marked \|\| !erased~pendingErase = !erased~
+
+# A recovered grant must reach the settings that were already observing.
+test: settingsSeesGrantsRecoveredByAnotherWindow
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~changed \|\| all != grantsBefore \|\| unsavedNow~changed || unsavedNow~
+
+# A new book must also report grants waiting for marker cleanup as unsaved.
+test: aMarkerThatCannotBeRemovedNeverSilentlyLosesANewGrant
+file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
+perl: s~dirty \|\| !addedWhileUnread\.isEmpty \?~dirty ?~

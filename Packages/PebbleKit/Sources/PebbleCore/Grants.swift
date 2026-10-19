@@ -276,6 +276,8 @@ public final class GrantFileStore: GrantStoring, @unchecked Sendable {
     private let forgetOnly: Bool
     /// What a forget-only store keeps.
     private var held: Data?
+    /// A forget remains owed even if its marker could not be written.
+    private var pendingErase = false
 
     package init(fileURL: URL, forgetMarker: URL) {
         self.fileURL = fileURL
@@ -292,7 +294,7 @@ public final class GrantFileStore: GrantStoring, @unchecked Sendable {
         markerURL = forgetMarker
         forgetOnly = true
         lock.lock()
-        if !Self.isAbsent(markerURL) { _ = eraseOwed() }
+        if Self.presence(markerURL) == .present { _ = eraseOwed() }
         lock.unlock()
     }
 
@@ -334,9 +336,8 @@ public final class GrantFileStore: GrantStoring, @unchecked Sendable {
 
     public func read() -> GrantFile {
         lock.lock(); defer { lock.unlock() }
+        guard finishPendingErase() else { return .unavailable }
         if forgetOnly { return held.map(GrantFile.data) ?? .empty }
-        // A marker or a file that can't be looked at is never taken as none.
-        if !Self.isAbsent(markerURL), !eraseOwed() { return .unavailable }
         if Self.isAbsent(fileURL) { return .empty }
         guard let data = try? Data(contentsOf: fileURL) else { return .unavailable }
         return .data(data)
@@ -344,11 +345,11 @@ public final class GrantFileStore: GrantStoring, @unchecked Sendable {
 
     public func write(_ data: Data) -> Bool {
         lock.lock(); defer { lock.unlock() }
+        guard finishPendingErase() else { return false }
         if forgetOnly {
             held = data
             return true
         }
-        if !Self.isAbsent(markerURL), !eraseOwed() { return false }
         try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         return (try? data.write(to: fileURL, options: Self.fileWriting())) != nil
     }
@@ -360,8 +361,23 @@ public final class GrantFileStore: GrantStoring, @unchecked Sendable {
         // still owed on the next launch.
         try? FileManager.default.createDirectory(at: markerURL.deletingLastPathComponent(),
                                                  withIntermediateDirectories: true)
-        try? Data().write(to: markerURL, options: TaskStore.markerWriting())
-        return eraseOwed()
+        pendingErase = true
+        let marked = (try? Data().write(to: markerURL, options: TaskStore.markerWriting())) != nil
+        let erased = eraseOwed()
+        // Keep a failed marker write visible even if deletion succeeded.
+        pendingErase = !marked || !erased
+        return !pendingErase
+    }
+
+    /// An inaccessible marker is unknown, never evidence of a forget.
+    /// An explicit forget this launch is still owed without a marker.
+    private func finishPendingErase() -> Bool {
+        if pendingErase { return eraseOwed() }
+        switch Self.presence(markerURL) {
+        case .present: return eraseOwed()
+        case .absent: return true
+        case .inaccessible: return false
+        }
     }
 
     /// Deletes the file, then the marker. Done only when the file was
@@ -370,7 +386,8 @@ public final class GrantFileStore: GrantStoring, @unchecked Sendable {
     /// forget is still owed. Called with the lock held.
     private func eraseOwed() -> Bool {
         guard Self.delete(fileURL) else { return false }
-        _ = Self.delete(markerURL)
+        guard Self.delete(markerURL) else { return false }
+        pendingErase = false
         return true
     }
 
@@ -387,8 +404,17 @@ public final class GrantFileStore: GrantStoring, @unchecked Sendable {
     /// True only when the system says nothing is at `url`. A folder on the
     /// way that can't be searched, or any other failure, is not proof.
     private static func isAbsent(_ url: URL) -> Bool {
+        presence(url) == .absent
+    }
+
+    private enum Presence { case present, absent, inaccessible }
+
+    private static func presence(_ url: URL) -> Presence {
         var info = stat()
-        return lstat(url.path, &info) != 0 && errno == ENOENT
+        let result = lstat(url.path, &info)
+        let failure = errno // Capture immediately, before any other system call.
+        if result == 0 { return .present }
+        return failure == ENOENT ? .absent : .inaccessible
     }
 }
 
@@ -510,7 +536,7 @@ public final class GrantBook: @unchecked Sendable {
     /// Called with the lock held.
     private var unsavedNow: Unsaved? {
         if owesErase { return .removal }
-        return dirty ? .grants : nil
+        return dirty || !addedWhileUnread.isEmpty ? .grants : nil
     }
 
     /// A task ended: its task grants end with it.
@@ -579,12 +605,14 @@ public final class GrantBook: @unchecked Sendable {
     // MARK: Storage
 
     /// Runs `body` with the lock held, then calls the watchers when it
-    /// says something changed, or a change was saved or failed to be.
+    /// says something changed, grants were loaded, or a change was saved
+    /// or failed to be.
     private func locked<T>(_ body: () -> (T, Bool)) -> T {
         lock.lock()
         let before = unsavedNow
+        let grantsBefore = all
         let (value, changed) = body()
-        let hooks = changed || unsavedNow != before ? Array(observers.values) : []
+        let hooks = changed || all != grantsBefore || unsavedNow != before ? Array(observers.values) : []
         lock.unlock()
         for hook in hooks { hook() }
         return value

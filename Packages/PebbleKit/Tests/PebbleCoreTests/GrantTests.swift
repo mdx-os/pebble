@@ -657,6 +657,76 @@ struct GrantStoreTests {
         #expect(!manager.fileExists(atPath: marker.path))
     }
 
+    @Test(.scratchFiles, arguments: [false, true])
+    func anInaccessibleMarkerNeverForgetsReadableGrants(fallback: Bool) throws {
+        let (file, marker) = GrantFileStore.location(base: Scratch.url("support"), app: TaskStore.appFolder)
+        let manager = FileManager.default
+        let pending = marker.deletingLastPathComponent()
+        let grant = try #require(try F.grant(.always, for: F.send()))
+        GrantBook(store: GrantFileStore(fileURL: file, forgetMarker: marker), now: { F.morning }).add(grant)
+        let original = try Data(contentsOf: file)
+        try manager.createDirectory(at: pending, withIntermediateDirectories: true)
+        try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: pending.path)
+        defer { try? manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: pending.path) }
+        let store = fallback ? GrantFileStore(forgetOnly: file, forgetMarker: marker)
+                             : GrantFileStore(fileURL: file, forgetMarker: marker)
+        #expect(store.read() == .unavailable)
+        #expect(manager.fileExists(atPath: file.path))
+        #expect(try Data(contentsOf: file) == original)
+        #expect(!store.write(Data("replacement".utf8)))
+        #expect(try Data(contentsOf: file) == original)
+        try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: pending.path)
+        #expect(GrantBook(store: GrantFileStore(fileURL: file, forgetMarker: marker), now: { F.morning }).grants == [grant])
+    }
+
+    @Test(.scratchFiles) func aMarkerThatCannotBeRemovedNeverSilentlyLosesANewGrant() throws {
+        let (file, marker) = GrantFileStore.location(base: Scratch.url("support"), app: TaskStore.appFolder)
+        let manager = FileManager.default
+        let pending = marker.deletingLastPathComponent()
+        let book = GrantBook(store: GrantFileStore(fileURL: file, forgetMarker: marker), now: { F.morning })
+        book.add(try #require(try F.grant(.always, for: F.send())))
+        try manager.createDirectory(at: pending, withIntermediateDirectories: true)
+        try Data().write(to: marker)
+        try manager.setAttributes([.posixPermissions: 0o500], ofItemAtPath: pending.path)
+        defer { try? manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: pending.path) }
+        book.forget()
+        #expect(!manager.fileExists(atPath: file.path))
+        #expect(manager.fileExists(atPath: marker.path))
+        #expect(book.unsaved == .removal)
+        let next = try #require(try F.grant(.always, for: F.send(to: F.otherSam)))
+        book.add(next)
+        let anotherBook = GrantBook(store: GrantFileStore(fileURL: file, forgetMarker: marker), now: { F.morning })
+        anotherBook.add(next)
+        #expect(anotherBook.unsaved == .grants, "an add while cleanup blocks loading is unsaved too")
+        let reportedUnsaved = book.unsaved != nil
+        #expect(reportedUnsaved)
+        #expect(!manager.fileExists(atPath: file.path), "no persistent write behind a stale marker")
+        try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: pending.path)
+        let relaunched = GrantBook(store: GrantFileStore(fileURL: file, forgetMarker: marker), now: { F.morning })
+        #expect(relaunched.grants.contains(next) || reportedUnsaved)
+        #expect(book.grants == [next], "the running book retries the pending change")
+        #expect(book.unsaved == nil)
+        #expect(GrantBook(store: GrantFileStore(fileURL: file, forgetMarker: marker), now: { F.morning }).grants == [next])
+    }
+
+    @Test(.scratchFiles) func aFailedMarkerWriteStaysVisibleUntilRetried() throws {
+        let (file, marker) = GrantFileStore.location(base: Scratch.url("support"), app: TaskStore.appFolder)
+        let manager = FileManager.default
+        let pending = marker.deletingLastPathComponent()
+        let book = GrantBook(store: GrantFileStore(fileURL: file, forgetMarker: marker), now: { F.morning })
+        book.add(try #require(try F.grant(.always, for: F.send())))
+        try manager.createDirectory(at: pending, withIntermediateDirectories: true)
+        try manager.setAttributes([.posixPermissions: 0o500], ofItemAtPath: pending.path)
+        defer { try? manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: pending.path) }
+        book.forget()
+        #expect(book.unsaved == .removal)
+        #expect(book.grants.isEmpty)
+        #expect(book.unsaved == .removal)
+        try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: pending.path)
+        #expect(book.grants.isEmpty)
+        #expect(book.unsaved == nil)
+    }
+
     /// A grants file that can't be looked at is never taken as no file: its
     /// grants are unknown, so none is listed, and nothing is written over it.
     @Test(.scratchFiles) func aFileThatCanNotBeLookedAtIsNotTakenAsNone() throws {

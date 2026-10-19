@@ -229,8 +229,8 @@ public final class AskFirst: @unchecked Sendable {
     /// Changing the date and time in Settings can't move it, so it can't
     /// bring a timed out question back.
     private let now: @Sendable () -> ContinuousClock.Instant
-    /// The person's grants. Nil, as for every rule until the app gives it
-    /// its book, means the rule asks every time, exactly as it always has.
+    /// The person's grants. Until the app gives the rule its book, every
+    /// consequential step needs a fresh yes.
     private var book: GrantBook?
 
     private init(

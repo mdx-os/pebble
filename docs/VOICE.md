@@ -51,8 +51,8 @@ The person names it. In copy, the agent speaks as "I" and calls the person
 
 Say no kindly, say why in a few words, and offer what you can do instead.
 
-- Good: "I can't buy things on my own. I'll always ask you first, and you
-  decide."
+- Good: "You decide what I may buy. I'll ask first unless your earlier OK
+  covers this purchase."
 - Bad: "Action not permitted."
 
 ## How to say sorry

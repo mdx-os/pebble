@@ -307,6 +307,44 @@ struct GrantSheetTests {
             .hasPrefix("AllowedFallbackSection(model: AllowedModel(grants: grants))"))
     }
 
+    @Test(.scratchFiles, arguments: [false, true])
+    func settingsSeesGrantsRecoveredByAnotherWindow(fallback: Bool) async throws {
+        let (file, marker) = GrantFileStore.location(base: Scratch.url("support"), app: TaskStore.appFolder)
+        let given = GrantBook(store: GrantFileStore(fileURL: file, forgetMarker: marker), now: { Self.morning })
+        let state = try sheet(Self.send, granted: { given.add($0) })
+        state.choose(.always)
+        state.tapPrimary()
+        let grant = try #require(given.grants.first)
+        let manager = FileManager.default
+        try manager.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+        defer { try? manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path) }
+        let book = GrantBook(store: GrantFileStore(fileURL: file, forgetMarker: marker), now: { Self.morning })
+        let memory = MemoryModel(store: MemoryStore(fileURL: Scratch.url("memory")), place: .onDevice,
+                                 grants: book, now: { Self.morning })
+        let allowed = AllowedModel(grants: book, now: { Self.morning })
+        memory.announce = { _ in }
+        allowed.announce = { _ in }
+        #expect(memory.allowed.isEmpty)
+        #expect(allowed.allowed.isEmpty)
+        try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        let rule = AskFirst.isolated(grants: book)
+        guard case .granted = rule.ask(Self.send, forTask: "another-window") else {
+            Issue.record("the recovered grant should cover the step")
+            return
+        }
+        // Let the existing observers run, without manually refreshing either model.
+        for _ in 0..<100 where memory.allowed.isEmpty || allowed.allowed.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(memory.allowed == [grant])
+        #expect(allowed.allowed == [grant])
+        if fallback { allowed.remove(try #require(allowed.allowed.first)) }
+        else { memory.removeGrant(try #require(memory.allowed.first)) }
+        #expect(book.grants.isEmpty)
+        #expect(book.use(Self.send, task: "another-window") == nil)
+        #expect(GrantBook(store: GrantFileStore(fileURL: file, forgetMarker: marker), now: { Self.morning }).grants.isEmpty)
+    }
+
     // MARK: Words are not a grant
 
     @Test(.scratchFiles) func aChatOrANoteThatSaysAlwaysAllowMakesNoGrant() async throws {
