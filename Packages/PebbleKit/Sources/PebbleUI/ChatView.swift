@@ -84,17 +84,17 @@ public struct ChatView: View {
         VStack(spacing: 0) {
             if !headerScrolls {
                 header
-                    .padding(.top, 28)
-                    .padding(.bottom, 20)
+                    .padding(.top, Theme.Space.xxl)
+                    .padding(.bottom, Theme.Space.l)
                     .readableColumn(columnWidth)
             }
             ScrollViewReader { scroller in
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: Theme.Space.m) {
                     if headerScrolls {
                         header
-                            .padding(.top, 12)
-                            .padding(.bottom, 8)
+                            .padding(.top, Theme.Space.s)
+                            .padding(.bottom, Theme.Space.xs)
                     }
                     transcript
                     if let offer = controller.reconOffer {
@@ -118,7 +118,7 @@ public struct ChatView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.bottom, 12)
+                .padding(.bottom, Theme.Space.s)
                 .readableColumn(columnWidth)
                 .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.4, dampingFraction: 0.85),
                            value: controller.isReplying)
@@ -164,7 +164,7 @@ public struct ChatView: View {
             }
             }
             composer
-                .padding(.vertical, 16)
+                .padding(.vertical, Theme.Space.m)
                 .readableColumn(columnWidth)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -193,22 +193,22 @@ public struct ChatView: View {
     }
 
     private var header: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Theme.Space.xs) {
             if let look {
                 CharacterView(look: look, size: 72)
             } else {
                 AvatarView(initial: controller.displayName.initial)
             }
             Text(controller.displayName.text)
-                .font(.title.weight(.semibold))
+                .font(Theme.TypeScale.title.weight(.semibold))
                 .multilineTextAlignment(.center)
             Text(FirstConversation.presence(controller.privacyPlace))
-                .font(.subheadline)
+                .font(Theme.TypeScale.subheadline)
                 .foregroundStyle(Theme.secondaryText)
                 .multilineTextAlignment(.center)
             if controller.showsNameInvitation {
                 Text(FirstConversation.nameInvitation)
-                    .font(.subheadline)
+                    .font(Theme.TypeScale.subheadline)
                     .foregroundStyle(Theme.secondaryText)
                     .multilineTextAlignment(.center)
             }
@@ -220,7 +220,7 @@ public struct ChatView: View {
     @ViewBuilder
     private var renameControl: some View {
         if controller.isChoosingName {
-            VStack(spacing: 8) {
+            VStack(spacing: Theme.Space.xs) {
                 TextField(
                     FirstConversation.namePlaceholder,
                     text: Binding(
@@ -230,20 +230,20 @@ public struct ChatView: View {
                 )
                 .textFieldStyle(.plain)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+                .padding(.horizontal, Theme.Space.m)
+                .padding(.vertical, Theme.Space.s)
+                .background(Color.primary.opacity(Theme.fieldTint), in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
                 .frame(maxWidth: 280)
                 .focused($nameFieldFocused)
                 .onAppear { nameFieldFocused = true }
                 .onSubmit { controller.commitName() }
                 if let nameHint = controller.nameHint {
                     Text(nameHint)
-                        .font(.subheadline)
+                        .font(Theme.TypeScale.subheadline)
                         .foregroundStyle(Theme.secondaryText)
                         .multilineTextAlignment(.center)
                 }
-                HStack(spacing: 8) {
+                HStack(spacing: Theme.Space.xs) {
                     Button(FirstConversation.cancelNameTitle) {
                         controller.cancelRename()
                     }
@@ -375,7 +375,7 @@ public struct ChatView: View {
     }
 
     private var transcript: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             ForEach(controller.conversation.turns) { turn in
                 bubble(turn)
                     .id(turn.id)
@@ -387,17 +387,17 @@ public struct ChatView: View {
     private func bubble(_ turn: ChatTurn) -> some View {
         HStack(alignment: .bottom, spacing: 0) {
             if turn.speaker == .person {
-                Spacer(minLength: 48)
+                Spacer(minLength: Theme.Space.xxxl)
             }
             Text(turn.text)
-                .font(.body)
+                .font(Theme.TypeScale.body)
                 .multilineTextAlignment(.leading)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(bubbleFill(for: turn.speaker), in: RoundedRectangle(cornerRadius: 16))
+                .padding(.horizontal, Theme.Space.m)
+                .padding(.vertical, Theme.Space.s)
+                .background(bubbleFill(for: turn.speaker), in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
                 .frame(maxWidth: bubbleWidth, alignment: turn.speaker == .agent ? .leading : .trailing)
             if turn.speaker == .agent {
-                Spacer(minLength: 48)
+                Spacer(minLength: Theme.Space.xxxl)
             }
         }
     }
@@ -414,12 +414,12 @@ public struct ChatView: View {
     /// The new chat's empty state: a few things to start with, so it never
     /// opens on a blank page.
     private var starterJobs: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             Text(FirstConversation.startersHeading)
-                .font(.subheadline.weight(.medium))
+                .font(Theme.TypeScale.subheadline.weight(.medium))
                 .foregroundStyle(Theme.secondaryText)
                 .accessibilityAddTraits(.isHeader)
-                .padding(.top, 4)
+                .padding(.top, Theme.Space.xxs)
             ForEach(Array(FirstConversation.jobs.enumerated()), id: \.element.id) { index, job in
                 StarterChip(title: job.title, index: index) {
                     controller.submit(job.prompt)
@@ -924,8 +924,8 @@ struct ReconOfferButtons: View {
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) { buttons }
-            VStack(alignment: .leading, spacing: 8) { buttons }
+            HStack(spacing: Theme.Space.xs) { buttons }
+            VStack(alignment: .leading, spacing: Theme.Space.xs) { buttons }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("reconOffer")
@@ -989,13 +989,13 @@ struct StarterChip: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.body.weight(.medium))
+                .font(Theme.TypeScale.body.weight(.medium))
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(Theme.accent.opacity(Theme.accentWash), in: RoundedRectangle(cornerRadius: 14))
-                .contentShape(RoundedRectangle(cornerRadius: 14))
-                .pointerHover(in: RoundedRectangle(cornerRadius: 14))
+                .padding(.horizontal, Theme.Space.m)
+                .padding(.vertical, Theme.Space.s)
+                .background(Theme.accent.opacity(Theme.accentWash), in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+                .pointerHover(in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
         }
         .buttonStyle(SoftPressStyle())
         .opacity(shown ? 1 : 0)
@@ -1023,7 +1023,7 @@ struct AvatarView: View {
             .frame(width: 88, height: 88)
             .overlay {
                 Text(initial)
-                    .font(.system(size: 40, weight: .semibold, design: .rounded))
+                    .font(Theme.TypeScale.avatarInitial)
                     .foregroundStyle(Theme.onAccent)
             }
             .accessibilityHidden(true)

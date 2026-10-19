@@ -34,7 +34,7 @@ struct Composer: View {
     }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        HStack(alignment: .bottom, spacing: Theme.Space.xs) {
             // Return sends and Shift Return starts a new line.
             // The system placeholder gray is too faint to read, so the
             // placeholder is drawn in the quieter words color.
@@ -48,11 +48,11 @@ struct Composer: View {
                 .accessibilityHint(hint.map { Text($0) } ?? Text(verbatim: ""))
                 // Keyboards are reported a moment after first asking, so ask early.
                 .onAppear { _ = Self.shiftIsDown }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Color.primary.opacity(Theme.fieldTint), in: RoundedRectangle(cornerRadius: 14))
+                .padding(.horizontal, Theme.Space.m)
+                .padding(.vertical, Theme.Space.s)
+                .background(Color.primary.opacity(Theme.fieldTint), in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
                 // An edge that reads at 3 to 1, so the field can be found.
-                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.fieldEdge, lineWidth: 1))
+                .overlay(RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous).stroke(Theme.fieldEdge, lineWidth: 1))
                 // One send path per platform: the draft binding reads a lone
                 // Return as Send on iOS, and onKeyPress handles it on the Mac.
                 #if os(macOS)

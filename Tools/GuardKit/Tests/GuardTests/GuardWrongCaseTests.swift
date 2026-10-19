@@ -687,6 +687,47 @@ struct GuardWrongCaseTests {
         }
     }
 
+    // MARK: The design token guard
+
+    static func token(_ rule: String, _ text: String) -> WrongCase {
+        WrongCase(rule: "token." + rule, text: text, file: "PebbleUI/Wrong.swift")
+    }
+
+    static let tokenWrong: [WrongCase] = [
+        token("literalColor", "let a = Color(red: 0.2, green: 0.3, blue: 0.4)"),
+        token("literalColor", ".fill(Color(.sRGB, red: 1, green: 0, blue: 0, opacity: 1))"),
+        token("literalColor", "let a = SwiftUI.Color(hue: 0.6, saturation: 0.5, brightness: 0.9)"),
+        token("literalColor", "let a = Color.init(white: 0.5)"),
+        token("literalColor", "let a = `Color`(`red`: 1, green: 1, blue: 1)"),
+        token("literalColor", "let a = UIColor(red: 1, green: 1, blue: 1, alpha: 1)"),
+        token("fixedFont", "Text(\"a\").font(.system(size: 30))"),
+        token("fixedFont", "Text(\"a\").font(.system(size: 40, weight: .semibold, design: .rounded))"),
+        token("fixedFont", "Text(\"a\").font(Font.custom(\"Serif\", size: 17))"),
+        token("fixedFont", "let font = UIFont.systemFont(ofSize: 12)"),
+        token("fixedFont", "Text(\"a\").font(.`system`(`size`: 30))"),
+    ]
+
+    static let tokenRight: [RightCase] = [
+        fine("Text(\"a\").font(Theme.TypeScale.body)"),
+        fine("Text(\"a\").font(.system(.title2, design: .rounded).weight(.bold))"),
+        fine("Text(\"a\").font(.title.weight(.semibold))"),
+        fine(".fill(Color.primary.opacity(Theme.fieldTint))"),
+        fine(".fill(Theme.accentRGB.color)"),
+        fine("Text(\"Color(red: 1, green: 0, blue: 0) and .system(size: 30)\")"),
+        fine("// .font(.system(size: 30)) and Color(red: 1, green: 0, blue: 0)"),
+        // Theme.swift defines the tokens, so it may spell them out.
+        fine("static let accent = Color(red: 0.4, green: 0.62, blue: 0.97)", file: TokenLint.themeFile),
+        fine("static let badgeSymbol = Font.system(size: 30, weight: .semibold)", file: TokenLint.themeFile),
+        // Only PebbleUI's screens are read.
+        fine("let a = Color(red: 1, green: 1, blue: 1)", file: "App/Snapshot.swift"),
+    ]
+
+    @Test func theTokenGuardCatchesEveryWrongCase() {
+        check(Self.tokenWrong, Self.tokenRight, rules: TokenLint.rules.map(\.name)) {
+            TokenLint.problems(in: $0, file: $1)
+        }
+    }
+
     // MARK: The platform gate
 
     static func gate(_ rule: String, _ text: String) -> WrongCase {
@@ -784,8 +825,9 @@ struct GuardWrongCaseTests {
     /// Every rule of every guard has a wrong case here, so none can be
     /// added, or stop working, unseen.
     @Test func everyRuleHasAWrongCase() {
-        let all = Self.promiseWrong + Self.contrastWrong + Self.accentWrong + Self.platformWrong
-        let rules = PromiseRules.allRuleNames + ContrastLint.rules.map(\.name) + PlatformGate.rules.map(\.name)
+        let all = Self.promiseWrong + Self.contrastWrong + Self.accentWrong + Self.tokenWrong + Self.platformWrong
+        let rules = PromiseRules.allRuleNames + ContrastLint.rules.map(\.name) + TokenLint.rules.map(\.name)
+            + PlatformGate.rules.map(\.name)
         #expect(Set(rules).count == rules.count, "each rule has its own name")
         for rule in rules {
             #expect(all.contains { $0.rule == rule }, "no wrong case for \(rule)")

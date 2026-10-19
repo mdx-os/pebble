@@ -232,8 +232,7 @@ struct OnDeviceModelRow: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
+        .cardSurface()
         // Each new step once, never each tick of progress.
         .onChange(of: Self.phase(of: setup.state)) { _, _ in
             AccessibilityNotification.Announcement(Self.detail(for: setup.state, pin: setup.pin)).post()
