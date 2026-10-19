@@ -1,4 +1,5 @@
 import PebbleCore
+import PromiseWords
 import Testing
 
 /// Every line that could promise the device, pinned to the one flag.

@@ -1,12 +1,14 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test repeat-test build build-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-config-check secrets-check pulse clean
+.PHONY: verify generate test repeat-test mutation-check build build-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-config-check graph-check graph-check-test secrets-check pulse clean
 
-## verify: everything CI runs. Run this before every PR. The screenshots are
-## made after every other step and then checked against the working tree.
-## Both are the recipe, so even with -j nothing runs beside them that could
-## change the tree between the stamp and the check.
-verify: brand-check local-config-check screenshots-check-test test build build-release
+## verify: everything CI runs. Run this before every PR. The graph check
+## runs once the builds have made the project, so it reads that too. The
+## screenshots are made after every other step and then checked against the
+## working tree. Both are the recipe, so even with -j nothing runs beside
+## them that could change the tree between the stamp and the check.
+verify: brand-check local-config-check screenshots-check-test graph-check-test test build build-release
+	$(MAKE) graph-check
 	$(MAKE) screenshots
 	sh scripts/screenshot-stamp.sh check build/screenshots
 
@@ -14,14 +16,23 @@ verify: brand-check local-config-check screenshots-check-test test build build-r
 generate:
 	xcodegen generate --quiet
 
-## test: unit tests for the shared packages
+## test: unit tests for the shared packages, then the source guards, which
+## live in Tools/GuardKit so swift-syntax stays out of the app's graph
 test:
 	swift test --package-path Packages/PebbleKit --quiet
+	swift test --package-path Tools/GuardKit --quiet
 
 ## repeat-test: run the package tests N times (default 30) to catch a flaky
 ## test. FILTER= narrows the run; without it the whole suite runs each time.
 repeat-test:
 	sh scripts/repeat-test.sh $(or $(N),30) "$(FILTER)"
+
+## mutation-check: prove the tests can fail. Each entry in
+## scripts/mutation-manifest.txt breaks one thing, such as one source guard
+## rule, on a copy in build/mutation, and its tests must then fail. The
+## working tree is never touched. ONLY= runs the entries whose tests match.
+mutation-check:
+	sh scripts/mutation-check.sh scripts/mutation-manifest.txt "$(ONLY)"
 
 ## pulse: fetch the public source watch and write a digest of real changes.
 ## When something changed, also write build/pulse/notify.md and build/pulse/summary.json.
@@ -88,6 +99,15 @@ ui-test: generate
 brand-check:
 	sh scripts/brand-check.sh
 
+## graph-check: fail if swift-syntax, which only Tools/GuardKit uses, can
+## reach PebbleKit or the app project, named or through a dependency
+graph-check:
+	sh scripts/graph-check.sh
+
+## graph-check-test: self-test for that check, in a scratch tree
+graph-check-test:
+	sh scripts/graph-check-test.sh
+
 ## local-config-check: fail if Config/Cloud.local.xcconfig is tracked by git
 local-config-check:
 	sh scripts/local-config-check.sh
@@ -99,4 +119,4 @@ secrets-check:
 	gitleaks git --no-banner --redact .
 
 clean:
-	rm -rf build Pebble.xcodeproj Packages/PebbleKit/.build
+	rm -rf build Pebble.xcodeproj Packages/PebbleKit/.build Tools/GuardKit/.build
