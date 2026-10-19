@@ -56,10 +56,9 @@ struct ReconCard: View {
             footer
             buttons
         }
-        .padding(16)
+        .padding(FeedStyle.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.card(scheme), in: shape)
-        .overlay(shape.stroke(Theme.hairline(scheme)))
+        .feedCardSurface()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("recon:\(summary.id)")
     }
@@ -73,16 +72,12 @@ struct ReconCard: View {
 
     /// Only the title is a heading. The overview under it is read as body text.
     private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Label {
-                    Text(FeedWords.readyLabel)
-                } icon: {
+        VStack(alignment: .leading, spacing: FeedStyle.cardStack) {
+            HStack(alignment: .center, spacing: 8) {
+                KindBadge(text: FeedWords.readyLabel) {
                     Image(systemName: "doc.text.magnifyingglass")
                         .foregroundStyle(Theme.accentSymbol)
                 }
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(Theme.secondaryText)
                 if isSample {
                     // The same capsule as a scripted task's card.
                     Text(FeedWords.exampleMarker)
@@ -121,19 +116,14 @@ struct ReconCard: View {
     }
 
     private var sourcesList: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(ReconWords.sourcesHeading)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(Theme.secondaryText)
                 .accessibilityAddTraits(.isHeader)
             ForEach(Array(summary.sources.enumerated()), id: \.element.id) { index, source in
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    SourceNumber(number: index + 1)
-                    Text(Self.sourceLine(source, gatheredAt: summary.gatheredAt))
-                        .font(.footnote)
-                        .foregroundStyle(Theme.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                SourceChip(number: index + 1, source: source,
+                           line: Self.sourceLine(source, gatheredAt: summary.gatheredAt))
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(ReconWords.sourceNumber(index + 1)). \(Self.sourceLine(source, gatheredAt: summary.gatheredAt))")
             }
@@ -155,14 +145,14 @@ struct ReconCard: View {
     }
 
     private var footer: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(gathered)
+        VStack(alignment: .leading, spacing: 6) {
+            ProofChip(text: gathered, symbol: "clock")
             if let note = summary.note {
                 Text(note)
+                    .font(.footnote)
+                    .foregroundStyle(Theme.secondaryText)
             }
         }
-        .font(.footnote)
-        .foregroundStyle(Theme.secondaryText)
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(footerSpoken)

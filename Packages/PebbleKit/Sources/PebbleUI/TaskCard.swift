@@ -156,10 +156,9 @@ struct TaskCard: View {
             }
             buttons
         }
-        .padding(16)
+        .padding(FeedStyle.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.card(scheme), in: shape)
-        .overlay(shape.stroke(asks ? Theme.accent.opacity(0.55) : Theme.hairline(scheme), lineWidth: asks ? 1.5 : 1))
+        .feedCardSurface(asks: asks)
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.45, dampingFraction: 0.9), value: task.state)
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .easeInOut(duration: 0.3), value: redirecting)
         .accessibilityElement(children: .contain)
@@ -231,11 +230,9 @@ struct TaskCard: View {
     }
 
     private var summary: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Label {
-                    Text(task.state.label)
-                } icon: {
+        VStack(alignment: .leading, spacing: FeedStyle.cardStack) {
+            HStack(alignment: .center, spacing: 8) {
+                KindBadge(text: task.state.label) {
                     if isLive {
                         LiveDot()
                     } else {
@@ -243,8 +240,6 @@ struct TaskCard: View {
                             .foregroundStyle(Theme.accentSymbol)
                     }
                 }
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(Theme.secondaryText)
                 if isSample {
                     // The same capsule as the label over an example opened to read.
                     Text(FeedWords.exampleMarker)

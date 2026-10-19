@@ -1033,10 +1033,10 @@ struct FeedView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
-    /// Two cards side by side once each can be at least this wide. Grows
-    /// with the text size, so large text gets one roomy column.
-    @ScaledMetric(relativeTo: .body) private var cardMinimum: CGFloat = 320
-    @ScaledMetric(relativeTo: .body) private var columnWidth: CGFloat = Theme.feedWidth
+    /// Cards side by side once each can be at least this wide. Grows with
+    /// the text size, so large text gets fewer, roomier columns.
+    @ScaledMetric(relativeTo: .body) private var cardMinimum: CGFloat = FeedStyle.cardMinimum
+    @ScaledMetric(relativeTo: .body) private var columnWidth: CGFloat = FeedStyle.wideFeedWidth
 
     static let cardSpacing: CGFloat = 14
     /// The room between Today's sections. Fixed, not scaled, so it is the
@@ -1139,11 +1139,11 @@ struct FeedView: View {
 
     /// How many cards fit side by side, each at least `minimum` wide. One
     /// plain column at accessibility text sizes or when even one card at
-    /// `minimum` would not fit, and never more than two.
+    /// `minimum` would not fit, and never more than `FeedStyle.maxColumns`.
     static func columnCount(for width: CGFloat, minimum: CGFloat, accessibilityText: Bool) -> Int {
         guard !accessibilityText, minimum > 0 else { return 1 }
         let fit = Int((width + cardSpacing) / (minimum + cardSpacing))
-        return min(2, max(1, fit))
+        return min(FeedStyle.maxColumns, max(1, fit))
     }
 
     /// Flexible columns share whatever width there is, so a card is never
@@ -1211,8 +1211,9 @@ struct FeedView: View {
     }
 
     private var empty: some View {
-        VStack(spacing: 14) {
-            CharacterView(look: look, size: 72)
+        VStack(spacing: 16) {
+            QuietIllustration(look: look)
+                .padding(.bottom, 4)
             Text(FeedWords.emptyTitle)
                 .font(.system(.title3, design: .rounded).weight(.semibold))
                 .multilineTextAlignment(.center)
@@ -1227,7 +1228,7 @@ struct FeedView: View {
                 .frame(maxWidth: Theme.readableWidth)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 48)
+        .padding(.vertical, 56)
         .accessibilityElement(children: .contain)
     }
 }
@@ -1277,16 +1278,12 @@ struct FeedCard: View {
     }
 
     private func content(actionTitle: String?) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Label {
-                    Text(item.spokenKind)
-                } icon: {
+        VStack(alignment: .leading, spacing: FeedStyle.cardStack) {
+            HStack(alignment: .center, spacing: 8) {
+                KindBadge(text: item.spokenKind) {
                     Image(systemName: Self.symbol(item.kind))
                         .foregroundStyle(Theme.accentSymbol)
                 }
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(Theme.secondaryText)
                 Spacer(minLength: 8)
                 Text(time)
                     .font(.footnote)
@@ -1314,10 +1311,9 @@ struct FeedCard: View {
                     .padding(.top, 2)
             }
         }
-        .padding(16)
+        .padding(FeedStyle.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.card(scheme), in: shape)
-        .overlay(shape.stroke(asks ? Theme.accent.opacity(0.55) : Theme.hairline(scheme), lineWidth: asks ? 1.5 : 1))
+        .feedCardSurface(asks: asks)
         .contentShape(shape)
     }
 
@@ -1384,10 +1380,9 @@ struct ForgotUnderwayNotice: View {
             Button(TaskWords.forgotUnderwayDismissTitle, action: onDismiss)
                 .buttonStyle(CardButtonStyle(kind: .quiet))
         }
-        .padding(16)
+        .padding(FeedStyle.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
+        .feedCardSurface()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(identifier)
     }

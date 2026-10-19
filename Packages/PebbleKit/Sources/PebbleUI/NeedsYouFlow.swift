@@ -682,10 +682,9 @@ struct NudgeOffer: View {
                 }
                 .padding(.top, 2)
             }
-            .padding(16)
+            .padding(FeedStyle.cardPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
+            .feedCardSurface()
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("nudgeOffer")
         } else if let note = flow.nudgeNote {
@@ -824,10 +823,9 @@ struct ReceiptCard: View {
                 .accessibilityHint(ReceiptWords.clearHint)
                 .accessibilityIdentifier("clearReceipt")
         }
-        .padding(16)
+        .padding(FeedStyle.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.card(scheme), in: shape)
-        .overlay(shape.stroke(Theme.hairline(scheme), lineWidth: 1))
+        .feedCardSurface()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("receiptCard")
     }
