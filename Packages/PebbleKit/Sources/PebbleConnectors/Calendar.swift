@@ -190,13 +190,19 @@ public struct CalendarConnector: CalendarSource {
         let access = store.access(.events)
         if let block = CalendarBlock(kind: .events, access: access) { return .blocked(block) }
         let found = await store.events(in: window)
+        // Access can close while the store reads, and then it hands back
+        // nothing. Looked at again, so that never reads as an empty day.
+        if let block = CalendarBlock(kind: .events, access: store.access(.events)) { return .blocked(block) }
         return .found(found.filter { $0.overlaps(window) }.sorted(by: CalendarEvent.earlier))
     }
 
     public func reminders(dueBy end: Date) async -> CalendarAnswer<[CalendarReminder]> {
         let access = store.access(.reminders)
         if let block = CalendarBlock(kind: .reminders, access: access) { return .blocked(block) }
-        guard let found = await store.reminders(dueBy: end) else {
+        let read = await store.reminders(dueBy: end)
+        // The same for reminders, before what came back or didn't.
+        if let block = CalendarBlock(kind: .reminders, access: store.access(.reminders)) { return .blocked(block) }
+        guard let found = read else {
             return .blocked(CalendarBlock(kind: .reminders, why: .couldNotRead))
         }
         let due = found.filter { reminder in

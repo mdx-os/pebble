@@ -89,6 +89,43 @@ struct CalendarConnectorTests {
                     == .blocked(CalendarBlock(kind: .reminders, why: .couldNotRead)))
     }
 
+    /// Access closed while the store is reading: the store hands back an
+    /// empty list, and the answer still says why rather than "nothing".
+    @Test(.timeLimit(.minutes(1))) func eventsClosedDuringTheReadSayWhy() async {
+        let (connector, store) = Self.connector(.fullAccess)
+        let pause = store.pause(.events)
+        async let answer = connector.events(in: Self.window)
+        await pause.reached()
+        store.setAccess(.denied, for: .events)
+        pause.resume()
+        #expect(await answer == .blocked(CalendarBlock(kind: .events, why: .denied)))
+    }
+
+    @Test(.timeLimit(.minutes(1))) func remindersClosedDuringTheReadSayWhy() async {
+        let (connector, store) = Self.connector(.fullAccess)
+        let pause = store.pause(.reminders)
+        async let answer = connector.reminders(dueBy: Self.window.end)
+        await pause.reached()
+        store.setAccess(.denied, for: .reminders)
+        pause.resume()
+        #expect(await answer == .blocked(CalendarBlock(kind: .reminders, why: .denied)))
+    }
+
+    /// A held read that stays allowed still finds what is there.
+    @Test(.timeLimit(.minutes(1))) func aHeldReadStillOpenFindsWhatIsThere() async {
+        let (connector, store) = Self.connector(.fullAccess)
+        let events = store.pause(.events)
+        let reminders = store.pause(.reminders)
+        async let eventsAnswer = connector.events(in: Self.window)
+        async let remindersAnswer = connector.reminders(dueBy: Self.window.end)
+        await events.reached()
+        await reminders.reached()
+        events.resume()
+        reminders.resume()
+        #expect(await eventsAnswer == .found([Self.meeting]))
+        #expect(await remindersAnswer == .found([Self.call]))
+    }
+
     @Test func onlyRemindersNotDoneAndDueByTheEndComeBack() async {
         let late = CalendarReminder(id: "late", title: "Late", due: Self.window.start - 86_400)
         let done = CalendarReminder(id: "done", title: "Done", due: Self.window.start, isCompleted: true)
