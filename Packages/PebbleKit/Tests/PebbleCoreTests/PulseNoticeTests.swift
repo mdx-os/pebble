@@ -32,7 +32,7 @@ struct PulseNoticeTests {
         let markdown = try String(contentsOf: noticeURL, encoding: .utf8)
         #expect(markdown == PulseNotice.markdown(for: digest))
         #expect(markdown == """
-        # Competitor watch
+        # Public source watch
 
         2026-10-05T00:00:00Z
 

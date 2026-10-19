@@ -118,21 +118,20 @@ struct TaskCard: View {
     /// Where VoiceOver goes when the redirect field opens and closes, so it
     /// never lands nowhere when a button it was on goes away.
     @AccessibilityFocusState private var focus: Focus?
-    @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: Theme.corner, style: .continuous)
+        RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
     }
 
     private var isLive: Bool { task.state == .running || task.state == .retrying }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             summary
             if let note = state.note {
                 Text(note)
-                    .font(.subheadline)
+                    .font(Theme.TypeScale.subheadline)
                     .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("taskNote")
@@ -142,7 +141,7 @@ struct TaskCard: View {
             }
             if let closing = closingLine {
                 Text(closing)
-                    .font(.subheadline)
+                    .font(Theme.TypeScale.subheadline)
                     .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("taskClosing")
@@ -156,10 +155,9 @@ struct TaskCard: View {
             }
             buttons
         }
-        .padding(16)
+        .padding(Theme.Space.m)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.card(scheme), in: shape)
-        .overlay(shape.stroke(asks ? Theme.accent.opacity(0.55) : Theme.hairline(scheme), lineWidth: asks ? 1.5 : 1))
+        .elevation(.raised, in: shape, edge: asks ? Theme.accent.opacity(0.55) : nil, edgeWidth: asks ? 1.5 : 1)
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.45, dampingFraction: 0.9), value: task.state)
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .easeInOut(duration: 0.3), value: redirecting)
         .accessibilityElement(children: .contain)
@@ -231,8 +229,8 @@ struct TaskCard: View {
     }
 
     private var summary: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
                 Label {
                     Text(task.state.label)
                 } icon: {
@@ -243,29 +241,29 @@ struct TaskCard: View {
                             .foregroundStyle(Theme.accentSymbol)
                     }
                 }
-                .font(.footnote.weight(.semibold))
+                .font(Theme.TypeScale.footnote.weight(.semibold))
                 .foregroundStyle(Theme.secondaryText)
                 if isSample {
                     // The same capsule as the label over an example opened to read.
                     Text(FeedWords.exampleMarker)
-                        .font(.caption.weight(.medium))
+                        .font(Theme.TypeScale.caption.weight(.medium))
                         .foregroundStyle(Theme.secondaryText)
-                        .padding(.horizontal, 8)
+                        .padding(.horizontal, Theme.Space.xs)
                         .padding(.vertical, 3)
                         .background(Color.primary.opacity(Theme.fieldTint), in: Capsule())
                         .accessibilityIdentifier("exampleTag")
                 }
-                Spacer(minLength: 8)
+                Spacer(minLength: Theme.Space.xs)
                 Text(time)
-                    .font(.footnote)
+                    .font(Theme.TypeScale.footnote)
                     .foregroundStyle(Theme.secondaryText)
             }
             Text(task.title)
-                .font(.system(.headline, design: .rounded))
+                .font(Theme.TypeScale.displayHeadline)
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
             Text(task.step)
-                .font(.subheadline)
+                .font(Theme.TypeScale.subheadline)
                 .foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
                 .contentTransition(.opacity)
@@ -283,7 +281,7 @@ struct TaskCard: View {
     }
 
     private var history: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
             // Keyed by each step, so a new step pushing in never moves
             // words into another row.
             ForEach(task.history.suffix(3), id: \.id) { step in
@@ -295,7 +293,7 @@ struct TaskCard: View {
                         .foregroundStyle(Theme.accentSymbol.opacity(0.8))
                         .accessibilityHidden(true)
                 }
-                .font(.footnote)
+                .font(Theme.TypeScale.footnote)
                 .foregroundStyle(Theme.secondaryText)
             }
         }
@@ -304,7 +302,7 @@ struct TaskCard: View {
     }
 
     private func wrapUpLines(_ wrapUp: TaskWrapUp) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
             if task.state != .done {
                 Text(wrapUp.keptLine)
             }
@@ -315,7 +313,7 @@ struct TaskCard: View {
                 Text(underway)
             }
         }
-        .font(.subheadline)
+        .font(Theme.TypeScale.subheadline)
         .foregroundStyle(.primary)
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .combine)
@@ -332,12 +330,12 @@ struct TaskCard: View {
             let lead = Array(row.prefix(1))
             let rest = Array(row.dropFirst())
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { buttonViews(row) }
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) { buttonViews(lead) }
-                    HStack(spacing: 8) { buttonViews(rest) }
+                HStack(spacing: Theme.Space.xs) { buttonViews(row) }
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    HStack(spacing: Theme.Space.xs) { buttonViews(lead) }
+                    HStack(spacing: Theme.Space.xs) { buttonViews(rest) }
                 }
-                VStack(alignment: .leading, spacing: 8) { buttonViews(row) }
+                VStack(alignment: .leading, spacing: Theme.Space.xs) { buttonViews(row) }
             }
             .padding(.top, 2)
         }
@@ -398,22 +396,22 @@ struct TaskCard: View {
     }
 
     private var redirectField: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
             TextField(TaskWords.redirectPlaceholder, text: $state.words, axis: .vertical)
                 .lineLimit(1...3)
-                .font(.subheadline)
+                .font(Theme.TypeScale.subheadline)
                 .focused($fieldFocused)
                 .submitLabel(.send)
                 .onSubmit(send)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
+                .padding(.horizontal, Theme.Space.s)
+                .padding(.vertical, Theme.Space.s)
                 // The same neutral field as the chat's, so typed words are
                 // on a pair `Theme.textPairs` checks.
-                .background(Color.primary.opacity(Theme.fieldTint), in: RoundedRectangle(cornerRadius: Theme.smallCorner, style: .continuous))
+                .background(Color.primary.opacity(Theme.fieldTint), in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
                 .accessibilityLabel(TaskWords.redirectPlaceholder)
                 .accessibilityFocused($focus, equals: .field)
                 .onAppear(perform: takeFieldFocus)
-            HStack(spacing: 8) {
+            HStack(spacing: Theme.Space.xs) {
                 Button(TaskWords.redirectSendTitle, action: send)
                     .buttonStyle(CardButtonStyle(kind: .primary))
                     .disabled(state.words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -467,10 +465,10 @@ struct CardButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.subheadline.weight(.semibold))
+            .font(Theme.TypeScale.subheadline.weight(.semibold))
             .foregroundStyle(foreground)
             .multilineTextAlignment(.center)
-            .padding(.horizontal, 16)
+            .padding(.horizontal, Theme.Space.m)
             .frame(minHeight: 44)
             .background(background, in: Capsule())
             .overlay(Capsule().stroke(kind == .quiet ? Theme.hairline(scheme) : .clear))

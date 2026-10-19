@@ -34,7 +34,7 @@ repeat-test:
 mutation-check:
 	sh scripts/mutation-check.sh scripts/mutation-manifest.txt "$(ONLY)"
 
-## pulse: fetch the competitor watch and write a digest of real changes.
+## pulse: fetch the public source watch and write a digest of real changes.
 ## When something changed, also write build/pulse/notify.md and build/pulse/summary.json.
 pulse:
 	swift run --package-path Packages/PebbleKit pulse -- --root "$(CURDIR)"
@@ -53,7 +53,7 @@ build-release: generate
 ## screenshots: first screen on iPhone, iPad and Mac, written to build/screenshots,
 ## plus the dark iPad sidebar and the sheets with Done, with
 ## build/screenshots/STAMP naming the commit and working tree they show. Fails
-## unless the dark shots show the orange fill with white words on it
+## unless the dark shots show the blue fill with white words on it
 ## (scripts/check-screenshots.sh).
 screenshots: generate
 	sh scripts/screenshots.sh build/screenshots

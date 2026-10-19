@@ -206,6 +206,21 @@ test: theAccentGuardCatchesEveryWrongCase
 file: Tools/GuardKit/Sources/GuardScan/ContrastRules.swift
 perl: s~Rule\("accent\.ink", ink\)~Rule("accent.ink", { _, _ in [] })~
 
+# The design token guard: no literal color or fixed font size in PebbleUI
+# outside Theme.swift.
+test: theTokenGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/TokenRules.swift
+perl: s~Rule\("token\.literalColor", literalColor\)~Rule("token.literalColor", { _, _ in [] })~
+
+test: theTokenGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/TokenRules.swift
+perl: s~Rule\("token\.fixedFont", fixedFont\)~Rule("token.fixedFont", { _, _ in [] })~
+
+# Theme.swift left out by prefix, so every file is let by.
+test: theTokenGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/TokenRules.swift
+perl: s~file\.hasPrefix\("PebbleUI/"\) && file != themeFile~file.hasPrefix("PebbleUI/") \&\& !file.hasPrefix("PebbleUI/")~
+
 # The row's `chosen` found by text, not by scope: the nearest function's
 # parameter list is never asked, so another function's `chosen` counts.
 test: theAccentGuardCatchesEveryWrongCase
@@ -528,7 +543,7 @@ perl: s~return \(!owesErase, true\)~return (true, true)~
 # The list never told that a change went through, or didn't.
 test: aRemovalTheStoreTookNoneOfIsNotCalledDone
 file: Packages/PebbleKit/Sources/PebbleCore/Grants.swift
-perl: s~changed \|\| unsavedNow != before \?~changed ?~
+perl: s~changed \|\| all != grantsBefore \|\| unsavedNow != before \?~changed || all != grantsBefore ?~
 
 # A Remove that couldn't be saved, said to no one.
 test: aRemoveThatCouldNotBeSavedIsSaidOnTheList
@@ -586,7 +601,7 @@ perl: s~erasesWords: cloud != nil, background: background, grants: feed\.grants,
 # The screen with no notes that never lists its grants.
 test: aGrantIsListedAndRemovedWhenTheNotesCouldNotOpen
 file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
-perl: s~            if let grants \{\n                AllowedFallbackSection\(model: AllowedModel\(grants: grants\)\)\n                    \.padding\(\.top, 8\)\n            \}\n~~
+perl: s~            if let grants \{\n                AllowedFallbackSection\(model: AllowedModel\(grants: grants\)\)\n                    \.padding\(\.top, Theme\.Space\.xs\)\n            \}\n~~
 
 # Its Remove that takes nothing away.
 test: aGrantIsListedAndRemovedWhenTheNotesCouldNotOpen

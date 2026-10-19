@@ -19,9 +19,9 @@ in lint, a skill, or CI.
 - `make test`: package unit tests (Swift Testing), PebbleKit's and then the source guards' in `Tools/GuardKit`
 - `make graph-check`: fail if swift-syntax can reach PebbleKit or the app project, named or through a dependency (part of verify). `make graph-check-test` is its self-test
 - `make build-release`: Release builds for macOS and the iOS Simulator (part of verify). Anything behind `#if DEBUG`, like the showcase, must only be used behind it too
-- `make pulse`: fetch the competitor watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
+- `make pulse`: fetch the public source watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
 - `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`, plus dark shots of the
-  orange fill that `scripts/check-screenshots.sh` checks. Worktrees share simulators and
+  blue fill that `scripts/check-screenshots.sh` checks. Worktrees share simulators and
   the bundle ID, so when another session runs at once pass free ones:
   `make verify PEBBLE_IPAD="iPad Air 13-inch (M4)" PEBBLE_IPHONE="iPhone 17e"`
 - The screenshots also get a `STAMP` with the commit and the working tree's hash. `make verify` makes them and then fails with "screenshots are stale, rerun make screenshots" if the stamp is missing or the tree has changed since. The tree hash is the contract: the same files make the same screenshots, so committing or amending them with nothing changed keeps them fresh. The commit line is only there to read. Screenshots always show the code as it is now
@@ -37,7 +37,7 @@ in lint, a skill, or CI.
 - `Packages/PebbleKit/`: shared code in layers. A layer imports only layers
   below it; `Package.swift` enforces this.
   - `PebbleCore`: plain types. No SwiftUI, no networking.
-  - `PebblePulse`: competitor watch fetching and snapshots. Imports PebbleCore.
+  - `PebblePulse`: public source watch fetching and snapshots. Imports PebbleCore.
   - `PebbleModel`: model adapter. `ModelClient`, the on-device placeholder and `CloudModel` (off by default, every request previewed and redacted by `Redactor` in PebbleCore). Imports PebbleCore. MLX and Ollama adapters plug in here.
   - `PebbleBackground`: gives the background runner time (`BGTaskScheduler` on iOS, `NSBackgroundActivityScheduler` on the Mac). Imports PebbleCore. Scheduling decisions are pure functions in `BackgroundPlan`; the runner, its store and its switch live in PebbleCore's `Background.swift`, so no platform code goes there.
   - `PebbleUI`: SwiftUI views shared by every platform. Imports PebbleCore and PebbleModel.
@@ -124,6 +124,19 @@ Things no test here can reach. Check each on a real iPhone before a release.
   lowercase `pebble` in Swift. Old ones stay in `scripts/brand-check-known.txt`.
 - Each user may name their own agent. Never confuse the agent's name with a
   person in the user's contacts.
+
+## Design tokens
+
+- `PebbleUI/Theme.swift` owns the design system: `Theme.TypeScale` (Dynamic
+  Type text styles, rounded `display` styles only for big warm words),
+  `Theme.Space` (4 pt grid: 4 to 40), `Theme.Radius` (small, card, sheet),
+  `Elevation` (flat, raised, floating, applied with `.elevation` or
+  `.cardSurface`) and the palette (warm neutrals, blue accent, `Ink` with
+  Increase Contrast pairs).
+- Views use tokens, never literal font sizes, paddings, radii or colors.
+  `DesignTokenTests` fails on a new `Color(red:...)` or
+  `.font(.system(size:))` in PebbleUI outside Theme.swift.
+- A new color for words needs a pair in `Theme.textPairs`.
 
 ## Principles
 

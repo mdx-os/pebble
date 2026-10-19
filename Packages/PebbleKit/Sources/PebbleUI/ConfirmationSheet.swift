@@ -268,14 +268,14 @@ public struct ConfirmationSheet: View {
     }
 
     private var content: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: Theme.Space.l) {
             if isExample {
                 ExampleLabel()
             }
             ZStack(alignment: .bottomTrailing) {
                 CharacterView(look: look, size: 64)
                 Image(systemName: symbol)
-                    .font(.footnote.weight(.bold))
+                    .font(Theme.TypeScale.footnote.weight(.bold))
                     .foregroundStyle(Theme.onAccent)
                     .frame(width: 30, height: 30)
                     .background(Theme.accent, in: Circle())
@@ -283,12 +283,12 @@ public struct ConfirmationSheet: View {
                     .offset(x: -10, y: -10)
                     .accessibilityHidden(true)
             }
-            VStack(spacing: 6) {
+            VStack(spacing: Theme.Space.xs) {
                 Text(ConfirmationWords.heading)
-                    .font(.subheadline.weight(.medium))
+                    .font(Theme.TypeScale.subheadline.weight(.medium))
                     .foregroundStyle(Theme.secondaryText)
                 Text(action.question)
-                    .font(.system(.title2, design: .rounded).weight(.bold))
+                    .font(Theme.TypeScale.displayTitle)
                     .multilineTextAlignment(.center)
                     .accessibilityAddTraits(.isHeader)
             }
@@ -298,17 +298,16 @@ public struct ConfirmationSheet: View {
                     self.row(row.label, row.value)
                 }
             }
-            .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
+            .cardSurface()
             if state.showsChoices {
                 choicePicker
             }
             Text(state.footnote)
-                .font(.footnote)
+                .font(Theme.TypeScale.footnote)
                 .foregroundStyle(Theme.secondaryText)
                 .multilineTextAlignment(.center)
                 .accessibilityFocused($footnoteFocused)
-            VStack(spacing: 6) {
+            VStack(spacing: Theme.Space.xs) {
                 Button(state.primaryTitle) { state.tapPrimary() }
                     .buttonStyle(PrimaryButtonStyle())
                 if state.showsNotNow {
@@ -333,9 +332,9 @@ public struct ConfirmationSheet: View {
     /// How long the yes is for, one row per choice, Just this once chosen
     /// until the person picks another.
     private var choicePicker: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
             Text(GrantWords.choiceHeading)
-                .font(.subheadline.weight(.medium))
+                .font(Theme.TypeScale.subheadline.weight(.medium))
                 .foregroundStyle(Theme.secondaryText)
                 .accessibilityAddTraits(.isHeader)
             VStack(spacing: 0) {
@@ -344,32 +343,31 @@ public struct ConfirmationSheet: View {
                     choiceRow(choice)
                 }
             }
-            .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: Theme.corner, style: .continuous).stroke(Theme.hairline(scheme)))
+            .cardSurface()
         }
     }
 
     private func choiceRow(_ choice: GrantChoice) -> some View {
         let chosen = state.choice == choice
         return Button { state.choose(choice) } label: {
-            HStack(spacing: 12) {
+            HStack(spacing: Theme.Space.s) {
                 Image(systemName: chosen ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
+                    .font(Theme.TypeScale.title3)
                     .foregroundStyle(chosen ? AnyShapeStyle(Theme.accentSymbol) : AnyShapeStyle(Theme.secondaryText))
                     .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(choice.title(for: action.recipient))
-                        .font(.body.weight(.medium))
+                        .font(Theme.TypeScale.body.weight(.medium))
                         .foregroundStyle(.primary)
                     Text(GrantWords.choiceDetail(choice))
-                        .font(.footnote)
+                        .font(Theme.TypeScale.footnote)
                         .foregroundStyle(Theme.secondaryText)
                 }
                 .multilineTextAlignment(.leading)
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.vertical, Theme.Space.s)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -406,14 +404,14 @@ public struct ConfirmationSheet: View {
     private func row(_ label: String, _ value: String) -> some View {
         LabeledRow(stacked: Self.stacksLabels(at: typeSize), labelWidth: labelWidth, spacing: Self.labelSpacing) {
             Text(label)
-                .font(.subheadline)
+                .font(Theme.TypeScale.subheadline)
                 .foregroundStyle(Theme.secondaryText)
         } value: {
             Text(value)
-                .font(.body.weight(.medium))
+                .font(Theme.TypeScale.body.weight(.medium))
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .padding(.horizontal, Theme.Space.m)
+        .padding(.vertical, Theme.Space.m)
         .accessibilityElement(children: .combine)
     }
 
