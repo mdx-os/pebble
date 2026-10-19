@@ -52,7 +52,7 @@ struct RetryResumeTests {
         #expect(StepFailure.timedOut.isTransient)
         #expect(StepFailure.busy(retryAfter: nil).isTransient)
         #expect(StepFailure.serverTrouble(retryAfter: nil).isTransient)
-        for failure: StepFailure in [.refused, .badRequest, .notAllowed, .unexpected, .notSaved] {
+        for failure: StepFailure in [.refused, .badRequest, .notAllowed, .unexpected, .notSaved, .unreadable] {
             #expect(!failure.isTransient, "\(failure)")
         }
         #expect(StepFailure.status(200) == nil)
@@ -336,6 +336,36 @@ struct RetryResumeTests {
         #expect(tries.total == 1)
     }
 
+    /// A kept place the run can't have reached, as from a file written for
+    /// other steps, is progress that can't be read: the run says so, runs
+    /// nothing and never says done.
+    @Test func aKeptPlaceOutsideTheStepsIsUnreadable() async {
+        let at = Date(timeIntervalSince1970: 0)
+        let kept = [
+            Checkpoint(taskID: "task", finished: -1, savedAt: at),
+            Checkpoint(taskID: "task", finished: 3, savedAt: at),
+            Checkpoint(taskID: "task", finished: .max, savedAt: at),
+            Checkpoint(taskID: "task", finished: 2, question: "Which one?", savedAt: at),
+        ]
+        for checkpoint in kept {
+            let store = InMemoryCheckpointStore(["task": checkpoint])
+            let tries = Tries()
+            let runner = World(store: store).runner(steps: (0..<2).map { index in
+                RunStep("step \(index)") { attempt in tries.add(attempt); return .done }
+            })
+            #expect(await runner.run(answer: "That one") == .failed(step: 0, reason: .unreadable), "\(checkpoint)")
+            #expect(tries.total == 0)
+            #expect(store.checkpoints["task"] == checkpoint, "nothing is written over it")
+            #expect(runner.forget())
+            #expect(await runner.run() == .done, "forgotten, it starts from the top")
+            #expect(tries.total == 2)
+        }
+        // Every step finished but the end not kept yet is still a place.
+        let world = World(store: InMemoryCheckpointStore(["task": Checkpoint(taskID: "task", finished: 2, savedAt: at)]))
+        let runner = world.runner(steps: (0..<2).map { RunStep("step \($0)") { _ in .done } })
+        #expect(await runner.run() == .done)
+    }
+
     // MARK: The file
 
     @Test(.scratchFiles) func aCheckpointOnDiskIsPickedUpByANewStore() async throws {
@@ -397,6 +427,50 @@ struct RetryResumeTests {
         #expect(keys(store) == ["first", "second", "third"])
         interleave(store, change: { saved("fourth") }, between: { store.remove("first") }, hook: hook)
         #expect(keys(store) == ["second", "third", "fourth"])
+    }
+
+    /// Two stores for one file, as `onDevice()` makes a new one each time,
+    /// with its path written another way. One's change comes while the
+    /// other is between its read and its write: it waits, and every change
+    /// is kept, a removed checkpoint never coming back.
+    @Test(.scratchFiles) func twoStoresForOneFileKeepEachOthersChanges() async throws {
+        let base = try #require(Scratch.folder)
+        let file = CheckpointFileStore.location(base: base)
+        let folder = file.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let first = CheckpointFileStore(fileURL: file)
+        let second = CheckpointFileStore(fileURL: folder.appendingPathComponent("../\(folder.lastPathComponent)/./")
+            .appendingPathComponent(file.lastPathComponent))
+        let at = Date(timeIntervalSince1970: 0)
+        @Sendable func saved(_ store: CheckpointFileStore, _ taskID: String) -> Bool {
+            store.save(Checkpoint(taskID: taskID, finished: 1, savedAt: at))
+        }
+        await Self.cross(first, change: { saved(first, "first") }, between: { saved(second, "second") })
+        #expect(Self.keys(CheckpointFileStore(fileURL: file)) == ["first", "second"])
+        await Self.cross(first, change: { first.remove("first") }, between: { saved(second, "third") })
+        #expect(Self.keys(CheckpointFileStore(fileURL: file)) == ["second", "third"])
+        await Self.cross(first, change: { saved(first, "fourth") }, between: { second.remove("second") })
+        #expect(Self.keys(CheckpointFileStore(fileURL: file)) == ["third", "fourth"])
+    }
+
+    /// Runs `change` on a thread of its own, and `between` once on another,
+    /// started while `store` is between its read and its write. The change
+    /// goes on once `between` is done or waiting for the file.
+    private static func cross(_ store: CheckpointFileStore, change: @escaping @Sendable () -> Bool,
+                              between: @escaping @Sendable () -> Bool) async {
+        let other = Box<OwnThread>()
+        store.whileHeld = {
+            guard other.value == nil else { return }
+            let started = OwnThread(between)
+            other.value = started
+            let limit = Date(timeIntervalSinceNow: 60)
+            while !started.isFinished, store.waitingForFile == 0, Date() < limit { Thread.sleep(forTimeInterval: 0.001) }
+        }
+        #expect(await OwnThread(change).value())
+        store.whileHeld = nil
+        let started = other.value
+        #expect(started != nil, "the change in between ran")
+        #expect(await started?.value() == true)
     }
 
     private static func keys(_ store: any CheckpointStoring) -> Set<String> {
@@ -622,6 +696,51 @@ private final class Flag: @unchecked Sendable {
         let was = value
         value = false
         return was
+    }
+}
+
+private final class Box<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var kept: Value?
+
+    var value: Value? {
+        get { lock.lock(); defer { lock.unlock() }; return kept }
+        set { lock.lock(); kept = newValue; lock.unlock() }
+    }
+}
+
+/// Work on a thread of its own, never the pool, so it may block.
+private final class OwnThread: @unchecked Sendable {
+    private let lock = NSLock()
+    private var result: Bool?
+    private var waiter: CheckedContinuation<Bool, Never>?
+
+    init(_ body: @escaping @Sendable () -> Bool) {
+        Thread { self.finish(body()) }.start()
+    }
+
+    var isFinished: Bool { lock.lock(); defer { lock.unlock() }; return result != nil }
+
+    func value() async -> Bool {
+        await withCheckedContinuation { next in
+            lock.lock()
+            if let result {
+                lock.unlock()
+                next.resume(returning: result)
+            } else {
+                waiter = next
+                lock.unlock()
+            }
+        }
+    }
+
+    private func finish(_ value: Bool) {
+        lock.lock()
+        result = value
+        let next = waiter
+        waiter = nil
+        lock.unlock()
+        next?.resume(returning: value)
     }
 }
 

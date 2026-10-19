@@ -157,6 +157,12 @@ public final class CheckpointRunner: @unchecked Sendable {
         }
         if var unkept, let ended = unkept.ended { return end(&unkept, ended) }
         var checkpoint = kept ?? Checkpoint(taskID: taskID, savedAt: clock.now)
+        // A place this run can't have reached, as from a file written for
+        // other steps, is never run from or told as done.
+        let last = checkpoint.question == nil ? steps.count : steps.count - 1
+        guard checkpoint.finished >= 0, checkpoint.finished <= last else {
+            return .failed(step: 0, reason: .unreadable)
+        }
         var index = checkpoint.finished
         var answer = answer
         if let question = checkpoint.question, answer == nil {
@@ -305,13 +311,18 @@ public final class InMemoryCheckpointStore: CheckpointStoring, @unchecked Sendab
 /// The checkpoints in one file beside the kept tasks, written the way
 /// `TaskStore` writes its file: whole, through a staged copy, and readable
 /// only while the device is unlocked. A file that is there but can't be
-/// read yet is never written over.
+/// read yet is never written over. Every store for one file in this process
+/// shares one lock, so two of them never lose each other's changes.
 public final class CheckpointFileStore: CheckpointStoring, @unchecked Sendable {
     public let fileURL: URL
+    /// Held for each read and change of the file and its staged copy.
+    private let fileLock: FileLock
+    /// Guards the test hooks only.
     private let lock = NSLock()
 
     package init(fileURL: URL) {
         self.fileURL = fileURL
+        fileLock = FileLock.shared(for: fileURL)
     }
 
     /// Where the checkpoints are kept beside the tasks, under `base`.
@@ -351,26 +362,37 @@ public final class CheckpointFileStore: CheckpointStoring, @unchecked Sendable {
         set { lock.lock(); readHook = newValue; lock.unlock() }
     }
 
+    private var heldHook: (@Sendable () -> Void)?
+
+    /// Called inside each change, after reading and before writing, with
+    /// the file's lock held, so a test can try another change there.
+    package var whileHeld: (@Sendable () -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return heldHook }
+        set { lock.lock(); heldHook = newValue; lock.unlock() }
+    }
+
+    /// How many are waiting for this file's lock now. For tests.
+    package var waitingForFile: Int { fileLock.waiting }
+
     public func read() -> [String: Checkpoint]? {
-        lock.lock()
+        fileLock.lock()
         let all = load()
-        let hook = readHook
-        lock.unlock()
-        hook?()
+        fileLock.unlock()
+        afterRead?()
         return all
     }
 
     public func update(_ edit: (inout [String: Checkpoint]) -> Void) -> Bool {
-        lock.lock()
+        fileLock.lock()
         var kept = false
         if let before = load() {
             var all = before
             edit(&all)
+            whileHeld?()
             kept = all == before || store(all)
         }
-        let hook = readHook
-        lock.unlock()
-        hook?()
+        fileLock.unlock()
+        afterRead?()
         return kept
     }
 
@@ -417,5 +439,47 @@ public final class CheckpointFileStore: CheckpointStoring, @unchecked Sendable {
     private static func isMissing(_ url: URL) -> Bool {
         var info = stat()
         return lstat(url.path, &info) != 0 && (errno == ENOENT || errno == ENOTDIR)
+    }
+}
+
+/// One lock for each checkpoint file, shared by every store for it in this
+/// process, however its path is written. Kept for as long as the process
+/// runs; there is one for each file, and only a few files.
+private final class FileLock: @unchecked Sendable {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var all: [String: FileLock] = [:]
+
+    static func shared(for fileURL: URL) -> FileLock {
+        let path = fileURL.standardizedFileURL.resolvingSymlinksInPath().path
+        lock.lock(); defer { lock.unlock() }
+        if let kept = all[path] { return kept }
+        let made = FileLock()
+        all[path] = made
+        return made
+    }
+
+    private let condition = NSCondition()
+    private var held = false
+    private var waits = 0
+
+    /// How many are waiting for it now.
+    var waiting: Int { condition.lock(); defer { condition.unlock() }; return waits }
+
+    func lock() {
+        condition.lock()
+        while held {
+            waits += 1
+            condition.wait()
+            waits -= 1
+        }
+        held = true
+        condition.unlock()
+    }
+
+    func unlock() {
+        condition.lock()
+        held = false
+        condition.signal()
+        condition.unlock()
     }
 }

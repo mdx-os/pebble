@@ -28,12 +28,15 @@ public enum StepFailure: Error, Codable, Sendable, Equatable {
     /// The run couldn't keep its checkpoint, so it stops rather than run
     /// ahead of what it could pick up again.
     case notSaved
+    /// The kept checkpoint says a place this run can't have reached, so its
+    /// progress can't be read. Nothing runs until it is forgotten.
+    case unreadable
 
     /// True when trying again might work.
     public var isTransient: Bool {
         switch self {
         case .dropped, .timedOut, .busy, .serverTrouble: true
-        case .refused, .badRequest, .notAllowed, .unexpected, .notSaved: false
+        case .refused, .badRequest, .notAllowed, .unexpected, .notSaved, .unreadable: false
         }
     }
 

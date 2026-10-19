@@ -53,6 +53,11 @@ the engine.
   the device is locked, the run ends `failed` with `notSaved` instead, and
   the runner holds the end. Run again, it keeps that end before anything
   else and then tells it, so a step that ended the run never runs again.
+  A held end lives only in that runner's memory, so one task has one
+  runner, and a new runner made after the app closes won't know of it.
+- `failed` with `unreadable`: the kept checkpoint says a place the run
+  can't have reached, before the first step or past the last. Nothing
+  runs and nothing is written over it until it is forgotten.
 - `stopped(step:)`: the run was cancelled. Running it again picks up there.
 - `waiting(step:question:)`: a step is waiting on the person.
 
@@ -69,7 +74,10 @@ each other's.
 one file beside the kept tasks, written the way `TaskStore` writes its file:
 whole, through a staged copy that is renamed into place, readable only while
 the device is unlocked, and left out of backups. A file that is there but
-can't be read yet is never written over. Nothing makes that file yet; when
+can't be read yet is never written over. Every `CheckpointFileStore` for
+one file in the process shares one lock, found by the file's real path, so
+two stores made for it, as `onDevice()` makes a new one each time, never
+lose each other's changes either. Nothing makes that file yet; when
 the kit is wired in, Forget everything has to clear it too.
 
 ## Time in tests
@@ -79,5 +87,6 @@ clock that only moves when a wait moves it, and waits that end at once, so
 the fault tests in `RetryResumeTests` run in milliseconds and the same way
 every time. `make mutation-check` breaks each rule on its own (the
 checkpoint save, Retry-After, the transient check, the most tries, the key,
-where a run picks up, a save or remove in two goes, and an end that couldn't
-be kept) and requires those tests to fail.
+where a run picks up, a save or remove in two goes, an end that couldn't
+be kept, a lock for each store rather than each file, and a kept place
+outside the steps) and requires those tests to fail.

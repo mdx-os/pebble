@@ -50,3 +50,30 @@ perl: s~guard keep\(&checkpoint\) else \{\n\s+heldEnd = checkpoint\n\s+return \.
 test: anEndThatCannotBeKeptIsKeptLaterAndNeverRunAgain
 file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
 perl: s~if var unkept, let ended = unkept\.ended \{ return end\(&unkept, ended\) \}~~
+
+# Each store has a lock of its own again: two stores for one file, as
+# onDevice() makes, both read before either writes and one change is lost.
+test: twoStoresForOneFileKeepEachOthersChanges
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~fileLock = FileLock\.shared\(for: fileURL\)~fileLock = FileLock()~
+
+# The shared lock is found by the path as written, so a store for the same
+# file reached another way gets a lock of its own.
+test: twoStoresForOneFileKeepEachOthersChanges
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~fileURL\.standardizedFileURL\.resolvingSymlinksInPath\(\)\.path~fileURL.path~
+
+# A kept place past the last step is told as done.
+test: aKeptPlaceOutsideTheStepsIsUnreadable
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~guard checkpoint\.finished >= 0, checkpoint\.finished <= last else~guard checkpoint.finished >= 0 else~
+
+# A kept place below the first step is run from.
+test: aKeptPlaceOutsideTheStepsIsUnreadable
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~guard checkpoint\.finished >= 0, checkpoint\.finished <= last else~guard checkpoint.finished <= last else~
+
+# A question kept past the last step is answered with a done.
+test: aKeptPlaceOutsideTheStepsIsUnreadable
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~checkpoint\.question == nil \? steps\.count : steps\.count - 1~steps.count~
