@@ -1,7 +1,9 @@
 #if canImport(SwiftUI)
+import Combine
 import Foundation
 import PebbleCore
 import PebbleModel
+import ReconTestSupport
 import SwiftUI
 import Testing
 @testable import PebbleUI
@@ -113,13 +115,45 @@ final class FailingCloudStore: CloudHelpStoring, @unchecked Sendable {
     }
 }
 
+/// Runs a step on the main thread at the first read off it, then answers
+/// with what was saved before that step: the switch turned off just after
+/// a reply checked it was on.
+final class OffAtTheFirstReadOffMain: CloudHelpStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private let inner: InMemoryCloudHelpStore
+    private var step: (@MainActor () -> Void)?
+    private var ran = false
+
+    init(_ settings: CloudHelpSettings) { inner = InMemoryCloudHelpStore(settings) }
+
+    func whenRead(_ step: @escaping @MainActor () -> Void) { lock.withLock { self.step = step } }
+
+    var wasTurnedOff: Bool { lock.withLock { ran } }
+
+    func load() throws -> CloudHelpSettings {
+        let read = try inner.load()
+        guard !Thread.isMainThread, let step = lock.withLock({ () -> (@MainActor () -> Void)? in
+            defer { self.step = nil }
+            return self.step
+        }) else { return read }
+        // Only as long as the main thread is busy elsewhere; the main thread
+        // never waits on this one.
+        DispatchQueue.main.sync { MainActor.assumeIsolated { step() } }
+        lock.withLock { ran = true }
+        return read
+    }
+
+    func save(_ next: CloudHelpSettings) throws { try inner.save(next) }
+    func erase() throws { try inner.erase() }
+}
+
 @MainActor
 struct CloudHelpTests {
     let brand = Brand(name: "Nova")
     let endpoint = URL(string: "https://cloud.example.com")!
 
     func help(_ settings: CloudHelpSettings = .off, endpoint: URL?, maker: TransportMaker,
-              memory: MemoryStore? = nil, store: InMemoryCloudHelpStore? = nil,
+              memory: MemoryStore? = nil, store: (any CloudHelpStoring)? = nil,
               auth: any CloudAuth = NoCloudAuth()) -> CloudHelp {
         CloudHelp(store: store ?? InMemoryCloudHelpStore(settings), endpoint: endpoint, memory: memory ?? scratchMemory(),
                   auth: auth, transport: { maker.make() })
@@ -554,6 +588,33 @@ struct CloudHelpTests {
         #expect(personTurns(controller).isEmpty)
         #expect(controller.draft == "Plan my week")
         #expect(review.pending == nil)
+        #expect(maker.wire.sent.isEmpty)
+    }
+
+    /// The switch goes off just after a reply checked it was on, before its
+    /// preview reached the screen, as on a busy main thread. No preview ever
+    /// shows: there would be nothing left to withdraw it, and its Send could
+    /// never send.
+    @Test func aSwitchOffJustAfterTheCheckNeverShowsAPreview() async throws {
+        let maker = TransportMaker()
+        let store = OffAtTheFirstReadOffMain(CloudHelpSettings(isOn: true))
+        let cloud = help(CloudHelpSettings(isOn: true), endpoint: endpoint, maker: maker, store: store)
+        let controller = chat(cloud)
+        let review = try #require(controller.review)
+        var shown = false
+        let watch = review.$pending.sink { if $0 != nil { shown = true } }
+        defer { watch.cancel() }
+        store.whenRead { cloud.setOn(false) }
+        controller.submit("Plan my week")
+        await eventually { !controller.isReplying || shown }
+        #expect(store.wasTurnedOff)
+        #expect(!shown)
+        #expect(review.pending == nil)
+        // Lets a preview that did show go, so a failure here never hangs.
+        review.cancelPending()
+        await controller.settled()
+        #expect(controller.failure == CloudWords.withdrawn)
+        #expect(personTurns(controller).isEmpty)
         #expect(maker.wire.sent.isEmpty)
     }
 

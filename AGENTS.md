@@ -48,6 +48,7 @@ in lint, a skill, or CI.
   - `PebblePulse`: public source watch fetching and snapshots. Imports PebbleCore.
   - `PebbleModel`: model adapter. `ModelClient`, the on-device placeholder and `CloudModel` (off by default, every request previewed and redacted by `Redactor` in PebbleCore). Imports PebbleCore. MLX and Ollama adapters plug in here. The on-device task engine lives here too, made only by `OnDeviceTasks` from a key the compiler keeps private.
   - `PebbleBackground`: gives the background runner time (`BGTaskScheduler` on iOS, `NSBackgroundActivityScheduler` on the Mac). Imports PebbleCore. Scheduling decisions are pure functions in `BackgroundPlan`; the runner, its store and its switch live in PebbleCore's `Background.swift`, so no platform code goes there.
+  - `PebbleConnectors`: read only connectors to what the person keeps in other apps (calendar and reminders through EventKit). Imports none of our layers; reading never asks, and `ConnectorGate` keeps it free of network, files and logs. See `docs/CONNECTORS.md`.
   - `PebbleUI`: SwiftUI views shared by every platform. Imports PebbleCore and PebbleModel.
 - Where work is done (kept context, a framework, the relay, a remote run,
   then the person) is decided only by `FallbackRouter` in PebbleCore.
@@ -206,6 +207,13 @@ in lint, a skill, or CI.
   generous limit (about 60 s). The pool starves on a busy runner, and a wait
   with no limit turns a regression into a hung run instead of a failure.
   `TaskLedgerRunTests` and `TaskLedgerCardTests` follow this.
+- A check made off the main actor can go stale before the main actor acts on
+  it. A cloud preview asks whether the cloud is on again where it goes on
+  screen, on the main actor, where the switch is turned off.
+  `aSwitchOffJustAfterTheCheckNeverShowsAPreview` guards this.
+- The Recon UI tests' `eventually` waits up to 60 s and their suites allow 3
+  minutes: main-actor tests queue behind each other, about 16 s on a fast Mac
+  and past 30 s on CI.
 
 ## Never
 

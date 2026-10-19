@@ -330,7 +330,11 @@ public final class HandClock: @unchecked Sendable {
 
 /// How long `eventually` waits before it gives up. One number for every
 /// recon test, set wide so a slow CI machine never fails on time alone.
-public let eventuallyLimit: Duration = .seconds(30)
+/// The main actor work these tests wait on queues behind every other
+/// main-actor test in the run, about 16 s on a fast Mac and past 30 s on
+/// CI, so this is the repo's limit for main-actor waits, about 60 s. A
+/// passing test never waits on it.
+public let eventuallyLimit: Duration = .seconds(60)
 
 /// Waits, a short sleep at a time, until `condition` holds or
 /// `eventuallyLimit` passes. The caller then checks the condition itself,

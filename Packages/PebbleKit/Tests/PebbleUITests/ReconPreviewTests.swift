@@ -11,7 +11,7 @@ import Testing
 /// one away at once and a stale Send sends nothing, a Send stays marked,
 /// a swipe down is a no, and the README says what Remember does.
 @MainActor
-@Suite(.timeLimit(.minutes(1)))
+@Suite(.timeLimit(.minutes(3)))
 struct ReconPreviewTests {
     let endpoint = URL(string: "https://cloud.example.com")!
     let morning = ShowcaseScene.morning

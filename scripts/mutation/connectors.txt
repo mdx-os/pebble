@@ -1,0 +1,57 @@
+# The calendar connector. Events that only touch, one ending as the next
+# begins, never clash.
+test: clashes
+file: Packages/PebbleKit/Sources/PebbleConnectors/CalendarDay.swift
+perl: s~if start < end \{~if start <= end {~
+
+# All day events never clash.
+test: clashes anAllDayEventIsCountedButNeverClashes
+file: Packages/PebbleKit/Sources/PebbleConnectors/CalendarDay.swift
+perl: s~let timed = events\.filter \{ !\$0\.isAllDay \}\.sorted~let timed = events.sorted~
+
+# Reading never asks the person; only requestAccess does.
+test: readingNeverAsksThePerson
+file: Packages/PebbleKit/Sources/PebbleConnectors/Calendar.swift
+perl: s~let access = store\.access\(\.events\)~let access = await store.requestAccess(.events)~
+perl: s~let access = store\.access\(\.reminders\)~let access = await store.requestAccess(.reminders)~
+
+# A no gives its reason, never an empty list that reads as an empty calendar.
+test: aClosedCalendarSaysWhyAndIsNeverEmpty sayingNoWhenAskedIsKept
+file: Packages/PebbleKit/Sources/PebbleConnectors/Calendar.swift
+perl: s~case \.denied: self\.init\(kind: kind, why: \.denied\)~case .denied: return nil~
+
+# So does a setting that keeps the calendar closed.
+test: aClosedCalendarSaysWhyAndIsNeverEmpty
+file: Packages/PebbleKit/Sources/PebbleConnectors/Calendar.swift
+perl: s~case \.restricted: self\.init\(kind: kind, why: \.restricted\)~case .restricted: return nil~
+
+# A choice already made is never asked again.
+test: aChoiceMadeIsNeverAskedAgain
+file: Packages/PebbleKit/Sources/PebbleConnectors/Calendar.swift
+perl: s~guard now == \.notDetermined else \{ return now \}~~
+
+# Access closed while events are being read says why, never an empty day.
+test: eventsClosedDuringTheReadSayWhy
+file: Packages/PebbleKit/Sources/PebbleConnectors/Calendar.swift
+perl: s~if let block = CalendarBlock\(kind: \.events, access: store\.access\(\.events\)\) \{ return \.blocked\(block\) \}\n~~
+
+# The same for reminders, looked at before whether any came back.
+test: remindersClosedDuringTheReadSayWhy
+file: Packages/PebbleKit/Sources/PebbleConnectors/Calendar.swift
+perl: s~if let block = CalendarBlock\(kind: \.reminders, access: store\.access\(\.reminders\)\) \{ return \.blocked\(block\) \}\n~~
+
+# The morning summary's day runs midnight to midnight in the calendar's
+# time zone, 23 or 25 hours when the clocks change, never a fixed 24.
+test: aDayWithTwentyFiveHours aDayWithTwentyThreeHours
+file: Packages/PebbleKit/Sources/PebbleConnectors/CalendarDay.swift
+perl: s~calendar\.dateInterval\(of: \.day, for: now\) \?\? ~~
+
+# A reminder due on a day with no time is overdue only once the day is over.
+test: aReminderWithNoTimeIsOverdueTheDayAfter
+file: Packages/PebbleKit/Sources/PebbleConnectors/Calendar.swift
+perl: s~return calendar\.compare\(due, to: now, toGranularity: \.day\) == \.orderedAscending~return due < now~
+
+# The connector layer depends on none of the package's others.
+test: theConnectorLayerDependsOnNothingOfOurs
+file: Packages/PebbleKit/Package.swift
+perl: s~\.target\(name: "PebbleConnectors"\),~.target(name: "PebbleConnectors", dependencies: ["PebbleCore"]),~
