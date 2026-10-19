@@ -492,11 +492,21 @@ struct ScriptGuardTests {
 
     /// CI runs all of make verify on every push and pull request: verify-ci
     /// in the Verify job, and the full mutation check, every entry with no
-    /// timeout let by, in a job of its own with a longer limit.
+    /// timeout let by, in a job of its own with a longer limit. The whole
+    /// mutation job is pinned, so no condition, dependency or extra step
+    /// can be slipped in anywhere in it.
     @Test func ciRunsTheFullMutationCheckInItsOwnJob() throws {
         let workflow = try String(contentsOf: Self.root.appendingPathComponent(".github/workflows/ci.yml"), encoding: .utf8)
         #expect(workflow.contains("  push:\n    branches: [main]\n  pull_request:\n"))
         #expect(workflow.contains("    name: Verify on Mac, iPhone and iPad\n"))
+        for filter in ["paths:", "paths-ignore", "branches-ignore", "types:"] {
+            #expect(!workflow.contains(filter), "\(filter)")
+        }
+        let opening = try #require(workflow.range(of: "\n  mutation:\n"))
+        let after = workflow[opening.upperBound...]
+        let close = after.range(of: "\n  [^ \n]", options: .regularExpression)?.lowerBound ?? after.endIndex
+        let block = ("  mutation:\n" + after[..<close]).trimmingCharacters(in: .newlines)
+        #expect(block == Self.mutationJob)
         let job = try #require(workflow.range(of: "    name: Mutation check\n"))
         let rest = workflow[job.upperBound...]
         let steps = rest.split(separator: "\n").filter { $0.hasPrefix("        run: ") }
@@ -508,6 +518,30 @@ struct ScriptGuardTests {
         let limit = try #require(rest.split(separator: "\n").first { $0.hasPrefix("    timeout-minutes: ") })
         #expect((Int(limit.dropFirst("    timeout-minutes: ".count)) ?? 0) >= 90)
     }
+
+    /// The mutation job in ci.yml, exactly. Changing it means changing this
+    /// on purpose.
+    static let mutationJob = """
+      mutation:
+        name: Mutation check
+        runs-on: macos-26
+        timeout-minutes: 150
+        steps:
+          - uses: actions/checkout@v5
+            with:
+              fetch-depth: 0
+
+          - name: Install tools
+            run: brew install xcodegen gitleaks
+
+          - name: Show toolchain
+            run: |
+              xcodebuild -version
+              swift --version
+
+          - name: Mutation check
+            run: make mutation-check
+    """
 
     /// The lint looks at project.yml, the Makefile and the mutation
     /// manifest too, not only the code folders.

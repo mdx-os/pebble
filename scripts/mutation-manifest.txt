@@ -850,6 +850,22 @@ test: ciRunsTheFullMutationCheckInItsOwnJob
 file: .github/workflows/ci.yml
 perl: s~  pull_request:\n~~
 
+test: ciRunsTheFullMutationCheckInItsOwnJob
+file: .github/workflows/ci.yml
+perl: s~  mutation:\n    name: Mutation check\n~  mutation:\n    if: github.ref == 'refs/heads/main'\n    name: Mutation check\n~
+
+test: ciRunsTheFullMutationCheckInItsOwnJob
+file: .github/workflows/ci.yml
+perl: s~    timeout-minutes: 150\n~    timeout-minutes: 150\n    if: github.event_name == 'push'\n~
+
+test: ciRunsTheFullMutationCheckInItsOwnJob
+file: .github/workflows/ci.yml
+perl: s~    runs-on: macos-26\n    timeout-minutes: 150\n~    runs-on: macos-26\n    needs: verify\n    timeout-minutes: 150\n~
+
+test: ciRunsTheFullMutationCheckInItsOwnJob
+file: .github/workflows/ci.yml
+perl: s~  pull_request:\n~  pull_request:\n    paths-ignore: ['scripts/**']\n~
+
 # The lint reads a Swift string of several lines as a string, so a URL in one is no comment.
 test: theCommentLintCatchesReviewHistoryAndNames
 file: scripts/comment-lint.sh
