@@ -80,9 +80,12 @@ public struct Checkpoint: Codable, Sendable, Equatable {
 public protocol CheckpointStoring: AnyObject, Sendable {
     /// Every checkpoint kept, by task, or nil while they can't be read.
     func read() -> [String: Checkpoint]?
-    /// Keeps these, whole. False when they couldn't be written now.
+    /// Reads every checkpoint, lets `edit` change them and keeps the result,
+    /// all in one go, so no other change can land in between and be lost.
+    /// `edit` never touches the store. False when they couldn't be read or
+    /// written now, and then nothing changed.
     @discardableResult
-    func write(_ checkpoints: [String: Checkpoint]) -> Bool
+    func update(_ edit: (inout [String: Checkpoint]) -> Void) -> Bool
 }
 
 extension CheckpointStoring {
@@ -96,17 +99,13 @@ extension CheckpointStoring {
     /// Keeps `checkpoint` beside the others. False when it couldn't be kept.
     @discardableResult
     public func save(_ checkpoint: Checkpoint) -> Bool {
-        guard var all = read() else { return false }
-        all[checkpoint.taskID] = checkpoint
-        return write(all)
+        update { $0[checkpoint.taskID] = checkpoint }
     }
 
     /// Lets go of the checkpoint for `taskID`. False when it couldn't.
     @discardableResult
     public func remove(_ taskID: String) -> Bool {
-        guard var all = read() else { return false }
-        guard all.removeValue(forKey: taskID) != nil else { return true }
-        return write(all)
+        update { $0[taskID] = nil }
     }
 }
 
@@ -119,7 +118,7 @@ extension CheckpointStoring {
 /// between tries as the policy says. Failures that aren't transient end the
 /// run on the first try. Every try carries the step's `IdempotencyKey`, so
 /// a step tried again after the app closed mid step is the same request.
-public final class CheckpointRunner: Sendable {
+public final class CheckpointRunner: @unchecked Sendable {
     public let taskID: String
     private let steps: [RunStep]
     private let store: any CheckpointStoring
@@ -127,6 +126,10 @@ public final class CheckpointRunner: Sendable {
     private let clock: any RunClock
     private let sleeper: any RunSleeper
     private let random: @Sendable () -> Double
+    private let lock = NSLock()
+    /// How the run ended, when that couldn't be kept yet. Kept again before
+    /// anything runs, so a step that ended the run is never run again.
+    private var unkeptEnd: Checkpoint?
 
     public init(taskID: String, steps: [RunStep], store: any CheckpointStoring, policy: BackoffPolicy = .standard,
                 clock: any RunClock = SystemRunClock(), sleeper: any RunSleeper = SystemRunSleeper(),
@@ -144,9 +147,16 @@ public final class CheckpointRunner: Sendable {
     /// step stops it. `answer` is the person's answer to the question the
     /// run is waiting on; without one a waiting run stays waiting.
     public func run(answer: String? = nil) async -> RunOutcome {
-        guard let kept = store.checkpoint(taskID) else { return .failed(step: 0, reason: .notSaved) }
+        let unkept = heldEnd
+        guard let kept = store.checkpoint(taskID) else {
+            return .failed(step: unkept?.ended.map(endingStep) ?? 0, reason: .notSaved)
+        }
+        if let ended = kept?.ended {
+            heldEnd = nil
+            return ended
+        }
+        if var unkept, let ended = unkept.ended { return end(&unkept, ended) }
         var checkpoint = kept ?? Checkpoint(taskID: taskID, savedAt: clock.now)
-        if let ended = checkpoint.ended { return ended }
         var index = checkpoint.finished
         var answer = answer
         if let question = checkpoint.question, answer == nil {
@@ -194,7 +204,14 @@ public final class CheckpointRunner: Sendable {
     /// Lets go of this task's checkpoint, as when the person clears it.
     @discardableResult
     public func forget() -> Bool {
-        store.remove(taskID)
+        guard store.remove(taskID) else { return false }
+        heldEnd = nil
+        return true
+    }
+
+    private var heldEnd: Checkpoint? {
+        get { lock.lock(); defer { lock.unlock() }; return unkeptEnd }
+        set { lock.lock(); unkeptEnd = newValue; lock.unlock() }
     }
 
     private func keep(_ checkpoint: inout Checkpoint) -> Bool {
@@ -202,13 +219,26 @@ public final class CheckpointRunner: Sendable {
         return store.save(checkpoint)
     }
 
-    /// Keeps how the run ended, so running it again only tells it. Ends
-    /// the same way even if it couldn't be kept.
+    /// Keeps how the run ended, so running it again only tells it. When it
+    /// can't be kept the run says so, and this runner holds the end and
+    /// keeps it before anything else, rather than run the step again.
     private func end(_ checkpoint: inout Checkpoint, _ outcome: RunOutcome) -> RunOutcome {
         checkpoint.ended = outcome
         checkpoint.question = nil
-        _ = keep(&checkpoint)
+        guard keep(&checkpoint) else {
+            heldEnd = checkpoint
+            return .failed(step: endingStep(outcome), reason: .notSaved)
+        }
+        heldEnd = nil
         return outcome
+    }
+
+    /// The step a run ended at: the one that failed, or the last.
+    private func endingStep(_ outcome: RunOutcome) -> Int {
+        switch outcome {
+        case .failed(let step, _), .stopped(let step), .waiting(let step, _): step
+        case .done: max(steps.count - 1, 0)
+        }
     }
 }
 
@@ -236,17 +266,39 @@ public final class InMemoryCheckpointStore: CheckpointStoring, @unchecked Sendab
     /// Writes that went in. For tests.
     public var writes: Int { lock.lock(); defer { lock.unlock() }; return writeCount }
 
-    public func read() -> [String: Checkpoint]? {
-        lock.lock(); defer { lock.unlock() }
-        return isLocked ? nil : kept
+    private var readHook: (@Sendable () -> Void)?
+
+    /// Called each time the store lets go after reading, outside its lock,
+    /// so a test can put another change there.
+    public var afterRead: (@Sendable () -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return readHook }
+        set { lock.lock(); readHook = newValue; lock.unlock() }
     }
 
-    public func write(_ checkpoints: [String: Checkpoint]) -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        guard !isLocked else { return false }
-        kept = checkpoints
-        writeCount += 1
-        return true
+    public func read() -> [String: Checkpoint]? {
+        lock.lock()
+        let all = isLocked ? nil : kept
+        let hook = readHook
+        lock.unlock()
+        hook?()
+        return all
+    }
+
+    public func update(_ edit: (inout [String: Checkpoint]) -> Void) -> Bool {
+        lock.lock()
+        let changed = !isLocked
+        if changed {
+            var all = kept
+            edit(&all)
+            if all != kept {
+                kept = all
+                writeCount += 1
+            }
+        }
+        let hook = readHook
+        lock.unlock()
+        hook?()
+        return changed
     }
 }
 
@@ -290,8 +342,40 @@ public final class CheckpointFileStore: CheckpointStoring, @unchecked Sendable {
         fileURL.deletingLastPathComponent().appendingPathComponent("." + fileURL.lastPathComponent + ".next")
     }
 
+    private var readHook: (@Sendable () -> Void)?
+
+    /// Called each time the store lets go after reading, outside its lock,
+    /// so a test can put another change there.
+    package var afterRead: (@Sendable () -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return readHook }
+        set { lock.lock(); readHook = newValue; lock.unlock() }
+    }
+
     public func read() -> [String: Checkpoint]? {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
+        let all = load()
+        let hook = readHook
+        lock.unlock()
+        hook?()
+        return all
+    }
+
+    public func update(_ edit: (inout [String: Checkpoint]) -> Void) -> Bool {
+        lock.lock()
+        var kept = false
+        if let before = load() {
+            var all = before
+            edit(&all)
+            kept = all == before || store(all)
+        }
+        let hook = readHook
+        lock.unlock()
+        hook?()
+        return kept
+    }
+
+    /// Reads the file. Called with the lock held.
+    private func load() -> [String: Checkpoint]? {
         if Self.isMissing(fileURL) { return [:] }
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
         let decoder = JSONDecoder()
@@ -305,8 +389,8 @@ public final class CheckpointFileStore: CheckpointStoring, @unchecked Sendable {
         return checkpoints
     }
 
-    public func write(_ checkpoints: [String: Checkpoint]) -> Bool {
-        lock.lock(); defer { lock.unlock() }
+    /// Writes the file whole. Called with the lock held.
+    private func store(_ checkpoints: [String: Checkpoint]) -> Bool {
         let manager = FileManager.default
         // A file there that can't be read yet is never written over.
         if manager.fileExists(atPath: fileURL.path), !manager.isReadableFile(atPath: fileURL.path) { return false }

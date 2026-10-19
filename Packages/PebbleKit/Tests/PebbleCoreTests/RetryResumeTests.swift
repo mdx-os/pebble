@@ -293,6 +293,49 @@ struct RetryResumeTests {
         #expect(world.store.checkpoints["task"]?.ended == nil, "a stopped run picks up again")
     }
 
+    /// A step ends the run for good, but the end can't be kept, as with
+    /// the device locked. The run says so, and once the store opens again
+    /// the end is kept first and the step is never run again.
+    @Test func anEndThatCannotBeKeptIsKeptLaterAndNeverRunAgain() async {
+        for failure: StepFailure in [.refused, .dropped] {
+            let world = World(policy: BackoffPolicy(maxTries: 2))
+            let tries = Tries()
+            let steps = [
+                RunStep("send") { attempt in tries.add(attempt); world.store.locked = true; throw failure },
+                RunStep("after") { attempt in tries.add(attempt); return .done },
+            ]
+            let runner = world.runner(steps: steps)
+            let tried = failure.isTransient ? 2 : 1
+            #expect(await runner.run() == .failed(step: 0, reason: .notSaved), "\(failure)")
+            #expect(world.store.checkpoints["task"]?.ended == nil)
+            #expect(await runner.run() == .failed(step: 0, reason: .notSaved), "still locked, so nothing runs")
+            #expect(tries.total == tried, "\(failure)")
+
+            world.store.locked = false
+            #expect(await runner.run() == .failed(step: 0, reason: failure), "\(failure)")
+            #expect(world.store.checkpoints["task"]?.ended == .failed(step: 0, reason: failure))
+            #expect(await world.runner(steps: steps).run() == .failed(step: 0, reason: failure))
+            #expect(tries.total == tried, "a step that ended the run is never run again: \(failure)")
+        }
+    }
+
+    @Test func aDoneThatCannotBeKeptSaysSo() async {
+        let world = World()
+        let tries = Tries()
+        let store = world.store
+        let runner = world.runner(steps: [RunStep("only") { attempt in tries.add(attempt); return .done }])
+        // The step's checkpoint goes in, and then the store locks.
+        store.afterRead = { if store.checkpoints["task"]?.finished == 1 { store.locked = true } }
+        #expect(await runner.run() == .failed(step: 0, reason: .notSaved))
+        #expect(store.checkpoints["task"]?.ended == nil)
+
+        store.afterRead = nil
+        store.locked = false
+        #expect(await runner.run() == .done)
+        #expect(store.checkpoints["task"]?.ended == .done)
+        #expect(tries.total == 1)
+    }
+
     // MARK: The file
 
     @Test(.scratchFiles) func aCheckpointOnDiskIsPickedUpByANewStore() async throws {
@@ -315,6 +358,49 @@ struct RetryResumeTests {
         #expect(CheckpointFileStore(fileURL: file).read()?["task"]?.ended == .done)
         #expect(World(store: reopened).runner(steps: steps).forget())
         #expect(!FileManager.default.fileExists(atPath: file.path), "nothing kept, no file")
+    }
+
+    /// Two runners keep their places at once: one's change lands between
+    /// the other's read and its write. Every change is kept, in memory
+    /// and on disk.
+    @Test(.scratchFiles) func twoChangesAtOnceAreBothKept() throws {
+        let base = try #require(Scratch.folder)
+        let file = CheckpointFileStore.location(base: base)
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let memory = InMemoryCheckpointStore()
+        Self.interleave(memory) { memory.afterRead = $0 }
+        let disk = CheckpointFileStore(fileURL: file)
+        Self.interleave(disk) { disk.afterRead = $0 }
+        #expect(Self.keys(CheckpointFileStore(fileURL: file)) == ["second", "third", "fourth"])
+    }
+
+    /// Runs `change`, and `between` once, right after the store first lets
+    /// go of a read inside it.
+    private static func interleave(_ store: any CheckpointStoring, change: () -> Bool, between: @escaping @Sendable () -> Bool,
+                                   hook: (@escaping @Sendable () -> Void) -> Void) {
+        let once = Flag(true)
+        hook { if once.take() { #expect(between()) } }
+        #expect(change())
+        #expect(!once.take(), "the change in between ran")
+        hook {}
+    }
+
+    private static func interleave(_ store: any CheckpointStoring, hook: (@escaping @Sendable () -> Void) -> Void) {
+        let at = Date(timeIntervalSince1970: 0)
+        @Sendable func saved(_ taskID: String) -> Bool {
+            store.save(Checkpoint(taskID: taskID, finished: 1, savedAt: at))
+        }
+        #expect(saved("gone"))
+        interleave(store, change: { saved("first") }, between: { saved("second") }, hook: hook)
+        #expect(keys(store) == ["gone", "first", "second"])
+        interleave(store, change: { store.remove("gone") }, between: { saved("third") }, hook: hook)
+        #expect(keys(store) == ["first", "second", "third"])
+        interleave(store, change: { saved("fourth") }, between: { store.remove("first") }, hook: hook)
+        #expect(keys(store) == ["second", "third", "fourth"])
+    }
+
+    private static func keys(_ store: any CheckpointStoring) -> Set<String> {
+        Set(store.read().map { Array($0.keys) } ?? [])
     }
 
     @Test(.scratchFiles) func aFileNoOneCanUnderstandGoes() throws {

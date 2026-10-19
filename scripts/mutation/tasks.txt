@@ -28,3 +28,25 @@ perl: s~value = "\\\(taskID\):\\\(step\)"~value = "\\(taskID):\\(Date().timeInte
 test: closingMidTaskThenPickingUpRepeatsNothing aQuestionForThePersonKeepsItsPlaceAndGoesOnWithTheAnswer aCheckpointOnDiskIsPickedUpByANewStore
 file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
 perl: s~var index = checkpoint\.finished~var index = 0~
+
+# A save that reads and writes in two goes: a change in between is lost.
+test: twoChangesAtOnceAreBothKept
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~update \{ \$0\[checkpoint\.taskID\] = checkpoint \}~guard var all = read() else { return false }; all[checkpoint.taskID] = checkpoint; return update { \$0 = all }~
+
+# A remove that reads and writes in two goes: a save in between is lost.
+test: twoChangesAtOnceAreBothKept
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~update \{ \$0\[taskID\] = nil \}~guard var all = read() else { return false }; all[taskID] = nil; return update { \$0 = all }~
+
+# How the run ended is let go when it can't be kept, so the run claims an
+# end it never kept and a step that failed for good runs again.
+test: anEndThatCannotBeKeptIsKeptLaterAndNeverRunAgain aDoneThatCannotBeKeptSaysSo
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~guard keep\(&checkpoint\) else \{\n\s+heldEnd = checkpoint\n\s+return \.failed\(step: endingStep\(outcome\), reason: \.notSaved\)\n\s+\}~_ = keep(&checkpoint)~
+
+# An end held because it couldn't be kept is not kept first, so the step
+# that ended the run runs again once the store opens.
+test: anEndThatCannotBeKeptIsKeptLaterAndNeverRunAgain
+file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
+perl: s~if var unkept, let ended = unkept\.ended \{ return end\(&unkept, ended\) \}~~

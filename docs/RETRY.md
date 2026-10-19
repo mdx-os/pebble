@@ -49,13 +49,21 @@ the engine.
 
 - `done`: every step finished.
 - `failed(step:reason:)`: a step failed for good. It is kept, so running the
-  task again only says so.
+  task again only says so. When how the run ended can't be kept, as while
+  the device is locked, the run ends `failed` with `notSaved` instead, and
+  the runner holds the end. Run again, it keeps that end before anything
+  else and then tells it, so a step that ended the run never runs again.
 - `stopped(step:)`: the run was cancelled. Running it again picks up there.
 - `waiting(step:question:)`: a step is waiting on the person.
 
 Nothing ends silently.
 
 ## Where checkpoints are kept
+
+Every change to the checkpoints, a save or a remove, is one `update`: the
+store reads them, makes the change and writes them back without letting
+go in between, so two runners keeping their places at once never lose
+each other's.
 
 `InMemoryCheckpointStore` is for tests. `CheckpointFileStore` keeps them in
 one file beside the kept tasks, written the way `TaskStore` writes its file:
@@ -71,4 +79,5 @@ clock that only moves when a wait moves it, and waits that end at once, so
 the fault tests in `RetryResumeTests` run in milliseconds and the same way
 every time. `make mutation-check` breaks each rule on its own (the
 checkpoint save, Retry-After, the transient check, the most tries, the key,
-and where a run picks up) and requires those tests to fail.
+where a run picks up, a save or remove in two goes, and an end that couldn't
+be kept) and requires those tests to fail.
