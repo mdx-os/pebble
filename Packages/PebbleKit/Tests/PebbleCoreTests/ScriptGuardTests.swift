@@ -497,7 +497,9 @@ struct ScriptGuardTests {
     /// can be slipped in anywhere in it.
     @Test func ciRunsTheFullMutationCheckInItsOwnJob() throws {
         let workflow = try String(contentsOf: Self.root.appendingPathComponent(".github/workflows/ci.yml"), encoding: .utf8)
-        #expect(workflow.contains("  push:\n    branches: [main]\n  pull_request:\n"))
+        // The triggers are pinned too: every pull request, whatever its
+        // target, and every push to main.
+        #expect(workflow.hasPrefix("name: CI\n\non:\n  push:\n    branches: [main]\n  pull_request:\n\npermissions:"))
         #expect(workflow.contains("    name: Verify on Mac, iPhone and iPad\n"))
         for filter in ["paths:", "paths-ignore", "branches-ignore", "types:"] {
             #expect(!workflow.contains(filter), "\(filter)")
