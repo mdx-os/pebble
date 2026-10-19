@@ -36,19 +36,75 @@ struct ChatStyleTests {
         #expect(!ChatStyle.playsReplyTap(from: mark(replied), to: mark(replied)), "nothing new")
     }
 
+    private func chat() -> ChatController {
+        ChatController(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(), replyBeat: .zero)
+    }
+
     @Test func aSuggestionFillsTheComposerAndNeverSends() {
-        let controller = ChatController(brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(),
-                                        replyBeat: .zero)
+        let controller = chat()
         let job = FirstConversation.jobs[0]
         let other = FirstConversation.jobs[1]
-        controller.draft = ChatStyle.draft(filling: controller.draft, with: job.prompt)
+        controller.fill(withSuggestion: job.prompt)
         #expect(controller.draft == job.prompt)
         #expect(controller.sentCount == 0 && !controller.isReplying)
         #expect(controller.conversation.isWaitingForPerson, "nothing went into the chat")
-        // Another suggestion swaps it; words the person typed stay.
-        #expect(ChatStyle.draft(filling: job.prompt, with: other.prompt) == other.prompt)
-        #expect(ChatStyle.draft(filling: "Pack lunches", with: job.prompt) == "Pack lunches")
-        #expect(ChatStyle.draft(filling: "  ", with: job.prompt) == job.prompt)
+        // Another suggestion swaps one a tap put there, untouched.
+        controller.fill(withSuggestion: other.prompt)
+        #expect(controller.draft == other.prompt)
+        controller.fill(withSuggestion: job.prompt)
+        #expect(controller.draft == job.prompt)
+        // Words the person typed stay, and an empty field takes one.
+        let typed = chat()
+        typed.draft = "Pack lunches"
+        typed.fill(withSuggestion: job.prompt)
+        #expect(typed.draft == "Pack lunches")
+        typed.draft = "  "
+        typed.fill(withSuggestion: job.prompt)
+        #expect(typed.draft == job.prompt)
+    }
+
+    /// Typed or pasted words that read exactly like a suggestion are still
+    /// the person's: only a tap makes a draft a suggestion.
+    @Test func wordsThatMatchASuggestionAreStillThePersons() {
+        let job = FirstConversation.jobs[0]
+        let other = FirstConversation.jobs[1]
+        // Typed or pasted by hand, the same words as a suggestion, with or
+        // without spaces around them.
+        for words in [job.prompt, other.prompt, " \(job.prompt)\n"] {
+            let controller = chat()
+            controller.draft = words
+            controller.fill(withSuggestion: FirstConversation.jobs[2].prompt)
+            #expect(controller.draft == words, "kept: \(words)")
+        }
+        // A suggestion the person then edits, even back to the same words,
+        // is theirs too.
+        let edited = chat()
+        edited.fill(withSuggestion: job.prompt)
+        edited.draft = job.prompt + "!"
+        edited.draft = job.prompt
+        edited.fill(withSuggestion: other.prompt)
+        #expect(edited.draft == job.prompt)
+        // Cleared by a send, the field takes the next suggestion again.
+        let sent = chat()
+        sent.fill(withSuggestion: job.prompt)
+        sent.draft = ""
+        sent.draft = other.prompt
+        sent.fill(withSuggestion: job.prompt)
+        #expect(sent.draft == other.prompt, "typed after the field was cleared")
+    }
+
+    @Test func theHeaderFadeIsOffWithIncreaseContrast() {
+        #expect(ChatStyle.headerFadeHeight(scrolls: false, contrast: .standard) == ChatStyle.headerFade)
+        #expect(ChatStyle.headerFadeHeight(scrolls: false, contrast: .increased) == 0)
+        #expect(ChatStyle.headerFadeHeight(scrolls: true, contrast: .standard) == 0)
+    }
+
+    /// With Reduce Motion the header's face is a new face at each size, so
+    /// it only cross fades; otherwise it is one face that shrinks.
+    @Test func theFaceOnlyFadesWithReduceMotion() {
+        let face = { ChatStyle.faceIdentity($0, reduceMotion: $1) }
+        #expect(face(ChatStyle.greetingFace, true) != face(ChatStyle.talkingFace, true))
+        #expect(face(ChatStyle.greetingFace, false) == face(ChatStyle.talkingFace, false))
     }
 
     @Test func theCharacterHoldsStillWithReduceMotion() {

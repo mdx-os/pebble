@@ -128,11 +128,12 @@ public struct ChatView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             // Lines that scroll up under the header fade out softly rather
-            // than stop at a hard edge.
+            // than stop at a hard edge. With Increase Contrast they never
+            // fade, so words and bubble edges keep their full contrast.
             .mask {
                 VStack(spacing: 0) {
                     LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                        .frame(height: headerScrolls ? 0 : ChatStyle.headerFade)
+                        .frame(height: ChatStyle.headerFadeHeight(scrolls: headerScrolls, contrast: contrast))
                     Color.black
                 }
             }
@@ -215,10 +216,16 @@ public struct ChatView: View {
             // A new chat greets with a larger face; once talking, it steps
             // back a little so the conversation has the room.
             if let look {
-                CharacterView(look: look, size: controller.conversation.isWaitingForPerson ? ChatStyle.greetingFace : ChatStyle.talkingFace,
-                              isThinking: controller.isReplying)
-                    .animation(ChatStyle.animation(reduceMotion: reduceMotion),
-                               value: controller.conversation.isWaitingForPerson)
+                let size = controller.conversation.isWaitingForPerson ? ChatStyle.greetingFace : ChatStyle.talkingFace
+                // With Reduce Motion the smaller face never shrinks into
+                // place: it cross fades with the larger one, on top of it.
+                ZStack {
+                    CharacterView(look: look, size: size, isThinking: controller.isReplying)
+                        .id(ChatStyle.faceIdentity(size, reduceMotion: reduceMotion))
+                        .transition(.opacity)
+                }
+                .animation(ChatStyle.animation(reduceMotion: reduceMotion),
+                           value: controller.conversation.isWaitingForPerson)
             } else {
                 AvatarView(initial: controller.displayName.initial)
             }
@@ -461,7 +468,7 @@ public struct ChatView: View {
             FlowRows(spacing: Theme.Space.xs) {
                 ForEach(Array(FirstConversation.jobs.enumerated()), id: \.element.id) { index, job in
                     StarterChip(title: job.title, symbol: ChatStyle.symbol(forStarter: job.id), index: index) {
-                        controller.draft = ChatStyle.draft(filling: controller.draft, with: job.prompt)
+                        controller.fill(withSuggestion: job.prompt)
                         composerFocused = true
                     }
                     .disabled(controller.isReplying)
@@ -487,6 +494,9 @@ final class ChatController: ObservableObject {
     @Published var conversation: Conversation
     @Published var draft = "" {
         didSet {
+            // Any change but a suggestion's own, typed, pasted or put back,
+            // makes the words the person's.
+            if draft != oldValue, !fillingSuggestion { draftIsSuggestion = false }
             // "What you wrote is still here" stops being true once the
             // person clears the words, or changes the ones given back, so
             // the line goes with them.
@@ -496,6 +506,10 @@ final class ChatController: ObservableObject {
             }
         }
     }
+    /// True while the draft is a suggestion a tap put there, untouched
+    /// since, so another tap may swap it. Never guessed from the words.
+    private(set) var draftIsSuggestion = false
+    private var fillingSuggestion = false
     /// The words the last failed send put back in the composer, until its
     /// line goes.
     private(set) var returnedWords: String?
@@ -624,6 +638,17 @@ final class ChatController: ObservableObject {
         naming = next
         names.saveDisplayName(name.text)
         conversation = conversation.renamingAgent(to: name)
+    }
+
+    /// A suggestion was tapped: its words go in the composer, unsent. They
+    /// take an empty field or the last suggestion's place, never the
+    /// person's own words.
+    func fill(withSuggestion suggestion: String) {
+        guard ChatStyle.suggestionTakes(draft, fromSuggestion: draftIsSuggestion) else { return }
+        fillingSuggestion = true
+        draft = suggestion
+        fillingSuggestion = false
+        draftIsSuggestion = true
     }
 
     /// What both composers call, in the chat and on Today: the same care

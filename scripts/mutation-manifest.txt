@@ -350,3 +350,19 @@ perl: s~guard called \|\| reached, !source\.context\(of: reference\)\.inPreview 
 test: diagnosticsCountCharacters
 file: Tools/GuardKit/Sources/GuardScan/SyntaxSource.swift
 perl: s~let column = String\(decoding: bytes\[start\.\.<min\(max\(start, offset\), bytes\.count\)\], as: UTF8\.self\)\.count \+ 1~let column = String(decoding: bytes[start..<min(max(start, offset), bytes.count)], as: UTF8.self).utf16.count + 1~
+
+# The chat's starters. A draft taken for a suggestion by its words, so
+# typed words that match one are replaced.
+test: wordsThatMatchASuggestionAreStillThePersons
+file: Packages/PebbleKit/Sources/PebbleUI/ChatStyle.swift
+perl: s~fromSuggestion \|\| draft\.trimmingCharacters~FirstConversation.jobs.map(\\.prompt).contains(draft.trimmingCharacters(in: .whitespacesAndNewlines)) || draft.trimmingCharacters~
+
+# A suggestion's mark that an edit never clears.
+test: wordsThatMatchASuggestionAreStillThePersons
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~if draft != oldValue, !fillingSuggestion \{ draftIsSuggestion = false \}~~
+
+# The first run. A new page left where the last one was scrolled to.
+test: eachPageOpensAtItsTop
+file: Packages/PebbleKit/Sources/PebbleUI/OnboardingView.swift
+perl: s~scroller\.scrollTo\(Self\.topID, anchor: \.top\)~_ = scroller~

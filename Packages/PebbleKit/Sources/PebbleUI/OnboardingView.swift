@@ -29,12 +29,21 @@ public struct OnboardingView: View {
         draftName: String = "",
         onFinish: @escaping @MainActor (_ firstMessage: String?) -> Void
     ) {
-        self.place = place
-        _model = StateObject(wrappedValue: OnboardingModel(
+        self.init(model: OnboardingModel(
             brand: brand, names: names, store: store, looks: looks,
             page: page, draftName: draftName, onFinish: onFinish
-        ))
+        ), place: place)
     }
+
+    /// Shows a first run whose model the caller keeps, so a test can turn
+    /// its pages.
+    init(model: @autoclosure @escaping () -> OnboardingModel, place: PrivacyPlace) {
+        self.place = place
+        _model = StateObject(wrappedValue: model())
+    }
+
+    /// The top of every page, where a new page starts.
+    static let topID = "firstRunTop"
 
     /// True once the character has made its entrance.
     @State private var introduced = false
@@ -50,10 +59,12 @@ public struct OnboardingView: View {
             GeometryReader { proxy in
                 // Scrolls only when the words outgrow the screen, as at the
                 // largest text sizes; otherwise everything sits centered.
+                ScrollViewReader { scroller in
                 ScrollView {
                     VStack(spacing: 0) {
                         progress
                             .padding(.top, Theme.Space.m)
+                            .id(Self.topID)
                         Spacer(minLength: Theme.Space.xl)
                         CharacterView(look: model.look, size: model.page == .hello ? 140 : 100,
                                       isCheerful: model.page == .ideas)
@@ -75,6 +86,13 @@ public struct OnboardingView: View {
                     .frame(maxWidth: .infinity, minHeight: proxy.size.height)
                 }
                 .scrollBounceBehavior(.basedOnSize)
+                // The scroll view stays as the pages change, so each new
+                // page starts back at the top, its heading in view, however
+                // far the last one was scrolled to reach Continue.
+                .onChange(of: model.page) {
+                    scroller.scrollTo(Self.topID, anchor: .top)
+                }
+                }
             }
         }
         .animation(reduceMotion ? .easeInOut(duration: 0.2) : .spring(response: 0.45, dampingFraction: 0.85), value: model.page)

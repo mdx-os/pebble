@@ -26,10 +26,24 @@ enum ChatStyle {
     /// How far lines fade as they scroll up under the chat's fixed header.
     static let headerFade = Theme.Space.l
 
+    /// The fade under the header: none when the header scrolls with the
+    /// lines, and none with Increase Contrast, so no words or bubble edges
+    /// are ever faded below the contrast the guards hold them to.
+    static func headerFadeHeight(scrolls: Bool, contrast: ColorSchemeContrast) -> CGFloat {
+        scrolls || contrast == .increased ? 0 : headerFade
+    }
+
     /// The character in the chat's header: larger on a new chat, smaller
     /// once talking so the conversation has the room.
     static let greetingFace: CGFloat = 88
     static let talkingFace: CGFloat = 64
+
+    /// Who the header's face is, as far as SwiftUI can tell. One face that
+    /// shrinks on a spring, or with Reduce Motion a new face for each size,
+    /// so the change is only a cross fade and nothing grows or shrinks.
+    static func faceIdentity(_ size: CGFloat, reduceMotion: Bool) -> CGFloat {
+        reduceMotion ? size : 0
+    }
 
     /// The round accent send button inside the composer, before Dynamic
     /// Type: the smallest target a finger needs.
@@ -107,13 +121,13 @@ enum ChatStyle {
         }
     }
 
-    /// The composer's words after a suggestion is tapped. It fills an empty
-    /// field, or swaps one suggestion for another, but never replaces words
-    /// the person typed. Nothing is sent.
-    static func draft(filling draft: String, with suggestion: String) -> String {
-        let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let suggestions = FirstConversation.jobs.map(\.prompt)
-        return typed.isEmpty || suggestions.contains(typed) ? suggestion : draft
+    /// Whether a tapped suggestion may take the composer's place. It fills
+    /// an empty field, or swaps a suggestion the last tap put there that
+    /// nobody has touched since, but never replaces words the person typed
+    /// or pasted, even ones that read the same as a suggestion. Nothing is
+    /// sent.
+    static func suggestionTakes(_ draft: String, fromSuggestion: Bool) -> Bool {
+        fromSuggestion || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// A symbol for each starter, the same in the first run and the chat.
