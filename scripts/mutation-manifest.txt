@@ -518,13 +518,18 @@ test: review2NonPurchaseRefusesPrice
 file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
 perl: s~guard action == \.purchase \|\| price == nil else~guard true else~
 
+# Since round 5 every whole data reading is scanned beside the readings
+# after a BOM, so an entry that breaks a BOM's reading also breaks the
+# whole data reading in the same encoding, or it changes nothing.
 test: review2UTF32IsChecked
 file: scripts/private-check.swift
 perl: s~\(\[0xff, 0xfe, 0x00, 0x00\], \.utf32LittleEndian, 4, false\),~~
+perl: s~\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)~(.utf32BigEndian, true)~
 
 test: review2UTF32IsChecked
 file: scripts/private-check.swift
 perl: s~\(\[0x00, 0x00, 0xfe, 0xff\], \.utf32BigEndian, 4, true\)~([0x00, 0x00, 0xfe, 0xff], .utf32LittleEndian, 4, false)~
+perl: s~\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)~(.utf32LittleEndian, false)~
 
 test: review2SymlinkTargetsAreChecked
 file: scripts/private-check.swift
@@ -566,11 +571,12 @@ perl: s~\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)~(.utf32Little
 
 test: review3UTF8AfterABOMIsChecked
 file: scripts/private-check.swift
-perl: s~        add\(String\(decoding: data, as: UTF8\.self\)\)\n        return texts~        return texts~
+perl: s~add\(String\(data: data, encoding: \.utf8\) \?\? String\(decoding: data, as: UTF8\.self\)\)~add(String(data: data, encoding: .utf8))~
 
 test: review3BrokenBOMTextIsChecked
 file: scripts/private-check.swift
 perl: s~\?\? lossyText\(rest, width: bom.width, bigEndian: bom.bigEndian\)~?? ""~
+perl: s~ \?\? lossyText\(data, width: width, bigEndian: bigEndian\)~~
 
 test: review3BrokenBOMTextIsChecked
 file: scripts/private-check.swift
@@ -586,6 +592,7 @@ perl: s~guard !AskFirst.hasHiddenScalars\(name\) else~guard true else~
 test: review4BOMFittingTwoReadingsIsChecked
 file: scripts/private-check.swift
 perl: s~let fitting = boms\.filter \{ data\.starts\(with: \$0\.bytes\) \}~let fitting = Array(boms.filter { data.starts(with: \$0.bytes) }.prefix(1))~
+perl: s~\[\(String\.Encoding\.utf16LittleEndian, false\), \(\.utf16BigEndian, true\)\]~[(String.Encoding.utf16BigEndian, true)]~
 
 test: review4BrokenTextWithoutBOMIsChecked
 file: scripts/private-check.swift
@@ -603,6 +610,12 @@ perl: s~\(4, \[\(\.utf32LittleEndian, false\), \(\.utf32BigEndian, true\)\]\)\] 
 test: review4JoinedEmojiNameIsRefused
 file: Packages/PebbleKit/Sources/PebbleCore/AskFirst.swift
 perl: s~\.unicodeScalars\.filter \{ !CharacterSet\.controlCharacters~.unicodeScalars.filter { \$0.value == 0x200D || !CharacterSet.controlCharacters~
+
+# Round-5 relay review: a start that fits a BOM stopping the other
+# readings. This puts back the early return 9f37abe had.
+test: review5BOMNeverStopsTheOtherReadings
+file: scripts/private-check.swift
+perl: s~(bigEndian: bom\.bigEndian\)\)\n    \}\n)~$1    if !fitting.isEmpty {\n        add(String(decoding: data, as: UTF8.self))\n        return texts\n    }\n~
 
 # Grants. Only the sheet's answer makes one, and each covers only its own
 # action, its own exact target, inside its scope.

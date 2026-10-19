@@ -146,6 +146,25 @@ struct PrivateCheckTests {
         #expect(!named, "the output names what was planted")
     }
 
+    /// UTF-16 BE text without a BOM that starts with NUL and U+FEFF begins
+    /// 00 00 FE FF, the UTF-32 BE BOM. A BOM that fits never stops the other
+    /// readings, so the UTF-16 BE one is scanned too.
+    @Test func review5BOMNeverStopsTheOtherReadings() throws {
+        let scratch = try Scratch()
+        let host = "relay.corp" + ".internal"
+        let data = try #require("\0\u{FEFF}First line.\n\(Self.word)\n\(host)\n".data(using: .utf16BigEndian))
+        #expect(data.starts(with: [0x00, 0x00, 0xfe, 0xff]))
+        try FileManager.default.createDirectory(at: scratch.root.appendingPathComponent("docs"), withIntermediateDirectories: true)
+        try data.write(to: scratch.root.appendingPathComponent("docs/SETUP.md"))
+        let result = try scratch.run()
+        #expect(result.status != 0)
+        #expect(result.output.contains("docs/SETUP.md:2: a private word"), "\(result.output)")
+        #expect(result.output.contains("docs/SETUP.md:3: a .internal or .local host"), "\(result.output)")
+        // A failed expectation prints its values, so only a bool is checked.
+        let named = result.output.lowercased().contains(Self.word) || result.output.contains(host)
+        #expect(!named, "the output names what was planted")
+    }
+
     /// Without a BOM, UTF-16 and UTF-32 in either byte order are read
     /// lossily too: a unit that isn't a scalar, or a stray byte at the end,
     /// keeps every whole unit before it.

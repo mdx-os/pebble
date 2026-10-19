@@ -148,13 +148,13 @@ func lossyText(_ data: Data, width: Int, bigEndian: Bool) -> String {
 }
 
 /// A BOM names the UTF-16 or UTF-32 byte order, but it can't prove the rest
-/// is in it: text decoded with the wrong one is still "valid" nonsense. So
-/// with a BOM scan its decoding, lossy if it doesn't decode, and the lossy
-/// UTF-8 too. Without a BOM the encoding can be ambiguous, so scan every
-/// reading rather than guessing wrong and hiding a word: UTF-8, and UTF-16
-/// and UTF-32 in both byte orders, each lossy, so one bad unit or a stray
-/// byte at the end never drops a whole reading. Valid UTF-8 is scanned even
-/// if it contains NUL.
+/// is in it: text decoded with the wrong one is still "valid" nonsense, and
+/// text without a BOM can start with the bytes of one (UTF-16 BE of NUL and
+/// U+FEFF starts 00 00 FE FF). So scan every reading, never guessing one and
+/// hiding a word: after each BOM the start fits, the rest in its encoding,
+/// and always the whole data as UTF-8, and UTF-16 and UTF-32 in both byte
+/// orders. Each is lossy, so one bad unit or a stray byte at the end never
+/// drops a whole reading. Valid UTF-8 is scanned even if it contains NUL.
 func decodedTexts(_ data: Data) -> [String] {
     var texts: [String] = []
     func add(_ text: String?) {
@@ -172,10 +172,6 @@ func decodedTexts(_ data: Data) -> [String] {
     for bom in fitting {
         let rest = data.dropFirst(bom.bytes.count)
         add(String(data: rest, encoding: bom.encoding) ?? lossyText(rest, width: bom.width, bigEndian: bom.bigEndian))
-    }
-    if !fitting.isEmpty {
-        add(String(decoding: data, as: UTF8.self))
-        return texts
     }
     // A stray non-UTF-8 byte must not hide otherwise readable words.
     add(String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self))
