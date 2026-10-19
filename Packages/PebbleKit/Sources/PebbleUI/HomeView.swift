@@ -974,7 +974,7 @@ struct TodayComposer: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             if let failure {
                 GentleNotice(text: failure)
                     .transition(.opacity)
@@ -982,7 +982,7 @@ struct TodayComposer: View {
             }
             composer
         }
-        .padding(.vertical, 12)
+        .padding(.vertical, Theme.Space.s)
         .readableColumn(columnWidth)
         .onChange(of: chat.failure) { speakFailure() }
         .onChange(of: inFront) { speakFailure() }
@@ -1172,7 +1172,7 @@ struct HomeSplit<TodayScreen: View, ChatScreen: View, MemoryScreen: View>: View 
                            : Text(count, format: .number).accessibilityLabel(Self.spokenCount(count)))
                     // iOS 26 draws a chosen sidebar row in gray glass, whatever
                     // the tint, so the row draws its own fill, with white words.
-                    .listRowBackground(chosen ? Capsule().fill(Theme.tintFill).padding(.horizontal, 10) : nil)
+                    .listRowBackground(chosen ? Capsule().fill(Theme.tintFill).padding(.horizontal, Theme.Space.s) : nil)
                     // Today is drawn chosen beside its own screen before the
                     // list has a selection, so VoiceOver hears it chosen too.
                     .accessibilityAddTraits(Self.traits(place, section: section, regular: isRegular, ownFill: Self.drawsOwnFill))
@@ -1331,7 +1331,7 @@ struct KeyboardShortcutsView: View {
                 ForEach(HomeWords.shortcuts, id: \.action) { shortcut in
                     LabeledContent(shortcut.action) {
                         Text(shortcut.keys)
-                            .font(.body.monospaced())
+                            .font(Theme.TypeScale.body.monospaced())
                             .foregroundStyle(Theme.secondaryText)
                     }
                     .accessibilityElement(children: .ignore)

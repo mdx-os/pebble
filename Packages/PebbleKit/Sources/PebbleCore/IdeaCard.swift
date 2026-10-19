@@ -1,6 +1,6 @@
 import Foundation
 
-/// A feature worth considering from the competitor watch.
+/// A feature worth considering from the public source watch.
 ///
 /// `pattern` is a behavior worth taking on. It does not name a brand and it
 /// does not include anyone else's code.

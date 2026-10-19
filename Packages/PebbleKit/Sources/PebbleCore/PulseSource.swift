@@ -1,6 +1,6 @@
 import Foundation
 
-/// One public source in the competitor watch.
+/// One public source in the public source watch.
 ///
 /// The list itself lives in `pulse/sources.json`. This type is only the shape.
 public struct PulseSource: Codable, Sendable, Equatable, Identifiable {
