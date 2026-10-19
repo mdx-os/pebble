@@ -114,6 +114,12 @@ final class FeedModel: ObservableObject {
     /// handed over again is known and quietly ignored. Ids only, and gone
     /// with Forget everything.
     private(set) var usedYes: Set<UUID> = []
+    /// The grant the sheet made with a yes, by question id, kept only once
+    /// that yes has gone through.
+    private var chosenGrants: [UUID: Grant] = [:]
+
+    /// The person's grants, from the rule every question here is asked through.
+    var grants: GrantBook? { needsYou.rule.grants }
     /// Kept on Today after Forget everything, while a step the person said
     /// yes to may have happened. Names nothing the task held.
     @Published private(set) var forgotUnderway: String?
@@ -818,9 +824,13 @@ final class FeedModel: ObservableObject {
     /// `forgetTasks`. The memory screen forgets the background work just
     /// before, so it can say if its file couldn't be erased; here a summary
     /// still open to read closes, and Today shows the cards gone.
+    /// Every grant goes too, before the tasks, so no step still going is
+    /// let through by one on its way out.
     @discardableResult
     func forgetEverything() -> ClearedTasks {
         if let reading, reading.id.hasPrefix(BackgroundFeed.idPrefix) { self.reading = nil }
+        chosenGrants.removeAll()
+        grants?.forget()
         let cleared = forgetTasks()
         rebuild()
         return cleared
@@ -899,6 +909,8 @@ final class FeedModel: ObservableObject {
     /// than leave the person wondering. A late one says so in its history.
     func approved(_ approval: Approval) {
         var refusedBy: String?
+        // A grant chosen with this yes is kept only if the yes goes through.
+        let grant = chosenGrants.removeValue(forKey: approval.id)
         if usedYes.contains(approval.id) {
             // The same yes again, as from a second tap. The first one
             // stands and went through; this one does nothing and says nothing.
@@ -906,6 +918,7 @@ final class FeedModel: ObservableObject {
             switch tasks?.resume(id, with: approval) ?? .refused {
             case .proceeding:
                 usedYes.insert(approval.id)
+                if let grant { grants?.add(grant) }
                 // Kept now, not at the next change: if the app closes in
                 // between, the step is known to be under way and is never
                 // asked about or run again.
@@ -917,12 +930,18 @@ final class FeedModel: ObservableObject {
             // The task moved on before this yes came. It does nothing, and
             // never goes to `NeedsYou`.
             refusedBy = id
-        } else {
-            needsYou.approved(approval)
+        } else if needsYou.approved(approval), let grant {
+            grants?.add(grant)
         }
         reviewing = nil
         refresh()
         if let refusedBy { note(TaskWords.yesNotUsed, on: refusedBy) }
+    }
+
+    /// The sheet made `grant` with its yes to `request`. It waits for that
+    /// yes to go through in `approved` before it counts.
+    func granted(_ grant: Grant, for request: ConfirmationRequest) {
+        chosenGrants[request.id] = grant
     }
 
     /// Puts a line on a task's card, and says it, until the task moves on.
@@ -942,6 +961,7 @@ final class FeedModel: ObservableObject {
     /// and settle it as it saw fit. Only a question `NeedsYou` asked is
     /// handed to `NeedsYou`.
     func closedQuestion(_ request: ConfirmationRequest) {
+        chosenGrants[request.id] = nil
         let asking = askedBy.removeValue(forKey: request.id) ?? taskAsked[request.id]
         if asking != nil {
             tasks?.questionClosed(request)
