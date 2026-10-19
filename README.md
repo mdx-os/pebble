@@ -65,8 +65,10 @@ The chat asks a `ModelClient` for each reply. The app makes one,
 `MLXChatModel`, running Qwen3 4B Instruct 2507 (4-bit MLX weights, pinned in
 `PinnedModel`) on the device, once that model is downloaded. Until then it
 holds `LocalStubModel`, which says plainly that the model isn't ready and how
-to get it, instead of pretending to answer. Tests, screenshots, and CI use the
-placeholder, so they never download or load a model and need no GPU.
+to get it, instead of pretending to answer. Screenshots and the package tests
+use the placeholder, so they never download a model or load its weights, and
+they need no GPU. The model tests, which `make model-test` runs and CI runs
+too, do load a model on the Mac. They never download one.
 
 The first reply loads the weights on the processor (`OnDeviceLoad`), so a
 load never uses the graphics chip, which iOS refuses to an app in the

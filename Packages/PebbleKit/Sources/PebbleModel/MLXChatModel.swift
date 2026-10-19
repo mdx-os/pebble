@@ -220,10 +220,33 @@ public final class MLXChatModel: ModelClient, Sendable {
         // leaving wait until the weights opened, which is too late: the
         // callback has to return while a first load can still be running,
         // and nothing from that load may reach the graphics chip.
+        // The reply still has to be cancellable while it waits. The
+        // registration cancels that wait only. The shared load keeps going
+        // and is reused, and coming back does not let this reply generate.
         if let loader = generator as? any ProcessorLoading {
             if runner.isAway { throw MLXChatModelError.interrupted }
-            try await loader.loadOffTheChip()
+            // Register before the load starts. The load can reach its first
+            // step on another thread, and leaving has to find this reply
+            // already registered. The slot takes a cancel that arrives
+            // before the task exists.
+            let slot = CancelSlot()
+            let waiting = runner.registerWaiting { slot.fire() }
+            defer { runner.unregisterWaiting(waiting) }
             if runner.isAway { throw MLXChatModelError.interrupted }
+            let load = Task { try await loader.loadOffTheChip() }
+            slot.arm { load.cancel() }
+            do {
+                try await withTaskCancellationHandler {
+                    try await load.value
+                } onCancel: {
+                    load.cancel()
+                }
+            } catch is CancellationError {
+                throw MLXChatModelError.interrupted
+            }
+            return try await runner.run({ try await generator.reply(to: transcript) },
+                                        drain: { await generator.drain() },
+                                        waiting: waiting)
         }
         return try await runner.run({ try await generator.reply(to: transcript) },
                                     drain: { await generator.drain() })
@@ -339,6 +362,33 @@ actor MLXGenerator<Engine: OnDeviceEngine>: OnDeviceGenerating, ProcessorLoading
             loadFailure = failure
             throw failure
         }
+    }
+}
+
+/// A cancel that may fire before its action is armed. Firing first still
+/// runs the action once it is set, so a leave during that gap is not lost.
+private final class CancelSlot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var action: (@Sendable () -> Void)?
+    private var fired = false
+
+    func fire() {
+        let action = lock.withLock { () -> (@Sendable () -> Void)? in
+            fired = true
+            let action = self.action
+            self.action = nil
+            return action
+        }
+        action?()
+    }
+
+    func arm(_ action: @escaping @Sendable () -> Void) {
+        let runNow = lock.withLock { () -> Bool in
+            if fired { return true }
+            self.action = action
+            return false
+        }
+        if runNow { action() }
     }
 }
 

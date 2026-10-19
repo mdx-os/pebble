@@ -285,6 +285,25 @@ struct OnDeviceModelTests {
         #expect(chat.runsOnDevice)
     }
 
+    /// The load listener must not keep a model that has been replaced. The
+    /// model is what holds the weights, so it has to be able to go.
+    @Test func aReplacedModelCanBeDeallocated() {
+        let chat = OnDeviceChat(LocalStubModel())
+        weak var gone: MLXChatModel?
+        autoreleasepool {
+            let model = MLXChatModel(
+                directory: URL(fileURLWithPath: "/tmp/no-such-model", isDirectory: true),
+                runner: OnDeviceRunner(),
+                generator: QuietGenerator())
+            gone = model
+            #expect(chat.use(model))
+            chat.onLoaded { _ in }
+            model.noteLoaded()
+            #expect(chat.use(LocalStubModel()))
+        }
+        #expect(gone == nil)
+    }
+
     // MARK: The transcript
 
     @Test func transcriptStartsWithTheOnDeviceInstruction() {
@@ -469,4 +488,10 @@ private final class FailedFolders: @unchecked Sendable {
 
 private struct LeavesDevice: ModelClient {
     func reply(to transcript: [ChatTurn]) async throws -> String { "remote" }
+}
+
+/// A model stand-in that never loads weights of its own.
+private struct QuietGenerator: OnDeviceGenerating {
+    func reply(to transcript: [ChatTurn]) async throws -> String { "" }
+    func drain() async {}
 }

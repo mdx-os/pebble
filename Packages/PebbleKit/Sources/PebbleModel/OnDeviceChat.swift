@@ -65,10 +65,12 @@ public final class OnDeviceChat: ModelClient, @unchecked Sendable {
     }
 
     /// Asks `model` to report a successful load, if it can load at all.
+    /// `model` is held weakly, so replacing it lets it and its weights go.
     private func watch(_ model: any ModelClient) {
         guard let model = model as? MLXChatModel else { return }
-        model.whenLoaded { [weak self] folder in
-            self?.loaded(model, folder: folder)
+        model.whenLoaded { [weak self, weak model] folder in
+            guard let self, let model else { return }
+            self.loaded(model, folder: folder)
         }
     }
 
