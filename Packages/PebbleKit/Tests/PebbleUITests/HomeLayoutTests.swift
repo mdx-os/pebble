@@ -21,7 +21,7 @@ struct HomeLayoutTests {
     /// imports, blank lines and directives. A branch is Debug-only when
     /// `DEBUG` is one of the `&&` terms of its `#if`, with no `||` and no
     /// `!`. Its `#else` and `#elseif` are not.
-    static func codeOutsideDebug(in text: String) -> [String] {
+    nonisolated static func codeOutsideDebug(in text: String) -> [String] {
         let lines = String(SwiftSource(text).code).split(separator: "\n", omittingEmptySubsequences: false)
         var branches: [Bool] = []
         var outside: [String] = []
@@ -80,8 +80,9 @@ struct HomeLayoutTests {
     /// PERMANENT GUARD. ShowcaseScene exists only in Debug, so a line of
     /// the app or the package that names it outside `#if DEBUG` breaks the
     /// Release build. `make build-release` proves it builds; this says
-    /// where it would break, without building.
-    @Test func theShowcaseIsReadOnlyInDebug() throws {
+    /// where it would break, without building. Off the main actor, since
+    /// it sweeps every source file.
+    @Test nonisolated func theShowcaseIsReadOnlyInDebug() throws {
         let root = SwiftSource.repositoryRoot(from: #filePath)
         let app = try SwiftSource.files(under: root.appendingPathComponent("App")).map { ("App/\($0.name)", $0.text) }
         let package = try SwiftSource.files(under: root.appendingPathComponent("Packages/PebbleKit/Sources"))

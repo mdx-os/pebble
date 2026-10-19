@@ -189,6 +189,11 @@ Things no test here can reach. Check each on a real iPhone before a release.
   generous limit (about 60 s). The pool starves on a busy runner, and a wait
   with no limit turns a regression into a hung run instead of a failure.
   `TaskLedgerRunTests` and `TaskLedgerCardTests` follow this.
+- Every main actor test in a run shares one main thread, so work a test
+  awaits there can wait 15 seconds or more behind the others. A test that
+  sweeps the sources is `nonisolated`, never on the main actor, and a
+  limit on work that needs the main actor is about 60 s, never 20.
+  `BackgroundServiceTests` and `finishes` in `CloudHelpTests` follow this.
 
 ## Never
 

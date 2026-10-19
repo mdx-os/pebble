@@ -858,8 +858,10 @@ struct BackgroundFeedTests {
     /// it, found by what its code names in the packages and the app, writes
     /// a file, encodes it, or puts it in `UserDefaults` or scene storage,
     /// but for the passes below, each with its reason. The one
-    /// `UserDefaults` the chat screen touches keeps the agent's name.
-    @Test func theChatIsNeverKeptOnDisk() throws {
+    /// `UserDefaults` the chat screen touches keeps the agent's name. Off
+    /// the main actor, like every sweep of the sources, so it never holds
+    /// the main actor tests running beside it.
+    @Test nonisolated func theChatIsNeverKeptOnDisk() throws {
         let keeping = ["write(to", "FileManager", "createFile", "FileHandle", "AppStorage", "SceneStorage",
                        "JSONEncoder", "PropertyListEncoder", "NSKeyedArchiver", "UserDefaults.", "UserDefaults(",
                        "BackgroundStore", "MemoryStore", "CloudHelpFileStore"]
@@ -887,7 +889,7 @@ struct BackgroundFeedTests {
 
     /// Where a file that can hold the chat names something that keeps
     /// words on disk, and why that is never the chat. By file and word.
-    static let keepsNoChat: [String: String] = [
+    nonisolated static let keepsNoChat: [String: String] = [
         "PebbleModel/CloudModel.swift: JSONEncoder":
             "CloudRequest.encoded turns the request into bytes in memory, for the preview and for the one ephemeral "
             + "session that sends it. The file writes nothing: no write(to, FileManager or UserDefaults, which this "
@@ -921,7 +923,7 @@ struct BackgroundFeedTests {
     /// Every source that can hold chat text, in the packages and the app,
     /// found by what its code names, not from a list. The public source
     /// watch never sees a chat.
-    static func chatFiles() throws -> [(name: String, code: String)] {
+    nonisolated static func chatFiles() throws -> [(name: String, code: String)] {
         let root = SwiftSource.repositoryRoot(from: #filePath)
         let package = try SwiftSource.files(under: root.appendingPathComponent("Packages/PebbleKit/Sources"))
         let app = try SwiftSource.files(under: root.appendingPathComponent("App/Sources"))
@@ -937,7 +939,8 @@ struct BackgroundFeedTests {
     /// from a list, writes nothing to the system log, which keeps it on
     /// disk, and the one session that sends a chat to the cloud keeps no
     /// cache. Only the public source watch, which never sees a chat, prints.
-    @Test func theChatNeverReachesTheLogOrACache() throws {
+    /// Off the main actor, since it sweeps every source file.
+    @Test nonisolated func theChatNeverReachesTheLogOrACache() throws {
         let root = SwiftSource.repositoryRoot(from: #filePath)
         let sources = root.appendingPathComponent("Packages/PebbleKit/Sources")
         let logging = try NSRegularExpression(pattern: #"\b(Logger|os_log|os_signpost|NSLog|print|debugPrint|dump|OSLog)\b"#)

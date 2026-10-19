@@ -271,8 +271,10 @@ struct BackgroundServiceTests {
     /// The service finds the lock by trying the file, through the one
     /// helper the tests drive, and nothing in PebbleBackground, the runner,
     /// or the app's own sources, where the system's task arrives, reads the
-    /// screen or protected data.
-    @Test func theServiceNeverReadsTheScreenForTheLock() throws {
+    /// screen or protected data. Off the main actor, like every sweep of
+    /// the sources: the sweep takes seconds in Debug, and on the main actor
+    /// it would hold every main actor test running beside it.
+    @Test nonisolated func theServiceNeverReadsTheScreenForTheLock() throws {
         let root = SwiftSource.repositoryRoot(from: #filePath)
         let sources = root.appendingPathComponent("Packages/PebbleKit/Sources")
         let target = try SwiftSource.files(under: sources.appendingPathComponent("PebbleBackground"))
@@ -295,8 +297,9 @@ struct BackgroundServiceTests {
 
     /// A Release build never reads the seed: its whole file is Debug only,
     /// and nothing outside `#if DEBUG` in the app or the packages names it
-    /// or its launch argument.
-    @Test func releaseIgnoresTheSeed() throws {
+    /// or its launch argument. Off the main actor, since it sweeps every
+    /// source file.
+    @Test nonisolated func releaseIgnoresTheSeed() throws {
         let root = SwiftSource.repositoryRoot(from: #filePath)
         let sources = root.appendingPathComponent("Packages/PebbleKit/Sources")
         let seed = try String(contentsOf: sources.appendingPathComponent("PebbleBackground/BackgroundSeed.swift"),
@@ -321,7 +324,7 @@ struct BackgroundServiceTests {
 
     /// The seed's launch argument, written here so this file builds in
     /// Release, where the seed isn't. `theSeedKeyIsTheSeeds` pins it.
-    static let seedKey = "backgroundSeed"
+    nonisolated static let seedKey = "backgroundSeed"
 
     #if DEBUG
     @Test func theSeedKeyIsTheSeeds() {
@@ -333,7 +336,7 @@ struct BackgroundServiceTests {
     /// `#if DEBUG` branches. Other conditions are taken as compiled. Each
     /// directive is read without what trails it, so `#if DEBUG // why`
     /// is `#if DEBUG`.
-    static func outsideDebug(_ code: String) -> String {
+    nonisolated static func outsideDebug(_ code: String) -> String {
         var stack: [Bool] = []
         var kept: [Substring] = []
         for line in code.split(separator: "\n", omittingEmptySubsequences: false) {

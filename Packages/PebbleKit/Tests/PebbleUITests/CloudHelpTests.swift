@@ -83,8 +83,10 @@ final class FakeWire: @unchecked Sendable {
 
 /// True when `work` finishes within `limit`. A passing test never waits on
 /// the limit; it only turns a wait that would never end, as when the code
-/// under test is broken, into a plain failure.
-func finishes(within limit: Duration = .seconds(20), _ work: @escaping @Sendable () async -> Void) async -> Bool {
+/// under test is broken, into a plain failure. The limit is generous: the
+/// work often needs the main actor, which every main actor test in the run
+/// shares, so on a busy runner it can wait well past 20 seconds for a turn.
+func finishes(within limit: Duration = .seconds(60), _ work: @escaping @Sendable () async -> Void) async -> Bool {
     await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
         let first = FirstAnswer(continuation)
         let worker = Task {
