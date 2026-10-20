@@ -1,6 +1,6 @@
 import Foundation
 import PebbleCore
-import PebbleModel
+@testable import PebbleModel
 import Testing
 
 /// Records every request and answers with a fixed reply. Never touches the network.

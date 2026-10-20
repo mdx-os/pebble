@@ -23,6 +23,7 @@ let package = Package(
                     .product(name: "SwiftOperators", package: "swift-syntax"),
                     .product(name: "PromiseWords", package: "PebbleKit"),
                 ]),
+        .executableTarget(name: "privacy-audit", dependencies: ["GuardScan"]),
         .testTarget(name: "GuardTests",
                     dependencies: [
                         "GuardScan",

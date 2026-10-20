@@ -53,31 +53,30 @@ struct TaskLedgerRunTests {
     /// unlocked and is held before it publishes. Every blocking wait runs on
     /// a thread of its own, never on a pool the other tests share, and the
     /// test only ever awaits it, so however many tests run beside it neither
-    /// side can starve. Every wait has a limit: if the mutation never
-    /// reaches its publication, the held worker is released and the test
-    /// fails rather than hangs. The returned release lets it publish, and
-    /// returns once it has, or fails once the limit passes.
+    /// side can starve. The held mutation waits only for the release, never
+    /// for a clock: the test may resume long after it unlocked on a busy
+    /// runner, and a hold that let go by itself would publish too soon.
+    /// It holds no lock while it waits, so nothing else blocks on it. The
+    /// test's own waits have a limit: if the mutation never reaches its
+    /// publication, the held worker is released and the test fails rather
+    /// than hangs. The returned release lets it publish, and returns once it
+    /// has, or fails once the limit passes.
     private func heldAdvance(_ engine: LocalFakeEngine) async throws -> () async -> Void {
         let unlocked = DispatchSemaphore(value: 0)
         let publish = DispatchSemaphore(value: 0)
-        let gaveUp = DispatchSemaphore(value: 0)
         let finished = DispatchSemaphore(value: 0)
         engine.beforeNextPublication {
             unlocked.signal()
-            if publish.wait(timeout: .now() + Self.patience) == .timedOut {
-                gaveUp.signal()
-            }
+            publish.wait()
         }
         Thread.detachNewThread {
             engine.advance(by: 2)
             finished.signal()
         }
-        func stoppedWaiting() -> Bool { gaveUp.wait(timeout: .now()) == .success }
         let release: () async -> Void = {
             publish.signal()
             let ended = await onOwnThread { finished.wait(timeout: .now() + Self.patience) == .success }
             #expect(ended, "the held mutation never finished publishing")
-            #expect(!stoppedWaiting(), "the held mutation stopped waiting before it was released")
         }
         let reached = await onOwnThread { unlocked.wait(timeout: .now() + Self.patience) == .success }
         if !reached {
