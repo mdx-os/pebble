@@ -229,7 +229,11 @@ Things no test here can reach. Check each on a real iPhone before a release.
   `DispatchQueue.global()` or the cooperative pool, and always with a
   generous limit (about 60 s). The pool starves on a busy runner, and a wait
   with no limit turns a regression into a hung run instead of a failure.
-  `TaskLedgerRunTests` and `TaskLedgerCardTests` follow this.
+  `TaskLedgerCardTests` follows this.
+- To test what happens while a mutation is held, run the other caller inside
+  the hook (`beforeNextPublication`), on the same thread, never from a test
+  that waits for it on a clock. Getting a pool thread back took 12 s on a
+  quiet Mac and over 60 s on CI. `TaskLedgerRunTests` does this.
 - Every main actor test in a run shares one main thread, so work a test
   awaits there can wait 15 seconds or more behind the others. A test that
   sweeps the sources is `nonisolated`, never on the main actor, and a
