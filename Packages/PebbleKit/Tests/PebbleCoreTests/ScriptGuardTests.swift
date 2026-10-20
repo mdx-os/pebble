@@ -314,8 +314,9 @@ struct ScriptGuardTests {
     }
 
     /// The check is a pre-build phase of the app target itself, with
-    /// nothing that lets it fail quietly, and `make build-release` runs it
-    /// before it builds.
+    /// nothing that lets it fail quietly, and `make build-release-simulator`
+    /// runs it before it builds, so `make build-release`, which builds that
+    /// first, does too.
     @Test func everyReleaseBuildRunsTheCheck() throws {
         let project = try String(contentsOf: Self.root.appendingPathComponent("project.yml"), encoding: .utf8)
         let targets = try #require(project.range(of: "\ntargets:"))
@@ -333,7 +334,8 @@ struct ScriptGuardTests {
             #expect(!appTarget.contains(loophole), "\(loophole)")
         }
         let makefile = try String(contentsOf: Self.root.appendingPathComponent("Makefile"), encoding: .utf8)
-        #expect(makefile.contains("build-release: generate\n\tsh scripts/release-endpoint-check.sh\n"))
+        #expect(makefile.contains("build-release-simulator: generate\n\tsh scripts/release-endpoint-check.sh\n"))
+        #expect(makefile.contains("\nbuild-release: generate build-release-simulator\n"))
     }
 
     // MARK: The comment lint
@@ -584,8 +586,8 @@ struct ScriptGuardTests {
     }
 
     /// `make verify` runs the lint, its self-test and the mutation check,
-    /// the Release check by one rule (verify builds `build-release`, whose
-    /// first step is the check, pinned in `everyReleaseBuildRunsTheCheck`),
+    /// the Release check by one rule (verify builds `build-release-simulator`,
+    /// whose first step is the check, pinned in `everyReleaseBuildRunsTheCheck`),
     /// and the tests that only a Release build can run. Verify is verify-ci
     /// and the mutation check, so what CI's Verify job runs can't drift
     /// from it.
@@ -598,7 +600,7 @@ struct ScriptGuardTests {
         let steps = ci.split(separator: " ")
         #expect(steps.contains("comment-lint"))
         #expect(!steps.contains("mutation-check"))
-        #expect(steps.contains("build-release"))
+        #expect(steps.contains("build-release-simulator"))
         #expect(steps.contains("release-test"))
         #expect(makefile.contains("comment-lint:\n\tsh scripts/comment-lint.sh --self-test\n\tsh scripts/comment-lint.sh\n"))
         #expect(makefile.contains("release-test:\n\tsh scripts/release-probe.sh\n"))

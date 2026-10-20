@@ -440,9 +440,12 @@ final class OffWhileThePreviewIsBuilt: CloudAuth, @unchecked Sendable {
             return self.step
         }) else { return [:] }
         // Only as long as the main thread is busy elsewhere; the main thread
-        // never waits on this one.
-        DispatchQueue.main.sync { MainActor.assumeIsolated { step() } }
-        lock.withLock { ran = true }
+        // never waits on this one. The flag is set on the main thread right
+        // after the step, so it is true before the main actor does anything else.
+        DispatchQueue.main.sync {
+            MainActor.assumeIsolated { step() }
+            lock.withLock { ran = true }
+        }
         return [:]
     }
 }
@@ -1196,17 +1199,20 @@ struct CloudHelpTests {
         let controller = chat(cloud)
         let review = try #require(controller.review)
         var shown = false
-        let watch = review.$pending.sink { if $0 != nil { shown = true } }
+        // A preview that does show is noted and then declined, so a failure
+        // here never hangs and the reply always ends.
+        let watch = review.$pending.sink { preview in
+            guard let preview else { return }
+            shown = true
+            Task { @MainActor in review.answer(.cancel, for: preview.id) }
+        }
         defer { watch.cancel() }
         auth.whenAsked { cloud.setOn(false) }
         controller.submit("Plan my week")
-        await eventually { !controller.isReplying || shown }
+        await controller.settled()
         #expect(auth.wasTurnedOff)
         #expect(!shown)
         #expect(review.pending == nil)
-        // Lets a preview that did show go, so a failure here never hangs.
-        review.cancelPending()
-        await controller.settled()
         #expect(controller.failure == CloudWords.withdrawn)
         #expect(personTurns(controller).isEmpty)
         #expect(maker.wire.sent.isEmpty)

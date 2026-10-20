@@ -901,7 +901,7 @@ final class ChatController: ObservableObject {
     private(set) var hasEnded = false
 
     /// The cloud chat's session, for a chat on the cloud model.
-    var cloudSession: CloudChatSession? { (model as? CloudModel)?.session }
+    var cloudSession: CloudChatSession? { model.cloudSession }
 
     /// True when ending the chat would let go of something: words the
     /// person said or typed and not yet sent, a reply or preview under way,

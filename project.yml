@@ -4,23 +4,25 @@ options:
   deploymentTarget:
     iOS: "26.0"
     macOS: "26.0"
+# The name, the version and the build number come from Config/, so every
+# target and platform shares them. Bump them in Config/Version.xcconfig.
 configFiles:
-  Debug: Config/Brand.xcconfig
-  Release: Config/Brand.xcconfig
+  Debug: Config/Project.xcconfig
+  Release: Config/Project.xcconfig
 packages:
   PebbleKit:
     path: Packages/PebbleKit
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: 0.1.0
-    CURRENT_PROJECT_VERSION: 1
 targets:
   Pebble:
     type: application
     supportedDestinations: [iOS, macOS]
     sources:
       - App/Sources
+      # Apple's required-reason manifest.
+      - App/Resources
       # The app icon, the system accent and the launch background, in the
       # colors Theme.swift defines (PebbleUI).
       - App/Assets.xcassets
@@ -38,7 +40,14 @@ targets:
         # Empty means no cloud model, and every build but Debug must keep it empty.
         PebbleCloudEndpoint: $(PEBBLE_CLOUD_ENDPOINT)
         LSApplicationCategoryType: public.app-category.productivity
-        # The backdrop's warm top, so launch fades straight into the first screen.
+        # No encryption of the app's own. The system's file protection is
+        # exempt, and so is HTTPS through URLSession, the only way the opt-in
+        # CloudModel reaches the network. `make archive` fails on
+        # CryptoKit, CommonCrypto, a TLS library or pinning; see "Encryption"
+        # in docs/RELEASE.md before changing this.
+        ITSAppUsesNonExemptEncryption: false
+        # The backdrop's warm top, light or dark, so launch fades straight
+        # into the first screen.
         UILaunchScreen:
           UIColorName: LaunchBackground
         # Every orientation on iPad, which Split View, Slide Over and Stage Manager need.
@@ -80,6 +89,15 @@ targets:
         CODE_SIGN_STYLE: Automatic
         "CODE_SIGN_IDENTITY[sdk=macosx*]": "-"
         ENABLE_HARDENED_RUNTIME: YES
+      configs:
+        # The Mac App Store and TestFlight for Mac need the sandbox. Debug
+        # stays outside it so `make screenshots` can write its PNG anywhere,
+        # so a Debug build keeps its data in a different place; see
+        # docs/RELEASE.md. Inside the sandbox the app asks only for outgoing
+        # connections, which the opt-in CloudModel needs.
+        Release:
+          "ENABLE_APP_SANDBOX[sdk=macosx*]": YES
+          "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": App/Mac-Release.entitlements
   # Drives the iOS app in the Simulator: the iPad sidebar, keyboard
   # shortcuts, and screenshots in each orientation. `make ui-test`.
   PebbleAppUITests:

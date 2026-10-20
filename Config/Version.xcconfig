@@ -1,0 +1,7 @@
+// The app's version, set once for every target and platform.
+// MARKETING_VERSION is the version people see in the App Store and
+// TestFlight. CURRENT_PROJECT_VERSION is the build number: raise it for
+// every upload, since App Store Connect refuses a build number it has seen
+// for the same version. docs/RELEASE.md has the steps.
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1

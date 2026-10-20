@@ -3,7 +3,7 @@ import Foundation
 import Network
 #endif
 import PebbleCore
-import PebbleModel
+@testable import PebbleModel
 import Testing
 
 // Addresses for the tests, each written in parts because the private check

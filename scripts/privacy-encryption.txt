@@ -1,0 +1,7 @@
+# Reviewed files that may use encryption APIs, one path per entry. Every
+# privacy.encryption hit in a listed file is let by; a file not listed
+# still fails, and an entry no code needs any more fails too. A new entry
+# needs the export review in docs/RELEASE.md answered before a store upload.
+# Relay.swift: SHA256 and Curve25519 only check receipt hashes and
+# signatures (docs/RELAY.md); nothing is encrypted.
+Packages/PebbleKit/Sources/PebbleCore/Relay.swift

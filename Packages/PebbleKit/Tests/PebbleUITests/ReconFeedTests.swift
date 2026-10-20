@@ -435,6 +435,7 @@ struct ReconFeedTests {
         #expect(today.pending == nil)
         await runner.settle(id)
         await eventually { !chat.isReplying }
+        #expect(!chat.isReplying)
         #expect(maker.wire.sent.isEmpty)
         #expect(runner.summary(for: id)?.note == ReconWords.cloudWithdrawn)
     }
@@ -735,6 +736,7 @@ struct ReconFeedTests {
         let id = try #require(runner.tasks.first?.id)
         engine.advance(by: 12)
         await eventually { runner.summariesMayLeaveDevice == 1 }
+        #expect(runner.summariesMayLeaveDevice == 1)
         #expect(review.pending == nil)
 
         model.forgetTasks()

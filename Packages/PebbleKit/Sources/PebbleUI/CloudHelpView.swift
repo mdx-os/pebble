@@ -104,7 +104,7 @@ public final class CloudHelp: ObservableObject {
     public let memory: MemoryStore?
     private let store: any CloudHelpStoring
     private let auth: any CloudAuth
-    private let makeTransport: @Sendable () -> any CloudTransport
+    private let makeTransport: (@Sendable () -> any CloudTransport)?
     /// The file a setting that couldn't be opened would have read.
     private let unopenedFile: (@Sendable () throws -> any CloudHelpStoring)?
     /// Every chat's preview gate, so turning the cloud off closes them all.
@@ -137,7 +137,7 @@ public final class CloudHelp: ObservableObject {
         endpoint: URL?,
         memory: MemoryStore?,
         auth: any CloudAuth = NoCloudAuth(),
-        transport: @escaping @Sendable () -> any CloudTransport = { URLSessionCloudTransport() }
+        transport: (@Sendable () -> any CloudTransport)? = nil
     ) {
         self.init(store: store, endpoint: endpoint, memory: memory, auth: auth, transport: transport,
                   storeOpened: true, unopenedFile: nil)
@@ -148,7 +148,7 @@ public final class CloudHelp: ObservableObject {
         endpoint: URL?,
         memory: MemoryStore?,
         auth: any CloudAuth,
-        transport: @escaping @Sendable () -> any CloudTransport,
+        transport: (@Sendable () -> any CloudTransport)?,
         storeOpened: Bool,
         unopenedFile: (@Sendable () throws -> any CloudHelpStoring)?
     ) {
@@ -236,7 +236,7 @@ public final class CloudHelp: ObservableObject {
     public static func couldNotOpen(endpoint: URL?, memory: MemoryStore?, auth: any CloudAuth = NoCloudAuth(),
                                     file: (@Sendable () throws -> any CloudHelpStoring)? = nil) -> CloudHelp {
         CloudHelp(store: InMemoryCloudHelpStore(), endpoint: endpoint, memory: memory, auth: auth,
-                  transport: { URLSessionCloudTransport() }, storeOpened: false, unopenedFile: file)
+                  transport: nil, storeOpened: false, unopenedFile: file)
     }
 
     /// What erasing the private words did, for the memory screen shown
@@ -305,6 +305,7 @@ public final class CloudHelp: ObservableObject {
     public func chatModel(local: any ModelClient, review: CloudReview, madeOnSend: Bool = false) -> any ModelClient {
         chatModelsAsked += 1
         return ModelChoice.model(settings: settings, endpoint: usableEndpoint, local: local) { url in
+            let makeTransport = self.makeTransport ?? { URLSessionCloudTransport() }
             reviews.add(review)
             let store = self.store
             let memory = self.memory

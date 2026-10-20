@@ -1,6 +1,6 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify verify-ci generate test release-test repeat-test mutation-check mutation-manifest-check mutation-manifest-check-test build build-release screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check local-config-check private-check hash-private-words graph-check graph-check-test comment-lint hash-names secrets-check pulse clean
+.PHONY: verify verify-ci generate test release-test repeat-test mutation-check mutation-manifest-check mutation-manifest-check-test build build-release build-release-simulator archive screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check privacy-check privacy-check-test local-config-check private-check hash-private-words graph-check graph-check-test comment-lint hash-names secrets-check pulse clean
 
 ## verify: everything CI runs. Run this before every PR. It is verify-ci and
 ## then the full mutation check, which CI runs as a job of its own beside
@@ -13,7 +13,7 @@ verify: verify-ci mutation-check
 ## and then checked against the working tree. Both are the recipe, so even
 ## with -j nothing runs beside them that could change the tree between the
 ## stamp and the check.
-verify-ci: brand-check local-config-check private-check mutation-manifest-check mutation-manifest-check-test comment-lint screenshots-check-test graph-check-test test release-test build build-release
+verify-ci: brand-check privacy-check privacy-check-test local-config-check private-check mutation-manifest-check mutation-manifest-check-test comment-lint screenshots-check-test graph-check-test test release-test build build-release-simulator archive
 	$(MAKE) graph-check
 	$(MAKE) screenshots
 	sh scripts/screenshot-stamp.sh check build/screenshots
@@ -68,12 +68,29 @@ build: generate
 
 ## build-release: compile the app in Release for macOS and the iOS Simulator, so
 ## code kept to Debug (the showcase screens) can never break a shipped build.
-## Fails first if any configuration but Debug has a cloud address; every
+## verify runs only build-release-simulator: its macOS archive is the same
+## Release build for the Mac, on arm64 and x86_64, so it stands in for the line below.
+## Both fail first if any configuration but Debug has a cloud address; every
 ## build checks again, and fails an archive with one even in Debug.
-build-release: generate
-	sh scripts/release-endpoint-check.sh
+build-release: generate build-release-simulator
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath $(DERIVED)
+
+build-release-simulator: generate
+	sh scripts/release-endpoint-check.sh
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath $(DERIVED) CODE_SIGNING_ALLOWED=NO
+
+## archive: unsigned Release archives for iOS and macOS in build/archives,
+## then a check of what App Store Connect reads. Signing comes later, by
+## whoever uploads; see docs/RELEASE.md.
+archive: generate privacy-check
+	rm -rf build/archives
+	xcodebuild archive -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release \
+		-destination 'generic/platform=iOS' -archivePath build/archives/Pebble-iOS.xcarchive \
+		-derivedDataPath $(DERIVED) CODE_SIGNING_ALLOWED=NO
+	xcodebuild archive -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release \
+		-destination 'generic/platform=macOS' -archivePath build/archives/Pebble-macOS.xcarchive \
+		-derivedDataPath $(DERIVED) CODE_SIGNING_ALLOWED=NO
+	sh scripts/release-check.sh build/archives
 
 ## screenshots: first screen on iPhone, iPad and Mac, written to build/screenshots,
 ## plus the dark iPad sidebar and the sheets with Done, with
@@ -127,6 +144,15 @@ ui-test: generate
 ## any case, and no new key or path may spell the codename in lowercase
 brand-check:
 	sh scripts/brand-check.sh
+
+## privacy-check: PrivacyInfo.xcprivacy must name every required-reason API the
+## app uses, and network code may live only in the opt-in cloud client
+privacy-check:
+	sh scripts/privacy-check.sh
+
+## privacy-check-test: self-test for that check, one fixture per kind of hit
+privacy-check-test:
+	sh scripts/privacy-check-test.sh
 
 ## graph-check: fail if swift-syntax, which only Tools/GuardKit uses, can
 ## reach PebbleKit or the app project, named or through a dependency

@@ -24,8 +24,9 @@ Requirements: macOS 26 or later, Xcode 26, and [XcodeGen](https://github.com/yon
 (`brew install xcodegen`).
 
 ```sh
-make verify       # brand check, tests, mutation check, builds, and screenshots on iPhone, iPad and Mac
+make verify       # brand and privacy checks, tests, mutation check, builds, archives, and screenshots on iPhone, iPad and Mac
 make test         # unit tests only
+make archive      # unsigned Release archives for iOS and macOS, checked for TestFlight
 make pulse        # fetch public sources, snapshot them, write pulse/digest.json
 make screenshots  # writes build/screenshots/{iphone,ipad,mac}.png
 ```
@@ -38,6 +39,8 @@ tests use the showcase (`ShowcaseScene.morning`, `ShowcaseScene.emptyMemory()`),
 which is Debug only, so `swift test -c release` does not build them. Release
 is checked by `make build-release` instead.
 
+Signing and uploading a TestFlight build is in [docs/RELEASE.md](docs/RELEASE.md).
+
 When `make pulse` finds a real change, it also writes `build/pulse/notify.md`
 and `build/pulse/summary.json`. A quiet run removes them.
 
@@ -45,7 +48,9 @@ and `build/pulse/summary.json`. A quiet run removes them.
 
 ```
 App/                  the app target (one target for Mac, iPhone and iPad)
+  Resources/            app icon, launch color, privacy manifest
 Config/Brand.xcconfig the product name, set once
+Config/Version.xcconfig the version and build number, set once
 Packages/PebbleKit/   shared code, in layers
   PebbleCore            plain types, no UI, no networking
   PebblePulse           public source watch fetching and snapshots

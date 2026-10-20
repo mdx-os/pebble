@@ -3,7 +3,7 @@ import Combine
 import Foundation
 import PebbleBackground
 import PebbleCore
-import PebbleModel
+@testable import PebbleModel
 import SourceScan
 import SwiftUI
 import TestScratch

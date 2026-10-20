@@ -226,6 +226,7 @@ struct ReconPreviewTests {
         let id = try #require(runner.tasks.first?.id)
         engine.advance(by: 30)
         await eventually { runner.summariesMayLeaveDevice == 1 }
+        #expect(runner.summariesMayLeaveDevice == 1)
         model.stop(try #require(runner.tasks.first { $0.id == id }))
         await gate.open()
         await eventually { heard.answers.count == 1 }

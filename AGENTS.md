@@ -15,12 +15,14 @@ in lint, a skill, or CI.
 
 ## Commands
 
-- `make verify`: everything CI runs (brand check, comment lint, tests, mutation check, builds, screenshots). It is `make verify-ci` and then `make mutation-check`. CI runs those as two jobs side by side on every push and PR: "Verify on Mac, iPhone and iPad" (40 minutes) and "Mutation check" (150 minutes, the full manifest; about 45 minutes on a recent Mac). Never move the mutation check back into the Verify job, or cut the manifest to fit a limit
+- `make verify`: everything CI runs (brand, privacy and comment checks, tests, mutation check, builds, unsigned archives, screenshots). It is `make verify-ci` and then `make mutation-check`. CI runs those as two jobs side by side on every push and PR: "Verify on Mac, iPhone and iPad" (40 minutes) and "Mutation check" (150 minutes, the full manifest; about 45 minutes on a recent Mac). Never move the mutation check back into the Verify job, or cut the manifest to fit a limit
 - `make test`: package unit tests (Swift Testing), PebbleKit's and then the source guards' in `Tools/GuardKit`
 - `make mutation-check`: breaks the code each test in `scripts/mutation-manifest.txt` covers, on a copy in `build/mutation`, and requires the test to fail. Every new package behavior test gets a manifest entry; a test that passes with its code broken protects nothing. The check runs `swift test` in both packages, so a UI test that guards a promise needs a package twin pinning the same thing, with entries, listed at the top of `scripts/mutation/cloud.txt`
 - `make release-test`: runs the "a shipped build reads no cloud address" promise in a Release build of PebbleCore (part of verify). Package tests run in Debug, so they can't see that code
 - `make comment-lint`: no review history ("fix round", "item 11", "round 4") or personal names in code comments, project.yml, the Makefile or the mutation manifest. Say what the code or test protects. The names it blocks are never committed in plain text: `Config/comment-lint-names.sha256` holds a salt and the SHA-256 of each name, and CI needs no secret. The plain list lives only in the git-ignored `Config/comment-lint-names.local.txt`; after changing it, run `make hash-names` and commit the hash file. A match prints the file and line, never the name. Never print, copy or quote the local list
-- `make build-release`: Release builds for macOS and the iOS Simulator (part of verify). Anything behind `#if DEBUG`, like the showcase, must only be used behind it too. Every build with a cloud address fails unless it is Debug and not an archive, whatever the configuration is called
+- `make build-release`: Release builds for macOS and the iOS Simulator. Verify runs only the Simulator one (`build-release-simulator`), since the macOS archive is the same Release build for the Mac. Anything behind `#if DEBUG`, like the showcase, must only be used behind it too. Every build with a cloud address fails unless it is Debug and not an archive, whatever the configuration is called
+- `make archive`: unsigned Release archives for iOS and macOS, checked for App Store Connect. `docs/RELEASE.md` covers signing and upload
+- `make privacy-check`: fails when code uses a required-reason API that `App/Resources/PrivacyInfo.xcprivacy` does not list, or network code outside the opt-in cloud client's files named in `scripts/privacy-check.sh`. `make privacy-check-test` runs it on `scripts/privacy-fixtures`
 - `make pulse`: fetch the public source watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
 - `make graph-check`: fail if swift-syntax can reach PebbleKit or the app project, named or through a dependency (part of verify). `make graph-check-test` is its self-test
 - `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`, plus dark shots of the
@@ -143,18 +145,6 @@ in lint, a skill, or CI.
 - After a Forget everything erases the summary's file, the switch file
   goes too, with the keys an earlier version kept in `UserDefaults`.
 
-## Manual checks before release
-
-Things no test here can reach. Check each on a real iPhone before a release.
-
-- `BackgroundStore.shutError` is `EPERM`. With "Work while you're away" on,
-  restart the phone in the evening and leave it locked, never unlocked,
-  until after 7:00. Unlock it but don't open the app, and download the
-  app's container from Xcode's Devices window: `background-switch.json`
-  (or the job in `background.json`) should hold `"locked"`. If neither
-  does, opening the file failed with another error, and the runner took
-  it as a disk error.
-
 ## The name
 
 - The product name lives only in `Config/Brand.xcconfig`. Code reads it from
@@ -163,6 +153,7 @@ Things no test here can reach. Check each on a real iPhone before a release.
 - But never in a new key, path, folder or launch argument, where it would
   be written down and outlive a rename: `make brand-check` fails on a new
   lowercase `pebble` in Swift. Old ones stay in `scripts/brand-check-known.txt`.
+- The version and build number live only in `Config/Version.xcconfig`.
 - Each user may name their own agent. Never confuse the agent's name with a
   person in the user's contacts.
 
@@ -250,7 +241,8 @@ Things no test here can reach. Check each on a real iPhone before a release.
 ## Never
 
 - Commit secrets, API keys or signing material. The xAI key and signing keys
-  live in CI secrets or the Keychain.
+  live in CI secrets or the Keychain. Team IDs and profiles go only in the
+  ignored `Config/Signing.local.xcconfig`.
 - Run untrusted PR code on a self-hosted runner. PR checks use GitHub's runners.
 - Copy code from MDx without reading it first; MDx carries enterprise
   assumptions and internal names that do not belong here.
@@ -258,6 +250,14 @@ Things no test here can reach. Check each on a real iPhone before a release.
 ## Manual checks before release
 
 Some things can't be proven by an automated test. Check these by hand before a release and note the result in the release PR:
+
+- `BackgroundStore.shutError` is `EPERM`. With "Work while you're away" on,
+  restart the phone in the evening and leave it locked, never unlocked,
+  until after 7:00. Unlock it but don't open the app, and download the
+  app's container from Xcode's Devices window: `background-switch.json`
+  (or the job in `background.json`) should hold `"locked"`. If neither
+  does, opening the file failed with another error, and the runner took
+  it as a disk error.
 
 - **Done's focus ring on the Mac:** turn on Full Keyboard Access, open a sheet, and Tab to Done. Exactly one ring shows around it, in light and in dark. If the system draws a second ring, add `.focusEffectDisabled()` to the button.
 - **Done's focus ring on iPad:** with a hardware keyboard, Tab to Done. The ring shows in light and in dark.

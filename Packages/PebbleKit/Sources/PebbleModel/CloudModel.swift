@@ -870,7 +870,7 @@ public struct URLSessionCloudTransport: CloudTransport {
     /// A session that keeps nothing and adds nothing: no cookies, cache or
     /// saved passwords, no extra headers, and every redirect refused, so
     /// the request can't end up anywhere but the address shown.
-    public static func makeSession() -> URLSession {
+    static func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
@@ -925,4 +925,10 @@ public final class RefusesRedirects: NSObject, URLSessionTaskDelegate, Sendable 
     ) async -> URLRequest? {
         nil
     }
+}
+
+extension ModelClient {
+    /// The cloud chat's session, when this is the cloud model. Read here, in
+    /// the cloud client's own file, so no other file names the client.
+    package var cloudSession: CloudChatSession? { (self as? CloudModel)?.session }
 }

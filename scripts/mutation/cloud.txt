@@ -435,7 +435,7 @@ perl: s~request\.httpShouldHandleCookies = false~request.httpShouldHandleCookies
 
 test: theYesToTurningOnReachesNoNetwork
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~(state = \.said\(CloudWords\.onNotSaved\)\n\s*return\n\s*\}\n\s*state = nil\n)~$1        _ = makeTransport()\n~
+perl: s~(state = \.said\(CloudWords\.onNotSaved\)\n\s*return\n\s*\}\n\s*state = nil\n)~$1        _ = (makeTransport ?? { URLSessionCloudTransport() })()\n~
 
 test: theQuestionSaysSignInIsInThePreview
 file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
@@ -693,7 +693,7 @@ perl: s~\.onAppear \{ if help\.claimLaunchAnnouncement\(\) \{ AccessibilityNotif
 # Forget everything tells sign-in to forget on every path, an unopened setting's included.
 test: theAppLetsAnUnopenedSettingEraseItsFile theFallbackMemoryScreenErasesKeptPrivateWords forgetEverythingErasesWordsKeptInASettingThatCouldntBeOpened
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~memory: memory, auth: auth,\n(\s*)transport: \{ URLSessionCloudTransport\(\) \}, storeOpened: false~memory: memory, auth: NoCloudAuth(),\n$1transport: { URLSessionCloudTransport() }, storeOpened: false~
+perl: s~memory: memory, auth: auth,\n(\s*)transport: nil, storeOpened: false~memory: memory, auth: NoCloudAuth(),\n$1transport: nil, storeOpened: false~
 
 test: theAppLetsAnUnopenedSettingEraseItsFile
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
@@ -737,6 +737,18 @@ perl: s~underway: tasks\.underwayLine, hadNotes: hadNotes, sent: sent\)~underway
 test: forgetEverythingAfterSendingSaysTheTasksStayedAndTheCloudCopy
 file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
 perl: s~summaries: summaries,\n(\s*)hadNotes: hadNotes, sent: sent\)~summaries: summaries,\n$1hadNotes: hadNotes)~
+
+# The cloud setting's gate on the network. scripts/privacy-check.sh names
+# these tests as its proof that no transport is made with the setting off.
+# Off, but a chat gets the cloud model anyway.
+test: offByDefaultMakesNoTransportAndKeepsChatsOnDevice
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~settings\.isOn\(for: endpoint\)~endpoint != nil~
+
+# No address, but a chat gets the cloud model anyway, at one made up.
+test: offByDefaultMakesNoTransportAndKeepsChatsOnDevice anEmptyAddressMeansDisabledEvenIfSavedOn
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~guard usesCloud\(settings: settings, endpoint: endpoint\), let endpoint else \{ return local \}~guard let endpoint = endpoint ?? URL(string: "https://example.com") else { return local }~
 
 # The preview no longer asks whether the cloud is still on as it goes on
 # screen, so a switch off just after the reply's own check leaves a preview

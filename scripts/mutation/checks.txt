@@ -82,6 +82,15 @@ test: everyReleaseBuildRunsTheCheck
 file: project.yml
 perl: s~basedOnDependencyAnalysis: false~basedOnDependencyAnalysis: true~
 
+# The Release builds make goes on without checking for a cloud address first.
+test: everyReleaseBuildRunsTheCheck
+file: Makefile
+perl: s~(build-release-simulator: generate\n)\tsh scripts/release-endpoint-check\.sh\n~$1~
+
+test: everyReleaseBuildRunsTheCheck
+file: Makefile
+perl: s~\nbuild-release: generate build-release-simulator\n~\nbuild-release: generate\n~
+
 # Names are matched by salted hash, as words and pairs of words, in any case and as possessives.
 test: theCommentLintCatchesReviewHistoryAndNames theNamesAreCommittedOnlyAsSaltedHashes
 file: scripts/comment-lint.sh
@@ -195,7 +204,7 @@ perl: s~^verify: verify-ci mutation-check$~verify: mutation-check~m
 
 test: verifyRunsTheCommentLintAndTheMutationCheck
 file: Makefile
-perl: s~^(verify-ci:[^\n]*) build build-release$~$1 mutation-check build build-release~m
+perl: s~^(verify-ci:[^\n]*) build build-release-simulator archive$~$1 mutation-check build build-release-simulator archive~m
 
 test: verifyRunsTheCommentLintAndTheMutationCheck
 file: Makefile
@@ -203,7 +212,7 @@ perl: s~ comment-lint screenshots-check-test graph-check-test test release-test~
 
 test: verifyRunsTheCommentLintAndTheMutationCheck
 file: Makefile
-perl: s~ test release-test build build-release~ test build build-release~
+perl: s~ test release-test build build-release-simulator~ test build build-release-simulator~
 
 test: verifyRunsTheCommentLintAndTheMutationCheck
 file: Makefile
@@ -287,4 +296,4 @@ perl: s~ else \{ \$multi = 1 \}~~
 
 test: verifyRunsTheCommentLintAndTheMutationCheck
 file: Makefile
-perl: s~(\nverify-ci:[^\n]*) build build-release\n~$1 build\n~
+perl: s~(\nverify-ci:[^\n]*) build build-release-simulator archive\n~$1 build archive\n~
