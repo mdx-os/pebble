@@ -312,7 +312,12 @@ done in the other window sends, cancels or changes it. The Talk shortcut
 starts listening in the window that came to the front last.
 
 The system's questions for the microphone and speech come only the first
-time the person holds the microphone. When the answer is no, or the device
+time the person starts talking, by holding the microphone, from the Talk
+shortcut or with a VoiceOver tap, never at launch. If listening stops by
+itself before a word was heard, "Sorry, I couldn't start listening just
+now. Try again in a moment, or type instead." says so. A sheet that covers
+the composer while it listens ends listening and leaves what was heard in
+the field, sending nothing. When the answer is no, or the device
 can't hear their language by itself, one honest line says so and that
 typing works just as before. It never says the voice stays on the device,
 since that line reads no flag; it says the voice isn't sent elsewhere to be

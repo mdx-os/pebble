@@ -67,8 +67,8 @@ targets:
           - $(PRODUCT_BUNDLE_IDENTIFIER).background.refresh
         UIBackgroundModes:
           - fetch
-        # Hold to talk. Asked the first time the person holds the microphone,
-        # never at launch. Speech is heard on the device only (DeviceSpeech).
+        # Hold to talk. Asked the first time the person starts talking (a
+        # hold, the Talk shortcut or VoiceOver), never at launch. Speech is heard on the device only (DeviceSpeech).
         NSMicrophoneUsageDescription: So you can talk instead of typing. I listen only while you're talking to me, and I keep no recording.
         NSSpeechRecognitionUsageDescription: So I can turn what you say into words. That happens on this device, and what you say is never sent anywhere to be understood.
     scheme:

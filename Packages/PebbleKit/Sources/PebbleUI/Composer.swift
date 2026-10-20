@@ -67,7 +67,10 @@ struct Composer: View {
             answerShortcut()
         }
         .onChange(of: voice?.requests.waiting) { answerShortcut() }
-        .onChange(of: keyboardSends) { answerShortcut() }
+        .onChange(of: keyboardSends) { _, sends in
+            Self.keyboardSendsChanged(to: sends, voice: voice, owner: owner)
+            answerShortcut()
+        }
         .onChange(of: voice?.phase) { _, phase in voiceChanged(phase) }
         // A line about the microphone goes once the person types instead,
         // and a change the capture didn't make ends listening, as typing does.
@@ -124,7 +127,7 @@ struct Composer: View {
                 }
                 #endif
             if let voice {
-                TalkButton(voice: voice, owner: owner, start: { listen(voice, $0) }, slidAway: $slidAway)
+                TalkButton(voice: voice, owner: owner, start: { Self.listen(voice, $0, owner: owner, draft: $draft, send: send) }, slidAway: $slidAway)
             }
             Button {
                 send(draft)
@@ -149,17 +152,27 @@ struct Composer: View {
         .overlay(bar.stroke(Theme.fieldEdge, lineWidth: 1))
     }
 
-    /// Starts listening here: what is written stays in front of the words
-    /// heard, which show in the field as they come, and a send goes the
-    /// way a typed one does.
-    private func listen(_ voice: VoiceCapture, _ mode: VoiceCapture.Mode) {
-        let draft = $draft
-        let send = self.send
-        let owner = owner
-        Task {
-            await voice.begin(mode, owner: owner, draft: draft.wrappedValue,
-                              write: { draft.wrappedValue = $0 }, send: send)
-        }
+    /// Starts listening for `owner`: what is written stays in front of the
+    /// words heard, which show in the field as they come, and a send goes
+    /// the way a typed one does.
+    ///
+    /// The capture is claimed for `owner` here, before the task, so a lift,
+    /// a lost touch, the composer going away or the app going to the
+    /// background before the task runs ends it, and the task starts nothing.
+    @discardableResult
+    static func listen(_ voice: VoiceCapture, _ mode: VoiceCapture.Mode, owner: String,
+                       draft: Binding<String>, send: @escaping (String) -> Void) -> Task<Void, Never>? {
+        guard let start = voice.claim(mode, owner: owner, draft: draft.wrappedValue,
+                                      write: { draft.wrappedValue = $0 }, send: send) else { return nil }
+        return Task { await voice.begin(start) }
+    }
+
+    /// A sheet came over the composer, or went. Covered, listening here, as
+    /// from the Talk shortcut or VoiceOver, ends with what was heard left in
+    /// the draft, since its Send can't be seen.
+    static func keyboardSendsChanged(to sends: Bool, voice: VoiceCapture?, owner: String) {
+        guard !sends else { return }
+        voice?.stopKeepingWords(owner: owner)
     }
 
     /// Takes the Talk shortcut, when it is waiting and this composer is the
@@ -171,10 +184,11 @@ struct Composer: View {
         let send = self.send
         let owner = owner
         let window = TalkWindow.token(window)
-        Task {
-            await voice.answerShortcut(owner: owner, in: window, draft: draft.wrappedValue,
-                                       write: { draft.wrappedValue = $0 }, send: send)
-        }
+        // Taken and claimed at once, like a hold, so this composer going away
+        // before the task runs ends it.
+        guard let start = voice.takeShortcut(owner: owner, in: window, draft: draft.wrappedValue,
+                                             write: { draft.wrappedValue = $0 }, send: send) else { return }
+        Task { await voice.begin(start) }
     }
 
     /// Says what happened to VoiceOver, and lets a "nothing sent" line go

@@ -85,6 +85,8 @@ final class TalkPress {
     private(set) var isDown = false
 
     /// The finger came down: listening starts, unless it is on already.
+    /// `start` claims the capture before it returns (`Composer.listen`),
+    /// so a lift or a lost touch right after still finds it.
     func down(_ voice: VoiceCapture, start: (VoiceCapture.Mode) -> Void) {
         guard !isDown else { return }
         isDown = true
@@ -100,7 +102,13 @@ final class TalkPress {
         guard voice.belongs(to: owner) else { return }
         switch voice.mode {
         case .hold:
-            if slidAway { voice.cancel(owner: owner) } else { Task { await voice.release(owner: owner) } }
+            if slidAway || voice.phase == .asking {
+                // Lifted before listening began, as before the start has
+                // run: it ends here, at once, so nothing starts after.
+                voice.cancel(owner: owner)
+            } else {
+                Task { await voice.release(owner: owner) }
+            }
         case .tap:
             // Tap mode began without a finger, so lifting one is the tap that sends.
             if voice.phase == .listening { Task { await voice.release(owner: owner) } }

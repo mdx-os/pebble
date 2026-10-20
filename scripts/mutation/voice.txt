@@ -175,7 +175,7 @@ perl: s~(public func cancel\(owner: String\) \{\n)        guard belongs\(to: own
 # Typing in another composer ends this one's listening.
 test: aSecondWindowsComposerNeverActsOnTheFirsts typingEndsOnlyItsOwnWindowsListening
 file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
-perl: s~guard isActive, belongs\(to: owner\), text != shown~guard isActive, text != shown~
+perl: s~(func stopKeepingWords\(owner: String\) \{\n        )guard isActive, belongs\(to: owner\) else~${1}guard isActive else~
 
 # A composer going away cancels whatever listens, in any window.
 test: aComposerGoingAwayStopsOnlyItsOwnWindowsListening
@@ -236,3 +236,42 @@ perl: s~\n        voice\?\.draftFilled\(line, in: window\)~~
 test: aSuggestionEndsListeningInItsOwnWindowOnly talkingAboutACardEndsListeningInItsOwnWindowOnly
 file: Packages/PebbleKit/Sources/PebbleUI/Composer.swift
 perl: s~edited\(owner: TalkWindow\.owner\(of: identifier, in: window\), to: text\)~edited(owner: identifier, to: text)~
+
+# A start the composer has not claimed yet. The capture is made the
+# composer's only once the task runs, so a lift, a lost touch or the
+# composer going away before then finds nothing to end, and the task then
+# listens with nobody holding.
+test: aHoldEndedBeforeItsStartRunsNeverListens
+file: Packages/PebbleKit/Sources/PebbleUI/Composer.swift
+perl: s~guard let start = voice\.claim\(mode, owner: owner, draft: draft\.wrappedValue,\n\s+write: \{ draft\.wrappedValue = \$0 \}, send: send\) else \{ return nil \}\n        return Task \{ await voice\.begin\(start\) \}~return Task { await voice.begin(mode, owner: owner, draft: draft.wrappedValue, write: { draft.wrappedValue = \$0 }, send: send) }~
+
+# A claimed start runs though it was ended before it ran, so the microphone
+# turns on after the finger lifted or the composer went away.
+test: aHoldEndedBeforeItsStartRunsNeverListens aClaimedStartEndedBeforeItRunsStartsNothing
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~        guard started == generation, phase == \.asking else \{ return \}\n~~
+
+# A lift before listening began waits for the start instead of ending it.
+test: aHoldEndedBeforeItsStartRunsNeverListens
+file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
+perl: s~if slidAway \|\| voice\.phase == \.asking \{~if slidAway {~
+
+# A sheet over the composer leaves it listening, with its Send hidden.
+test: aSheetOverTheComposerEndsListeningAndKeepsTheWords
+file: Packages/PebbleKit/Sources/PebbleUI/Composer.swift
+perl: s~\n        voice\?\.stopKeepingWords\(owner: owner\)~~
+
+# The sheet going away ends listening too.
+test: aSheetOverTheComposerEndsListeningAndKeepsTheWords
+file: Packages/PebbleKit/Sources/PebbleUI/Composer.swift
+perl: s~        guard !sends else \{ return \}\n~~
+
+# Ending for the sheet puts the draft back, so what was heard is lost.
+test: aSheetOverTheComposerEndsListeningAndKeepsTheWords
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~(if phase != \.asking \{ listener\.cancel\(\) \}\n)(        stop\(\.idle\)\n    \}\n\n    /// The same, only)~${1}        target?.write(target?.before ?? "")\n$2~
+
+# Listening that stops on its own with nothing heard just goes quiet.
+test: stoppingOnItsOwnWithNothingHeardSaysSo
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~self\.stop\(self\.heard\.isEmpty \? \.unavailable\(\.couldNotStart\) : \.idle\)~self.stop(.idle)~

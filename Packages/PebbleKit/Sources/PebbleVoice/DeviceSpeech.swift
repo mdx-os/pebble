@@ -188,6 +188,9 @@ final class DeviceHearing: Hearing {
     private let engine = AVAudioEngine()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
+    /// Where the listen going now hears back, so an interruption can end it.
+    private var answer: (@Sendable (String?, Bool) -> Void)?
+    private var interruption: (any NSObjectProtocol)?
 
     init(locale: Locale) {
         recognizer = SFSpeechRecognizer(locale: locale)
@@ -205,7 +208,13 @@ final class DeviceHearing: Hearing {
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.record, mode: .measurement, options: .duckOthers)
+        // The light tap as listening starts would be muted otherwise.
+        try session.setAllowHapticsAndSystemSoundsDuringRecording(true)
         try session.setActive(true, options: .notifyOthersOnDeactivation)
+        // A call or another app taking the microphone ends the listen.
+        interruption = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: session, queue: .main,
+            using: Self.interrupted(self))
         #endif
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.requiresOnDeviceRecognition = true
@@ -227,8 +236,31 @@ final class DeviceHearing: Hearing {
             throw error
         }
         self.request = request
+        self.answer = answer
         task = recognizer.recognitionTask(with: request, resultHandler: Self.results(to: answer))
     }
+
+    /// The audio was interrupted: the microphone and recognizer stop at
+    /// once, and the listen is told it is done, so it ends as one that
+    /// stopped on its own and nothing is sent.
+    private func cancelForInterruption() {
+        let answer = self.answer
+        stop()
+        answer?(nil, true)
+    }
+
+    #if os(iOS)
+    /// Made here, away from the main actor, since the notification's block
+    /// is not isolated; it is delivered on the main queue.
+    private nonisolated static func interrupted(_ hearing: DeviceHearing) -> @Sendable (Notification) -> Void {
+        { [weak hearing] note in
+            let kind = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt)
+                .flatMap(AVAudioSession.InterruptionType.init(rawValue:))
+            guard kind == .began else { return }
+            MainActor.assumeIsolated { hearing?.cancelForInterruption() }
+        }
+    }
+    #endif
 
     func endAudio() {
         stopHearing()
@@ -242,7 +274,10 @@ final class DeviceHearing: Hearing {
         task?.cancel()
         task = nil
         request = nil
+        answer = nil
         #if os(iOS)
+        if let interruption { NotificationCenter.default.removeObserver(interruption) }
+        interruption = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         #endif
     }

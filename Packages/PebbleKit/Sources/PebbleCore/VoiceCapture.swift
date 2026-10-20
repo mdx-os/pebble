@@ -114,8 +114,9 @@ public final class TalkRequests {
 /// normal message; slide away to send nothing. For VoiceOver and the Talk
 /// shortcut, a tap starts it and a tap sends.
 ///
-/// Asks for the microphone and speech only when the person first holds
-/// the button, never before. Nothing heard is kept: the words live in the
+/// Asks for the microphone and speech only when the person first starts
+/// talking, by a hold, the Talk shortcut or a VoiceOver tap, never before.
+/// Nothing heard is kept: the words live in the
 /// composer's draft and, once sent, in the chat, as typed words do. A
 /// release with nothing heard sends nothing.
 @MainActor
@@ -123,7 +124,8 @@ public final class TalkRequests {
 public final class VoiceCapture {
     public enum Phase: Equatable, Sendable {
         case idle
-        /// The system is asking for the microphone or speech.
+        /// Claimed, and not listening yet: the start is on its way, or the
+        /// system is asking for the microphone or speech.
         case asking
         case listening
         /// Let go: the last words are coming in before they are sent.
@@ -188,26 +190,48 @@ public final class VoiceCapture {
         belongs(to: owner) && isActive
     }
 
+    /// A start claimed and not yet begun. Any stop in between, as a lift,
+    /// a lost touch or the composer going away, makes it count no more.
+    public struct Start: Sendable {
+        fileprivate let generation: Int
+    }
+
     /// Starts listening for the composer `owner`. `draft` is what is already
     /// written, kept in front of the words heard; `write` shows the words in
     /// the composer, and `send` sends the message.
     public func begin(_ mode: Mode, owner: String, draft: String, write: @escaping (String) -> Void,
                       send: @escaping (String) -> Void) async {
-        guard !isActive else { return }
+        guard let start = claim(mode, owner: owner, draft: draft, write: write, send: send) else { return }
+        await begin(start)
+    }
+
+    /// Makes the capture `owner`'s at once, before anything waits, so a
+    /// lift, a cancel or the composer going away that comes before `begin`
+    /// runs ends it, and `begin` then starts nothing. Nil while another
+    /// capture is going.
+    public func claim(_ mode: Mode, owner: String, draft: String, write: @escaping (String) -> Void,
+                      send: @escaping (String) -> Void) -> Start? {
+        guard !isActive else { return nil }
         generation += 1
-        let started = generation
         self.mode = mode
         self.owner = owner
         heard = ""
         letGoWhileAsking = false
         target = Target(before: draft, write: write, send: send)
         shown = draft
+        phase = .asking
+        return Start(generation: generation)
+    }
+
+    /// Goes on with a claimed start, unless it was ended since.
+    public func begin(_ start: Start) async {
+        let started = start.generation
+        guard started == generation, phase == .asking else { return }
         // Checked before any question, so nobody is asked for something
         // that can't work here.
         guard listener.hearsOnDevice else { return stop(.unavailable(.notOnDevice)) }
         var access = listener.access
         if access == .notAsked {
-            phase = .asking
             access = await listener.askForAccess()
             guard started == generation else { return }
         }
@@ -227,8 +251,9 @@ public final class VoiceCapture {
             }, ended: { [weak self] in
                 guard let self, started == self.generation, self.phase == .listening else { return }
                 // Stopped on its own: the words stay in the composer to
-                // send or change, and nothing is sent.
-                self.stop(.idle)
+                // send or change, and nothing is sent. With nothing heard,
+                // a line says so, rather than the microphone just going off.
+                self.stop(self.heard.isEmpty ? .unavailable(.couldNotStart) : .idle)
             })
         } catch {
             return stop(.unavailable(.couldNotStart))
@@ -260,8 +285,8 @@ public final class VoiceCapture {
     }
 
     /// Slid away, or Don't send: nothing is sent, and the draft is as it was.
-    /// While the system is still asking nothing has begun, so it ends
-    /// quietly, with no line, as the first hold always has.
+    /// While the system is still asking, or the start hasn't run, nothing
+    /// has begun, so it ends quietly, with no line.
     public func cancel() {
         guard isActive, let target else { return }
         let asking = phase == .asking
@@ -275,7 +300,14 @@ public final class VoiceCapture {
     /// once with their words left as they are and nothing sent, so no later
     /// words, Send or cancel ever write over them.
     public func edited(owner: String, to text: String) {
-        guard isActive, belongs(to: owner), text != shown else { return }
+        guard text != shown else { return }
+        stopKeepingWords(owner: owner)
+    }
+
+    /// Ends `owner`'s listening with what was heard left in the draft and
+    /// nothing sent, as when a sheet covers the composer.
+    public func stopKeepingWords(owner: String) {
+        guard isActive, belongs(to: owner) else { return }
         if phase != .asking { listener.cancel() }
         stop(.idle)
     }
@@ -305,9 +337,18 @@ public final class VoiceCapture {
     @discardableResult
     public func answerShortcut(owner: String, in window: String? = nil, draft: String, now: Date = Date(),
                                write: @escaping (String) -> Void, send: @escaping (String) -> Void) async -> Bool {
-        guard !isActive, requests.take(in: window, now: now) else { return false }
-        await begin(.tap, owner: owner, draft: draft, write: write, send: send)
+        guard let start = takeShortcut(owner: owner, in: window, draft: draft, now: now, write: write, send: send)
+        else { return false }
+        await begin(start)
         return true
+    }
+
+    /// The same, claimed at once for `owner`, to `begin` after. Nil when
+    /// there is no ask to take here, or something else is going.
+    public func takeShortcut(owner: String, in window: String? = nil, draft: String, now: Date = Date(),
+                             write: @escaping (String) -> Void, send: @escaping (String) -> Void) -> Start? {
+        guard !isActive, requests.take(in: window, now: now) else { return nil }
+        return claim(.tap, owner: owner, draft: draft, write: write, send: send)
     }
 
     private func message(with words: String) -> String {

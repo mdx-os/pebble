@@ -293,6 +293,41 @@ struct VoiceCaptureTests {
         #expect(composer.sent.isEmpty)
     }
 
+    /// Listening that stops on its own before a word was heard says so,
+    /// so the person isn't left wondering why the microphone went off.
+    @Test func stoppingOnItsOwnWithNothingHeardSaysSo() async {
+        let typed = FakeComposer(draft: "Typed")
+        let voice = capture()
+        await voice.begin(.tap, on: typed)
+        listener.stopOnItsOwn()
+        #expect(voice.phase == .unavailable(.couldNotStart))
+        #expect(voice.belongs(to: "composer"), "the line shows on the composer that was listening")
+        #expect(!voice.isActive)
+        #expect(typed.draft == "Typed")
+        #expect(typed.sent.isEmpty)
+        #expect(listener.cancels == 0)
+    }
+
+    /// A start claimed at once, then ended before it runs, as when the
+    /// composer goes away just after the Talk shortcut was taken: the
+    /// start that runs after asks nothing and listens to nothing.
+    @Test func aClaimedStartEndedBeforeItRunsStartsNothing() async throws {
+        let listener = FakeListener(access: .notAsked)
+        let requests = TalkRequests()
+        let voice = VoiceCapture(listener: listener, requests: requests)
+        requests.ask()
+        let start = try #require(voice.takeShortcut(owner: "composer", draft: "", write: { composer.write($0) },
+                                                     send: { composer.send($0) }))
+        #expect(voice.isActive(for: "composer"))
+        voice.cancel(owner: "composer")
+        #expect(voice.phase == .idle)
+        await voice.begin(start)
+        #expect(voice.phase == .idle)
+        #expect(listener.asked == 0)
+        #expect(listener.requests.isEmpty)
+        #expect(requests.waiting == nil, "the ask was taken, so it never starts later either")
+    }
+
     /// A composer going away stops only its own listening.
     @Test func onlyTheOwnerCancelsByName() async {
         let voice = capture()

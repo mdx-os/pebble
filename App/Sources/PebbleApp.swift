@@ -39,7 +39,8 @@ struct PebbleApp: App {
     private let kept: TaskStore
     #if os(iOS)
     /// Hold to talk in the composers, heard on this device only. Nothing is
-    /// asked until the person first holds the microphone. Not on the Mac yet.
+    /// asked until the person first starts talking, by a hold, the Talk
+    /// shortcut or VoiceOver. Not on the Mac yet.
     @State private var voice = VoiceCapture(listener: DeviceSpeech())
     #endif
 
