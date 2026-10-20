@@ -1,13 +1,13 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test repeat-test mutation-check mutation-manifest-check mutation-manifest-check-test build build-release archive screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check privacy-check privacy-check-test local-config-check graph-check graph-check-test secrets-check pulse clean private-check hash-private-words
+.PHONY: verify generate test repeat-test mutation-check mutation-manifest-check mutation-manifest-check-test build build-release build-release-simulator archive screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check privacy-check privacy-check-test local-config-check graph-check graph-check-test secrets-check pulse clean private-check hash-private-words
 
 ## verify: everything CI runs. Run this before every PR. The graph check
 ## runs once the builds have made the project, so it reads that too. The
 ## screenshots are made after every other step and then checked against the
 ## working tree. Both are the recipe, so even with -j nothing runs beside
 ## them that could change the tree between the stamp and the check.
-verify: brand-check privacy-check privacy-check-test local-config-check mutation-manifest-check mutation-manifest-check-test screenshots-check-test graph-check-test test build build-release archive private-check
+verify: brand-check privacy-check privacy-check-test local-config-check mutation-manifest-check mutation-manifest-check-test screenshots-check-test graph-check-test test build build-release-simulator archive private-check
 	$(MAKE) graph-check
 	$(MAKE) screenshots
 	sh scripts/screenshot-stamp.sh check build/screenshots
@@ -55,9 +55,13 @@ build: generate
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -destination 'generic/platform=iOS Simulator' -derivedDataPath $(DERIVED) CODE_SIGNING_ALLOWED=NO
 
 ## build-release: compile the app in Release for macOS and the iOS Simulator, so
-## code kept to Debug (the showcase screens) can never break a shipped build
-build-release: generate
+## code kept to Debug (the showcase screens) can never break a shipped build.
+## verify runs only build-release-simulator: its macOS archive is the same
+## Release build for the Mac, on arm64 and x86_64, so it stands in for the line below.
+build-release: generate build-release-simulator
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath $(DERIVED)
+
+build-release-simulator: generate
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath $(DERIVED) CODE_SIGNING_ALLOWED=NO
 
 ## archive: unsigned Release archives for iOS and macOS in build/archives,
