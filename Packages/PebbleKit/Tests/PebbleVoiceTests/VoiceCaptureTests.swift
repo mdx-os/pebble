@@ -213,10 +213,72 @@ struct VoiceCaptureTests {
         let started = Task { await voice.begin(.tap, on: composer) }
         #expect(await waitUntil { listener.isAsking })
         voice.cancel()
+        #expect(voice.phase == .idle, "nothing had begun, so there is no line to show")
+        #expect(voice.owner == nil)
         listener.answerQuestions()
         await started.value
-        #expect(voice.phase == .cancelled)
+        #expect(voice.phase == .idle)
         #expect(listener.requests.isEmpty)
+        #expect(listener.cancels == 0)
+        #expect(composer.sent.isEmpty)
+    }
+
+    /// What the person types while it listens by tap, as with the Action
+    /// Button, ends listening and stays: later words, Send and Don't send
+    /// never write over it, and nothing is sent.
+    enum AfterTheEdit: CaseIterable {
+        case moreWords, send, dontSend
+    }
+
+    @Test(arguments: AfterTheEdit.allCases)
+    func anEditWhileListeningIsNeverLostOrSent(_ after: AfterTheEdit) async {
+        let typed = FakeComposer(draft: "Hi,")
+        let voice = capture()
+        await voice.begin(.tap, on: typed)
+        listener.say("call Sam")
+        #expect(typed.draft == "Hi, call Sam")
+        // The capture's own words are not an edit.
+        voice.edited(owner: "composer", to: typed.draft)
+        #expect(voice.phase == .listening)
+        // Another composer's change is not this one's edit.
+        voice.edited(owner: "todayComposer", to: "elsewhere")
+        #expect(voice.phase == .listening)
+        typed.draft = "Hi, call Sam tomorrow"
+        voice.edited(owner: "composer", to: typed.draft)
+        #expect(voice.phase == .idle)
+        #expect(voice.owner == nil)
+        #expect(listener.cancels == 1, "the microphone stops")
+        switch after {
+        case .moreWords:
+            listener.say("call Sam about lunch")
+        case .send:
+            listener.lastWords = "call Sam about lunch"
+            await voice.release()
+        case .dontSend:
+            voice.cancel()
+        }
+        #expect(typed.draft == "Hi, call Sam tomorrow")
+        #expect(typed.sent.isEmpty)
+        #expect(typed.shown == ["Hi, call Sam"], "nothing written after the edit")
+        #expect(voice.phase == .idle)
+        #expect(listener.finishes == 0)
+    }
+
+    /// An edit while the last words are on their way drops them too.
+    @Test func anEditWhileTheLastWordsComeIsKept() async {
+        let listener = SlowFinishListener()
+        let voice = VoiceCapture(listener: listener, requests: TalkRequests())
+        let typed = FakeComposer(draft: "")
+        await voice.begin(.tap, on: typed)
+        let sending = Task { await voice.release() }
+        #expect(await waitUntil { voice.phase == .sending })
+        typed.draft = "My own words"
+        voice.edited(owner: "composer", to: typed.draft)
+        #expect(voice.phase == .idle)
+        listener.giveLastWords("call Sam")
+        await sending.value
+        #expect(typed.draft == "My own words")
+        #expect(typed.sent.isEmpty)
     }
 
     @Test func stoppingOnItsOwnKeepsTheWordsAndSendsNothing() async {

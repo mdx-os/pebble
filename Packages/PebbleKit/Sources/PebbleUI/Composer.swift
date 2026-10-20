@@ -54,9 +54,11 @@ struct Composer: View {
         .onChange(of: voice?.requests.waiting) { answerShortcut() }
         .onChange(of: keyboardSends) { answerShortcut() }
         .onChange(of: voice?.phase) { _, phase in voiceChanged(phase) }
-        // A line about the microphone goes once the person types instead.
-        .onChange(of: draft) {
+        // A line about the microphone goes once the person types instead,
+        // and a change the capture didn't make ends listening, as typing does.
+        .onChange(of: draft) { _, new in
             if let voice, voice.owner == identifier, case .unavailable = voice.phase { voice.settle() }
+            voice?.edited(owner: identifier, to: new)
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { voice?.cancel(owner: identifier) }
@@ -93,6 +95,7 @@ struct Composer: View {
                     if press.modifiers.contains(.shift) {
                         // The break goes at the end, where the cursor almost
                         // always is while writing.
+                        voice?.edited(owner: identifier, to: draft + "\n")
                         draft += "\n"
                         return .handled
                     }
@@ -193,11 +196,13 @@ struct Composer: View {
 
     /// The draft, with a lone Return read as Send. On iPad the field types
     /// Return and Shift Return alike as a line break, so the Shift key is
-    /// checked here. See `ComposerReturn`.
+    /// checked here. See `ComposerReturn`. Typing while listening ends it
+    /// first, so the words typed stay and the capture never writes over them.
     private var text: Binding<String> {
         Binding(
             get: { draft },
             set: { new in
+                voice?.edited(owner: identifier, to: new)
                 if !Self.shiftIsDown, let line = ComposerReturn.textToSend(old: draft, new: new) {
                     draft = line
                     send(line)

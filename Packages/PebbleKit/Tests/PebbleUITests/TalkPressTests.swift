@@ -117,8 +117,8 @@ struct TalkPressTests {
     }
 
     /// The system's question takes the touch, then the person allows it.
-    /// The reset cancels there and then, so the late yes never listens and
-    /// nothing is sent, held or tapped.
+    /// The reset ends it there and then, quietly as nothing had begun, so
+    /// the late yes never listens and nothing is sent, held or tapped.
     @Test(arguments: [VoiceCapture.Mode.hold, .tap])
     func aTouchTakenWhileAskedNeverListensOnALateYes(_ mode: VoiceCapture.Mode) async throws {
         let listener = AskingListener()
@@ -140,12 +140,12 @@ struct TalkPressTests {
         try #require(await until { listener.isAsking })
         #expect(voice.phase == .asking)
         press.reset(voice, owner: "composer")
-        #expect(voice.phase == .cancelled, "cancelled at once, not once the question is answered")
+        #expect(voice.phase == .idle, "ended at once, not once the question is answered, and with no line")
         #expect(!voice.isActive)
         listener.allow()
         await started?.value
         #expect(listener.starts == 0, "a late yes never starts listening")
-        #expect(voice.phase == .cancelled)
+        #expect(voice.phase == .idle)
         await voice.release()
         await settle()
         #expect(draft.sent.isEmpty)

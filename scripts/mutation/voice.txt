@@ -19,7 +19,7 @@ perl: s~ListenRequest\(onDeviceOnly: true\)~ListenRequest(onDeviceOnly: false)~
 # A cancel sends what was heard.
 test: cancelSendsNothing
 file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
-perl: s~        target\.write\(target\.before\)\n        stop\(\.cancelled\)~        target.send(heard)\n        target.write(target.before)\n        stop(.cancelled)~
+perl: s~        target\.write\(target\.before\)\n        stop\(asking~        target.send(heard)\n        target.write(target.before)\n        stop(asking~
 
 # A release with nothing heard sends an empty message.
 test: aShortTapWithNothingHeardSendsNothing emptyOrBlankWordsSendNothing
@@ -113,3 +113,26 @@ perl: s~or sends\.\n        voice\.cancel\(\)~or sends.\n        if voice.phase 
 test: theGesturesOwnEndSendsOnceAndItsResetAfterDoesNothing
 file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
 perl: s~(slidAway: Bool\) \{\n        guard isDown else \{ return \}\n)        isDown = false\n~$1~
+
+# A cancel while the system asks shows "I didn't send anything" though
+# nothing had begun, unlike the first hold before.
+test: cancelWhileAskedNeverListens aTouchTakenWhileAskedNeverListensOnALateYes
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~stop\(asking \? \.idle : \.cancelled\)~stop(.cancelled)~
+
+# An edit of the person's own while listening is ignored, so later words,
+# Send or Don't send write over it and Send sends the heard words.
+test: anEditWhileListeningIsNeverLostOrSent anEditWhileTheLastWordsComeIsKept
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~text != shown else \{ return \}~false else { return }~
+
+# An edit ends listening but leaves the microphone on.
+test: anEditWhileListeningIsNeverLostOrSent
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~        if phase != \.asking \{ listener\.cancel\(\) \}\n        stop\(\.idle\)~        stop(.idle)~
+
+# The capture forgets what it wrote, so its own words read as an edit and
+# end listening.
+test: anEditWhileListeningIsNeverLostOrSent
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~        shown = text\n~~

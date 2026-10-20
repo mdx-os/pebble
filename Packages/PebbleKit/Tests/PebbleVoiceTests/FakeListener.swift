@@ -79,6 +79,31 @@ final class FakeListener: SpeechListening {
     }
 }
 
+/// A recognizer whose last words wait until the test gives them.
+@MainActor
+final class SlowFinishListener: SpeechListening {
+    let access = SpeechAccess.allowed
+    let hearsOnDevice = true
+    private var last: CheckedContinuation<String?, Never>?
+
+    func askForAccess() async -> SpeechAccess { access }
+
+    func start(_ request: ListenRequest, heard: @escaping @MainActor (String) -> Void,
+               ended: @escaping @MainActor () -> Void) throws {}
+
+    func finish() async -> String? {
+        await withCheckedContinuation { last = $0 }
+    }
+
+    /// Lets the wait end even after a cancel, as a late answer would.
+    func cancel() {}
+
+    func giveLastWords(_ words: String) {
+        last?.resume(returning: words)
+        last = nil
+    }
+}
+
 /// The composer, as the capture sees it: its draft, and what it sent.
 @MainActor
 final class FakeComposer {

@@ -132,6 +132,9 @@ public final class VoiceCapture {
 
     private let listener: any SpeechListening
     private var target: Target?
+    /// What the capture last put in the draft, so an edit of the person's
+    /// own can be told from it.
+    private var shown = ""
     /// Let go while the system was asking, as its question takes the touch.
     private var letGoWhileAsking = false
     /// Goes up with every start and every stop, so a late answer can tell
@@ -168,6 +171,7 @@ public final class VoiceCapture {
         heard = ""
         letGoWhileAsking = false
         target = Target(before: draft, write: write, send: send)
+        shown = draft
         // Checked before any question, so nobody is asked for something
         // that can't work here.
         guard listener.hearsOnDevice else { return stop(.unavailable(.notOnDevice)) }
@@ -183,13 +187,13 @@ public final class VoiceCapture {
         case .speechDeclined: return stop(.unavailable(.speechDeclined))
         case .notAsked: return stop(.unavailable(.couldNotStart))
         }
-        // Holding, the question took the touch; the person holds again.
+        // Holding, the finger lifted while asked; the person holds again.
         if mode == .hold, letGoWhileAsking { return stop(.idle) }
         do {
             try listener.start(ListenRequest(onDeviceOnly: true), heard: { [weak self] words in
                 guard let self, started == self.generation, self.phase == .listening else { return }
                 self.heard = words
-                self.target?.write(self.message(with: words))
+                self.show(self.message(with: words))
             }, ended: { [weak self] in
                 guard let self, started == self.generation, self.phase == .listening else { return }
                 // Stopped on its own: the words stay in the composer to
@@ -215,22 +219,35 @@ public final class VoiceCapture {
         guard started == generation else { return }
         let words = (last ?? heard).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !words.isEmpty else {
-            target.write(target.before)
+            show(target.before)
             return stop(.idle)
         }
         let message = message(with: words)
         // In the draft first, so a send that can't go yet leaves the words there.
-        target.write(message)
+        show(message)
         stop(.idle)
         target.send(message)
     }
 
     /// Slid away, or Don't send: nothing is sent, and the draft is as it was.
+    /// While the system is still asking nothing has begun, so it ends
+    /// quietly, with no line, as the first hold always has.
     public func cancel() {
         guard isActive, let target else { return }
-        if phase == .listening || phase == .sending { listener.cancel() }
+        let asking = phase == .asking
+        if !asking { listener.cancel() }
         target.write(target.before)
-        stop(.cancelled)
+        stop(asking ? .idle : .cancelled)
+    }
+
+    /// The composer `owner`'s draft changed to `text`. When that isn't what
+    /// the capture last put there, the person wrote it: listening ends at
+    /// once with their words left as they are and nothing sent, so no later
+    /// words, Send or cancel ever write over them.
+    public func edited(owner: String, to text: String) {
+        guard isActive, self.owner == owner, text != shown else { return }
+        if phase != .asking { listener.cancel() }
+        stop(.idle)
     }
 
     /// The same, only for the composer `owner`, as when it goes away.
@@ -263,9 +280,15 @@ public final class VoiceCapture {
         return before.isEmpty ? words : before + " " + words
     }
 
+    private func show(_ text: String) {
+        shown = text
+        target?.write(text)
+    }
+
     private func stop(_ next: Phase) {
         generation += 1
         target = nil
+        shown = ""
         heard = ""
         letGoWhileAsking = false
         // A line about what happened stays with the composer it happened on.
