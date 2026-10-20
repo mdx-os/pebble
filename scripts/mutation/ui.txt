@@ -1,5 +1,11 @@
-# The test's switch no longer sends snapshots through the hop, so they
-# take effect at once and nothing is left for a newer one to overtake.
-test: backgroundCompletionsSurviveANewerMainThreadSnapshot
+# Proves the test's switch holds the hops back: with it gone, snapshots
+# told on the main thread take effect at once, nothing waits in the hop,
+# and the test's check that the hops have not run yet fails.
+test: queuedCompletionsSurviveANewerSnapshot
 file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
-perl: s~if hops\.hopsEverySnapshot \{ onMain = false \}~~
+perl: s~let onMain = Thread\.isMainThread && !hops\.hopsEverySnapshot~let onMain = Thread.isMainThread~
+
+# A snapshot told on another thread must still reach the feed through the hop.
+test: aCompletionToldOnAnotherThreadKeepsItsFinish
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~hops\.add \{ self\?\.tasksChanged\(snapshot\) \}~_ = snapshot~

@@ -664,7 +664,7 @@ file: Packages/PebbleKit/Sources/PebbleUI/TaskCard.swift
 perl: s~"", statusLabel, task\.title~"", task.state.label, task.title~
 
 # Completion recording must precede the UI hop and its sequence guard.
-test: backgroundCompletionsSurviveANewerMainThreadSnapshot
+test: queuedCompletionsSurviveANewerSnapshot
 file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
 perl: s~            ledger\?\.record\(snapshot\)\n~~
 perl: s~        summaries = \[:\]\n        // Kept~        summaries = [:]\n        ledger?.record(snapshot)\n        // Kept~

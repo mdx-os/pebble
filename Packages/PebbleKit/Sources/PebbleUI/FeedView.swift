@@ -226,9 +226,10 @@ final class FeedModel: ObservableObject {
             // one, without a wait when already there. `tasksChanged` drops a
             // snapshot older than one it took. A hop joins the same chain as
             // the refreshes below, so `settled` waits for it too.
-            var onMain = Thread.isMainThread
             #if DEBUG
-            if hops.hopsEverySnapshot { onMain = false }
+            let onMain = Thread.isMainThread && !hops.hopsEverySnapshot
+            #else
+            let onMain = Thread.isMainThread
             #endif
             if onMain {
                 MainActor.assumeIsolated { self?.tasksChanged(snapshot) }
