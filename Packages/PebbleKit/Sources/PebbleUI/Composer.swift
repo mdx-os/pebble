@@ -16,7 +16,7 @@ struct Composer: View {
     /// Whether Command Return sends from here. Off while a question waits
     /// for its answer, and on a composer another screen is covering.
     let keyboardSends: Bool
-    var identifier = "composer"
+    var identifier = Composer.chatIdentifier
     var lines: ClosedRange<Int> = 1...6
     /// What VoiceOver adds after the field's name, when sending does more
     /// than the placeholder says.
@@ -30,7 +30,19 @@ struct Composer: View {
     @Environment(VoiceCapture.self) private var voice: VoiceCapture?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    /// The window this composer is in. See `TalkWindow`.
+    @Environment(\.talkWindow) private var window
     @State private var slidAway = false
+
+    /// The chat's composer and Today's, by their identifiers.
+    static let chatIdentifier = "composer"
+    static let todayIdentifier = "todayComposer"
+
+    /// Whose the capture is: this composer in this window. The capture is
+    /// one for the whole app, so the identifier alone, the same in every
+    /// window, would let one window's composer show, send or cancel
+    /// another's.
+    private var owner: String { TalkWindow.owner(of: identifier, in: window) }
 
     /// The placeholder, in `Theme.secondaryText` on the field, a pair
     /// `Theme.textPairs` holds to 4.5 to 1.
@@ -44,31 +56,42 @@ struct Composer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            if let voice, voice.owner == identifier {
-                TalkLine(voice: voice, slidAway: slidAway)
+            if let voice, voice.belongs(to: owner) {
+                TalkLine(voice: voice, owner: owner, slidAway: slidAway)
                     .transition(.opacity)
             }
             bar
         }
-        .onAppear { answerShortcut() }
+        .onAppear {
+            if scenePhase == .active { voice?.requests.cameForward(TalkWindow.token(window)) }
+            answerShortcut()
+        }
         .onChange(of: voice?.requests.waiting) { answerShortcut() }
         .onChange(of: keyboardSends) { answerShortcut() }
         .onChange(of: voice?.phase) { _, phase in voiceChanged(phase) }
         // A line about the microphone goes once the person types instead,
         // and a change the capture didn't make ends listening, as typing does.
         .onChange(of: draft) { _, new in
-            if let voice, voice.owner == identifier, case .unavailable = voice.phase { voice.settle() }
-            voice?.edited(owner: identifier, to: new)
+            if let voice, voice.belongs(to: owner), case .unavailable = voice.phase { voice.settle() }
+            voice?.edited(owner: owner, to: new)
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .background { voice?.cancel(owner: identifier) }
+            // The window in front last is the one the Talk shortcut opens in.
+            switch phase {
+            case .active:
+                voice?.requests.cameForward(TalkWindow.token(window))
+                answerShortcut()
+            case .background:
+                voice?.requests.wentAway(TalkWindow.token(window))
+                voice?.cancel(owner: owner)
+            default: break
+            }
         }
-        .onDisappear { voice?.cancel(owner: identifier) }
+        .onDisappear { voice?.cancel(owner: owner) }
     }
 
     private var listeningHere: Bool {
-        guard let voice else { return false }
-        return voice.owner == identifier && voice.isActive
+        voice?.isActive(for: owner) ?? false
     }
 
     @ViewBuilder
@@ -93,10 +116,7 @@ struct Composer: View {
                 #if os(macOS)
                 .onKeyPress(.return, phases: .down) { press in
                     if press.modifiers.contains(.shift) {
-                        // The break goes at the end, where the cursor almost
-                        // always is while writing.
-                        voice?.edited(owner: identifier, to: draft + "\n")
-                        draft += "\n"
+                        Self.addLine(to: $draft, voice: voice, owner: owner)
                         return .handled
                     }
                     send(draft)
@@ -104,7 +124,7 @@ struct Composer: View {
                 }
                 #endif
             if let voice {
-                TalkButton(voice: voice, owner: identifier, start: { listen(voice, $0) }, slidAway: $slidAway)
+                TalkButton(voice: voice, owner: owner, start: { listen(voice, $0) }, slidAway: $slidAway)
             }
             Button {
                 send(draft)
@@ -135,7 +155,7 @@ struct Composer: View {
     private func listen(_ voice: VoiceCapture, _ mode: VoiceCapture.Mode) {
         let draft = $draft
         let send = self.send
-        let owner = identifier
+        let owner = owner
         Task {
             await voice.begin(mode, owner: owner, draft: draft.wrappedValue,
                               write: { draft.wrappedValue = $0 }, send: send)
@@ -143,14 +163,16 @@ struct Composer: View {
     }
 
     /// Takes the Talk shortcut, when it is waiting and this composer is the
-    /// one in front.
+    /// one in front, in an active window: the one that came forward last,
+    /// as the system brings one forward when the shortcut opens the app.
     private func answerShortcut() {
-        guard let voice, keyboardSends, voice.requests.waiting != nil else { return }
+        guard let voice, keyboardSends, scenePhase == .active, voice.requests.waiting != nil else { return }
         let draft = $draft
         let send = self.send
-        let owner = identifier
+        let owner = owner
+        let window = TalkWindow.token(window)
         Task {
-            await voice.answerShortcut(owner: owner, draft: draft.wrappedValue,
+            await voice.answerShortcut(owner: owner, in: window, draft: draft.wrappedValue,
                                        write: { draft.wrappedValue = $0 }, send: send)
         }
     }
@@ -159,7 +181,7 @@ struct Composer: View {
     /// after a moment. Never anything while listening, so nothing is
     /// spoken into the microphone, and focus is never moved.
     private func voiceChanged(_ phase: VoiceCapture.Phase?) {
-        guard let voice, voice.owner == identifier, let phase else { return }
+        guard let voice, voice.belongs(to: owner), let phase else { return }
         if voiceOver, let line = TalkLine.spoken(phase) {
             AccessibilityNotification.Announcement(line).post()
         }
@@ -194,23 +216,74 @@ struct Composer: View {
         #endif
     }
 
+    private var text: Binding<String> {
+        Self.typing(into: $draft, voice: voice, owner: owner, shiftIsDown: { Self.shiftIsDown }, send: send)
+    }
+
     /// The draft, with a lone Return read as Send. On iPad the field types
     /// Return and Shift Return alike as a line break, so the Shift key is
     /// checked here. See `ComposerReturn`. Typing while listening ends it
     /// first, so the words typed stay and the capture never writes over them.
-    private var text: Binding<String> {
+    static func typing(into draft: Binding<String>, voice: VoiceCapture?, owner: String,
+                       shiftIsDown: @escaping () -> Bool, send: @escaping (String) -> Void) -> Binding<String> {
         Binding(
-            get: { draft },
+            get: { draft.wrappedValue },
             set: { new in
-                voice?.edited(owner: identifier, to: new)
-                if !Self.shiftIsDown, let line = ComposerReturn.textToSend(old: draft, new: new) {
-                    draft = line
+                voice?.edited(owner: owner, to: new)
+                if !shiftIsDown(), let line = ComposerReturn.textToSend(old: draft.wrappedValue, new: new) {
+                    draft.wrappedValue = line
                     send(line)
                 } else {
-                    draft = new
+                    draft.wrappedValue = new
                 }
             }
         )
+    }
+
+    /// Shift Return on the Mac. The break goes at the end, where the cursor
+    /// almost always is while writing, and like typing it ends listening here.
+    static func addLine(to draft: Binding<String>, voice: VoiceCapture?, owner: String) {
+        let new = draft.wrappedValue + "\n"
+        voice?.edited(owner: owner, to: new)
+        draft.wrappedValue = new
+    }
+}
+
+/// One window's composers, as the one voice capture tells them apart. The
+/// app can show several windows on iPad, each with its own Today and chat
+/// composer under the same identifiers, so an owner is the window's token
+/// with the composer's identifier.
+enum TalkWindow {
+    /// The capture owner of the composer `identifier` in `window`. With no
+    /// window, as for a lone composer in the showcase or a test, just the
+    /// identifier.
+    static func owner(of identifier: String, in window: UUID?) -> String {
+        guard let window else { return identifier }
+        return window.uuidString + "." + identifier
+    }
+
+    /// The window as `TalkRequests` knows it, to send the Talk shortcut to
+    /// the one in front.
+    static func token(_ window: UUID?) -> String {
+        window?.uuidString ?? ""
+    }
+}
+
+extension EnvironmentValues {
+    /// The window the views are in, by Today's token for it. Set once per
+    /// window by the home screen.
+    @Entry var talkWindow: UUID?
+}
+
+extension VoiceCapture {
+    /// The chat's draft changed from outside its field in `window`, as a
+    /// suggestion fills it. Both of the window's composers share that
+    /// draft, so listening in either ends at once, before a word heard
+    /// next could write over the fill. Another window's capture goes on.
+    func draftFilled(_ text: String, in window: UUID?) {
+        for identifier in [Composer.chatIdentifier, Composer.todayIdentifier] {
+            edited(owner: TalkWindow.owner(of: identifier, in: window), to: text)
+        }
     }
 }
 #endif

@@ -299,8 +299,17 @@ listening." with "Let go to send, or slide away to cancel." under it, and
 the words show in the field as they are heard. Sliding away changes the
 line to "Let go, and I won't send it." From the Talk shortcut or with
 VoiceOver, a tap starts it and the line says "Tap Send when you're done.",
-with Send and Don't send. A cancel says "Okay, I didn't send anything." and
-a release with nothing heard sends nothing and says nothing.
+with Send and Don't send. A cancel while listening says "Okay, I didn't
+send anything." and a release with nothing heard sends nothing and says
+nothing. The system's questions can come from a hold, from the Talk
+shortcut or from a VoiceOver tap; a cancel while one is still open, or a
+touch the question takes, ends quietly with no line, since nothing was
+heard yet, and a yes that comes after never starts listening.
+
+With two windows open on iPad, each composer listens on its own: the line,
+Send and Don't send show only in the window that is listening, and nothing
+done in the other window sends, cancels or changes it. The Talk shortcut
+starts listening in the window that came to the front last.
 
 The system's questions for the microphone and speech come only the first
 time the person holds the microphone. When the answer is no, or the device

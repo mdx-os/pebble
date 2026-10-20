@@ -67,7 +67,8 @@ public enum VoiceUnavailable: Equatable, Sendable {
 }
 
 /// Asks from outside the app to start listening, as the Talk shortcut and
-/// the Action Button do. The composer in front takes it once it shows.
+/// the Action Button do. The composer in front takes it once it shows, in
+/// the window that came to the front last.
 @MainActor
 @Observable
 public final class TalkRequests {
@@ -77,6 +78,9 @@ public final class TalkRequests {
     public static let freshFor: TimeInterval = 60
 
     public private(set) var waiting: Date?
+    /// The window that came to the front last, by its token. Only it takes
+    /// an ask. Nil before any window has said, or once it went away.
+    public private(set) var front: String?
 
     public init() {}
 
@@ -84,9 +88,22 @@ public final class TalkRequests {
         waiting = now
     }
 
-    /// True once for each fresh ask; a stale one is let go.
-    public func take(now: Date = Date()) -> Bool {
+    /// `window` came to the front, as the system brings one forward when
+    /// the shortcut opens the app.
+    public func cameForward(_ window: String) {
+        front = window
+    }
+
+    /// `window` went to the background.
+    public func wentAway(_ window: String) {
+        if front == window { front = nil }
+    }
+
+    /// True once for each fresh ask; a stale one is let go. Another window
+    /// than the one in front leaves the ask waiting for it.
+    public func take(in window: String? = nil, now: Date = Date()) -> Bool {
         guard let asked = waiting else { return false }
+        if let window, let front, front != window { return false }
         waiting = nil
         return now.timeIntervalSince(asked) <= Self.freshFor
     }
@@ -126,7 +143,10 @@ public final class VoiceCapture {
     /// The words heard so far, while listening. Empty once it ends.
     public private(set) var heard = ""
     /// The composer listening now, or the one a line about the last try
-    /// belongs to, by its identifier. Nil when idle.
+    /// belongs to. Nil when idle. One capture serves every window, so an
+    /// owner names one composer in one window, never just its kind: every
+    /// control and every change of a composer's goes through the calls
+    /// that take its owner, and does nothing to another's capture.
     public private(set) var owner: String?
     public let requests: TalkRequests
 
@@ -156,6 +176,16 @@ public final class VoiceCapture {
 
     public var isActive: Bool {
         phase == .asking || phase == .listening || phase == .sending
+    }
+
+    /// True when the capture, and any line about it, is `owner`'s to show.
+    public func belongs(to owner: String) -> Bool {
+        self.owner == owner
+    }
+
+    /// True while `owner` is the composer listening, or about to.
+    public func isActive(for owner: String) -> Bool {
+        belongs(to: owner) && isActive
     }
 
     /// Starts listening for the composer `owner`. `draft` is what is already
@@ -245,15 +275,22 @@ public final class VoiceCapture {
     /// once with their words left as they are and nothing sent, so no later
     /// words, Send or cancel ever write over them.
     public func edited(owner: String, to text: String) {
-        guard isActive, self.owner == owner, text != shown else { return }
+        guard isActive, belongs(to: owner), text != shown else { return }
         if phase != .asking { listener.cancel() }
         stop(.idle)
     }
 
-    /// The same, only for the composer `owner`, as when it goes away.
+    /// The same, only for the composer `owner`, as its Don't send or when
+    /// it goes away.
     public func cancel(owner: String) {
-        guard self.owner == owner else { return }
+        guard belongs(to: owner) else { return }
         cancel()
+    }
+
+    /// Let go, or Send, only for the composer `owner`.
+    public func release(owner: String) async {
+        guard belongs(to: owner) else { return }
+        await release()
     }
 
     /// Back to idle after an unavailable line or a cancel has been seen.
@@ -263,12 +300,12 @@ public final class VoiceCapture {
         phase = .idle
     }
 
-    /// Takes a waiting Talk shortcut, if one is fresh, and starts listening
-    /// with a tap to send.
+    /// Takes a waiting Talk shortcut, if one is fresh and `window` is the
+    /// one in front, and starts listening with a tap to send.
     @discardableResult
-    public func answerShortcut(owner: String, draft: String, now: Date = Date(), write: @escaping (String) -> Void,
-                               send: @escaping (String) -> Void) async -> Bool {
-        guard !isActive, requests.take(now: now) else { return false }
+    public func answerShortcut(owner: String, in window: String? = nil, draft: String, now: Date = Date(),
+                               write: @escaping (String) -> Void, send: @escaping (String) -> Void) async -> Bool {
+        guard !isActive, requests.take(in: window, now: now) else { return false }
         await begin(.tap, owner: owner, draft: draft, write: write, send: send)
         return true
     }

@@ -1,0 +1,17 @@
+# Reviewed local URL reads and initializer references, one entry per occurrence. GuardScan writes
+# path: normalized call syntax (no trivia). Duplicate calls need duplicate
+# entries, so an added occurrence never inherits an existing approval.
+Packages/PebbleKit/Sources/PebbleCore/Background.swift: Data(contentsOf:url)
+Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift: Data(contentsOf:fileURL)
+Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift: Data(contentsOf:fileURL)
+Packages/PebbleKit/Sources/PebbleCore/Grants.swift: Data(contentsOf:fileURL)
+Packages/PebbleKit/Sources/PebbleCore/Memory.swift: Data(contentsOf:fileURL)
+Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift: Data(contentsOf:fileURL)
+Packages/PebbleKit/Sources/PebbleCore/TaskStore.swift: Data(contentsOf:choiceURL)
+Packages/PebbleKit/Sources/PebbleCore/TaskStore.swift: Data(contentsOf:fileURL)
+Packages/PebbleKit/Sources/PebbleCore/AskFirst.swift: String.init
+Packages/PebbleKit/Sources/PebbleCore/IdeaDraft.swift: String.init
+Packages/PebbleKit/Sources/PebbleCore/IdeaDraft.swift: String.init
+Packages/PebbleKit/Sources/PebbleCore/IdeaDraft.swift: String.init
+Packages/PebbleKit/Sources/PebbleCore/SnapshotDiff.swift: String.init
+Packages/PebbleKit/Sources/PebbleModel/DeviceTaskEngine.swift: plan.lines

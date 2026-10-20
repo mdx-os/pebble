@@ -43,6 +43,43 @@ struct TalkIntentTests {
         #expect(requests.waiting == nil)
     }
 
+    /// With two windows, the shortcut starts in the one that came to the
+    /// front last. The other leaves it waiting, and takes it only once it
+    /// is in front.
+    @Test func theShortcutStartsInTheWindowInFront() async {
+        let requests = TalkRequests()
+        requests.cameForward("A")
+        requests.cameForward("B")
+        requests.ask()
+        let listener = FakeListener()
+        let voice = VoiceCapture(listener: listener, requests: requests)
+        let behind = await voice.answerShortcut(owner: "A.todayComposer", in: "A", draft: "",
+                                                write: { _ in }, send: { _ in })
+        #expect(!behind)
+        #expect(requests.waiting != nil, "left for the window in front")
+        #expect(listener.requests.isEmpty)
+        let inFront = await voice.answerShortcut(owner: "B.todayComposer", in: "B", draft: "",
+                                                 write: { _ in }, send: { _ in })
+        #expect(inFront)
+        #expect(voice.owner == "B.todayComposer")
+        #expect(requests.waiting == nil)
+    }
+
+    /// The window in front went away, so another may take the next ask; and
+    /// before any window has said, the first to show takes it.
+    @Test func noWindowInFrontLetsAnyTakeIt() {
+        let requests = TalkRequests()
+        requests.ask()
+        #expect(requests.take(in: "A"))
+        requests.cameForward("B")
+        requests.wentAway("A")
+        requests.ask()
+        #expect(!requests.take(in: "A"), "B is still in front")
+        requests.wentAway("B")
+        #expect(requests.front == nil)
+        #expect(requests.take(in: "A"))
+    }
+
     @Test func noShortcutWaitingStartsNothing() async {
         let listener = FakeListener()
         let voice = VoiceCapture(listener: listener, requests: TalkRequests())

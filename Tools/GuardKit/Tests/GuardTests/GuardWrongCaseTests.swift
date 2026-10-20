@@ -1190,3 +1190,173 @@ struct GuardScanTests {
         #expect(Finding(rule: "r", line: 2, column: 13, message: "m").report(in: "A.swift") == "A.swift:2:13: m")
     }
 }
+
+extension GuardWrongCaseTests {
+    static let privacyWrong: [WrongCase] = [
+        WrongCase(rule: "privacy.gateTests", text: "// func offByDefaultMakesNoTransportAndKeepsChatsOnDevice() { #expect(maker.made == 0) }", file: PrivacyRules.gateTests),
+        WrongCase(rule: "privacy.network", text: "let x = NSURLSession.sharedSession()", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.network", text: "let x = `socket`\n (AF_INET, SOCK_STREAM, 0)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "let x = try Data.init(\n contentsOf: url)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "let x = Data.init(contentsOf:)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.transport", text: "let x: URLSessionCloudTransport = .init()", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.transport", text: "let x = URLSessionCloudTransport.init", file: PrivacyRules.gate),
+        WrongCase(rule: "privacy.transport", text: "func f() { _ = ModelChoice.model(local: local) { _ in local }; makeTransport() }", file: PrivacyRules.gate),
+        WrongCase(rule: "privacy.transport", text: "let x = ModelChoice.model(local: { makeTransport() }()) { _ in local }", file: PrivacyRules.gate),
+        WrongCase(rule: "privacy.transport", text: "let x = makeTransport", file: PrivacyRules.gate),
+        WrongCase(rule: "privacy.sessionFactory", text: "public static func makeSession() -> URLSession { fatalError() }", file: PrivacyRules.cloud),
+        WrongCase(rule: "privacy.requiredReason", text: "let x = fstat\n (fd, &info)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.speech", text: "local.requiresOnDeviceRecognition = true\nrecognizer.recognitionTask(with: unrestricted) { _, _ in }", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.speech", text: "func unrestricted() {\n    let other = SFSpeechAudioBufferRecognitionRequest()\n    SFSpeechRecognizer()?.recognitionTask(with: other) { _, _ in }\n}", file: PrivacyRules.speechHelper),
+        WrongCase(rule: "privacy.upload", text: "let x = MKLocalSearch(request: request)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.encryption", text: "import CryptoKit", file: PrivacyRules.cloud),
+        // Round 3: remote readers with no flagged name.
+        WrongCase(rule: "privacy.network", text: "var body: some View { WebView(url: url) }", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.network", text: "let page = WebPage()", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.network", text: "let x = MCSession(peer: peer)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.network", text: "let x = MCNearbyServiceBrowser(peer: peer, serviceType: kind)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.network", text: "let x = MCBrowserViewController(serviceType: kind, session: session)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.network", text: "let x = CFSocketCreate(nil, 0, 0, 0, 0, nil, nil)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.network", text: "let x = NSArray(contentsOf: url)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.network", text: "let x = try NSAttributedString(url: url, options: [:], documentAttributes: nil)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.network", text: "let x = AVURLAsset(url: url)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.network", text: "let x = AVAsset(url: url)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.network", text: "let x = try NSXMLDocument(contentsOf: url, options: [])", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.upload", text: "let x = FileManager.default.url(forUbiquityContainerIdentifier: nil)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.upload", text: "let x = FileManager.default.ubiquityIdentityToken", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "for try await line in url.lines { print(line) }", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "let x = url.resourceBytes", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "let x = urls.map(\\.lines)", file: "App/Sources/Wrong.swift"),
+        // contentsOf: however the initializer's type is spelled.
+        WrongCase(rule: "privacy.urlRead", text: "let x: Data = try .init(contentsOf: remote)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "typealias Bytes = Data\nlet x = all.map(Bytes.init)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "extension Data { static func f(_ all: [Data]) -> [Data] { all.map(Self.init) } }", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "let x = type(of: data).init(contentsOf:options:)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "try FileManager.default.copyItem(at: remote, to: local)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "let x = FileManager.default.copyItem(at:to:)", file: "App/Sources/Wrong.swift"),
+        // Round 4. An alias of any case, from this file or another.
+        WrongCase(rule: "privacy.urlRead", text: "typealias bytes = Data\nlet x = try bytes(contentsOf: remote)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "let x = try bytes(contentsOf: remote)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "enum Kinds { typealias bytes = Data }\nlet x = try Kinds.bytes(contentsOf: remote)", file: "App/Sources/Wrong.swift"),
+        // A remote initializer through an alias, inference or another label.
+        WrongCase(rule: "privacy.network", text: "typealias Player = AVPlayer\nlet x = Player(url: remote)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.network", text: "let x = NSImage(byReferencing: remote)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "let x: AVPlayer = .init(url: remote)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "let x: NSImage = .init(byReferencing: remote)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "let x = Loader(url: remote)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "class Loader: AVPlayer {}\nlet x = Loader(url: remote)", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "let x = remotes.map(Loader.init(url:))", file: "App/Sources/Wrong.swift"),
+        // The URL readers with self. left off.
+        WrongCase(rule: "privacy.urlRead", text: "extension URL { func f() async throws { for try await b in resourceBytes { _ = b } } }", file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.urlRead", text: "typealias Link = URL\nextension Link { var x: AsyncLineSequence<URL.AsyncBytes> { lines } }", file: "App/Sources/Wrong.swift"),
+        // A capture list runs before consent is checked.
+        WrongCase(rule: "privacy.transport", text: "let x = ModelChoice.model(local: local) { [t = URLSessionCloudTransport()] url in t }", file: PrivacyRules.gate),
+        WrongCase(rule: "privacy.transport", text: "let x = ModelChoice.model(local: local, cloud: { [t = makeTransport()] _ in t })", file: PrivacyRules.gate),
+    ]
+
+    @Test func privacyRulesCatchEveryWrongCase() {
+        for item in Self.privacyWrong {
+            let hits = PrivacyRules.findings(in: SyntaxSource(item.text), file: item.file)
+            #expect(hits.contains { $0.rule == item.rule }, "\(item.rule) missed \(item.text)")
+        }
+    }
+
+    @Test func privacyRulesAllowReviewedContexts() {
+        let comments = SyntaxSource("/* URLSession /* stat() */ CryptoKit */\nlet x = \"socket()\"")
+        #expect(PrivacyRules.findings(in: comments, file: "App/Sources/Right.swift").isEmpty)
+        for text in [
+            "ModelChoice.model(settings: settings, endpoint: url, local: local) { _ in\n\n\n\n\n\n\n\n\n\n URLSessionCloudTransport() }",
+            "ModelChoice.model(settings: settings, endpoint: url, local: local, cloud: { _ in URLSessionCloudTransport.init() })",
+            "ModelChoice.model(settings: settings, endpoint: url, local: local) { _ in let x: URLSessionCloudTransport = .init(); return x }",
+            "ModelChoice.model(settings: settings, endpoint: url, local: local) { [settings] _ in URLSessionCloudTransport() }",
+            "ModelChoice.model(settings: settings, endpoint: url, local: local) { _ in { [t = URLSessionCloudTransport()] in t }() }",
+        ] {
+            #expect(!PrivacyRules.findings(in: SyntaxSource(text), file: PrivacyRules.gate).contains { $0.rule == "privacy.transport" })
+        }
+        // contentsOf: on a method, a method named lines, and a copy by path read nothing.
+        // A plain type made here may take a url:, a method's url: reads nothing,
+        // and lines outside an extension of URL is just a name.
+        for text in ["all.append(contentsOf: more)", "let x = announcer.lines(for: list)", "try FileManager.default.copyItem(atPath: a, toPath: b)",
+                     "struct Source { var url: URL }\nlet x = Source(url: link)", "final class Box { init(url: URL) {} }\nlet x = Box(url: link)",
+                     "let x = shown.title(url: link)", "var lines = [\"a\"]\nlines.append(\"b\")",
+                     "extension URL { var name: String { lastPathComponent } }"] {
+            #expect(!PrivacyRules.findings(in: SyntaxSource(text), file: "App/Sources/Right.swift").contains { $0.rule == "privacy.urlRead" }, "\(text)")
+        }
+        // The cloud client may hand its request a url:.
+        #expect(!PrivacyRules.findings(in: SyntaxSource("let x = URLRequest(url: url)"), file: PrivacyRules.cloud).contains { $0.rule == "privacy.urlRead" })
+        #expect(!PrivacyRules.findings(in: SyntaxSource("static func makeSession() {}"), file: PrivacyRules.cloud).contains { $0.rule == "privacy.sessionFactory" })
+        // The voice adapter may hear speech, every request on the device.
+        let adapter = "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    request.requiresOnDeviceRecognition = true\n"
+            + "    task = SFSpeechRecognizer()?.recognitionTask(with: request) { _, _ in }\n}"
+        #expect(!PrivacyRules.findings(in: SyntaxSource(adapter), file: PrivacyRules.speechHelper).contains { $0.rule == "privacy.speech" })
+    }
+
+    @Test func privacyReasonCodesBelongToTheirCategories() {
+        for (category, codes) in PrivacyAudit.allowedReasons {
+            #expect(!codes.isEmpty)
+            for code in codes { #expect(PrivacyAudit.validReason(code, category: category)) }
+            #expect(!PrivacyAudit.validReason("0000.0", category: category))
+        }
+        #expect(!PrivacyAudit.validReason("C617.1", category: "NSPrivacyAccessedAPICategoryUserDefaults"))
+        #expect(!PrivacyAudit.validReason("CA92.1", category: "invented"))
+    }
+
+    @Test func privacyRejectsUnreadableCompiledSources() {
+        #expect(PrivacyAudit.readableSource("App/Sources/Main.swift"))
+        for ext in ["m", "mm", "c", "cpp", "metal", "cc", "cxx", "s"] {
+            #expect(!PrivacyAudit.readableSource("App/Sources/Wrong." + ext))
+        }
+    }
+
+    /// project.yml as `xcodegen dump --type json` gives it.
+    static func project(_ app: [String: Any], _ more: [String: Any] = [:], packages: [String: Any] = ["PebbleKit": ["path": "Packages/PebbleKit"]]) -> [String: Any] {
+        var app = app
+        app["type"] = "application"
+        return ["packages": packages, "targets": more.merging(["Pebble": app]) { _, new in new }]
+    }
+
+    @Test func privacyProjectReadsEveryForm() throws {
+        let read = try PrivacyProject.linked(spec: Self.project([
+            "sources": ["App/Sources", ["path": "Extra"]],
+            "dependencies": [
+                ["package": "PebbleKit", "products": ["PebbleCore", "PebbleUI"]],
+                ["package": "PebbleKit", "product": "PebblePulse", "embed": false],
+                ["package": "PebbleKit"],
+                ["target": "Helper"],
+            ],
+        ], [
+            // Reached only as a dependency, so its sources count through it.
+            "Helper": ["type": "bundle.unit-test", "sources": "Helper"],
+            "PebbleAppUITests": ["type": "bundle.ui-testing", "sources": ["AppUITests"], "dependencies": [["target": "Pebble"]]],
+        ]))
+        #expect(read.products == ["PebbleCore", "PebbleUI", "PebblePulse", "PebbleKit"])
+        #expect(read.roots == ["App/Sources", "Extra", "Helper"])
+    }
+
+    @Test func privacyProjectFailsOnFormsItCannotRead() {
+        let cases: [(String, [String: Any])] = [
+            ("a source key", Self.project(["sources": [["path": "App/Sources", "buildPhase": "sources"]]])),
+            ("a framework", Self.project(["dependencies": [["framework": "Vendor.framework"]]])),
+            ("an SDK", Self.project(["dependencies": [["sdk": "Network.framework"]]])),
+            ("another package", Self.project(["dependencies": [["package": "Other"]]],
+                                             packages: ["PebbleKit": ["path": "Packages/PebbleKit"], "Other": ["path": "Other"]])),
+            ("PebbleKit elsewhere", Self.project(["dependencies": [["package": "PebbleKit", "product": "PebbleCore"]]],
+                                                 packages: ["PebbleKit": ["url": "https://example.com/PebbleKit"]])),
+            ("both product forms", Self.project(["dependencies": [["package": "PebbleKit", "product": "PebbleCore", "products": ["PebbleUI"]]]])),
+            ("a framework target", Self.project([:], ["Helper": ["type": "framework", "sources": ["Extra"]]])),
+            ("a missing target", Self.project(["dependencies": [["target": "Gone"]]])),
+        ]
+        for (what, spec) in cases {
+            #expect(throws: PrivacyProject.Unreadable.self, "\(what)") { try PrivacyProject.linked(spec: spec) }
+        }
+    }
+
+    @Test func privacyRequiresAllFiveCategories() {
+        let cases = ["UserDefaults": "`UserDefaults`\n .standard", "FileTimestamp": "fstat\n (fd, &info)",
+                     "SystemBootTime": "`mach_absolute_time`\n ()", "DiskSpace": "statfs\n (path, &info)",
+                     "ActiveKeyboards": "UITextInputMode\n .`activeInputModes`"]
+        for (category, text) in cases {
+            let hits = PrivacyRules.findings(in: SyntaxSource(text), file: "App/Sources/Wrong.swift")
+            #expect(hits.contains { $0.rule == "privacy.requiredReason" && $0.message == "NSPrivacyAccessedAPICategory" + category })
+        }
+    }
+}

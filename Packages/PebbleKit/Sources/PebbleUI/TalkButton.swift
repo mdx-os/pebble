@@ -7,7 +7,7 @@ import SwiftUI
 /// listening and another sends, with Don't send among its actions.
 struct TalkButton: View {
     let voice: VoiceCapture
-    /// The composer this button belongs to, by its identifier.
+    /// The composer this button belongs to, in its window.
     let owner: String
     /// Starts listening for this composer, in the given mode.
     let start: (VoiceCapture.Mode) -> Void
@@ -19,7 +19,7 @@ struct TalkButton: View {
     /// How far a finger slides before letting go cancels, in points.
     static let slideToCancel: CGFloat = 70
 
-    private var listeningHere: Bool { voice.owner == owner && voice.isActive }
+    private var listeningHere: Bool { voice.isActive(for: owner) }
 
     var body: some View {
         Image(systemName: listeningHere ? "waveform" : "mic")
@@ -54,10 +54,10 @@ struct TalkButton: View {
             .accessibilityAction { tap() }
             .accessibilityActions {
                 if listeningHere {
-                    Button(VoiceWords.dontSendTitle) { voice.cancel() }
+                    Button(VoiceWords.dontSendTitle) { voice.cancel(owner: owner) }
                 }
             }
-            .haptic(.listening, trigger: voice.phase == .listening && voice.owner == owner, when: { $0 })
+            .haptic(.listening, trigger: voice.phase == .listening && voice.belongs(to: owner), when: { $0 })
     }
 
     /// The gesture's own end: the finger lifted.
@@ -69,11 +69,7 @@ struct TalkButton: View {
 
     /// VoiceOver's double tap: start, or send.
     private func tap() {
-        if voice.phase == .listening, voice.owner == owner {
-            Task { await voice.release() }
-        } else if !voice.isActive {
-            start(.tap)
-        }
+        TalkPress.tapped(voice, owner: owner, start: start)
     }
 }
 
@@ -101,13 +97,13 @@ final class TalkPress {
     func lifted(_ voice: VoiceCapture, owner: String, slidAway: Bool) {
         guard isDown else { return }
         isDown = false
-        guard voice.owner == owner else { return }
+        guard voice.belongs(to: owner) else { return }
         switch voice.mode {
         case .hold:
-            if slidAway { voice.cancel() } else { Task { await voice.release() } }
+            if slidAway { voice.cancel(owner: owner) } else { Task { await voice.release(owner: owner) } }
         case .tap:
             // Tap mode began without a finger, so lifting one is the tap that sends.
-            if voice.phase == .listening { Task { await voice.release() } }
+            if voice.phase == .listening { Task { await voice.release(owner: owner) } }
         }
     }
 
@@ -116,10 +112,21 @@ final class TalkPress {
     func reset(_ voice: VoiceCapture, owner: String) {
         guard isDown else { return }
         isDown = false
-        guard voice.owner == owner, voice.isActive else { return }
+        guard voice.isActive(for: owner) else { return }
         // Cancelled at once, even while the system's question is open, so
         // a yes that comes later never starts listening or sends.
-        voice.cancel()
+        voice.cancel(owner: owner)
+    }
+
+    /// VoiceOver's double tap on `owner`'s microphone: sends what it is
+    /// listening to, or starts when nothing listens anywhere. Another
+    /// composer's listening is never sent from here.
+    static func tapped(_ voice: VoiceCapture, owner: String, start: (VoiceCapture.Mode) -> Void) {
+        if voice.phase == .listening, voice.belongs(to: owner) {
+            Task { await voice.release(owner: owner) }
+        } else if !voice.isActive {
+            start(.tap)
+        }
     }
 }
 
@@ -127,6 +134,9 @@ final class TalkPress {
 /// after, when listening couldn't start or nothing was sent.
 struct TalkLine: View {
     let voice: VoiceCapture
+    /// The composer the line shows on. Its Send and Don't send act only on
+    /// that composer's listening.
+    let owner: String
     let slidAway: Bool
 
     var body: some View {
@@ -143,10 +153,10 @@ struct TalkLine: View {
                         .font(Theme.TypeScale.footnote)
                         .foregroundStyle(Theme.secondaryText)
                     HStack(spacing: Theme.Space.s) {
-                        Button(VoiceWords.dontSendTitle) { voice.cancel() }
+                        Button(VoiceWords.dontSendTitle) { voice.cancel(owner: owner) }
                             .buttonStyle(SoftButtonStyle(neutral: true))
                             .accessibilityIdentifier("talkDontSend")
-                        Button(VoiceWords.sendTitle) { Task { await voice.release() } }
+                        Button(VoiceWords.sendTitle) { Task { await voice.release(owner: owner) } }
                             .buttonStyle(SoftButtonStyle())
                             .accessibilityIdentifier("talkSend")
                     }

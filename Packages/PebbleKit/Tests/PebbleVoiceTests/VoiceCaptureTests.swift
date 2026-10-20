@@ -303,6 +303,46 @@ struct VoiceCaptureTests {
         #expect(voice.phase == .cancelled)
     }
 
+    /// Two windows show the same composer, each under its own owner. The
+    /// second can't cancel, edit, finish or send the first's listening, and
+    /// never sees it as its own.
+    @Test func aSecondWindowsComposerNeverActsOnTheFirsts() async {
+        let first = "A.composer", second = "B.composer"
+        let voice = capture()
+        await voice.begin(.tap, owner: first, draft: composer.draft,
+                          write: { composer.write($0) }, send: { composer.send($0) })
+        listener.say("call Sam")
+        #expect(voice.belongs(to: first))
+        #expect(voice.isActive(for: first))
+        #expect(!voice.belongs(to: second), "the second window shows no Send or Don't send")
+        #expect(!voice.isActive(for: second))
+        voice.cancel(owner: second)
+        voice.edited(owner: second, to: "typed in the other window")
+        await voice.release(owner: second)
+        #expect(voice.phase == .listening)
+        #expect(listener.cancels == 0)
+        #expect(listener.finishes == 0)
+        #expect(composer.draft == "call Sam")
+        #expect(composer.sent.isEmpty)
+        // A start from the second window while the first listens is ignored too.
+        await voice.begin(.tap, owner: second, draft: "", write: { _ in }, send: { _ in })
+        #expect(voice.belongs(to: first))
+        listener.lastWords = "call Sam"
+        await voice.release(owner: first)
+        #expect(composer.sent == ["call Sam"])
+    }
+
+    /// Don't send in the right window still cancels.
+    @Test func theOwnersOwnDontSendCancels() async {
+        let voice = capture()
+        await voice.begin(.tap, on: composer)
+        listener.say("call Sam")
+        voice.cancel(owner: "composer")
+        #expect(voice.phase == .cancelled)
+        #expect(composer.draft == "")
+        #expect(composer.sent.isEmpty)
+    }
+
     /// The capture lets go of the words once they're sent or dropped, so
     /// the composer and the chat are the only places they are.
     @Test func nothingHeardIsKeptAfterward() async {

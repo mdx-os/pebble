@@ -96,18 +96,18 @@ perl: s~if current == listen \{ tearDown\(\) \}~tearDown()~
 # A touch the system takes sends the words, as a lift would.
 test: aCancelledTouchWithWordsSendsNothingAndPutsTheDraftBack
 file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
-perl: s~or sends\.\n        voice\.cancel\(\)~or sends.\n        Task { await voice.release() }~
+perl: s~or sends\.\n        voice\.cancel\(owner: owner\)~or sends.\n        Task { await voice.release(owner: owner) }~
 
 # A touch the system takes leaves the microphone on and the words in the draft.
 test: aCancelledTouchWithWordsSendsNothingAndPutsTheDraftBack
 file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
-perl: s~or sends\.\n        voice\.cancel\(\)~or sends.~
+perl: s~or sends\.\n        voice\.cancel\(owner: owner\)~or sends.~
 
 # A touch taken while the system asks waits for the answer instead of
 # cancelling, so a late yes on a tap starts listening and can send.
 test: aTouchTakenWhileAskedNeverListensOnALateYes
 file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
-perl: s~or sends\.\n        voice\.cancel\(\)~or sends.\n        if voice.phase == .asking { Task { await voice.release() } } else { voice.cancel() }~
+perl: s~or sends\.\n        voice\.cancel\(owner: owner\)~or sends.\n        if voice.phase == .asking { Task { await voice.release(owner: owner) } } else { voice.cancel(owner: owner) }~
 
 # The reset after a lift takes it for a cancelled touch, so nothing sends.
 test: theGesturesOwnEndSendsOnceAndItsResetAfterDoesNothing
@@ -136,3 +136,103 @@ perl: s~        if phase != \.asking \{ listener\.cancel\(\) \}\n        stop\(\
 test: anEditWhileListeningIsNeverLostOrSent
 file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
 perl: s~        shown = text\n~~
+
+# One capture serves every window. The entries below each bring back an
+# owner shared by every window, or a control that acts on any composer's
+# listening, so a second iPad window could show, send, cancel or edit
+# the first's.
+
+# The composer listens under its identifier alone, the same in every window.
+test: aComposerGoingAwayStopsOnlyItsOwnWindowsListening eachHomeScreenGivesItsComposersItsOwnWindow
+file: Packages/PebbleKit/Sources/PebbleUI/Composer.swift
+perl: s~private var owner: String \{ TalkWindow\.owner\(of: identifier, in: window\) \}~private var owner: String { identifier }~
+
+# A window's owner leaves the window out.
+test: theSameComposerInTwoWindowsHasTwoOwners theSecondWindowsControlsNeverActOnTheFirsts
+file: Packages/PebbleKit/Sources/PebbleUI/Composer.swift
+perl: s~guard let window else \{ return identifier \}\n        return window\.uuidString \+ "\." \+ identifier~return identifier~
+
+# The home screen never tells its composers which window they are in.
+test: eachHomeScreenGivesItsComposersItsOwnWindow
+file: Packages/PebbleKit/Sources/PebbleUI/HomeView.swift
+perl: s~\n        \.environment\(\\\.talkWindow, feed\.window\)~~
+
+# Every composer takes the capture for its own.
+test: aSecondWindowsComposerNeverActsOnTheFirsts
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~(func belongs\(to owner: String\) -> Bool \{\n        )self\.owner == owner~${1}true~
+
+# Another composer's Send sends this one's words.
+test: aSecondWindowsComposerNeverActsOnTheFirsts theSecondWindowsControlsNeverActOnTheFirsts
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~(func release\(owner: String\) async \{\n)        guard belongs\(to: owner\) else \{ return \}\n~$1~
+
+# Another composer's Don't send, or its going away, cancels this one.
+test: onlyTheOwnerCancelsByName aSecondWindowsComposerNeverActsOnTheFirsts
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~(public func cancel\(owner: String\) \{\n)        guard belongs\(to: owner\) else \{ return \}\n~$1~
+
+# Typing in another composer ends this one's listening.
+test: aSecondWindowsComposerNeverActsOnTheFirsts typingEndsOnlyItsOwnWindowsListening
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~guard isActive, belongs\(to: owner\), text != shown~guard isActive, text != shown~
+
+# A composer going away cancels whatever listens, in any window.
+test: aComposerGoingAwayStopsOnlyItsOwnWindowsListening
+file: Packages/PebbleKit/Sources/PebbleUI/Composer.swift
+perl: s~\.onDisappear \{ voice\?\.cancel\(owner: owner\) \}~.onDisappear { voice?.cancel() }~
+
+# VoiceOver's double tap on another window's microphone sends this one's words.
+test: theSecondWindowsControlsNeverActOnTheFirsts
+file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
+perl: s~if voice\.phase == \.listening, voice\.belongs\(to: owner\) \{\n            Task \{ await voice\.release\(owner: owner\) \}~if voice.phase == .listening {\n            Task { await voice.release() }~
+
+# Lifting a finger from another window's microphone sends this one's words.
+test: theSecondWindowsControlsNeverActOnTheFirsts
+file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
+perl: s~        guard voice\.belongs\(to: owner\) else \{ return \}\n        switch~        switch~
+perl: s~if voice\.phase == \.listening \{ Task \{ await voice\.release\(owner: owner\) \} \}~if voice.phase == .listening { Task { await voice.release() } }~
+
+# A touch lost on another window's microphone cancels this one.
+test: theSecondWindowsControlsNeverActOnTheFirsts
+file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
+perl: s~guard voice\.isActive\(for: owner\) else \{ return \}~guard voice.isActive else { return }~
+perl: s~or sends\.\n        voice\.cancel\(owner: owner\)~or sends.\n        voice.cancel()~
+
+# The Talk shortcut starts in any window, not the one in front.
+test: theShortcutStartsInTheWindowInFront noWindowInFrontLetsAnyTakeIt
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~        if let window, let front, front != window \{ return false \}\n~~
+
+# A window that went away stays in front, so no other takes the shortcut.
+test: noWindowInFrontLetsAnyTakeIt
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~if front == window \{ front = nil \}~_ = window~
+
+# Typing while listening no longer ends it, so a later word writes over
+# what was typed.
+test: typingEndsOnlyItsOwnWindowsListening
+file: Packages/PebbleKit/Sources/PebbleUI/Composer.swift
+perl: s~            set: \{ new in\n                voice\?\.edited\(owner: owner, to: new\)\n~            set: { new in\n~
+
+# Shift Return on the Mac no longer ends listening.
+test: aLineBreakEndsListeningAndStays
+file: Packages/PebbleKit/Sources/PebbleUI/Composer.swift
+perl: s~        voice\?\.edited\(owner: owner, to: new\)\n        draft\.wrappedValue = new~        draft.wrappedValue = new~
+
+# A suggestion's fill no longer ends listening, so the next word heard
+# writes over it.
+test: aSuggestionEndsListeningInItsOwnWindowOnly
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~\n        voice\?\.draftFilled\(controller\.draft, in: window\)~~
+
+# Talk about this, from a card, no longer ends listening.
+test: talkingAboutACardEndsListeningInItsOwnWindowOnly
+file: Packages/PebbleKit/Sources/PebbleUI/HomeView.swift
+perl: s~\n        voice\?\.draftFilled\(line, in: window\)~~
+
+# A fill ends listening under the identifier alone, so it misses the
+# window's composer.
+test: aSuggestionEndsListeningInItsOwnWindowOnly talkingAboutACardEndsListeningInItsOwnWindowOnly
+file: Packages/PebbleKit/Sources/PebbleUI/Composer.swift
+perl: s~edited\(owner: TalkWindow\.owner\(of: identifier, in: window\), to: text\)~edited(owner: identifier, to: text)~

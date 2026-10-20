@@ -312,9 +312,13 @@ public struct HomeView: View {
 
     /// What Today's `onTalk` does to the chat, apart from moving, so tests
     /// can drive it: the line goes in the composer, ready, and nothing is
-    /// sent. Words the person already typed are never replaced.
-    static func draft(_ line: String, in chat: ChatController) {
-        if chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { chat.draft = line }
+    /// sent. Words the person already typed are never replaced. Listening
+    /// in this window ends as the line goes in, so no word heard after
+    /// writes over it.
+    static func draft(_ line: String, in chat: ChatController, voice: VoiceCapture? = nil, window: UUID? = nil) {
+        guard chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        voice?.draftFilled(line, in: window)
+        chat.draft = line
     }
 
     /// The send itself, apart from moving, so tests can drive it.
@@ -418,6 +422,8 @@ struct HomeScreen: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
     @Environment(\.scenePhase) private var scenePhase
+    /// Talking in the composers, where the app offers it.
+    @Environment(VoiceCapture.self) private var voice: VoiceCapture?
 
     init(
         brand: Brand,
@@ -592,6 +598,8 @@ struct HomeScreen: View {
         // A question or any sheet, the memory on a narrow window included,
         // sits in front; Command Return can't send a chat line from behind it.
         .environment(\.sendsFromKeyboard, cover.chatSendsFromKeyboard)
+        // Each window's composers listen apart, by this window's token.
+        .environment(\.talkWindow, feed.window)
         // Something waiting on a sheet to close is only for where it was asked.
         .onChange(of: SheetHandoff.Place(section: section, usesSidebar: usesSidebar)) { _, now in
             handoff.moved(to: now)
@@ -706,7 +714,7 @@ struct HomeScreen: View {
     /// typed are never replaced.
     private func talk(about line: String) {
         guard let chat else { return }
-        HomeView.draft(line, in: chat)
+        HomeView.draft(line, in: chat, voice: voice, window: feed.window)
         go(.chat)
     }
 
@@ -989,7 +997,7 @@ struct TodayComposer: View {
     /// The shared field, with a hint that sending here opens the chat.
     var composer: Composer {
         Composer(draft: $chat.draft, isBusy: chat.isReplying, keyboardSends: inFront,
-                 identifier: "todayComposer", lines: 1...4, hint: FeedWords.composerHint, send: send)
+                 identifier: Composer.todayIdentifier, lines: 1...4, hint: FeedWords.composerHint, send: send)
     }
 
     /// The chat's failure line, when there is one, to show above the field.

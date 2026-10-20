@@ -58,7 +58,7 @@ struct TalkLineTests {
         let voice = VoiceCapture(listener: listener, requests: TalkRequests())
         await voice.begin(.hold, owner: "composer", draft: "", write: { _ in }, send: { _ in })
         #expect(voice.phase == .unavailable(.notOnDevice))
-        try smokeRender(TalkLine(voice: voice, slidAway: false)
+        try smokeRender(TalkLine(voice: voice, owner: "composer", slidAway: false)
             .environment(\.colorScheme, scheme)
             .frame(width: 393))
     }

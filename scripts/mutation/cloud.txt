@@ -1,3 +1,16 @@
+# The cloud setting's gate on the network. scripts/privacy-check.sh names
+# these tests as its proof that no transport is made with the setting off.
+# Off, but a chat gets the cloud model anyway.
+test: offByDefaultMakesNoTransportAndKeepsChatsOnDevice
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~settings\.isOn && endpoint != nil~endpoint != nil~
+
+# No address, but a chat gets the cloud model anyway, at one made up.
+test: offByDefaultMakesNoTransportAndKeepsChatsOnDevice anEmptyAddressMeansDisabledEvenIfSavedOn
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~guard usesCloud\(settings: settings, endpoint: endpoint\), let endpoint else \{ return local \}~guard let endpoint = endpoint ?? URL(string: "https://example.com") else { return local }~
+
+
 # The preview no longer asks whether the cloud is still on as it goes on
 # screen, so a switch off just after the reply's own check leaves a preview
 # up that nothing withdraws.
