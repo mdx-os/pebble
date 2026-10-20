@@ -226,7 +226,11 @@ final class FeedModel: ObservableObject {
             // one, without a wait when already there. `tasksChanged` drops a
             // snapshot older than one it took. A hop joins the same chain as
             // the refreshes below, so `settled` waits for it too.
-            if Thread.isMainThread {
+            var onMain = Thread.isMainThread
+            #if DEBUG
+            if hops.hopsEverySnapshot { onMain = false }
+            #endif
+            if onMain {
                 MainActor.assumeIsolated { self?.tasksChanged(snapshot) }
             } else {
                 hops.add { self?.tasksChanged(snapshot) }
@@ -303,6 +307,16 @@ final class FeedModel: ObservableObject {
     func settled() async {
         await pendingRefreshes.last?.value
     }
+
+    #if DEBUG
+    /// For tests: while on, every snapshot the engine tells takes the hop to
+    /// the main actor, as one told on another thread does. A test on the
+    /// main actor then holds those hops back simply by not yet awaiting,
+    /// with no second thread and no wait.
+    func hopEverySnapshot(_ on: Bool) {
+        pendingRefreshes.hopsEverySnapshot = on
+    }
+    #endif
 
     /// Plain, not isolated: the observation and `needsYou` are Sendable and
     /// `stopObserving` takes its own lock, so this runs safely anywhere.
@@ -1204,6 +1218,14 @@ struct AsksInChat: FeedSource {
 private final class PendingRefreshes: @unchecked Sendable {
     private let lock = NSLock()
     private var newest: Task<Void, Never>?
+    #if DEBUG
+    private var hopsAll = false
+    /// See `FeedModel.hopEverySnapshot`.
+    var hopsEverySnapshot: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return hopsAll }
+        set { lock.lock(); hopsAll = newValue; lock.unlock() }
+    }
+    #endif
 
     func add(_ refresh: @escaping @MainActor @Sendable () -> Void) {
         lock.lock()

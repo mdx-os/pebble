@@ -223,22 +223,17 @@ struct TaskLedgerCardTests {
                                     steps: [.init("Reading", duration: 1, todo: "read")],
                                     doneLine: "Ready.", proofs: [.check("Read the note")]))
         }
-        // Hold the main actor until both background snapshots have queued
-        // their UI work, then overtake them with a main-thread mutation.
-        // Holding the main actor is the point, so this one wait blocks it.
-        // The snapshots come from a thread of their own, which needs
-        // neither the main actor nor any pool other tests share, so the
-        // wait ends however many tests run beside it. It still has a
-        // generous limit, so if delivery ever comes to need the main actor
-        // the test fails, before the overtaking mutation, instead of
-        // holding the main actor for good.
-        let delivered = DispatchSemaphore(value: 0)
-        Thread.detachNewThread {
-            engine.advance(by: 2)
-            delivered.signal()
-        }
-        func waitForDelivery() -> Bool { delivered.wait(timeout: .now() + 60) == .success }
-        try #require(waitForDelivery(), "the background snapshots never finished, so nothing could overtake them")
+        // The completions are told as from another thread: the ledger hears
+        // them at once and their UI work hops to the main actor. This test
+        // holds the main actor until it awaits, so both hops (the endings
+        // and the trim after them) wait there, with no second thread and no
+        // clock. A main-thread mutation then overtakes them, and the UI's
+        // sequence guard drops both when they finally run.
+        model.hopEverySnapshot(true)
+        engine.advance(by: 2)
+        model.hopEverySnapshot(false)
+        #expect(engine.tasks.count == LocalFakeEngine.endedLimit, "the engine let the oldest ending go")
+        #expect(model.feed.working.count == 13, "the hops have not run yet")
         engine.start(TaskScript(title: "Next", steps: [.init("Reading", duration: 60, todo: "read")],
                                 doneLine: "Ready."))
         await model.settled()

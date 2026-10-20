@@ -1,0 +1,5 @@
+# The test's switch no longer sends snapshots through the hop, so they
+# take effect at once and nothing is left for a newer one to overtake.
+test: backgroundCompletionsSurviveANewerMainThreadSnapshot
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~if hops\.hopsEverySnapshot \{ onMain = false \}~~
