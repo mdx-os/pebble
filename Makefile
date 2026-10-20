@@ -1,13 +1,13 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test repeat-test mutation-check mutation-manifest-check mutation-manifest-check-test build build-release build-release-simulator archive screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check privacy-check privacy-check-test local-config-check graph-check graph-check-test secrets-check pulse clean private-check hash-private-words
+.PHONY: verify generate test repeat-test mutation-check mutation-manifest-check mutation-manifest-check-test build build-release build-release-simulator archive screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check privacy-check privacy-check-test local-config-check graph-check graph-check-test verify-coverage-check verify-coverage-check-test secrets-check pulse clean private-check hash-private-words
 
 ## verify: everything CI runs. Run this before every PR. The graph check
 ## runs once the builds have made the project, so it reads that too. The
 ## screenshots are made after every other step and then checked against the
 ## working tree. Both are the recipe, so even with -j nothing runs beside
 ## them that could change the tree between the stamp and the check.
-verify: brand-check privacy-check privacy-check-test local-config-check mutation-manifest-check mutation-manifest-check-test screenshots-check-test graph-check-test test build build-release-simulator archive private-check
+verify: brand-check privacy-check privacy-check-test local-config-check mutation-manifest-check mutation-manifest-check-test screenshots-check-test graph-check-test verify-coverage-check verify-coverage-check-test test build build-release-simulator archive private-check
 	$(MAKE) graph-check
 	$(MAKE) screenshots
 	sh scripts/screenshot-stamp.sh check build/screenshots
@@ -147,6 +147,16 @@ graph-check:
 ## graph-check-test: self-test for that check, in a scratch tree
 graph-check-test:
 	sh scripts/graph-check-test.sh
+
+## verify-coverage-check: fail unless verify builds or archives in Release
+## every platform build-release builds, with the iOS Simulator build and
+## both archives, so dropping archive from verify can't drop the Mac's
+verify-coverage-check:
+	sh scripts/verify-coverage-check.sh
+
+## verify-coverage-check-test: self-test for that check, on copies of the Makefile
+verify-coverage-check-test:
+	sh scripts/verify-coverage-check-test.sh
 
 ## local-config-check: fail if Config/Cloud.local.xcconfig is tracked by git
 local-config-check:

@@ -37,7 +37,10 @@ is generated, not committed.
 The package tests run in Debug only, as `make test` and CI run them. The UI
 tests use the showcase (`ShowcaseScene.morning`, `ShowcaseScene.emptyMemory()`),
 which is Debug only, so `swift test -c release` does not build them. Release
-is checked by `make build-release` instead.
+is checked instead by `make verify`, through `build-release-simulator` and the
+unsigned iOS and macOS archives, and `make verify-coverage-check` fails if
+verify stops covering a Release build. `make build-release` still runs both
+Release builds, macOS and the iOS Simulator, by hand.
 
 Signing and uploading a TestFlight build is in [docs/RELEASE.md](docs/RELEASE.md).
 
