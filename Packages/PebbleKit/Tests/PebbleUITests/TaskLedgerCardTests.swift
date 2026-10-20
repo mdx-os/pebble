@@ -214,7 +214,9 @@ struct TaskLedgerCardTests {
         func erase() -> Bool { inner.erase() }
     }
 
-    @Test func backgroundCompletionsSurviveANewerMainThreadSnapshot() async throws {
+    /// Completions whose UI hops are still queued keep their finish in the
+    /// ledger when a newer snapshot overtakes those hops.
+    @Test func queuedCompletionsSurviveANewerSnapshot() async throws {
         let engine = LocalFakeEngine(rule: .isolated(), scripts: [])
         let book = ledger(engine)
         let model = model(engine, ledger: book)
@@ -240,6 +242,30 @@ struct TaskLedgerCardTests {
         for id in ids {
             #expect(try #require(book.ledger(id)).end?.kind == .done(proofs: [.check("Read the note")]))
         }
+    }
+
+    /// A task that ends on another thread keeps its finish, and its card
+    /// shows it once the hop to the main actor has run.
+    @Test func aCompletionToldOnAnotherThreadKeepsItsFinish() async throws {
+        let engine = LocalFakeEngine(rule: .isolated(), scripts: [])
+        let book = ledger(engine)
+        let model = model(engine, ledger: book)
+        let proofs: [TaskProof] = [.check("Read the note")]
+        let id = engine.start(TaskScript(title: "Read the note", steps: [.init("Reading", duration: 1, todo: "read")],
+                                         doneLine: "Ready.", proofs: proofs))
+        #expect(model.feed.working.count == 1)
+        await withCheckedContinuation { done in
+            Thread.detachNewThread {
+                engine.advance(by: 2)
+                done.resume()
+            }
+        }
+        await model.settled()
+        #expect(book.ledger(id)?.end?.kind == .done(proofs: proofs))
+        #expect(model.feed.working.isEmpty, "the hop ran")
+        let task = try #require(model.feed.groups.flatMap(\.items).compactMap(\.task).first { $0.id == id })
+        #expect(task.state == .done)
+        #expect(model.finish(task) == .proven(proofs))
     }
 
     @Test(.scratchFiles, .fileModesHoldOrCI, .failsAsRoot, arguments: [0, 1, 2])

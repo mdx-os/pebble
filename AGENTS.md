@@ -217,7 +217,8 @@ in lint, a skill, or CI.
   `DispatchQueue.global()` or the cooperative pool, and always with a
   generous limit (about 60 s). The pool starves on a busy runner, and a wait
   with no limit turns a regression into a hung run instead of a failure.
-  `TaskLedgerRunTests` and `TaskLedgerCardTests` follow this.
+  `TaskLedgerRunTests` follows this. `TaskLedgerCardTests` never blocks at
+  all: it holds the hops back with `FeedModel.hopEverySnapshot`.
 - A check made off the main actor can go stale before the main actor acts on
   it. A cloud preview asks whether the cloud is on again where it goes on
   screen, on the main actor, where the switch is turned off.
