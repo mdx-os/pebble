@@ -8,9 +8,17 @@
 # archive commented out, an xcodebuild line with its errors ignored, the
 # macOS archive only echoed, skipped by `true ||`, followed by `|| true`,
 # joined in Debug to the iOS one by &&, given a second -configuration or
-# a shell variable, and a new Release build with no -destination. An
-# archive with no -configuration still passes, as it archives in
-# Release, and so does an echo that names an archive beside the real ones.
+# a shell variable, and a new Release build with no -destination. Errors
+# ignored any other way fail too: .IGNORE naming archive or naming none,
+# -$(MAKE) archive, $(MAKE) archive || true, $(MAKE) -i archive,
+# MAKEFLAGS += -i, -/usr/bin/xcodebuild, -$(XB) with XB := xcodebuild,
+# .ONESHELL, SHELL set, and an include this check can't read. So do a new
+# Release build with its action after the options or with none, the macOS
+# archive turned into -showBuildSettings, given an option the check
+# doesn't know, or of another scheme. An archive with no -configuration
+# still passes, as it archives in Release, and so do the macOS archive
+# with its action last and an echo that names an archive beside the real
+# ones.
 set -eu
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -95,7 +103,7 @@ expect pass "the macOS archive with no -configuration, which archives in Release
 
 fresh
 change "s~\txcodebuild archive ([^\n]*\\\\\n[^\n]*'generic/platform=macOS')~\t-xcodebuild archive \$1~"
-expect fail "the macOS archive with its errors ignored" "make archive runs xcodebuild with its errors ignored"
+expect fail "the macOS archive with its errors ignored" "make archive runs a recipe line with its errors ignored"
 
 macos_archive="\t+xcodebuild archive [^\n]*\\\\\n[^\n]*'generic/platform=macOS'[^\n]*\\\\\n[^\n]*"
 cant_read="make verify runs xcodebuild in a line this check can't read"
@@ -131,6 +139,81 @@ expect fail "the macOS archive with a shell variable in its arguments" "$cant_re
 fresh
 change "s~(\nbuild-release:[^\n]*\n)~\$1\txcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -sdk macosx\n~"
 expect fail "a new Release build with no -destination" "make build-release builds Release with no -destination"
+
+ignored_errors="with its errors ignored"
+drop_archive="s~$verify_line archive\b~\$1~"
+
+fresh
+change "s~(\n\.PHONY:)~\n.IGNORE: archive\$1~"
+expect fail "archive named in .IGNORE" "$ignored_errors"
+
+fresh
+change "s~(\n\.PHONY:)~\n.IGNORE:\$1~"
+expect fail "an .IGNORE that names no target, so it covers them all" "$ignored_errors"
+
+fresh
+change "$drop_archive"
+change "s~(\n\t\\\$\(MAKE\) graph-check\n)~\$1\t-\\\$(MAKE) archive\n~"
+expect fail "archive run as -\$(MAKE) archive" "make verify runs a recipe line with its errors ignored"
+
+fresh
+change "$drop_archive"
+change "s~(\n\t\\\$\(MAKE\) graph-check\n)~\$1\t\\\$(MAKE) archive || true\n~"
+expect fail "archive run as \$(MAKE) archive || true" "make verify runs a sub-make this check can't read"
+
+fresh
+change "$drop_archive"
+change "s~(\n\t\\\$\(MAKE\) graph-check\n)~\$1\t\\\$(MAKE) -i archive\n~"
+expect fail "archive run as \$(MAKE) -i archive" "make verify runs a sub-make this check can't read"
+
+fresh
+change "s~(\n\.PHONY:)~\nMAKEFLAGS += -i\$1~"
+expect fail "MAKEFLAGS += -i" "the Makefile sets MAKEFLAGS to ignore errors"
+
+fresh
+change "s~\txcodebuild archive ([^\n]*\\\\\n[^\n]*'generic/platform=macOS')~\t-/usr/bin/xcodebuild archive \$1~"
+expect fail "the macOS archive run as -/usr/bin/xcodebuild" "make archive runs a recipe line with its errors ignored"
+
+fresh
+change "s~(\n\.PHONY:)~\nXB := xcodebuild\$1~"
+change "s~\txcodebuild archive ([^\n]*\\\\\n[^\n]*'generic/platform=macOS')~\t-\\\$(XB) archive \$1~"
+expect fail "the macOS archive run as -\$(XB) with XB := xcodebuild" "make archive runs a recipe line with its errors ignored"
+
+fresh
+change "s~(\n\.PHONY:)~\n.ONESHELL:\$1~"
+expect fail ".ONESHELL, which lets a failed line go on" "the Makefile sets .ONESHELL"
+
+fresh
+change "s~(\n\.PHONY:)~\nSHELL := /usr/bin/true\$1~"
+expect fail "SHELL set to a command that runs nothing" "the Makefile sets SHELL"
+
+fresh
+change "s~(\n\.PHONY:)~\n-include local.mk\$1~"
+expect fail "an included Makefile this check never reads" "the Makefile includes another file"
+
+fresh
+change "s~(\nbuild-release:[^\n]*\n)~\$1\txcodebuild -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'generic/platform=visionOS Simulator' build\n~"
+expect fail "a new Release build with its action after the options" "make build-release builds Release for visionOS Simulator, but make verify neither builds nor archives it"
+
+fresh
+change "s~(\nbuild-release:[^\n]*\n)~\$1\txcodebuild -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'generic/platform=visionOS Simulator'\n~"
+expect fail "a new Release build with no action, which builds" "make build-release builds Release for visionOS Simulator, but make verify neither builds nor archives it"
+
+fresh
+change "s~\txcodebuild archive (-quiet [^\n]*\\\\\n[^\n]*'generic/platform=macOS'[^\n]*\\\\\n[^\n]*CODE_SIGNING_ALLOWED=NO)\n~\txcodebuild \$1 archive\n~"
+expect pass "the macOS archive with its action last"
+
+fresh
+change "s~\txcodebuild archive (-quiet [^\n]*\\\\\n[^\n]*'generic/platform=macOS')~\txcodebuild -showBuildSettings \$1~"
+expect fail "the macOS archive turned into -showBuildSettings, which builds nothing" "make verify no longer archives Release for macOS"
+
+fresh
+change "s~\txcodebuild archive (-quiet [^\n]*\\\\\n[^\n]*'generic/platform=macOS')~\txcodebuild archive -skipUnavailableActions \$1~"
+expect fail "the macOS archive with an option this check doesn't know" "$cant_read"
+
+fresh
+change "s~(xcodebuild archive [^\n]*-scheme )Pebble([^\n]*\\\\\n[^\n]*'generic/platform=macOS')~\$1Other\$2~"
+expect fail "the macOS archive of another scheme" "make verify runs xcodebuild on another scheme or project"
 if [ "$failures" -ne 0 ]; then
   echo "verify-coverage-check-test: $failures case(s) went the wrong way"
   exit 1

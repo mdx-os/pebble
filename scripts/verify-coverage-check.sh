@@ -18,12 +18,23 @@ status=0
 fail() { echo "verify-coverage-check: $*"; status=1; }
 
 # The xcodebuild lines a target would run, one per line as "kind
-# configuration platform", where kind is build or archive and platform is
-# the destination's, such as "iOS Simulator" or "macOS". A missing
-# -configuration is the scheme's own: Debug for build, which uses its Run
-# action, and Release for archive, which uses its Archive action (the
-# scheme project.yml makes; nothing here reads the scheme to check it).
-# A build with no -destination prints "unknown" as its platform.
+# configuration platform", where kind is an action, such as build or
+# archive, and platform is the destination's, such as "iOS Simulator" or
+# "macOS". Actions may come anywhere after the options, as xcodebuild
+# allows, and a line with none builds. A missing -configuration is the
+# scheme's own: Release for archive, which uses its Archive action, and
+# Debug for the rest (the scheme project.yml makes; nothing here reads the
+# scheme to check it). A build with no -destination prints "unknown" as
+# its platform. A line that only shows or exports something, such as
+# -showBuildSettings, -list or -dry-run, builds nothing and prints
+# nothing. A build of a scheme other than Pebble, or of a project other
+# than Pebble.xcodeproj, prints "foreign" and the line, and fails.
+#
+# Options are read from known lists, so a value is never taken for an
+# action: an option the lists don't name, a word that is neither an
+# action nor NAME=value, or an action where a value should be, prints
+# "unsupported", as -skipUnavailableActions would, which can skip an
+# action that can't run. Add an option to its list when verify needs it.
 #
 # Each line is read in shell words, with quotes, so a quoted xcodebuild,
 # as in an echo, is no build, and a shell comment is none either. An
@@ -94,57 +105,146 @@ xcodebuilds() {
       print "unsupported $line\n";
       next;
     }
-    my $kind = $words[1] // "";
-    next unless $kind eq "build" || $kind eq "archive";
-    my $config = $kind eq "archive" ? "Release" : "Debug";
-    my @dests;
-    for my $k (0 .. $#words) {
-      $config = $words[$k + 1] // "" if $words[$k] eq "-configuration";
-      push @dests, $words[$k + 1] // "" if $words[$k] eq "-destination";
+    my %actions = map { $_ => 1 } qw(build build-for-testing analyze archive
+      test test-without-building docbuild install installsrc clean);
+    my %flags = map { $_ => 1 } qw(-quiet -verbose -json -alltargets
+      -parallelizeTargets -hideShellScriptEnvironment -showBuildTimingSummary
+      -allowProvisioningUpdates -allowProvisioningDeviceRegistration
+      -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile
+      -skipPackageUpdates -disablePackageRepositoryCache
+      -skipPackagePluginValidation -skipMacroValidation
+      -skipPackageSignatureValidation);
+    my %valued = map { $_ => 1 } qw(-project -workspace -scheme -target
+      -configuration -destination -destination-timeout -sdk -arch -xcconfig
+      -toolchain -jobs -derivedDataPath -archivePath -resultBundlePath
+      -resultBundleVersion -clonedSourcePackagesDirPath -packageCachePath
+      -testPlan -enableCodeCoverage);
+    my %modes = map { $_ => 1 } qw(-usage -help -license -version -list
+      -showsdks -showdestinations -showTestPlans -showBuildSettings
+      -showBuildSettingsForIndex -find-executable -find-library -exportArchive
+      -exportNotarizedApp -exportLocalizations -importLocalizations
+      -resolvePackageDependencies -create-xcframework -checkFirstLaunchStatus
+      -runFirstLaunch -downloadAllPlatforms -downloadPlatform -importPlatform
+      -downloadComponent -importComponent -deleteComponent -showComponent
+      -prepareDeviceSupport -enumerate-tests -dry-run -n);
+    my (@acts, @dests, %opt, $mode, $bad);
+    my $config;
+    for (my $k = 1; $k <= $#words; $k++) {
+      my $w = $words[$k];
+      if ($w =~ /^-/) {
+        if ($modes{$w}) { $mode = 1 }
+        elsif ($flags{$w} || $w =~ /=/) { }
+        elsif ($valued{$w} && $k < $#words && !$actions{$words[$k + 1]}) {
+          my $v = $words[++$k];
+          if ($w eq "-configuration") { $config = $v }
+          elsif ($w eq "-destination") { push @dests, $v }
+          else { $opt{$w} //= $v }
+        } else { $bad = 1 }
+      } elsif ($w =~ /^\w+=/) {
+      } elsif ($actions{$w}) {
+        push @acts, $w;
+      } else { $bad = 1 }
     }
-    print "$kind $config unknown\n" unless @dests;
-    for my $dest (@dests) {
-      my ($platform) = $dest =~ /(?:^|,|generic\/)platform=([^,]+)/;
-      print "$kind $config ", ($platform // "unknown"), "\n";
+    next if $mode;
+    if ($bad) { print "unsupported $line\n"; next }
+    @acts = ("build") unless @acts;
+    @acts = grep { $_ ne "clean" && $_ ne "installsrc" } @acts;
+    next unless @acts;
+    if (($opt{"-scheme"} // "") ne "Pebble" || ($opt{"-project"} // "") ne "Pebble.xcodeproj"
+        || exists $opt{"-workspace"} || exists $opt{"-target"}) {
+      print "foreign $line\n";
+      next;
+    }
+    for my $kind (@acts) {
+      my $c = $config // ($kind eq "archive" ? "Release" : "Debug");
+      print "$kind $c unknown\n" unless @dests;
+      for my $dest (@dests) {
+        my ($platform) = $dest =~ /(?:^|,|generic\/)platform=([^,]+)/;
+        print "$kind $c ", ($platform // "unknown"), "\n";
+      }
     }'
 }
 
-# The targets verify and archive reach, through prerequisites and
-# `$(MAKE)` sub-makes, with an xcodebuild recipe line marked `-`, so make
-# would go on as if it had built. `make -n` drops that mark, so this reads
-# the Makefile itself.
-ignored="$(perl -ne '
-  if (/^\t/) {
-    $text .= $_;
-    if ($text !~ /\\\n\z/) {
-      push @{$lines{$_}}, $text for @current;
-      $text = "";
+# Ways make could go on past a failed build, which `make -n` never shows,
+# so this reads the Makefile itself. In the targets verify and archive
+# reach, through prerequisites and `$(MAKE)` sub-makes: a recipe line
+# marked `-`, whatever it runs, a target named in `.IGNORE` (or an
+# `.IGNORE` naming none, which covers them all), and a `$(MAKE)` line that
+# is more than `$(MAKE)`, a few plain flags, NAME=value words and targets,
+# such as `$(MAKE) archive || true` or `$(MAKE) -i archive`. In the whole
+# Makefile: MAKEFLAGS or MFLAGS given -i or --ignore-errors, `.ONESHELL`
+# (one shell for a recipe, which goes on past a failed line), SHELL or
+# .SHELLFLAGS set, and an include, whose file this never reads. -k is
+# fine: make still fails at the end.
+problems="$(perl -e '
+  local $/;
+  my $all = <>;
+  $all =~ s/\\\n[ \t]*/ /g;
+  my (%deps, %lines, @current, %ignore, $ignoreall);
+  my $ignores = sub { grep { /^--ig/ || /^-?[bBdehikLnpqrRsStvw]*i[bBdehikLnpqrRsStvw]*\z/ } @_ };
+  for my $l (split /\n/, $all) {
+    if ($l =~ /^\t/) {
+      push @{$lines{$_}}, $l for @current;
+      next;
     }
-    next;
-  }
-  $text = "";
-  next if /^\s*(#|$)/;
-  if (/^([^\s:=#][^:=#]*?)\s*:(?![=:])\s*([^;#]*)/) {
-    @current = split " ", $1;
-    push @{$deps{$_}}, split(" ", $2) for @current;
-  } else {
-    @current = ();
-  }
-  END {
-    my @todo = ("verify", "archive");
-    my %seen;
-    while (defined(my $t = shift @todo)) {
-      next if $seen{$t}++;
-      push @todo, @{$deps{$t} || []};
-      for my $line (@{$lines{$t} || []}) {
-        push @todo, $1 while $line =~ /\$[({]MAKE[)}](?:\s+-\S+)*\s+([\w.-]+)/g;
-        print "$t\n" if $line =~ /^\t[@+\s]*-[@+\-\s]*(?:\w+=\S*\s+)*xcodebuild\b/;
+    next if $l =~ /^\s*(#|$)/;
+    if ($l =~ /^\s*-?s?include\s/) {
+      print "global the Makefile includes another file, which this check never reads: $l\n";
+    }
+    if ($l =~ /\b(?:MAKEFLAGS|MFLAGS)\b[^=]*=(.*)/ && $ignores->(split " ", $1)) {
+      print "global the Makefile sets MAKEFLAGS to ignore errors: $l\n";
+    }
+    if ($l =~ /^\s*(?:export\s+|override\s+)*(?:SHELL|\.SHELLFLAGS)\s*[:+?!]?=/) {
+      print "global the Makefile sets SHELL or .SHELLFLAGS, so this check cannot tell how a failed line ends: $l\n";
+    }
+    if ($l =~ /^\.ONESHELL\s*:/) {
+      print "global the Makefile sets .ONESHELL, so a failed line in a recipe would not stop it\n";
+    }
+    if ($l =~ /^([^\s:=#][^:=#]*?)\s*:(?![=:])\s*([^;#]*)(?:;(.*))?/) {
+      my ($names, $prereqs, $inline) = ($1, $2, $3);
+      @current = split " ", $names;
+      if ($names eq ".IGNORE") {
+        $ignore{$_} = 1 for split " ", $prereqs;
+        $ignoreall = 1 unless $prereqs =~ /\S/;
       }
+      push @{$deps{$_}}, split(" ", $prereqs) for @current;
+      if (defined $inline && $inline =~ /\S/) {
+        push @{$lines{$_}}, "\t$inline" for @current;
+      }
+    } else {
+      @current = ();
     }
-  }' "$dir/Makefile" | sort -u)"
-for target in $ignored; do
-  fail "make $target runs xcodebuild with its errors ignored (a recipe line starting with -), so a failed build would not stop verify"
+  }
+  my @todo = ("verify", "archive");
+  my %seen;
+  while (defined(my $t = shift @todo)) {
+    next if $seen{$t}++;
+    push @todo, @{$deps{$t} || []};
+    print "ignored $t\n" if $ignoreall || $ignore{$t};
+    for my $line (@{$lines{$t} || []}) {
+      my ($mark, $body) = $line =~ /^\t([\s@+-]*)(.*)/;
+      print "ignored $t\n" if $mark =~ /-/;
+      next unless $body =~ /\$[({]MAKE[)}]/;
+      my ($rest) = $body =~ /^\$[({]MAKE[)}](\s.*|)\z/;
+      my @words = split " ", $rest // "";
+      my $plain = defined $rest && $rest !~ /[;&|()<>`#"\x27\\\$]/
+        && !(grep { /^-/ && !/^-(?:s|j\d*|-silent|-no-print-directory)\z/ } @words)
+        && !$ignores->(@words);
+      print "submake $t $body\n" unless $plain;
+      push @todo, grep { !/^-/ && !/=/ } @words;
+    }
+  }' "$dir/Makefile")"
+printf '%s\n' "$problems" | sed -n 's/^global //p' | sort -u | while IFS= read -r line; do
+  echo "verify-coverage-check: $line"
 done
+for target in $(printf '%s\n' "$problems" | sed -n 's/^ignored //p' | sort -u); do
+  echo "verify-coverage-check: make $target runs a recipe line with its errors ignored (a line marked -, or a target in .IGNORE), so a failed build would not stop verify"
+done
+printf '%s\n' "$problems" | sed -n 's/^submake //p' | while IFS= read -r line; do
+  echo "verify-coverage-check: make ${line%% *} runs a sub-make this check can't read, which could hide a failed build: ${line#* }"
+  echo "verify-coverage-check: write it as \$(MAKE) and its targets alone"
+done
+if printf '%s\n' "$problems" | grep -qE '^(global|ignored|submake) '; then status=1; fi
 
 verify="$(xcodebuilds verify)" || exit 1
 release="$(xcodebuilds build-release)" || exit 1
@@ -155,7 +255,11 @@ for target in verify build-release; do
     echo "verify-coverage-check: make $target runs xcodebuild in a line this check can't read, so it can't tell whether the build runs or in which configuration: $line"
     echo "verify-coverage-check: write it as one xcodebuild command on a recipe line of its own, with no ;, &&, ||, pipes, redirects or \$ expansions"
   done
-  if printf '%s\n' "$lines" | grep -q '^unsupported '; then status=1; fi
+  printf '%s\n' "$lines" | sed -n 's/^foreign //p' | while IFS= read -r line; do
+    echo "verify-coverage-check: make $target runs xcodebuild on another scheme or project, so it isn't the app's build: $line"
+    echo "verify-coverage-check: name -project Pebble.xcodeproj -scheme Pebble on it"
+  done
+  if printf '%s\n' "$lines" | grep -qE '^(unsupported|foreign) '; then status=1; fi
 done
 
 has() { printf '%s\n' "$verify" | grep -qx "$1"; }
@@ -163,8 +267,9 @@ has "build Release iOS Simulator" || fail "make verify no longer builds Release 
 has "archive Release iOS" || fail "make verify no longer archives Release for iOS"
 has "archive Release macOS" || fail "make verify no longer archives Release for macOS"
 
-# Every platform build-release builds in Release, verify builds or archives.
-platforms="$(printf '%s\n' "$release" | sed -n 's/^build Release //p' | sort -u)"
+# Every platform build-release builds in Release, by any action that
+# builds, verify builds or archives.
+platforms="$(printf '%s\n' "$release" | sed -nE 's/^(build|build-for-testing|analyze|archive|test|test-without-building|docbuild|install) Release //p' | sort -u)"
 if [ -z "$platforms" ]; then
   fail "make build-release builds nothing in Release, so there is nothing to compare"
 fi
