@@ -10,8 +10,9 @@
 #   name of two words matches with any space between
 # Comments are // and /* */ in Swift, every line of a block included; #
 # in scripts, Makefile and YAML; and lines that start with # in text files
-# such as the mutation manifest. Text inside quotes is not a comment, so a
-# string such as "https://example.com/item 3" passes.
+# such as the mutation manifest. A string in quotes outside a comment is
+# not a comment, so "https://example.com/item 3" in code passes; quotes
+# inside a comment are part of it and are checked.
 #
 # The names are never in the repository, in plain text or in any other
 # form: a hash of a short name can be undone by trying every name. The
@@ -102,22 +103,32 @@ scan() {
               if ($after =~ /"""(.*)$/) { $rest .= " $1" } else { $multi = 1 }
             }
           }
-          $rest =~ s/$quoted/""/g;
+          # Read left to right, so a string is skipped only outside a
+          # comment, and quotes inside one are part of the comment.
           while (length $rest) {
             if ($block) {
               if ($rest =~ m{^(.*?)\*/(.*)$}) { $comment .= " $1"; $rest = $2; $block = 0 }
               else { $comment .= " $rest"; $rest = "" }
-            } elsif ($rest =~ m{^.*?(//|/\*)(.*)$}) {
-              if ($1 eq "//") { $comment .= " $2"; $rest = "" } else { $rest = $2; $block = 1 }
+            } elsif ($rest =~ m{^.*?(//|/\*|")(.*)$}) {
+              my ($open, $after) = ($1, $2);
+              if ($open eq "//") { $comment .= " $after"; $rest = "" }
+              elsif ($open eq "/*") { $rest = $after; $block = 1 }
+              else { $rest = $after =~ /^(?:[^"\\]|\\.)*"(.*)$/ ? $1 : "" }
             } else { $rest = "" }
           }
         } elsif ($kind eq "text") {
           $comment = $line if $line =~ /^\s*#/;
         } else {
+          # The same, for a # comment: strings and $# before it are
+          # skipped, and everything after it is the comment.
           my $rest = $line;
-          $rest =~ s/$quoted|\x27[^\x27]*\x27//g;
-          $rest =~ s/\$\{?#//g;
-          $comment = $1 if $rest =~ /#(.*)$/;
+          while ($rest =~ /^.*?(\$\{?#|#|"|\x27)(.*)$/) {
+            my ($open, $after) = ($1, $2);
+            if ($open eq "#") { $comment = $after; last }
+            elsif ($open eq "\"") { $rest = $after =~ /^(?:[^"\\]|\\.)*"(.*)$/ ? $1 : "" }
+            elsif ($open eq "\x27") { $rest = $after =~ /^[^\x27]*\x27(.*)$/ ? $1 : "" }
+            else { $rest = $after }
+          }
         }
         my @words = words_of($comment);
         my @keys = (@words, map { "$words[$_] $words[$_ + 1]" } 0 .. $#words - 1);
@@ -161,6 +172,13 @@ self_test() {
   printf '// asked by Ada\tByron\n' > "$dir/bad/tab.swift"
   printf '/* for ADA BYRON\047S sake */\n' > "$dir/bad/twopossessive.swift"
   printf '# from Ada Byron\n' > "$dir/bad/name.sh"
+  # Quotes inside a comment are still the comment.
+  printf '    // "%s %s 4"\n' "$fix" "$round" > "$dir/bad/quotedcomment.swift"
+  printf 'let x = "a" // since "%s 4"\n' "$round" > "$dir/bad/quotedtrailing.swift"
+  printf '/* asked in "%s 2" */\n' "$item" > "$dir/bad/quotedblock.swift"
+  printf '/// "Quillon" decided this.\n' > "$dir/bad/quotedname.swift"
+  printf '# "%s %s 4"\n' "$fix" "$round" > "$dir/bad/quotedcomment.sh"
+  printf 'echo "a" # from \047Ada Byron\047\n' > "$dir/bad/singlequoted.sh"
   printf '# a note for quillon\ntest: aTest\n' > "$dir/bad/name.txt"
   # Fine: words that only look alike, and the same words outside a comment.
   printf '/// Rounds to 4 places, and lists items 1 to 3.\nlet rounded = 4\n' > "$dir/good/words.swift"

@@ -222,7 +222,7 @@ perl: s~(endedBy = reason \}\n)\s*hidden = Redactor\(\)\n~$1~
 
 test: handingARequestOverIsToldFirst forgetEverythingFirstEndsEveryOpenCloudChat forgetEverythingEndsASummarysSendOnTheWire
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
-perl: s~\n\s*handingOver\(\)\n~\n~
+perl: s~\n\s*do \{ try handingOver\(\) \} catch \{ throw CloudModelError\.notRecorded \}\n~\n~
 
 # The redaction copy matches what it does: plurals and hyphens folded, other spellings missed.
 test: aPluralOrAHyphenatedSpellingIsHiddenToo
@@ -335,7 +335,7 @@ perl: s~(func forgetPrivateWords\(\) throws -> Forgot \{\n(?:\s*//[^\n]*\n)*)\s*
 # A sign-in hop that was handed over counts as sent, whatever the message does.
 test: aSignInHopHandedOverCountsAsSentWhateverHappensToTheMessage aSignInHopThatWentCountsAsSentWhateverHappensToTheMessage
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
-perl: s~let answer = try await session\.send\(signIn, through: transport\)~let answer = try await transport.send(signIn)~
+perl: s~guard let handed = try handOver\(signIn, ifStill: current\) else \{ return nil \}\n\s*let answer = try await session\.finish\(handed\)~let answer = try await transport.send(signIn)~
 
 # Sign-in may carry a credential or a device token, and nothing of the person's.
 test: aSignInValueWithAPersonalDetailIsRefusedAndNothingIsSent aSignInCarryingAPrivateWordOrANoteNameSendsNothing
@@ -397,7 +397,7 @@ perl: s~case \.signInBodyRefused\?, \.signInHeaderRefused\?, ~case .signInBodyRe
 
 test: aSignInBodyThatIsNotAFlatObjectOfShortValuesIsRefused
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
-perl: s~text = String\(try value\.decode\(Double\.self\)\)~if let flag = try? value.decode(Bool.self) { text = String(flag) } else { text = String(try value.decode(Double.self)) }~
+perl: s~guard let fields = try\? JSONDecoder\(\)\.decode\(\[String: String\]\.self, from: body\) else \{ return nil \}~let fields: [String: String] = ((try? JSONSerialization.jsonObject(with: body)) as? [String: Any])?.mapValues { "\\(\$0)" } ?? [:]~
 
 test: eachFailureHasItsOwnLine aSignInCarryingAPrivateWordOrANoteNameSendsNothing
 file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
@@ -496,11 +496,11 @@ perl: s~preview\.signIn != nil \|\| preview\.request\.headers\.contains \{ isSig
 
 test: everyCloudLineIsInTheCopyLists
 file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
-perl: s~chatEnded, signInRefused, ~chatEnded, ~
+perl: s~notRecorded, signInRefused, ~notRecorded, ~
 
 test: handingARequestOverIsToldFirst
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
-perl: s~handingOver\(\)\n(\s*)let task = Task \{ try await transport\.send\(request\) \}~let task = Task { let data = try await transport.send(request); handingOver(); return data }~
+perl: s~do \{ try handingOver\(\) \} catch \{ throw CloudModelError\.notRecorded \}\n(\s*)let task = Task \{ try await transport\.send\(request\) \}~let task = Task { let data = try await transport.send(request); try handingOver(); return data }~
 
 test: eachTransportRefusalCountsAsNothingSent
 file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
@@ -761,11 +761,11 @@ perl: s~if Task\.isCancelled \|\| !isOn\(\) \{ return \.withdrawn \}~if Task.isC
 # goes, and a fresh preview needs a new yes.
 test: aPrivateWordAddedDuringSignInNeedsAFreshPreviewAndANewYes
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
-perl: s~guard try readRedactor\(\) == current else \{ return nil \}\n(\s*let data = )~$1~
+perl: s~guard let handed = try handOver\(preview\.request, ifStill: current\) else \{ return nil \}~let handed = try session.handOff(preview.request, through: transport)~
 
 test: aPrivateWordAddedBeforeTheYesSendsNoHopOfThatPreview
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
-perl: s~guard try readRedactor\(\) == current else \{ return nil \}\n(\s*let answer = )~$1~
+perl: s~guard let handed = try handOver\(signIn, ifStill: current\) else \{ return nil \}~let handed = try session.handOff(signIn, through: transport)~
 
 test: aPrivateWordAddedDuringSignInNeedsAFreshPreviewAndANewYes
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
@@ -793,11 +793,11 @@ perl: s~(\n\s*state = status\n)\s*fromLaunch = true\n~$1~
 # next launch, and erasing the setting leaves it.
 test: forgetEverythingAfterARelaunchStillSaysWhatWentCantBeErased
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~sent\.value = true; try\? store\.markSent\(\)~sent.value = true~
+perl: s~try store\.markSent\(\); sent\.value = true~sent.value = true~
 
 test: forgetEverythingAfterARelaunchStillSaysWhatWentCantBeErased
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~withdrawPreviews\(\)\n(\s*)return anythingSent~withdrawPreviews()\n$1return sent.value~
+perl: s~recountHeldChats\(\)\n(\s*)return anythingSent~recountHeldChats()\n$1return sent.value~
 
 test: forgetEverythingAfterARelaunchStillSaysWhatWentCantBeErased theSentMarkOutlivesARelaunchAndAnErase
 file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
@@ -810,3 +810,63 @@ perl: s~(\n\s*)try removeOffMark\(\)\n(\s*)\}~$1try removeOffMark()$1try? FileMa
 test: theSentMarkOutlivesARelaunchAndAnErase
 file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
 perl: s~(\n\s*)settings = \.off\n(\s*)readable = true\n~$1settings = .off$1sent = false\n$2readable = true\n~
+
+# A private word or a note saved between a hop's last check and its hand
+# over waits for the hand over: the check and the hand over run under the
+# lock every writer of the notes and private words takes.
+test: aPrivateWordSavedJustBeforeTheHandOverWaitsForIt
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~try privacyChanges\.handOver \{~try PrivacyChanges().handOver {~
+
+test: aNoteSavedDuringAHandOverWaitsForIt
+file: Packages/PebbleKit/Sources/PebbleCore/Memory.swift
+perl: s~try privacyChanges\.change \{\n~try PrivacyChanges().change {\n~
+
+test: aPrivateWordAddedDuringAHandOverWaitsForIt
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~privacyChanges\.change \{ updateNow\(change\) \}~PrivacyChanges().change { updateNow(change) }~
+
+test: aCloudChatHandsOverUnderTheNotesStoresLock
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~\n\s*privacyChanges: privacyChanges,\n~\n~
+
+test: aPrivateWordAddedDuringAHandOverWaitsForIt aCloudChatHandsOverUnderTheNotesStoresLock
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~privacyChanges = memory\?\.privacyChanges \?\? PrivacyChanges\(\)~privacyChanges = PrivacyChanges()~
+
+# A send the sent mark can't be made for sends nothing, so a later launch
+# never misses a copy that left.
+test: aSendThatCantBeNotedSendsNothing aSendThatCantBeMarkedSendsNothingAndARelaunchIsRight
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~do \{ try handingOver\(\) \} catch \{ throw CloudModelError\.notRecorded \}~try? handingOver()~
+
+test: aSendThatCantBeMarkedSendsNothingAndARelaunchIsRight
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~try store\.markSent\(\); sent\.value = true~try? store.markSent(); sent.value = true~
+
+test: aSendThatCantBeMarkedSendsNothingAndARelaunchIsRight eachFailureHasItsOwnLine
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~\n\s*case \.notRecorded: CloudWords\.notRecorded\n~\n~
+
+# A chat a switch off ended says it stopped once the cloud is on again,
+# never that the cloud is off.
+test: aChatEndedBySwitchingOffSaysSoOnceTheCloudIsOnAgain aChatStillOpenAfterOffThenOnSaysItStopped
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~ where session\.endedBySwitchOff && \(try\? isOn\(\)\) == true \{~ where false {~
+
+test: aChatStillOpenAfterOffThenOnSaysItStopped eachFailureHasItsOwnLine
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~\n\s*case \.endedByOff: CloudWords\.chatEndedByOff\n~\n~
+
+# Forget everything shows for a cloud chat alone, in any window.
+test: aChatOnlyAccountStillOffersForgetEverything
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~ \|\| help\.chatsHoldAnything~~
+
+test: aChatOnlyAccountStillOffersForgetEverything
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~let holds = open\.contains \{ \$0\.holdsAnything \} \|\| ~let holds = ~
+
+test: aChatOnlyAccountStillOffersForgetEverything
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~Task \{ \@MainActor in self\?\.recountHeldChats\(\) \}~_ = self~

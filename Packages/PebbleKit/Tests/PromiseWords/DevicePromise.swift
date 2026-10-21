@@ -103,7 +103,7 @@ public enum DevicePromise {
     /// place, and each is true with the cloud on and off.
     public static let cloud: [Allowed] = [
         Allowed(file: "PebbleCore/CloudHelp.swift",
-                literal: "On for new chats. Before anything from a chat leaves this device, I show you exactly what goes, and you decide.",
+                literal: "On for new chats. Before anything from a chat leaves this device, I show you what goes, and you decide.",
                 reason: "CloudWords.onDetail, shown only while the cloud is on. It says words do leave, the opposite of a "
                     + "device promise, and the preview it describes gates every cloud request (CloudReview)."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
@@ -242,6 +242,10 @@ public enum DevicePromise {
                 reason: cloudSettingName + " CloudWords.turnedOff: its only \"cloud\" is the setting's name, Help from "
                     + "the cloud, and \"still here\" is the composer, where the words go back."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "This chat stopped when help from the cloud was turned off, so I didn't send that. A new chat starts fresh. What you wrote is still here.",
+                reason: cloudSettingName + " CloudWords.chatEndedByOff: its only \"cloud\" is the setting's name, said "
+                    + "of a chat a switch off ended, and \"still here\" is the composer, where the words go back."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
                 literal: "Your tasks are forgotten, and so are any words you asked me to hide. To be sure of that I cleared the cloud setting too, so help from the cloud is off.",
                 reason: cloudSettingName + " CloudWords.tasksAndWordsAndCloudForgotten: the setting was erased, so it reads "
                     + "as off, which is what it says."),
@@ -359,6 +363,7 @@ public enum DevicePromise {
         CloudWords.offForNow,
         CloudWords.onNotSaved,
         CloudWords.turnedOff,
+        CloudWords.chatEndedByOff,
         CloudWords.tasksAndWordsAndCloudForgotten,
         CloudWords.offSavedLater,
         CloudWords.offAtLaunchNotSaved,

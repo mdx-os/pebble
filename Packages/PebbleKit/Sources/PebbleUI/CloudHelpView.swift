@@ -102,6 +102,10 @@ public final class CloudHelp: ObservableObject {
     /// the notes as they are now. The app reads its notes store from here,
     /// so the two can never be different stores.
     public let memory: MemoryStore?
+    /// The notes store's (`MemoryStore.privacyChanges`), taken to save
+    /// private words and given to every cloud chat, so neither the notes
+    /// nor the words change while a request is checked and handed over.
+    private let privacyChanges: PrivacyChanges
     private let store: any CloudHelpStoring
     private let auth: any CloudAuth
     private let makeTransport: (@Sendable () -> any CloudTransport)?
@@ -168,6 +172,9 @@ public final class CloudHelp: ObservableObject {
         self.endpoint = endpoint
         self.storeOpened = storeOpened
         self.memory = memory
+        // With no notes store, nothing is ever sent (the redactor throws),
+        // so a lock of its own serves.
+        privacyChanges = memory?.privacyChanges ?? PrivacyChanges()
         self.auth = auth
         self.makeTransport = transport
         self.unopenedFile = unopenedFile
@@ -334,8 +341,10 @@ public final class CloudHelp: ObservableObject {
             let memory = self.memory
             let switchedOff = self.switchedOff
             let sent = self.sent
-            // Marked in the store too, so a later launch still knows.
-            let session = CloudChatSession(handingOver: { sent.value = true; try? store.markSent() })
+            // Marked in the store first, so a later launch still knows. A
+            // mark that can't be made sends nothing (`notRecorded`), so
+            // Forget everything never says no copy left when one did.
+            let session = CloudChatSession(handingOver: { try store.markSent(); sent.value = true })
             sessions.add(session)
             return CloudModel(
                 endpoint: url, transport: madeOnSend ? MadeOnSend(make: makeTransport) : makeTransport(),
@@ -356,14 +365,38 @@ public final class CloudHelp: ObservableObject {
                 // can't be read throws, so the chat says so rather than
                 // that it was turned off.
                 isOn: { try !switchedOff.value && store.load().isOn(for: url) },
+                privacyChanges: privacyChanges,
                 session: session
             )
         }
     }
 
     /// A cloud chat now on screen, so Forget everything can end it too.
+    /// Watched from here on, so `chatsHoldAnything` follows what it holds.
     func opened(_ chat: ChatController) {
         openChats.add(chat)
+        chatWatches[ObjectIdentifier(chat)] = chat.objectWillChange.sink { [weak self] _ in
+            // Told before the change, so it looks once the change is made.
+            Task { @MainActor in self?.recountHeldChats() }
+        }
+        recountHeldChats()
+    }
+
+    /// True while a cloud chat on screen in any window, or a cloud chat's
+    /// session, holds something Forget everything would let go of: words
+    /// said or typed and not yet sent, a reply under way, or anything it
+    /// hid. The memory screen shows Forget everything then, even with
+    /// nothing else kept.
+    @Published private(set) var chatsHoldAnything = false
+    private var chatWatches: [ObjectIdentifier: AnyCancellable] = [:]
+
+    /// Reads `chatsHoldAnything` again, and stops watching chats gone.
+    func recountHeldChats() {
+        let open = openChats.allObjects
+        let live = Set(open.map(ObjectIdentifier.init))
+        chatWatches = chatWatches.filter { live.contains($0.key) }
+        let holds = open.contains { $0.holdsAnything } || sessions.allObjects.contains { $0.holdsAnything }
+        if holds != chatsHoldAnything { chatsHoldAnything = holds }
     }
 
     /// What Forget everything does first, before anything is erased: every
@@ -385,6 +418,7 @@ public final class CloudHelp: ObservableObject {
         for chat in openChats.allObjects where chat.holdsAnything { chat.end() }
         for session in sessions.allObjects where session.holdsAnything { session.end() }
         withdrawPreviews()
+        recountHeldChats()
         return anythingSent
     }
 
@@ -609,8 +643,14 @@ public final class CloudHelp: ObservableObject {
 
     /// Changes the saved settings, read fresh so words saved elsewhere or
     /// unreadable at launch are never written over. A switch off made in
-    /// this session is kept in whatever is saved.
+    /// this session is kept in whatever is saved. Read and saved under
+    /// `privacyChanges`, so a private word added while a cloud request is
+    /// checked and handed over waits until it has gone.
     private func update(_ change: (inout CloudHelpSettings) -> Void) -> Outcome {
+        privacyChanges.change { updateNow(change) }
+    }
+
+    private func updateNow(_ change: (inout CloudHelpSettings) -> Void) -> Outcome {
         let before: CloudHelpSettings
         do {
             before = try store.load()

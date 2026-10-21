@@ -135,7 +135,13 @@ perl: s~else \{ \$comment \.= " \$rest"; \$rest = "" \}~else { \$rest = "" }~
 
 test: theCommentLintCatchesReviewHistoryAndNames
 file: scripts/comment-lint.sh
-perl: s#\n\s*\$rest =~ s/\$quoted/""/g;##
+perl: s!else \{ \$rest = \$after =~ [^\n]*!else { \$rest = \$after }!
+
+# Quotes inside a comment are still the comment: stripping strings before
+# finding the comment would hide them.
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s!(\n\s*)# Read left to right!$1\$rest =~ s/\$quoted/""/g;$1# Read left to right!
 
 test: theCommentLintCoversTheProjectFiles
 file: scripts/comment-lint.sh

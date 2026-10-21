@@ -269,47 +269,31 @@ public struct CloudSignIn: Sendable, Equatable {
     }
 
     /// The body as it is checked, shown and sent: each part's name and its
-    /// value as text, when the body is a flat JSON object whose names are
-    /// tokens (`isToken`) and whose values are each a string or a number
-    /// of at most `maxValueLength` characters. Nil for anything else: a
+    /// value, when the body is a flat JSON object whose names are tokens
+    /// (`isToken`) and whose values are each a string of at most
+    /// `maxValueLength` characters. Nil for anything else: a number, a
     /// nested object or list, a true or false, a null, or a body that
     /// isn't a JSON object at all. A sign-in carries a credential or a
-    /// device token, never a document.
+    /// device token, never a document. A number is refused rather than
+    /// sent as text, so a server that reads a number never gets a string
+    /// in its place; sign-in writes it as a string itself.
     ///
     /// `body` itself is never sent. What goes is `encoded(fields)`, built
-    /// from these very values, so a duplicate name or a number the system
-    /// would write another way can't send anything that wasn't checked.
+    /// from these very values, so a duplicate name can't send anything
+    /// that wasn't checked.
     public var fields: [String: String]? {
-        guard let object = try? JSONDecoder().decode([String: PlainValue].self, from: body) else { return nil }
-        let fields = object.mapValues(\.text)
+        guard let fields = try? JSONDecoder().decode([String: String].self, from: body) else { return nil }
         guard fields.keys.allSatisfy(Self.isToken),
               fields.values.allSatisfy({ $0.count <= Self.maxValueLength }) else { return nil }
         return fields
     }
 
     /// `fields` as the bytes that go: a flat JSON object of strings, its
-    /// names in order. A number goes as the text it was checked as.
+    /// names in order.
     public static func encoded(_ fields: [String: String]) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return try encoder.encode(fields)
-    }
-
-    /// One value of a sign-in body: a string, or a number as text. Anything
-    /// else fails to decode, so the whole body is refused.
-    private struct PlainValue: Decodable {
-        let text: String
-
-        init(from decoder: any Decoder) throws {
-            let value = try decoder.singleValueContainer()
-            if let string = try? value.decode(String.self) {
-                text = string
-            } else if let whole = try? value.decode(Int64.self) {
-                text = String(whole)
-            } else {
-                text = String(try value.decode(Double.self))
-            }
-        }
     }
 
     /// The hop's address under `endpoint`, or nil when `path` isn't plain.
@@ -407,6 +391,13 @@ public enum CloudModelError: Error, Equatable, Sendable {
     case unreadableReply
     /// Forget everything ended this chat. Nothing more goes from it.
     case ended
+    /// A switch off ended this chat, and the cloud has been turned on again
+    /// since. Nothing more goes from it; a new chat can use the cloud.
+    case endedByOff
+    /// That something was handed to the cloud couldn't be noted on this
+    /// device, so a later Forget everything couldn't say a copy left.
+    /// Nothing was sent.
+    case notRecorded
 }
 
 /// The body sent to the cloud model.
@@ -470,6 +461,9 @@ public struct CloudModel: ModelClient {
     private let auth: any CloudAuth
     private let redactor: @Sendable () throws -> Redactor
     private let isOn: @Sendable () throws -> Bool
+    /// Held while each hop is checked against the notes and private words
+    /// and handed to the transport, so neither changes in between.
+    private let privacyChanges: PrivacyChanges
     /// Shared by every copy of this model, so by the whole chat.
     package let session: CloudChatSession
 
@@ -482,6 +476,9 @@ public struct CloudModel: ModelClient {
     /// chat's lock held, so it may read files or reach into the chat. It
     /// throws when the setting can't be read, which is not the same as off:
     /// nothing is sent, and the chat says it couldn't read them.
+    /// `privacyChanges` is the one every writer of the notes and private
+    /// words takes (`MemoryStore.privacyChanges`), so a word saved just
+    /// before a hop goes waits until it has gone, or stops it.
     /// `session` is this chat's, so whoever made it can end the chat.
     public init(
         endpoint: URL,
@@ -490,6 +487,7 @@ public struct CloudModel: ModelClient {
         auth: any CloudAuth = NoCloudAuth(),
         redactor: @escaping @Sendable () throws -> Redactor = { Redactor() },
         isOn: @escaping @Sendable () throws -> Bool = { true },
+        privacyChanges: PrivacyChanges = PrivacyChanges(),
         session: CloudChatSession = CloudChatSession()
     ) {
         self.endpoint = endpoint
@@ -498,6 +496,7 @@ public struct CloudModel: ModelClient {
         self.auth = auth
         self.redactor = redactor
         self.isOn = isOn
+        self.privacyChanges = privacyChanges
         self.session = session
     }
 
@@ -512,9 +511,16 @@ public struct CloudModel: ModelClient {
     /// that finds the notes or private words changed before a hop goes
     /// drops every hop not yet sent, and the next pass redacts afresh and
     /// asks for a new yes. Each pass waits on the person, so they bound it.
+    ///
+    /// A chat a switch off ended says so once the cloud is on again
+    /// (`endedByOff`), never that the cloud is off while it reads on.
     public func reply(to transcript: [ChatTurn]) async throws -> String {
-        while true {
-            if let reply = try await replyOnce(to: transcript) { return reply }
+        do {
+            while true {
+                if let reply = try await replyOnce(to: transcript) { return reply }
+            }
+        } catch CloudModelError.off where session.endedBySwitchOff && (try? isOn()) == true {
+            throw CloudModelError.endedByOff
         }
     }
 
@@ -554,8 +560,8 @@ public struct CloudModel: ModelClient {
             // each is checked again just before it goes.
             if let signIn = preview.signIn {
                 try readyToSend()
-                guard try readRedactor() == current else { return nil }
-                let answer = try await session.send(signIn, through: transport)
+                guard let handed = try handOver(signIn, ifStill: current) else { return nil }
+                let answer = try await session.finish(handed)
                 // A switch off or Forget everything may have come while it
                 // was on the wire; then nothing it brought back is kept.
                 // `isOn` is read first, off the chat's lock, so it may take
@@ -568,12 +574,23 @@ public struct CloudModel: ModelClient {
             try readyToSend()
             // A private word added or a note saved while sign-in was on the
             // wire isn't hidden in this message, so it never goes.
-            guard try readRedactor() == current else { return nil }
-            let data = try await session.send(preview.request, through: transport)
+            guard let handed = try handOver(preview.request, ifStill: current) else { return nil }
+            let data = try await session.finish(handed)
             guard let reply = try? JSONDecoder().decode(CloudPayload.Reply.self, from: data) else {
                 throw CloudModelError.unreadableReply
             }
             return reply.reply
+        }
+    }
+
+    /// Hands `request` to the transport while the notes and private words
+    /// still make `current`. The check and the hand over both run under
+    /// `privacyChanges`, so nothing saved between the two can miss the
+    /// check. Nil, with nothing handed over, once they have changed.
+    private func handOver(_ request: CloudRequest, ifStill current: Redactor) throws -> CloudChatSession.Handed? {
+        try privacyChanges.handOver {
+            guard try readRedactor() == current else { return nil }
+            return try session.handOff(request, through: transport)
         }
     }
 
@@ -704,12 +721,15 @@ public final class CloudChatSession: @unchecked Sendable {
     private var endedBy: CloudModelError?
     private var ended: Bool { endedBy != nil }
     private var onTheWire: [UUID: Task<Data, Error>] = [:]
-    private let handingOver: @Sendable () -> Void
+    private let handingOver: @Sendable () throws -> Void
 
     /// `handingOver` is told just before each request is handed to the
     /// transport, so the owner knows something may have left this session.
-    /// It runs under the session's lock, so it must not touch the session.
-    public init(handingOver: @escaping @Sendable () -> Void = {}) {
+    /// When it throws, nothing is handed over and the send fails with
+    /// `CloudModelError.notRecorded`, so nothing goes that the owner
+    /// couldn't note. It runs under the session's lock, so it must not
+    /// touch the session.
+    public init(handingOver: @escaping @Sendable () throws -> Void = {}) {
         self.handingOver = handingOver
     }
 
@@ -717,6 +737,9 @@ public final class CloudChatSession: @unchecked Sendable {
     package var hiddenSoFar: Redactor { lock.withLock { hidden } }
 
     public var hasEnded: Bool { lock.withLock { ended } }
+
+    /// True when a switch off ended the chat, and Forget everything didn't.
+    package var endedBySwitchOff: Bool { lock.withLock { endedBy == .off } }
 
     /// How many requests are on the wire now.
     package var sendsOnTheWire: Int { lock.withLock { onTheWire.count } }
@@ -762,20 +785,41 @@ public final class CloudChatSession: @unchecked Sendable {
         }
     }
 
-    /// Hands `request` to `transport`, unless the chat has ended. Ending it
-    /// cancels the send, as stopping the reply does. The `handingOver`
+    /// A request `handOff` handed to its transport, until `finish`.
+    package struct Handed {
+        fileprivate let id: UUID
+        fileprivate let task: Task<Data, Error>
+    }
+
+    /// Hands `request` to `transport`, unless the chat has ended, and waits
+    /// for the answer. Ending it cancels the send, as stopping the reply
+    /// does.
+    package func send(_ request: CloudRequest, through transport: any CloudTransport) async throws -> Data {
+        try await finish(try handOff(request, through: transport))
+    }
+
+    /// The part of `send` that hands `request` over, with no wait, so a
+    /// caller can do it under a lock of its own (`PrivacyChanges`). Once
+    /// it returns the bytes may be on their way. The `handingOver`
     /// callback given at init runs under the session's lock, just before
     /// the request is handed over, so it must not touch the session.
-    package func send(_ request: CloudRequest, through transport: any CloudTransport) async throws -> Data {
+    /// Always followed by `finish`.
+    package func handOff(_ request: CloudRequest, through transport: any CloudTransport) throws -> Handed {
         let id = UUID()
         let task: Task<Data, Error> = try lock.withLock {
             if let endedBy { throw endedBy }
-            handingOver()
+            do { try handingOver() } catch { throw CloudModelError.notRecorded }
             let task = Task { try await transport.send(request) }
             onTheWire[id] = task
             return task
         }
-        defer { lock.withLock { onTheWire[id] = nil } }
+        return Handed(id: id, task: task)
+    }
+
+    /// Waits for what `handOff` handed over.
+    package func finish(_ handed: Handed) async throws -> Data {
+        defer { lock.withLock { onTheWire[handed.id] = nil } }
+        let task = handed.task
         return try await withTaskCancellationHandler {
             try await task.value
         } onCancel: {
@@ -855,15 +899,17 @@ public struct URLSessionCloudTransport: CloudTransport {
         allowsLoopbackHTTP = false
     }
 
+    #if DEBUG
     /// The real session, one for every send, so a test can see what the
     /// system itself adds from one request to the next. Takes plain http
     /// to `loopbackHost` too, which a test's local listener needs and
-    /// nothing else ever gets.
+    /// nothing else ever gets. Debug only, so no shipped build has it.
     package init(loopbackForTests: Void) {
         let session = Self.makeSession()
         load = { request in try await session.data(for: request, delegate: RefusesRedirects()) }
         allowsLoopbackHTTP = true
     }
+    #endif
 
     /// Only https leaves, whatever address a request was built for:
     /// `CloudEndpoint` takes no other, and this holds even if something

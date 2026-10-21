@@ -205,11 +205,12 @@ public struct MemoryView: View {
     private var forgetEverythingSection: some View {
         if let cloud {
             // Watches the cloud setting, so the button shows while there
-            // may be private words to erase.
+            // may be private words to erase, or a cloud chat in any window
+            // holds something Forget everything would end.
             CloudWatcher(help: cloud) { help in
                 forgetEverythingButton(shown: Self.showsForgetEverything(
                     hasNotes: model.hasSomethingToForget, mayHaveWords: help.mayHavePrivateWords,
-                    holdsMore: holdsMore || !model.allowed.isEmpty))
+                    holdsMore: holdsMore || !model.allowed.isEmpty || help.chatsHoldAnything))
             }
         } else {
             forgetEverythingButton(shown: Self.showsForgetEverything(

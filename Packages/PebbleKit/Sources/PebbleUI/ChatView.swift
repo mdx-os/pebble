@@ -824,6 +824,8 @@ final class ChatController: ObservableObject {
         case .staysHere: CloudWords.staysHere
         case .notesUnreadable: CloudWords.notesUnreadable
         case .ended: CloudWords.chatEnded
+        case .endedByOff: CloudWords.chatEndedByOff
+        case .notRecorded: CloudWords.notRecorded
         default: FirstConversation.couldNotAnswer
         }
     }
@@ -831,13 +833,14 @@ final class ChatController: ObservableObject {
     /// True for a line that says the words are back in the composer, so it
     /// goes once the person clears them.
     ///
-    /// `staysHere`, `turnedOff` and `chatEnded` give the words back too, but
-    /// they are about the chat, not the draft: clearing the words doesn't
-    /// make "part of this chat has to stay here" or "the cloud is off" any
-    /// less true, so those lines stay until the next send or a new chat.
+    /// `staysHere`, `turnedOff`, `chatEnded` and `chatEndedByOff` give the
+    /// words back too, but they are about the chat, not the draft: clearing
+    /// the words doesn't make "part of this chat has to stay here" or "this
+    /// chat stopped" any less true, so those lines stay until the next send
+    /// or a new chat.
     nonisolated static func pointsAtTheDraft(_ failure: String) -> Bool {
         [FirstConversation.couldNotAnswer, CloudWords.notSent, CloudWords.withdrawn, CloudWords.turnedOff,
-         CloudWords.notesUnreadable].contains(failure)
+         CloudWords.notesUnreadable, CloudWords.notRecorded].contains(failure)
     }
 
     /// True while the draft still starts with the words given back, whole,
@@ -884,7 +887,7 @@ final class ChatController: ObservableObject {
             }
         }
         return switch error as? CloudModelError {
-        case .notSent, .withdrawn, .off, .staysHere, .notesUnreadable, .ended: true
+        case .notSent, .withdrawn, .off, .staysHere, .notesUnreadable, .ended, .endedByOff, .notRecorded: true
         case .unreadableReply, nil: false
         }
     }

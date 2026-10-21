@@ -328,7 +328,7 @@ struct CloudModelTests {
             endpoint: endpoint, transport: URLSessionCloudTransport(loopbackForTests: ()), reviewer: reviewer,
             auth: SampleAuth(headers: ["X-Sample-Sign-In": "made-up"],
                              signIn: CloudSignIn(path: "v1/sign-in", headers: ["X-Sample-Device": "made-up"],
-                                                 body: Data(#"{"device":"made-up","build":7}"#.utf8)))
+                                                 body: Data(#"{"device":"made-up","build":"7"}"#.utf8)))
         )
         _ = try await cloudChat().sending("Plan my week", with: cloud)
         let preview = try #require(reviewer.seen.first)
@@ -408,9 +408,9 @@ struct CloudModelTests {
     @Test(arguments: [
         SampleAuth(signIn: CloudSignIn(path: "v1/sign-in", body: Data(#"{"device":"lemon cake"}"#.utf8))),
         SampleAuth(signIn: CloudSignIn(path: "v1/sign-in", body: Data(#"{"device":"Sam"}"#.utf8))),
-        SampleAuth(signIn: CloudSignIn(path: "v1/sign-in", body: Data(#"{"note":"Sam's birthday","id":7}"#.utf8))),
+        SampleAuth(signIn: CloudSignIn(path: "v1/sign-in", body: Data(#"{"note":"Sam's birthday","id":"7"}"#.utf8))),
         SampleAuth(signIn: CloudSignIn(path: "v1/sign-in", body: Data(#"{"who":"sam.lee@example.com"}"#.utf8))),
-        SampleAuth(signIn: CloudSignIn(path: "v1/sign-in", body: Data(#"{"phone":4165550199}"#.utf8))),
+        SampleAuth(signIn: CloudSignIn(path: "v1/sign-in", body: Data(#"{"phone":"4165550199"}"#.utf8))),
         SampleAuth(signIn: CloudSignIn(path: "v1/sign-in", headers: ["X-Sample-Device": "lemon-cake"],
                                        body: Data("{}".utf8))),
         SampleAuth(headers: ["X-Sample-Sign-In": "Sam"]),
@@ -436,7 +436,7 @@ struct CloudModelTests {
         let notes = notes
         let auth = SampleAuth(headers: ["X-Sample-Sign-In": "made-up-token"],
                               signIn: CloudSignIn(path: "v1/sign-in", headers: ["X-Sample-Device": "made-up"],
-                                                  body: Data(#"{"device":"made-up-device","build":7}"#.utf8)))
+                                                  body: Data(#"{"device":"made-up-device","build":"7"}"#.utf8)))
         let cloud = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer, auth: auth,
                                redactor: { Redactor(memory: notes, privateWords: ["lemon cake"]) })
         _ = try await cloudChat().sending("Plan my week", with: cloud)
@@ -444,21 +444,23 @@ struct CloudModelTests {
         #expect(transport.sent.count == 2)
     }
 
-    /// A sign-in body is a flat JSON object of short strings or numbers,
-    /// as a credential or device token is. Anything else is refused before
-    /// a preview, so the card never covers a document.
+    /// A sign-in body is a flat JSON object of short strings, as a
+    /// credential or device token is. Anything else is refused before a
+    /// preview, so the card never covers a document. A number is refused
+    /// too, rather than sent as a string a server may not expect.
     @Test func aSignInBodyThatIsNotAFlatObjectOfShortValuesIsRefused() async throws {
         var turns = cloudChat().turns
         turns.append(ChatTurn(id: UUID(), speaker: .person, text: "Plan my week"))
         let longest = String(repeating: "a", count: CloudSignIn.maxValueLength)
         for body in [#"{"a":{"b":"c"}}"#, #"{"a":["b"]}"#, #"["a"]"#, "token=made-up", "", #"{"a":true}"#,
-                     #"{"a":null}"#, #""a""#, "{\"a\":\"\(longest)a\"}"] {
+                     #"{"a":null}"#, #""a""#, "{\"a\":\"\(longest)a\"}", #"{"build":7}"#, #"{"scale":1.5}"#,
+                     #"{"device":"made-up","n":12345678901234567890}"#] {
             #expect(throws: CloudTransportError.signInBodyRefused, "\(body.prefix(40))") {
                 try CloudModel.preview(for: turns, endpoint: endpoint, redactor: Redactor(),
                                        signIn: CloudSignIn(path: "v1/sign-in", body: Data(body.utf8)))
             }
         }
-        for body in ["{}", #"{"device":"made-up","build":7,"scale":1.5}"#, "{\"a\":\"\(longest)\"}"] {
+        for body in ["{}", #"{"device":"made-up","build":"7"}"#, "{\"a\":\"\(longest)\"}"] {
             #expect(throws: Never.self, "\(body.prefix(40))") {
                 try CloudModel.preview(for: turns, endpoint: endpoint, redactor: Redactor(),
                                        signIn: CloudSignIn(path: "v1/sign-in", body: Data(body.utf8)))
@@ -479,15 +481,13 @@ struct CloudModelTests {
 
     /// What goes is what was checked: the hop's body is the checked fields
     /// written again, never the bytes sign-in handed over. A name given
-    /// twice can't carry an unchecked value, whichever one a parser keeps,
-    /// and a number too big to read exactly goes as the text that was
-    /// checked, not as digits nobody checked.
+    /// twice can't carry an unchecked value, whichever one a parser keeps.
     @Test func theSignInBodyThatGoesIsTheOneThatWasChecked() async throws {
         var turns = cloudChat().turns
         turns.append(ChatTurn(id: UUID(), speaker: .person, text: "Plan my week"))
         let redactor = Redactor(privateWords: ["lemon cake"])
         for raw in [#"{"device":"made-up","device":"Sam lemon cake"}"#, #"{"device":"Sam lemon cake","device":"made-up"}"#,
-                    #"{"n":12345678901234567890}"#, #"{"device":"made-up","build":7,"scale":1.5}"#] {
+                    #"{"device":"made-up","build":"7"}"#] {
             let signIn = CloudSignIn(path: "v1/sign-in", body: Data(raw.utf8))
             let preview: CloudPreview
             do {
@@ -505,16 +505,13 @@ struct CloudModelTests {
             #expect(sent == fields, "\(raw)")
             #expect(sent.values.allSatisfy { redactor.redact($0).isUnchanged }, "\(raw)")
         }
-        // The big number goes as it was checked.
-        let big = try CloudModel.preview(for: turns, endpoint: endpoint, redactor: redactor,
-                                         signIn: CloudSignIn(path: "v1/sign-in", body: Data(#"{"n":12345678901234567890}"#.utf8)))
-        #expect(try #require(big.signIn).text == #"{"n":"1.2345678901234567e+19"}"#)
-        // And through a reply, the wire gets those very bytes.
+        // Through a reply, the wire gets the checked fields written again,
+        // never the spacing sign-in handed over.
         let transport = RecordingTransport()
         let reviewer = RecordingReviewer(answer: .send)
         let cloud = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer,
                                auth: SampleAuth(signIn: CloudSignIn(path: "v1/sign-in",
-                                                                    body: Data(#"{ "build" : 7, "device" : "made-up" }"#.utf8))))
+                                                                    body: Data(#"{ "build" : "7", "device" : "made-up" }"#.utf8))))
         _ = try await cloudChat().sending("Plan my week", with: cloud)
         #expect(transport.sent.first?.text == #"{"build":"7","device":"made-up"}"#)
         #expect(transport.sent == reviewer.seen.first?.hops)
@@ -930,6 +927,110 @@ struct CloudModelTests {
         #expect(transport.sent.isEmpty)
     }
 
+    /// A private word saved in another window between a hop's last check
+    /// and its hand over never lets that hop leave without it hidden: the
+    /// save waits until the hop is handed over (`PrivacyChanges`). The save
+    /// starts on a thread of its own from inside that last check, which
+    /// goes on only once the save has finished or is held back, so neither
+    /// order is left to a clock. What was saved by the hand over is noted
+    /// there and held up against what went.
+    @Test func aPrivateWordSavedJustBeforeTheHandOverWaitsForIt() async throws {
+        let words = Words()
+        let saving = SaveFromElsewhere()
+        let privacy = PrivacyChanges(waiting: { saving.heldBack() })
+        let reads = Count()
+        let savedByTheHandOver = Words()
+        let session = CloudChatSession(handingOver: { for word in words.list { savedByTheHandOver.add(word) } })
+        let transport = RecordingTransport()
+        let cloud = CloudModel(
+            endpoint: endpoint, transport: transport, reviewer: RecordingReviewer(answer: .send),
+            redactor: {
+                let read = Redactor(privateWords: words.list)
+                // The first read redacts the preview; the second is the
+                // message's last check before it is handed over.
+                if reads.next() == 2 {
+                    saving.start { privacy.change { words.add("lemon cake") } }
+                    #expect(saving.waitUntilFinishedOrHeldBack(), "the save neither finished nor waited")
+                }
+                return read
+            },
+            privacyChanges: privacy, session: session
+        )
+        _ = try await cloudChat().sending("Bring the lemon cake on Friday.", with: cloud)
+        #expect(saving.waitUntilFinished(), "the save never finished")
+        #expect(words.list == ["lemon cake"], "the save was lost")
+        #expect(transport.sent.count == 1)
+        #expect(savedByTheHandOver.list.isEmpty, "a word saved before the hand over missed its check")
+        for sent in transport.sent {
+            for word in savedByTheHandOver.list {
+                #expect(!sent.text.contains(word), "sent unmasked after it was saved")
+            }
+        }
+    }
+
+    /// Every writer of the notes takes the same lock as the hand over, so
+    /// a note saved while a hop is checked and handed over waits for it.
+    /// The lock is held here as a hand over holds it, and the note is
+    /// saved from a thread of its own.
+    @Test func aNoteSavedDuringAHandOverWaitsForIt() throws {
+        let saving = SaveFromElsewhere()
+        let privacy = PrivacyChanges(waiting: { saving.heldBack() })
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("hand-over-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let memory = MemoryStore(fileURL: url, privacyChanges: privacy)
+        let duringTheHandOver = privacy.handOver { () -> [MemoryNote] in
+            saving.start { _ = try? memory.remember("Sam's birthday is May 14.", source: .toldMe) }
+            #expect(saving.waitUntilFinishedOrHeldBack(), "the save neither finished nor waited")
+            return memory.notes()
+        }
+        #expect(saving.waitUntilFinished(), "the save never finished")
+        #expect(duringTheHandOver.isEmpty, "a note was saved in the middle of a hand over")
+        #expect(memory.notes().count == 1)
+    }
+
+    /// A send the owner couldn't note sends nothing: the session refuses
+    /// it with `notRecorded`, and the transport never sees it.
+    @Test func aSendThatCantBeNotedSendsNothing() async throws {
+        struct Full: Error {}
+        let transport = RecordingTransport()
+        let session = CloudChatSession(handingOver: { throw Full() })
+        let cloud = CloudModel(endpoint: endpoint, transport: transport, reviewer: RecordingReviewer(answer: .send),
+                               auth: SampleAuth(signIn: CloudSignIn(path: "v1/sign-in", body: Data("{}".utf8))),
+                               session: session)
+        await #expect(throws: CloudModelError.notRecorded) {
+            try await cloudChat().sending("Plan my week", with: cloud)
+        }
+        #expect(transport.sent.isEmpty)
+        #expect(session.sendsOnTheWire == 0)
+    }
+
+    /// A chat a switch off ended, once the cloud is on again, says the
+    /// chat stopped (`endedByOff`), never that the cloud is off. While it
+    /// is still off it says off. Either way nothing goes from it.
+    @Test func aChatEndedBySwitchingOffSaysSoOnceTheCloudIsOnAgain() async throws {
+        for onAgain in [true, false] {
+            let session = CloudChatSession()
+            let on = Flag(true)
+            let transport = RecordingTransport()
+            let cloud = CloudModel(endpoint: endpoint, transport: transport, reviewer: RecordingReviewer(answer: .send),
+                                   isOn: { on.value }, session: session)
+            on.value = false
+            session.end(because: .off)
+            on.value = onAgain
+            await #expect(throws: onAgain ? CloudModelError.endedByOff : CloudModelError.off, "\(onAgain)") {
+                try await cloudChat().sending("Plan my week", with: cloud)
+            }
+            #expect(transport.sent.isEmpty)
+        }
+        // Forget everything still says it ended the chat.
+        let forgotten = CloudChatSession()
+        forgotten.end(because: .off)
+        forgotten.end()
+        let cloud = CloudModel(endpoint: endpoint, transport: RecordingTransport(),
+                               reviewer: RecordingReviewer(answer: .send), session: forgotten)
+        await #expect(throws: CloudModelError.ended) { try await cloudChat().sending("Plan my week", with: cloud) }
+    }
+
     // MARK: Notes that can't be read
 
     @Test func unreadableNotesSendNothingAndShowNothing() async {
@@ -1298,6 +1399,37 @@ final class HopThenTransport: CloudTransport, @unchecked Sendable {
 }
 
 /// The private words, as a list the test can add to while a reply is under way.
+/// Counts, one call at a time.
+final class Count: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    /// One more, and the count after it.
+    func next() -> Int { lock.withLock { value += 1; return value } }
+}
+
+/// A save made from a thread of its own, as from another window, that can
+/// be waited on until it finishes or is held back by a lock, with no clock
+/// deciding which. Every wait has a generous limit, so a regression fails
+/// rather than hangs.
+final class SaveFromElsewhere: @unchecked Sendable {
+    private let finishedOrHeldBack = DispatchSemaphore(value: 0)
+    private let finished = DispatchSemaphore(value: 0)
+
+    func start(_ save: @escaping @Sendable () -> Void) {
+        Thread { [self] in
+            save()
+            finishedOrHeldBack.signal()
+            finished.signal()
+        }.start()
+    }
+
+    /// Told by the lock's `waiting`.
+    func heldBack() { finishedOrHeldBack.signal() }
+
+    func waitUntilFinishedOrHeldBack() -> Bool { finishedOrHeldBack.wait(timeout: .now() + 60) == .success }
+    func waitUntilFinished() -> Bool { finished.wait(timeout: .now() + 60) == .success }
+}
+
 final class Words: @unchecked Sendable {
     private let lock = NSLock()
     private var _list: [String] = []

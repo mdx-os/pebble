@@ -61,7 +61,7 @@ public struct CloudReconSummarizer: ReconSummarizer {
             // this, so the note doesn't say they did. Only a preview with
             // no answer is withdrawn, so no yes was ever given.
             return onDevice(ReconWords.cloudWithdrawn)
-        } catch CloudModelError.off {
+        } catch CloudModelError.off, CloudModelError.endedByOff {
             // Off before a preview was shown, or by the time a yes came:
             // nothing was asked, or the yes couldn't be used.
             return onDevice(ReconWords.cloudOff)

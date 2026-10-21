@@ -397,7 +397,7 @@ public enum CloudWords {
     public static func offDetail(_ place: PrivacyPlace) -> String {
         place.staysOnDevice ? "Off. Everything I do stays on this device." : "Off for new chats."
     }
-    public static let onDetail = "On for new chats. Before anything from a chat leaves this device, I show you exactly what goes, and you decide."
+    public static let onDetail = "On for new chats. Before anything from a chat leaves this device, I show you what goes, and you decide."
     public static let unavailable = "There's no cloud model set up for this device yet, so this stays off."
     /// The file the setting and private words are kept in couldn't be
     /// opened at launch, so nothing typed here could be kept. It is opened
@@ -410,7 +410,9 @@ public enum CloudWords {
     public static let askQuestion = "Turn on help from the cloud?"
     public static let askPoints: [String] = [
         "Your next new chat will use a bigger model on a computer somewhere else, not on this device.",
-        "Before anything from a chat leaves, I show you exactly what goes. You can send it or keep it here.",
+        // Not "exactly": sign-in values are covered on the card, as
+        // `previewTitle` says.
+        "Before anything from a chat leaves, I show you what goes. You can send it or keep it here.",
         "I try to take out names from your notes, emails, phone numbers, addresses, card numbers and your private words first. Check what I show you, since I can miss things.",
         "Earlier messages in a chat go again with each new one, so you see them in every preview.",
         "The name you gave me goes too, in my first line of each chat.",
@@ -617,6 +619,13 @@ public enum CloudWords {
     /// The home screen starts a fresh chat in its place, so this is only
     /// seen by a chat held somewhere else.
     public static let chatEnded = "This chat ended with Forget everything, so I didn't send that. A new chat starts fresh."
+    /// Turning the cloud off ended this chat, and it has been turned on
+    /// again since, so a send from it went nowhere. Said in place of
+    /// `turnedOff`, which would say the cloud is off while it reads on.
+    public static let chatEndedByOff = "This chat stopped when help from the cloud was turned off, so I didn't send that. A new chat starts fresh. What you wrote is still here."
+    /// The note that something went to the cloud, which a later Forget
+    /// everything reads, couldn't be made, so nothing was sent.
+    public static let notRecorded = "Sorry, I couldn't get ready to send that, so I didn't send it. What you wrote is still here. Please try again in a moment."
     /// The sign-in asked to carry something it may not: a value with a
     /// name, a private word or another personal detail in it, or a body
     /// that isn't a few short labelled values. Nothing was shown or sent.
@@ -650,7 +659,7 @@ public enum CloudWords {
         forgotNotesAndTasksNotWords, forgotTasksAndWordsNotNotes, forgotTasksNotNotesOrWords,
         forgotTasksAndWordsAndCloudNotNotes, forgetTasksAndWordsDetail, tasksAndWordsForgotten,
         tasksAndWordsAndCloudForgotten, tasksForgottenNotWords,
-        chatEnded, signInRefused, forgotAfterSending, forgotAndCloudOffAfterSending, sentCantBeErased,
+        chatEnded, chatEndedByOff, notRecorded, signInRefused, forgotAfterSending, forgotAndCloudOffAfterSending, sentCantBeErased,
         forgetEverythingWithSummariesDetail,
     ] + forgotAndCloudOffNotSummariesLines + askPoints + Redaction.Kind.allCases.map(\.spoken)
 }

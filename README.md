@@ -109,7 +109,9 @@ chooses one.
   so the card may show a line more than went. Redirects, plain http and the header
   names URLSession reserves are refused. Words of crisis and chats that promised to stay on
   the device are never sent, and nothing is sent when the notes or private
-  words can't be read. The setting and the private words are kept next to
+  words can't be read. Each request is checked against them once more as
+  it is handed over, under the same lock their saves take, so a word saved
+  in another window just then waits for it or stops it. The setting and the private words are kept next to
   the notes, out of backups, and Forget everything ends every open cloud
   chat first. Sign-in is a `CloudAuth` hook that adds nothing by default; a
   sign-in the cloud needs is a hop shown in the same preview, its values
@@ -119,7 +121,7 @@ chooses one.
   covered, sign-in may carry only a credential or a device token: a name
   or value with a name, a private word or another personal detail in it,
   a name that isn't a short token, or a body that isn't a flat object of
-  short values, is refused before anything is shown or sent. What goes is those
+  short strings, is refused before anything is shown or sent. What goes is those
   checked values, written again, never the body sign-in handed over. The
   check knows only what the redactor knows, so the rest rests on the
   `CloudAuth` contract. The transport keeps and
@@ -135,7 +137,8 @@ chooses one.
   holds nothing personal; its only tell, to someone already reading the
   app's folder, is that the cloud was switched off. Once anything is sent,
   another empty file marks that it was, so Forget everything at a later
-  launch still says what went can't be erased from here. It holds no
+  launch still says what went can't be erased from here. It is made just
+  before the first request goes, and if it can't be made nothing is sent. It holds no
   words, is left unprotected the same way, and stays through Forget
   everything, since erasing the device's copy can't call back what was
   sent; its only tell is that something was once sent to the cloud.

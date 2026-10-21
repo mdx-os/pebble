@@ -4,6 +4,7 @@ import Foundation
 import PebbleCore
 import PebbleModel
 import ReconTestSupport
+import SourceScan
 import SwiftUI
 import Testing
 @testable import PebbleUI
@@ -421,13 +422,75 @@ final class FailingCloudStore: CloudHelpStoring, @unchecked Sendable {
     }
 
     private var _sent = false
+    private var _markSentFails = false
+    private var _onMarkSent: (@Sendable () -> Void)?
+
+    /// Makes `markSent` fail, as a disk with no room for even an empty
+    /// file would.
+    var markSentFails: Bool {
+        get { lock.withLock { _markSentFails } }
+        set { lock.withLock { _markSentFails = newValue } }
+    }
+
+    /// Run at each `markSent`, outside this store's lock: the moment just
+    /// before a request is handed over.
+    var onMarkSent: (@Sendable () -> Void)? {
+        get { lock.withLock { _onMarkSent } }
+        set { lock.withLock { _onMarkSent = newValue } }
+    }
 
     /// Kept through `erase`, as the file store's mark is.
     func markSent() throws {
-        lock.withLock { _sent = true }
+        onMarkSent?()
+        try lock.withLock {
+            if _markSentFails { throw CocoaError(.fileWriteOutOfSpace) }
+            _sent = true
+        }
     }
 
     var wasSent: Bool { lock.withLock { _sent } }
+}
+
+/// Runs a step on a thread of its own, as another window would, and waits
+/// until it finishes or is held back by a lock, with no clock deciding
+/// which. Every wait has a generous limit, so a regression fails rather
+/// than hangs.
+final class FromAnotherThread: @unchecked Sendable {
+    private let finishedOrHeldBack = DispatchSemaphore(value: 0)
+    private let finished = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var _wasHeldBack = false
+
+    func start(_ step: @escaping @Sendable () -> Void) {
+        Thread { [self] in
+            step()
+            finishedOrHeldBack.signal()
+            finished.signal()
+        }.start()
+    }
+
+    /// Told by the lock's `waiting`.
+    func heldBack() {
+        lock.withLock { _wasHeldBack = true }
+        finishedOrHeldBack.signal()
+    }
+
+    var wasHeldBack: Bool { lock.withLock { _wasHeldBack } }
+
+    /// Wakes a wait for finished or held back, as when the step it would
+    /// have held back ran somewhere else and is done.
+    func wake() { finishedOrHeldBack.signal() }
+
+    func waitUntilFinishedOrHeldBack() -> Bool { finishedOrHeldBack.wait(timeout: .now() + 60) == .success }
+    func waitUntilFinished() -> Bool { finished.wait(timeout: .now() + 60) == .success }
+}
+
+/// Words noted from any thread.
+final class SeenWords: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _list: [String] = []
+    var list: [String] { lock.withLock { _list } }
+    func add(_ word: String) { lock.withLock { _list.append(word) } }
 }
 
 /// Runs a step on the main thread the first time a message's headers are
@@ -568,6 +631,168 @@ struct CloudHelpTests {
         #expect(maker.wire.sent.map(\.httpBody) == shown.hops.map(\.body))
         #expect(maker.wire.sent.map(\.allHTTPHeaderFields) == shown.hops.map(\.headers))
         #expect(auth.signIns == 1)
+    }
+
+    // MARK: A chat a switch off ended
+
+    /// Off, then on again, then a send from the chat still on screen: it
+    /// says the chat stopped and a new one starts fresh, never that the
+    /// cloud is off while the setting reads on. Nothing goes, the words
+    /// come back, and a new chat uses the cloud again.
+    @Test func aChatStillOpenAfterOffThenOnSaysItStopped() async throws {
+        let maker = TransportMaker()
+        let cloud = help(CloudHelpSettings(isOn: true, for: endpoint), endpoint: endpoint, maker: maker)
+        let controller = chat(cloud)
+        cloud.setOn(false)
+        #expect(cloud.setOn(true))
+        cloud.confirmTurnOn()
+        #expect(cloud.settings.isOn)
+        controller.submit("Plan my week")
+        await controller.settled()
+        #expect(controller.failure == CloudWords.chatEndedByOff)
+        #expect(controller.draft == "Plan my week")
+        #expect(personTurns(controller).isEmpty)
+        #expect(maker.wire.sent.isEmpty)
+        let fresh = chat(cloud)
+        let review = try #require(fresh.review)
+        fresh.submit("Plan my week")
+        review.answer(.send, for: await review.shown().id)
+        await fresh.settled()
+        #expect(maker.wire.sent.count == 1)
+    }
+
+    // MARK: The sent mark fails closed
+
+    /// The mark that tells a later launch something went can't be made:
+    /// nothing goes, the chat says so with the words back, and a relaunch
+    /// truly has nothing to warn about. Once the mark can be made the send
+    /// goes, and a relaunch knows.
+    @Test func aSendThatCantBeMarkedSendsNothingAndARelaunchIsRight() async throws {
+        let maker = TransportMaker()
+        let store = FailingCloudStore(CloudHelpSettings(isOn: true, for: endpoint))
+        store.markSentFails = true
+        let cloud = help(endpoint: endpoint, maker: maker, store: store)
+        let controller = chat(cloud)
+        let review = try #require(controller.review)
+        controller.submit("Plan my week")
+        review.answer(.send, for: await review.shown().id)
+        await controller.settled()
+        #expect(maker.wire.sent.isEmpty)
+        #expect(controller.failure == CloudWords.notRecorded)
+        #expect(controller.draft == "Plan my week")
+        #expect(!cloud.anythingSent)
+        #expect(!help(endpoint: endpoint, maker: maker, store: store).anythingSent, "a relaunch")
+        store.markSentFails = false
+        controller.draft = ""
+        controller.submit("Plan my week")
+        review.answer(.send, for: await review.shown().id)
+        await controller.settled()
+        #expect(maker.wire.sent.count == 1)
+        #expect(help(endpoint: endpoint, maker: maker, store: store).anythingSent, "a relaunch")
+    }
+
+    // MARK: Privacy changes wait for a hand over
+
+    /// A private word added while a cloud request is checked and handed
+    /// over waits until it has gone: the setting saves its words under the
+    /// notes store's lock (`MemoryStore.privacyChanges`). The lock is held
+    /// on a thread of its own, as a hand over holds it, and the word is
+    /// added here; that thread notes the words saved while it holds it.
+    @Test func aPrivateWordAddedDuringAHandOverWaitsForIt() throws {
+        let other = FromAnotherThread()
+        let privacy = PrivacyChanges(waiting: { other.heldBack() })
+        let memory = MemoryStore(fileURL: scratch.add(FileManager.default.temporaryDirectory
+            .appendingPathComponent("cloud-test-\(UUID().uuidString).json")), privacyChanges: privacy)
+        let store = InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint))
+        let cloud = help(endpoint: endpoint, maker: TransportMaker(), memory: memory, store: store)
+        let holding = DispatchSemaphore(value: 0)
+        let seen = SeenWords()
+        other.start {
+            privacy.handOver {
+                holding.signal()
+                _ = other.waitUntilFinishedOrHeldBack()
+                for word in store.loadOrOff().privateWords { seen.add(word) }
+            }
+        }
+        #expect(holding.wait(timeout: .now() + 60) == .success)
+        cloud.newPrivateWord = "lemon cake"
+        cloud.addPrivateWord()
+        // If the add never waited, the other thread is woken here.
+        other.wake()
+        #expect(other.waitUntilFinished())
+        #expect(other.wasHeldBack, "the word was saved without waiting")
+        #expect(seen.list.isEmpty, "a word was saved in the middle of a hand over")
+        #expect(store.loadOrOff().privateWords == ["lemon cake"])
+    }
+
+    /// Every cloud chat hands its requests over under the notes store's
+    /// lock, the one the notes and private words are saved under. Just
+    /// before the hand over (the sent mark), a save tried from another
+    /// thread is held back.
+    @Test func aCloudChatHandsOverUnderTheNotesStoresLock() async throws {
+        let other = FromAnotherThread()
+        let privacy = PrivacyChanges(waiting: { other.heldBack() })
+        let memory = MemoryStore(fileURL: scratch.add(FileManager.default.temporaryDirectory
+            .appendingPathComponent("cloud-test-\(UUID().uuidString).json")), privacyChanges: privacy)
+        let store = FailingCloudStore(CloudHelpSettings(isOn: true, for: endpoint))
+        let tried = SessionFlag()
+        store.onMarkSent = {
+            guard !tried.value else { return }
+            tried.value = true
+            other.start { privacy.change {} }
+            _ = other.waitUntilFinishedOrHeldBack()
+        }
+        let maker = TransportMaker()
+        let cloud = help(endpoint: endpoint, maker: maker, memory: memory, store: store)
+        let controller = chat(cloud)
+        let review = try #require(controller.review)
+        controller.submit("Plan my week")
+        review.answer(.send, for: await review.shown().id)
+        await controller.settled()
+        #expect(other.waitUntilFinished())
+        #expect(tried.value)
+        #expect(other.wasHeldBack, "the hand over wasn't under the notes store's lock")
+        #expect(maker.wire.sent.count == 1)
+    }
+
+    // MARK: Forget everything for a chat alone
+
+    /// With no notes, words, tasks or anything else kept, a cloud chat in
+    /// any window that holds words, said or only typed, still offers
+    /// Forget everything, which ends it. The memory screen reads that from
+    /// the setting.
+    @Test func aChatOnlyAccountStillOffersForgetEverything() async throws {
+        let cloud = help(CloudHelpSettings(isOn: true, for: endpoint), endpoint: endpoint, maker: TransportMaker())
+        let first = chat(cloud)
+        let second = chat(cloud)
+        cloud.opened(first)
+        cloud.opened(second)
+        func shows() -> Bool {
+            MemoryView.showsForgetEverything(hasNotes: false, mayHaveWords: cloud.mayHavePrivateWords,
+                                             holdsMore: cloud.chatsHoldAnything)
+        }
+        #expect(!shows(), "nothing kept yet")
+        second.draft = "Ask Sam about Friday"
+        await eventually { cloud.chatsHoldAnything }
+        #expect(shows(), "an unsent draft in another window")
+        second.draft = ""
+        await eventually { !cloud.chatsHoldAnything }
+        #expect(!shows())
+        let review = try #require(first.review)
+        first.submit("Plan my week")
+        review.answer(.send, for: await review.shown().id)
+        await first.settled()
+        await eventually { cloud.chatsHoldAnything }
+        #expect(shows(), "a chat that sent")
+        cloud.endOpenCloudChats()
+        await eventually { !cloud.chatsHoldAnything }
+        #expect(!shows(), "Forget everything ended the chats")
+        // The screen passes it on.
+        let root = SwiftSource.repositoryRoot(from: #filePath)
+        let memory = SwiftSource(try String(contentsOf: root.appendingPathComponent(
+            "Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift"), encoding: .utf8))
+        let calls = memory.calls(named: ["showsForgetEverything"]).map(\.arguments)
+        #expect(calls.contains { $0.contains("help.chatsHoldAnything") }, "\(calls)")
     }
 
     // MARK: Turning it off fails closed
@@ -1030,7 +1255,10 @@ struct CloudHelpTests {
 
     @Test func theQuestionSaysWhatChangesWithoutOverclaiming() {
         let words = CloudWords.askPoints.joined(separator: " ")
-        for promise in ["not on this device", "exactly what goes", "names", "emails", "phone numbers",
+        // Not "exactly what goes": sign-in values are covered on the card.
+        #expect(!words.contains("exactly"))
+        #expect(!CloudWords.onDetail.contains("exactly"))
+        for promise in ["not on this device", "I show you what goes", "names", "emails", "phone numbers",
                         "addresses", "card numbers", "private words", "never leave this device",
                         "send nothing", "turn this off anytime", "The name you gave me goes too",
                         "internet address"] {
@@ -1393,7 +1621,8 @@ struct CloudHelpTests {
     /// back that the draft starts with, whatever the error and whatever was
     /// typed while the reply came. A kept newer draft gets the line that
     /// points at the bubble instead.
-    @Test(arguments: [CloudModelError.off, .notSent, .withdrawn, .staysHere, .notesUnreadable, .unreadableReply, nil])
+    @Test(arguments: [CloudModelError.off, .notSent, .withdrawn, .staysHere, .notesUnreadable, .unreadableReply,
+                      .notRecorded, .endedByOff, nil])
     func aStillHereLineAlwaysComesWithTheWordsGivenBack(error: CloudModelError?) async throws {
         for typed in ["", "and the weekend"] {
             let latch = Latch()
@@ -1408,9 +1637,12 @@ struct CloudHelpTests {
                 let words = try #require(controller.returnedWords, "\(failure) without words given back")
                 #expect(ChatController.stillHolds(words, draft: controller.draft), "\(failure): \(controller.draft)")
             } else {
-                #expect(failure == CloudWords.staysHere || failure == FirstConversation.couldNotAnswerKeptDraft, "\(failure)")
+                #expect(failure == CloudWords.staysHere || failure == CloudWords.chatEndedByOff
+                        || failure == FirstConversation.couldNotAnswerKeptDraft, "\(failure)")
             }
-            if failure == CloudWords.turnedOff { #expect(controller.returnedWords != nil) }
+            if failure == CloudWords.turnedOff || failure == CloudWords.chatEndedByOff {
+                #expect(controller.returnedWords != nil)
+            }
         }
     }
 
@@ -2074,6 +2306,10 @@ struct CloudHelpTests {
         #expect(ChatController.failureLine(for: CloudModelError.notesUnreadable) == CloudWords.notesUnreadable)
         #expect(ChatController.failureLine(for: CloudModelError.unreadableReply) == FirstConversation.couldNotAnswer)
         #expect(ChatController.failureLine(for: CloudModelError.ended) == CloudWords.chatEnded)
+        #expect(ChatController.failureLine(for: CloudModelError.endedByOff) == CloudWords.chatEndedByOff)
+        #expect(ChatController.failureLine(for: CloudModelError.notRecorded) == CloudWords.notRecorded)
+        #expect(ChatController.nothingWasSent(CloudModelError.endedByOff))
+        #expect(ChatController.nothingWasSent(CloudModelError.notRecorded))
         #expect(ChatController.failureLine(for: CloudTransportError.signInBodyRefused) == CloudWords.signInRefused)
         #expect(ChatController.failureLine(for: CloudTransportError.signInCarriesPersonalDetails)
                 == CloudWords.signInRefused)
