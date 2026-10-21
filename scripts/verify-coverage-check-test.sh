@@ -5,9 +5,12 @@
 # fail the check, for that reason: archive dropped from verify, the
 # simulator build dropped, either archive gone or no longer Release, a
 # new Release build in build-release that verify never makes, the macOS
-# archive commented out, and an xcodebuild line with its errors ignored.
-# An archive with no -configuration still passes, as it archives in
-# Release.
+# archive commented out, an xcodebuild line with its errors ignored, the
+# macOS archive only echoed, skipped by `true ||`, followed by `|| true`,
+# joined in Debug to the iOS one by &&, given a second -configuration or
+# a shell variable, and a new Release build with no -destination. An
+# archive with no -configuration still passes, as it archives in
+# Release, and so does an echo that names an archive beside the real ones.
 set -eu
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -93,6 +96,41 @@ expect pass "the macOS archive with no -configuration, which archives in Release
 fresh
 change "s~\txcodebuild archive ([^\n]*\\\\\n[^\n]*'generic/platform=macOS')~\t-xcodebuild archive \$1~"
 expect fail "the macOS archive with its errors ignored" "make archive runs xcodebuild with its errors ignored"
+
+macos_archive="\t+xcodebuild archive [^\n]*\\\\\n[^\n]*'generic/platform=macOS'[^\n]*\\\\\n[^\n]*"
+cant_read="make verify runs xcodebuild in a line this check can't read"
+
+fresh
+change "s~$macos_archive\n~\techo \"Skipping (xcodebuild archive -configuration Release -destination 'generic/platform=macOS')\"\n~"
+expect fail "the macOS archive only echoed" "make verify no longer archives Release for macOS"
+
+fresh
+change "s~(\narchive:[^\n]*\n)~\$1\techo \"xcodebuild archive -configuration Debug -destination 'generic/platform=macOS'\"\n~"
+expect pass "an echo that names an archive beside the real ones"
+
+fresh
+change "s~\txcodebuild archive ([^\n]*\\\\\n[^\n]*'generic/platform=macOS')~\ttrue || xcodebuild archive \$1~"
+expect fail "the macOS archive skipped by true ||" "$cant_read"
+
+fresh
+change "s~($macos_archive)\n~\$1 || true\n~"
+expect fail "the macOS archive with || true after it" "$cant_read"
+
+fresh
+change "s~(CODE_SIGNING_ALLOWED=NO)\n\txcodebuild archive ([^\n]*)-configuration Release([^\n]*\\\\\n[^\n]*'generic/platform=macOS')~\$1 && xcodebuild archive \$2-configuration Debug\$3~"
+expect fail "a Debug macOS archive joined to the iOS one by &&" "$cant_read"
+
+fresh
+change "s~(xcodebuild archive [^\n]*-configuration Release)([^\n]*\\\\\n[^\n]*'generic/platform=macOS')~\$1 -configuration Debug\$2~"
+expect fail "the macOS archive with a second -configuration" "$cant_read"
+
+fresh
+change "s~(xcodebuild archive [^\n]*-configuration Release)([^\n]*\\\\\n[^\n]*'generic/platform=macOS')~\$1 \\\$\\\$EXTRA\$2~"
+expect fail "the macOS archive with a shell variable in its arguments" "$cant_read"
+
+fresh
+change "s~(\nbuild-release:[^\n]*\n)~\$1\txcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -sdk macosx\n~"
+expect fail "a new Release build with no -destination" "make build-release builds Release with no -destination"
 if [ "$failures" -ne 0 ]; then
   echo "verify-coverage-check-test: $failures case(s) went the wrong way"
   exit 1
