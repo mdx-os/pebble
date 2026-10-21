@@ -49,7 +49,9 @@ public struct CloudRequest: Sendable, Equatable {
     /// of the person or the device, and both are shown. That test speaks
     /// HTTP/1.1 only, so it is over HTTP/1.1 that the card is shown to hold
     /// every line that goes. Over HTTP/2 the connection line is left out,
-    /// so the card may show one line more than went; no test covers that.
+    /// and a newer system may add lines of its own, such as `priority`,
+    /// that the card doesn't show; there it holds every header we set, and
+    /// no test covers the rest.
     public static let systemLines: [String: String] = [
         "Cache-Control": "no-cache",
         "Connection": "keep-alive",
@@ -151,9 +153,10 @@ public enum CloudHeaders {
 ///
 /// When the cloud needs a sign-in first, that hop is part of the same
 /// preview, shown above the message, and the one yes sends both, sign-in
-/// first. No header goes that isn't on this screen: the lines URLSession
-/// adds itself are shown too (`CloudRequest.systemLines`), and carry
-/// nothing of the person. Its session keeps no cookie, cache or saved
+/// first. Every header we set is on this screen, and so are the lines
+/// URLSession adds itself over HTTP/1.1 (`CloudRequest.systemLines`),
+/// which carry nothing of the person; over HTTP/2 the system may add a
+/// line the card doesn't show. Its session keeps no cookie, cache or saved
 /// password and adds none
 /// (`URLSessionCloudTransport.makeSession`), so a cookie set by a sign-in
 /// answer never rides on the message.
@@ -224,8 +227,10 @@ extension CloudReviewing {
 }
 
 /// Carries a request to the cloud model and brings back the answer's bytes.
-/// Tests use a fake that records requests; nothing in tests or CI touches
-/// the network.
+/// Tests use a fake that records requests. No test or CI run reaches
+/// anything off the machine it runs on: the one test that sends for real
+/// (`theWireCarriesExactlyTheHeaderLinesTheCardShows`) sends only to a
+/// listener on that machine's loopback address.
 public protocol CloudTransport: Sendable {
     /// Hands `request` over before it returns, and gives back the wait for
     /// its answer. Cancelling the wait stops the send. Whatever the caller
@@ -275,6 +280,24 @@ public struct CloudSignIn: Sendable, Equatable {
     /// contract.
     public static let maxValueLength = 512
 
+    /// The body part that carries Apple's identity token, the one value
+    /// allowed past `maxValueLength`. Sign in with Apple's token is a
+    /// signed JWT, usually well over 512 characters, and the server checks
+    /// it once and keeps only the anonymous user ID it names. Every other
+    /// part keeps the short limit, and the token is held to the same
+    /// checks as any value: the redactor must leave it unchanged, so a
+    /// token that by chance looks like a phone number is refused, not sent.
+    public static let identityTokenField = "identityToken"
+
+    /// The longest identity token, in characters: room for Apple's token
+    /// with its header and signature, and no more.
+    public static let maxIdentityTokenLength = 4096
+
+    /// The longest value the part named `name` may hold.
+    public static func maxLength(of name: String) -> Int {
+        name == identityTokenField ? maxIdentityTokenLength : maxValueLength
+    }
+
     /// The longest name a sign-in body part or header may have.
     public static let maxNameLength = 64
 
@@ -291,7 +314,9 @@ public struct CloudSignIn: Sendable, Equatable {
     /// The body as it is checked, shown and sent: each part's name and its
     /// value, when the body is a flat JSON object whose names are tokens
     /// (`isToken`) and whose values are each a string of at most
-    /// `maxValueLength` characters. Nil for anything else: a number, a
+    /// `maxLength(of:)` characters: `maxValueLength`, or
+    /// `maxIdentityTokenLength` for `identityTokenField` alone. Nil for
+    /// anything else: a number, a
     /// nested object or list, a true or false, a null, or a body that
     /// isn't a JSON object at all. A sign-in carries a credential or a
     /// device token, never a document. A number is refused rather than
@@ -304,7 +329,7 @@ public struct CloudSignIn: Sendable, Equatable {
     public var fields: [String: String]? {
         guard let fields = try? JSONDecoder().decode([String: String].self, from: body) else { return nil }
         guard fields.keys.allSatisfy(Self.isToken),
-              fields.values.allSatisfy({ $0.count <= Self.maxValueLength }) else { return nil }
+              fields.allSatisfy({ $0.value.count <= Self.maxLength(of: $0.key) }) else { return nil }
         return fields
     }
 
@@ -346,7 +371,7 @@ public struct CloudSignIn: Sendable, Equatable {
 /// (`CloudSignIn.fields`), is refused before anything is shown or sent.
 ///
 /// Those checks catch what the redactor knows, not everything. A value of
-/// up to `CloudSignIn.maxValueLength` characters with no known name,
+/// up to `CloudSignIn.maxLength(of:)` characters with no known name,
 /// private word or detail in it passes, and so does another spelling of a
 /// private word. That a value is only ever a credential or a device token
 /// is this protocol's contract, kept by the first-party code that
@@ -542,7 +567,10 @@ public struct CloudModel: ModelClient {
     ///
     /// Once a sign-in hop has gone, in this pass or an earlier one, a
     /// message that then doesn't go says so (`stoppedAfterSignIn`), never
-    /// that nothing went.
+    /// that nothing went. That covers a refusal by the transport or the
+    /// preview, such as a sign-in value that now holds a private word
+    /// saved while the hop was on the wire, and a stop, as both read as
+    /// nothing having left.
     public func reply(to transcript: [ChatTurn]) async throws -> String {
         var signInWent = false
         do {
@@ -550,6 +578,10 @@ public struct CloudModel: ModelClient {
                 if let reply = try await replyOnce(to: transcript, signInWent: &signInWent) { return reply }
             }
         } catch let error as CloudModelError where signInWent && Self.saysNothingWent(error) {
+            throw CloudModelError.stoppedAfterSignIn
+        } catch is CloudTransportError where signInWent {
+            throw CloudModelError.stoppedAfterSignIn
+        } catch is CancellationError where signInWent {
             throw CloudModelError.stoppedAfterSignIn
         } catch CloudModelError.off where session.endedBySwitchOff && (try? isOn()) == true {
             throw CloudModelError.endedByOff
@@ -589,7 +621,10 @@ public struct CloudModel: ModelClient {
         // have been switched off since the check above. Unreadable counts as
         // off there, so nothing shows that couldn't be sent.
         let isOn = self.isOn
-        switch await reviewer.review(preview, whileOn: { (try? isOn()) == true }) {
+        // A chat ended by a switch off stays ended when the cloud is turned
+        // on again, so its preview never shows only to have Send refused.
+        let chat = session
+        switch await reviewer.review(preview, whileOn: { !chat.hasEnded && (try? isOn()) == true }) {
         case .send: break
         case .cancel: throw CloudModelError.notSent
         case .withdrawn: throw CloudModelError.withdrawn

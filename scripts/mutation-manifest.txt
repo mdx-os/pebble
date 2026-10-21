@@ -590,7 +590,7 @@ test: clearingACardTakesItsLedger
 file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
 perl: s~        ledger\?\.remove\(task\.id\)\n~~
 
-# Round-one ledger regressions: deletion is owed independently of marker creation.
+# Ledger erasing: deletion is owed independently of marker creation.
 test: forgetTriesDeletionWhenItsMarkerCannotBeWritten
 file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
 perl: s~(private func erased\(\) -> Bool \{)\n        pendingErase = true~$1~

@@ -43,9 +43,10 @@ struct PebbleApp: App {
 
     /// The one notes store, shared by the memory screen and the cloud
     /// redactor. Read from `cloud`, so the two are always the same store.
-    /// SwiftUI may make the app again, and each time `init` opens a notes
-    /// store and builds a setting around it, but `State` keeps only the
-    /// first and the rest are dropped unused, so no screen ever reads one.
+    /// This assumes `init` runs once, as it does for an app's entry point.
+    /// Were it run again, `State` would keep only the first setting, but
+    /// that run's task engine would read the new run's notes store, and
+    /// opening the setting again can rewrite its file.
     private var memory: MemoryStore? { cloud.memory }
 
     init() {

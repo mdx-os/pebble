@@ -362,7 +362,20 @@ perl: s~guard let fields = \$0\.fields else \{ throw CloudTransportError\.signIn
 
 test: aSignInBodyThatIsNotAFlatObjectOfShortValuesIsRefused
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
-perl: s~,\n\s*fields\.values\.allSatisfy\(\{ \$0\.count <= Self\.maxValueLength \}\) else~ else~
+perl: s~,\n\s*fields\.allSatisfy\(\{ \$0\.value\.count <= Self\.maxLength\(of: \$0\.key\) \}\) else~ else~
+
+# Only the identity token gets the longer limit; every other value keeps the short one.
+test: aSignInBodyThatIsNotAFlatObjectOfShortValuesIsRefused
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~name == identityTokenField \? maxIdentityTokenLength : maxValueLength~maxIdentityTokenLength~
+
+test: anIdentityTokenMayBeLongerThanOtherSignInValues
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~name == identityTokenField \? maxIdentityTokenLength : maxValueLength~maxValueLength~
+
+test: anIdentityTokenMayBeLongerThanOtherSignInValues
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~public static let maxIdentityTokenLength = 4096~public static let maxIdentityTokenLength = 1 << 20~
 
 # Body names are short tokens, so none can hold a sentence or draw a line on the card.
 test: aSignInNameThatIsNotATokenIsRefused
@@ -906,6 +919,33 @@ perl: s~(\n\s*switchedOff\.value = true)\n\s*for session in sessions\.allObjects
 test: aMessageStoppedAfterTheSignInWentNeverSaysNothingWent aPrivateWordAddedDuringSignInNeedsAFreshPreviewAndANewYes aSignInAnswerThatLandsAfterTheChatEndedIsNotKept aSummaryStoppedAfterTheSignInWentSaysTheSignInWent
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
 perl: s~\n\s*signInWent = true\n~\n~
+
+# A refusal or a stop after the sign-in hop went says only the sign-in went.
+test: aRefusalOrAStopAfterTheSignInWentSaysOnlyTheSignInWent
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~\} catch is CloudTransportError where signInWent \{\n\s*throw CloudModelError\.stoppedAfterSignIn\n\s*~~
+
+test: aRefusalOrAStopAfterTheSignInWentSaysOnlyTheSignInWent
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~\} catch is CancellationError where signInWent \{\n\s*throw CloudModelError\.stoppedAfterSignIn\n\s*~~
+
+test: aRefusalOrAStopAfterTheSignInWentSaysOnlyTheSignInWent
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~catch is CloudTransportError where signInWent~catch is CloudTransportError where true~
+
+# The turn on question says what the decided server policy keeps, and who carries it.
+test: theQuestionSaysWhatTheServerKeepsAndWhoCarriesIt
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~ That computer keeps one anonymous ID for you, so it can tell what came from the same person\.~~
+
+test: theQuestionSaysWhatTheServerKeepsAndWhoCarriesIt
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~ It runs on Render, a hosting company, so Render's computers carry what you send too\.~~
+
+# A preview for a chat that has ended never shows.
+test: aPreviewForAChatEndedOnTheWayToTheScreenNeverShows
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~whileOn: \{ !chat\.hasEnded && ~whileOn: { ~
 
 test: aSummaryStoppedAfterTheSignInWentSaysTheSignInWent
 file: Packages/PebbleKit/Sources/PebbleModel/CloudRecon.swift

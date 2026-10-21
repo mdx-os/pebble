@@ -81,17 +81,21 @@ chooses one.
 
 - Cloud: `CloudModel` sends to the address in `Config/Cloud.local.xcconfig`,
   which git ignores and which doesn't exist by default, so the setting can't
-  be turned on. The policy for the server is decided. We run it ourselves,
-  as a small service of our own, so no third party sees requests. It keeps
-  no request bodies: only counts of requests and of errors, for 7 days.
-  Sign-in is Sign in with Apple, asking for no email and no name. The app
-  sends Apple's identity token with a one-time nonce it made; the server
-  checks the token once (Apple's signature, issuer, audience, expiry and
-  the nonce), keeps only Apple's anonymous user ID and a per-device key,
-  and then drops the token, which is never stored or logged. Work handed
-  to the relay as a run is held in memory only, dropped when the device
-  deletes it or 30 minutes after the run ends ([docs/RELAY.md](docs/RELAY.md);
-  no build uses runs yet).
+  be turned on.
+  The server is not in this repository, so nothing here can prove how it
+  behaves. What follows is the policy decided for the server we will run,
+  not something this code shows; the protocol is in
+  [docs/RELAY.md](docs/RELAY.md). The server runs on Render, a hosting
+  provider, so Render's machines carry the requests. It keeps no request
+  bodies: only counts of requests and of errors, for 7 days. Sign-in is
+  Sign in with Apple, asking for no email and no name. The app sends
+  Apple's identity token once; the server checks it, keeps only Apple's
+  anonymous user ID for the person (`sub`) and a per-device key, and then
+  discards the token. That one anonymous ID stays the same, so the server
+  can link requests that come from the same person, though it never learns
+  their name or email. Work handed to the relay as a run is held in memory
+  only, dropped when the device deletes it or 30 minutes after the run
+  ends (no build uses runs yet).
   The app's side of that sign-in is not built yet, and the setting is
   still for Debug builds only: every build with an address fails unless
   it is Debug and not an archive, whatever the configuration is called,
@@ -100,13 +104,15 @@ chooses one.
   skipped. Turning it on (What I
   remember, then Help from the cloud) asks first, holds only for that
   address, and counts from the next new chat. Every request is redacted on
-  the device by `Redactor` and shown to the person in full, method, address,
-  every header including the Host, Content-Length, Cache-Control and
-  Connection lines the system adds, and body, before it is sent; a test
-  against a listener on the Mac's own loopback address holds the lines
-  that arrive over HTTP/1.1 up against the card's. That is the only
-  protocol tested: over HTTP/2 the system leaves out the Connection line,
-  so the card may show a line more than went. Redirects, plain http and the header
+  the device by `Redactor` and shown to the person before it is sent:
+  method, address, body, every header we set, and the Host,
+  Content-Length, Cache-Control and Connection lines the system adds. A
+  test against a listener on the Mac's own loopback address holds the
+  lines that arrive over HTTP/1.1 up against the card's, so every line
+  that goes over HTTP/1.1 is on the card. That is the only protocol
+  tested. Over HTTP/2 the system leaves out the Connection line and may
+  add lines of its own that the card doesn't show, so there the card is
+  shown to hold only every header we set. Redirects, plain http and the header
   names URLSession reserves are refused. Words of crisis and chats that promised to stay on
   the device are never sent, and nothing is sent when the notes or private
   words can't be read. Each request is checked against them once more as

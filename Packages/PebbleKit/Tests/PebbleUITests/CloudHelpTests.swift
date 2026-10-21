@@ -1304,6 +1304,21 @@ struct CloudHelpTests {
         #expect(CloudWords.askPoints.contains("Signing in never carries your chats, notes or private words."))
     }
 
+    /// The question says what the decided server policy says, and no more:
+    /// Sign in with Apple with no email or name, one anonymous ID that lets
+    /// the server tell what came from the same person, nothing sent kept
+    /// but counts for 7 days, and the hosting company named rather than
+    /// "no third party".
+    @Test func theQuestionSaysWhatTheServerKeepsAndWhoCarriesIt() {
+        let words = CloudWords.askPoints.joined(separator: " ")
+        for promise in ["Sign in with Apple, without your email or name", "one anonymous ID for you",
+                        "tell what came from the same person", "keeps none of what you send", "for 7 days",
+                        "Render, a hosting company"] {
+            #expect(words.contains(promise), "missing: \(promise)")
+        }
+        #expect(!words.contains("third party"))
+    }
+
     // MARK: The preview
 
     @Test func theSheetShowsExactlyTheRequestThatIsSent() async throws {

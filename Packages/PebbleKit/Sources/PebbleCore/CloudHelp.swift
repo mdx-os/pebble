@@ -428,6 +428,15 @@ public enum CloudWords {
         // rest rests on `CloudAuth`'s contract: first-party sign-in that
         // supplies only credentials or a device token.
         "Signing in never carries your chats, notes or private words.",
+        // The server policy that was decided (README, "Cloud"): Sign in
+        // with Apple with no email or name scope, the token checked once
+        // and dropped, and only Apple's anonymous ID and a per device key
+        // kept. One ID that never changes lets the server link what one
+        // person sends, so this says so.
+        "To sign in, I use Sign in with Apple, without your email or name. That computer keeps one anonymous ID for you, so it can tell what came from the same person.",
+        // Also decided: no bodies kept, only counts for 7 days, and the
+        // server runs on a hosting provider, named here.
+        "It keeps none of what you send, only counts of how often it's used and how often something went wrong, for 7 days. It runs on Render, a hosting company, so Render's computers carry what you send too.",
         "Your notes themselves never leave this device.",
         "Like any website, the computer it goes to can see this device's internet address.",
         "If you tell me you might be in danger, I answer here and send nothing.",

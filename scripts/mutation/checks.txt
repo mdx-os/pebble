@@ -16,15 +16,44 @@ perl: s~PEBBLE_CLOUD_ENDPOINT\(\\\[\[\^\]\]\*\\\]\)\*~PEBBLE_CLOUD_ENDPOINT~
 
 test: theLocalConfigCheckFailsWhenProjectYmlSetsAnAddress
 file: scripts/local-config-check.sh
-perl: s~if \[ -n "\$values" \] \|\| \[ -n "\$passed" \]; then~if [ -n "\$passed" ]; then~
+perl: s~project\.yml sets a cloud address\. A real address goes only in \$local_only\."\n    exit 1~project.yml sets a cloud address. A real address goes only in \$local_only."\n    exit 0~
 
 test: theLocalConfigCheckFailsWhenProjectYmlSetsAnAddress
 file: scripts/local-config-check.sh
-perl: s~if \[ -n "\$values" \] \|\| \[ -n "\$passed" \]; then~if [ -n "\$values" ]; then~
+perl: s~index\(line, "PEBBLE_CLOUD_ENDPOINT"\) \|\| index\(line, "PebbleCloudEndpoint"\)~index(line, "PEBBLE_CLOUD_ENDPOINT")~
 
 test: theLocalConfigCheckFailsWhenProjectYmlSetsAnAddress
 file: scripts/local-config-check.sh
-perl: s~PEBBLE_CLOUD_ENDPOINT\(\\\[\[\^\]\]\*\\\]\)\*"\?~PEBBLE_CLOUD_ENDPOINT"?~
+perl: s~      bad = 1\n    \}\n    END \{ exit bad \? 1 : 0 \}~      next\n    }\n    END { exit bad ? 1 : 0 }~
+
+test: theLocalConfigCheckFailsWhenProjectYmlSetsAnAddress
+file: scripts/local-config-check.sh
+perl: s~if \(rest == ":"\) next~next~
+
+test: theLocalConfigCheckFailsWhenProjectYmlSetsAnAddress
+file: scripts/local-config-check.sh
+perl: s~      sub\(/\^\[\[:space:\]\]\*#\.\*\$/, "", line\)\n~~
+
+# A tracked Info.plist may only pass the setting through or leave it empty.
+test: theLocalConfigCheckFailsWhenAnInfoPlistHoldsAnAddress
+file: scripts/local-config-check.sh
+perl: s~gives PebbleCloudEndpoint a value\. A real address goes only in \$local_only\."\n    exit 1~gives PebbleCloudEndpoint a value. A real address goes only in \$local_only."\n    exit 0~
+
+test: theLocalConfigCheckFailsWhenAnInfoPlistHoldsAnAddress
+file: scripts/local-config-check.sh
+perl: s~ && line != "<string></string>" && line != "<string/>"\) bad = 1~ \&\& 0) bad = 1~
+
+test: theLocalConfigCheckFailsWhenAnInfoPlistHoldsAnAddress
+file: scripts/local-config-check.sh
+perl: s~\n    /PebbleCloudEndpoint/ \{ bad = 1 \}~~
+
+test: theLocalConfigCheckFailsWhenAnInfoPlistHoldsAnAddress
+file: scripts/local-config-check.sh
+perl: s~isn't an XML plist, so I can't check it\."\n    exit 1~isn't an XML plist, so I can't check it."\n    exit 0~
+
+test: theLocalConfigCheckFailsWhenAnInfoPlistHoldsAnAddress
+file: scripts/local-config-check.sh
+perl: s~ls-files --cached -- '\*\.plist'~ls-files --cached -- 'Config/*.plist'~
 
 test: theLocalConfigCheckFailsWhenATrackedConfigCantBeRead theLocalConfigCheckFailsWhenATrackedConfigIsUnreadable
 file: scripts/local-config-check.sh
@@ -41,6 +70,27 @@ perl: s~if \[ "\$CONFIGURATION" = Debug \]~if [ "\$CONFIGURATION" != Release ]~
 test: theReleaseCheckFailsWhenAReleaseBuildHasAnAddress
 file: scripts/release-endpoint-check.sh
 perl: s~\[ "\$action" != install \] && \[ "\$action" != archive \]~true~
+
+# An address written into the Info.plist key fails a build that could ship.
+test: theReleaseCheckFailsWhenTheInfoPlistHoldsAnAddress
+file: scripts/release-endpoint-check.sh
+perl: s~if plist_sets_address "\$plist"; then refuse_plist~if false; then refuse_plist~
+
+test: theReleaseCheckFailsWhenTheInfoPlistHoldsAnAddress
+file: scripts/release-endpoint-check.sh
+perl: s~if plist_sets_address "\$\(under "\$info" "\$root"\)"; then refuse_plist~if false; then refuse_plist~
+
+test: theReleaseCheckFailsWhenTheInfoPlistHoldsAnAddress
+file: scripts/release-endpoint-check.sh
+perl: s~\[ -n "\$key" \] && \[ "\$key" != '\$\(PEBBLE_CLOUD_ENDPOINT\)' \]~[ -n "\$key" ] \&\& false~
+
+test: theReleaseCheckFailsWhenTheInfoPlistHoldsAnAddress
+file: scripts/release-endpoint-check.sh
+perl: s~echo "release-endpoint-check: can't read \$1, so it can't check it\."\n    exit 1~echo "release-endpoint-check: can't read \$1, so it can't check it."\n    return 1~
+
+test: theReleaseCheckFailsWhenTheInfoPlistHoldsAnAddress
+file: scripts/release-endpoint-check.sh
+perl: s~gives PebbleCloudEndpoint a value of its own for a \$2 build\. The value is not shown here\.~gives PebbleCloudEndpoint \$key for a \$2 build.~
 
 test: aStrayConfigurationInTheShellDoesNotSkipTheCheck
 file: scripts/release-endpoint-check.sh
@@ -142,6 +192,31 @@ perl: s!else \{ \$rest = \$after =~ [^\n]*!else { \$rest = \$after }!
 test: theCommentLintCatchesReviewHistoryAndNames
 file: scripts/comment-lint.sh
 perl: s!(\n\s*)# Read left to right!$1\$rest =~ s/\$quoted/""/g;$1# Read left to right!
+
+# Review history is printed as file and line only, and caught in more shapes and files.
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s~print "\$file:\$n: review history\\n"~print "\$file:\$n:\$line\\n"~
+
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s~\(\?:item\|round\)\[\\s#-\]\*\$number~(?:item|round)[\\s#-]*[0-9]+~
+
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s~\(\?<!\[\\w\]\)fix\[\\s#-\]\*\[0-9\]\+~(?<![\\w])fix[0-9]+~
+
+test: theCommentLintCatchesReviewHistoryAndNames
+file: scripts/comment-lint.sh
+perl: s~/\\\.\(\?:swift\|xcconfig\)\$/~/\\.swift\$/~
+
+test: theCommentLintCoversTheProjectFiles
+file: scripts/comment-lint.sh
+perl: s~ Makefile \.github Config~ Makefile~
+
+test: theCommentLintCoversTheProjectFiles
+file: scripts/comment-lint.sh
+perl: s~ -o -name '\*\.xcconfig'~~
 
 test: theCommentLintCoversTheProjectFiles
 file: scripts/comment-lint.sh

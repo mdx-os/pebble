@@ -5,13 +5,15 @@
 #
 # Checks comments for:
 # - "fix round", in any case
-# - review item and round numbers, like "item 11", "round 4", "Round-4"
-#   or "round #4", and numbered fixes like "fix9"
+# - review item and round numbers, like "item 11", "round 4", "Round-4",
+#   "round #4" or "round one", and numbered fixes like "fix9", "fix 9" or
+#   "fix-9"
 # - any name in the list of names, in any case, also as a possessive; a
 #   name of two words matches with any space between
-# Comments are // and /* */ in Swift, every line of a block included; #
-# in scripts, Makefile and YAML; and lines that start with # in text files
-# such as the mutation manifest. A string in quotes outside a comment is
+# Comments are // and /* */ in Swift and xcconfig files, every line of a
+# block included; # in scripts, Makefile and YAML, the CI workflows among
+# them; and lines that start with # in text files such as the mutation
+# manifest. A string in quotes outside a comment is
 # not a comment, so "https://example.com/item 3" in code passes; quotes
 # inside a comment are part of it and are checked.
 #
@@ -23,7 +25,8 @@
 # names are not checked, and the lint says so; review history is checked
 # everywhere either way. A COMMENT_LINT_NAMES that names a file that can't
 # be read, or holds a name of more than two words, is an error. A match
-# gives the file and line, never the name.
+# gives the file and line only, never the line's text, so a name beside
+# review history never reaches a public log either.
 #
 # The lint splits each comment into words (letters, digits and
 # apostrophes, in lower case, a trailing 's dropped) and looks up each
@@ -38,9 +41,9 @@ set -eu
 names_file="${COMMENT_LINT_NAMES:-}"
 
 # Reads file names on stdin, one per line, and prints every comment that
-# matches: file:line:text for review history, and for a name only
-# file:line, so the log never holds the name. Exits 1 on a match, 2 when a
-# file can't be read, 3 when the names list can't be used.
+# matches as file:line and what kind of match it is, never its text, so
+# the log never holds a name. Exits 1 on a match, 2 when a file can't be
+# read, 3 when the names list can't be used.
 scan() {
   perl -e '
     use strict; use warnings;
@@ -72,14 +75,15 @@ scan() {
       }
       if (!%set) { print "comment-lint: the names list COMMENT_LINT_NAMES names holds no names\n"; exit 3 }
     }
-    my $history = qr/fix(?:ed)?\s+round|(?<![\w])(?:item|round)[\s#-]*[0-9]+|(?<![\w])fix[0-9]+(?![\w])/i;
+    my $number = qr/(?:[0-9]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?![\w])/i;
+    my $history = qr/fix(?:ed)?\s+round|(?<![\w])(?:item|round)[\s#-]*$number|(?<![\w])fix[\s#-]*[0-9]+(?![\w])/i;
     # A string in double quotes, escapes and all. Never a comment.
     my $quoted = qr/"(?:[^"\\]|\\.)*"/;
     my $found = 0;
     while (my $file = <STDIN>) {
       chomp $file;
       next if $file eq "";
-      my $kind = $file =~ /\.swift$/ ? "swift" : $file =~ /\.txt$/ ? "text" : "hash";
+      my $kind = $file =~ /\.(?:swift|xcconfig)$/ ? "swift" : $file =~ /\.txt$/ ? "text" : "hash";
       open(my $fh, "<", $file) or do { print "comment-lint: can\x27t read $file\n"; exit 2 };
       my $block = 0;
       # Inside a Swift string of several lines, between two """.
@@ -134,7 +138,7 @@ scan() {
         my @words = words_of($comment);
         my @keys = (@words, map { "$words[$_] $words[$_ + 1]" } 0 .. $#words - 1);
         if (grep { $set{$_} } @keys) { print "$file:$n: a name from the list\n"; $found = 1 }
-        elsif ($comment =~ $history) { print "$file:$n:$line\n"; $found = 1 }
+        elsif ($comment =~ $history) { print "$file:$n: review history\n"; $found = 1 }
       }
       close $fh;
     }
@@ -159,6 +163,12 @@ self_test() {
   printf '// since %s #4\n' "Round" > "$dir/bad/hash.swift"
   printf '// carried from %s#2\n' "$item" > "$dir/bad/hashtight.swift"
   printf '# ported from %s9\ntest: aTest\n' "$fix" > "$dir/bad/numberedfix.txt"
+  printf '# ported from %s 9\n' "$fix" > "$dir/bad/spacedfix.sh"
+  printf '# ported from %s-9\ntest: aTest\n' "$fix" > "$dir/bad/hyphenfix.txt"
+  printf '// since %s one\n' "$round" > "$dir/bad/roundword.swift"
+  printf '# %s-One follow-ups\ntest: aTest\n' "Round" > "$dir/bad/roundhyphenword.txt"
+  printf '// since %s 2\nA = 1\n' "$round" > "$dir/bad/Base.xcconfig"
+  printf 'on: # since %s 3\n' "$round" > "$dir/bad/ci.yml"
   printf '/* %s %s 2 */\n' "$fix" "$round" > "$dir/bad/block.swift"
   printf '/*\n * What this guards.\n * %s %s 3\n */\nlet x = 1\n' "$fix" "$round" > "$dir/bad/continued.swift"
   printf '/**\n   carried over from %s 7\n */\n' "$item" > "$dir/bad/bare.swift"
@@ -188,7 +198,7 @@ self_test() {
   # Fine: words that only look alike, and the same words outside a comment.
   printf '/// Rounds to 4 places, and lists items 1 to 3.\nlet rounded = 4\n' > "$dir/good/words.swift"
   printf '/// A round trip, a prefix9 and a fixture2 are not review history.\n' > "$dir/good/near.history.swift"
-  printf '#expect(text.contains("%s %s 5"))\n' "$fix" "$round" > "$dir/good/string.swift"
+  printf '/// Round once, round to tens, fix it, fixes 9 times and a prefix 9 are fine too.\n' > "$dir/good/near.words.swift"  printf '#expect(text.contains("%s %s 5"))\n' "$fix" "$round" > "$dir/good/string.swift"
   printf 'let url = "https://example.com" // the sample address\n' > "$dir/good/url.swift"
   printf 'let url = "https://example.com/%s 3"\n' "$item" > "$dir/good/path.swift"
   printf 'let a = 2 * 3\n/* a\n * product */\n' > "$dir/good/product.swift"
@@ -213,9 +223,14 @@ self_test() {
     COMMENT_LINT_NAMES="$dir/names.txt" sh "$0" "$dir/good" || true
     failed=1
   fi
-  # A match says where, never the name.
+  # A match says where, never the name, and never the text of a line with
+  # review history, which may hold a name the list doesn't.
   if COMMENT_LINT_NAMES="$dir/names.txt" sh "$0" "$dir/bad/name.swift" 2>&1 | grep -qi 'byron'; then
     echo "comment-lint self-test: printed the name it found"
+    failed=1
+  fi
+  if COMMENT_LINT_NAMES= sh "$0" "$dir/bad/item.swift" 2>&1 | grep -q 'Asked for'; then
+    echo "comment-lint self-test: printed the text of a line with review history"
     failed=1
   fi
   # With no list, review history still fails, a name passes, and the lint
@@ -283,7 +298,7 @@ if [ -n "$names_file" ] && [ -e "$names_file" ]; then
   esac
 fi
 
-[ "$#" -gt 0 ] || set -- Packages/PebbleKit/Sources Packages/PebbleKit/Tests Tools/GuardKit App AppUITests scripts project.yml Makefile
+[ "$#" -gt 0 ] || set -- Packages/PebbleKit/Sources Packages/PebbleKit/Tests Tools/GuardKit App AppUITests scripts project.yml Makefile .github Config
 
 for path in "$@"; do
   if [ ! -e "$path" ]; then
@@ -297,12 +312,18 @@ done
 list="$(mktemp)"
 trap 'rm -f "$list"' EXIT
 if ! find "$@" -type f \( -name '*.swift' -o -name '*.sh' -o -name '*.py' -o -name '*.yml' -o -name '*.txt' \
-  -o -name Makefile \) ! -path '*/.build/*' ! -name 'comment-lint.sh' > "$list"; then
+  -o -name '*.xcconfig' -o -name Makefile \) ! -path '*/.build/*' ! -name 'comment-lint.sh' > "$list"; then
   echo "comment-lint: couldn't list every file"
   exit 1
 fi
+# Sorted in place and read straight from the file, so a sort that fails
+# fails the lint rather than handing the scan nothing.
+if ! sort -o "$list" "$list"; then
+  echo "comment-lint: couldn't sort the list of files"
+  exit 1
+fi
 status=0
-hits="$(sort "$list" | scan "$names_file")" || status=$?
+hits="$(scan "$names_file" < "$list")" || status=$?
 if [ "$status" -eq 1 ]; then
   echo "comment-lint: say what the code protects, not the review it came from or who asked:"
   printf '%s\n' "$hits"

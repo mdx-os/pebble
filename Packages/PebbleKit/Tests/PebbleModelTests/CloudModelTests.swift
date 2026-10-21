@@ -543,6 +543,30 @@ struct CloudModelTests {
         #expect(transport.sent.isEmpty)
     }
 
+    /// Sign in with Apple's identity token is longer than any other sign-in
+    /// value may be, so its own named part takes up to
+    /// `maxIdentityTokenLength`, and not a character more. Any other name
+    /// still keeps the short limit.
+    @Test func anIdentityTokenMayBeLongerThanOtherSignInValues() throws {
+        var turns = cloudChat().turns
+        turns.append(ChatTurn(id: UUID(), speaker: .person, text: "Plan my week"))
+        let field = CloudSignIn.identityTokenField
+        let token = String(repeating: "a", count: CloudSignIn.maxIdentityTokenLength)
+        // Pinned, so the room for a token can't quietly grow into room for a document.
+        #expect(CloudSignIn.maxIdentityTokenLength == 4096)
+        #expect(CloudSignIn.maxIdentityTokenLength > CloudSignIn.maxValueLength)
+        let preview = try CloudModel.preview(
+            for: turns, endpoint: endpoint, redactor: Redactor(),
+            signIn: CloudSignIn(path: "v1/sign-in", body: Data("{\"\(field)\":\"\(token)\",\"device\":\"made-up\"}".utf8)))
+        #expect(preview.signIn.map { CloudSignIn(path: "v1/sign-in", body: $0.body).fields?[field] } == token)
+        for body in ["{\"\(field)\":\"\(token)a\"}", "{\"token\":\"\(token)\"}", "{\"identitytoken\":\"\(token)\"}"] {
+            #expect(throws: CloudTransportError.signInBodyRefused, "\(body.prefix(20))") {
+                try CloudModel.preview(for: turns, endpoint: endpoint, redactor: Redactor(),
+                                       signIn: CloudSignIn(path: "v1/sign-in", body: Data(body.utf8)))
+            }
+        }
+    }
+
     /// What goes is what was checked: the hop's body is the checked fields
     /// written again, never the bytes sign-in handed over. A name given
     /// twice can't carry an unchecked value, whichever one a parser keeps.
@@ -1129,6 +1153,53 @@ struct CloudModelTests {
                                    reviewer: RecordingReviewer(answer: answer))
             await #expect(throws: said) { try await cloudChat().sending("Plan my week", with: cloud) }
         }
+    }
+
+    /// A chat a switch off ends while its preview is on the way to the
+    /// screen never shows it, even with the cloud on again by then: Send
+    /// would only be refused.
+    @Test func aPreviewForAChatEndedOnTheWayToTheScreenNeverShows() async throws {
+        let session = CloudChatSession()
+        let reviewer = EndsFirstReviewer(session: session)
+        let transport = RecordingTransport()
+        let cloud = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer, session: session)
+        await #expect(throws: (any Error).self) { try await cloudChat().sending("Plan my week", with: cloud) }
+        #expect(reviewer.shown == false, "a preview for an ended chat showed")
+        #expect(transport.sent.isEmpty)
+    }
+
+    /// A refusal or a stop after the sign-in hop went never says nothing
+    /// left either. A private word saved while the hop is on the wire
+    /// holds the message back, and the sign-in value now holds that word,
+    /// so the next preview is refused (`signInCarriesPersonalDetails`); a
+    /// reply stopped once the hop is back throws `CancellationError`. Both
+    /// would read as nothing having gone, so both say `stoppedAfterSignIn`.
+    @Test func aRefusalOrAStopAfterTheSignInWentSaysOnlyTheSignInWent() async throws {
+        let words = Words()
+        let transport = SignInAddsAWordTransport(words: words, word: "lemon cake")
+        let reviewer = ScriptedReviewer(answers: [.send, .send])
+        let hop = CloudSignIn(path: "v1/sign-in", body: Data(#"{"device":"lemon cake"}"#.utf8))
+        let cloud = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer,
+                               auth: SampleAuth(signIn: hop), redactor: { Redactor(privateWords: words.list) })
+        await #expect(throws: CloudModelError.stoppedAfterSignIn) {
+            try await cloudChat().sending("Plan my week", with: cloud)
+        }
+        #expect(transport.sent.map(\.url.path) == ["/v1/sign-in"])
+        #expect(reviewer.seen.count == 1, "the refused preview was shown")
+        // The same refusal with no sign-in gone still says nothing went.
+        await #expect(throws: CloudTransportError.signInCarriesPersonalDetails) {
+            try await cloudChat().sending("Plan my week", with: cloud)
+        }
+        // Stopped as the sign-in answer is handed over, in a task of its
+        // own, so stopping it never stops the test.
+        let stopping = RecordingTransport()
+        let stopped = CloudModel(endpoint: endpoint, transport: stopping, reviewer: RecordingReviewer(answer: .send),
+                                 auth: StopsAtSignInAuth(signIn: CloudSignIn(path: "v1/sign-in",
+                                                                             body: Data(#"{"device":"made-up"}"#.utf8))))
+        let chat = cloudChat()
+        let result = await Task { try await chat.sending("Plan my week", with: stopped) }.result
+        #expect(throws: CloudModelError.stoppedAfterSignIn) { try result.get() }
+        #expect(stopping.sent.map(\.url.path) == ["/v1/sign-in"])
     }
 
     /// A reply stopped before its hand over hands nothing to the
@@ -1964,6 +2035,47 @@ final class SampleAuth: CloudAuth, @unchecked Sendable {
 
     func signedIn(_ answer: Data) {
         lock.withLock { _answers.append(answer) }
+    }
+}
+
+/// Ends the chat by a switch off just as the preview would go on screen,
+/// with the cloud on again, and shows the preview only if `whileOn` still
+/// says it may.
+final class EndsFirstReviewer: CloudReviewing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _shown = false
+    private let session: CloudChatSession
+
+    init(session: CloudChatSession) { self.session = session }
+
+    var shown: Bool { lock.withLock { _shown } }
+
+    func review(_ preview: CloudPreview) async -> CloudConsent {
+        lock.withLock { _shown = true }
+        return .send
+    }
+
+    func review(_ preview: CloudPreview, whileOn isOn: @escaping @Sendable () -> Bool) async -> CloudConsent {
+        session.end(because: .off)
+        guard isOn() else { return .withdrawn }
+        return await review(preview)
+    }
+}
+
+/// Sign-in that stops the reply as its answer is handed over, as a person
+/// leaving the chat just as the sign-in hop comes back. `signedIn` runs in
+/// the reply's own task, so the reply's next check finds it stopped.
+final class StopsAtSignInAuth: CloudAuth, @unchecked Sendable {
+    private let hop: CloudSignIn
+
+    init(signIn: CloudSignIn) { hop = signIn }
+
+    func headers(for url: URL) -> [String: String] { [:] }
+
+    func signIn(for endpoint: URL) -> CloudSignIn? { hop }
+
+    func signedIn(_ answer: Data) {
+        withUnsafeCurrentTask { $0?.cancel() }
     }
 }
 

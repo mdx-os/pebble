@@ -125,8 +125,58 @@ struct ScriptGuardTests {
         let written = passThrough.replacingOccurrences(of: "$(PEBBLE_CLOUD_ENDPOINT)", with: "https://cloud.example.com")
         try Data(written.utf8).write(to: project)
         #expect(try Self.run(["sh", check, repo.path], in: repo) == 1)
+        // A quoted key, an inline map, or the setting named in another
+        // shape fails too; a comment that only names it passes.
+        for shape in ["        \"PebbleCloudEndpoint\": https://cloud.example.com\n",
+                      "      properties: {PebbleCloudEndpoint: https://cloud.example.com}\n",
+                      "    settings: {base: {PEBBLE_CLOUD_ENDPOINT: https://cloud.example.com}}\n",
+                      "        'PebbleCloudEndpoint': 'https://cloud.example.com' # mine\n"] {
+            try Data((passThrough + shape).utf8).write(to: project)
+            #expect(try Self.run(["sh", check, repo.path], in: repo) == 1, "\(shape)")
+        }
+        for comment in ["# PEBBLE_CLOUD_ENDPOINT stays empty here.\n", "    # PebbleCloudEndpoint: https://cloud.example.com\n"] {
+            try Data((passThrough + comment).utf8).write(to: project)
+            #expect(try Self.run(["sh", check, repo.path], in: repo) == 0, "\(comment)")
+        }
         // The project's own file passes.
         #expect(try Self.run(["sh", check], in: Self.root) == 0)
+    }
+
+    /// A tracked Info.plist with an address written into its key fails;
+    /// passing the setting through, or leaving the key empty, passes. A
+    /// tracked plist that isn't XML can't be read for the key, so it fails.
+    @Test func theLocalConfigCheckFailsWhenAnInfoPlistHoldsAnAddress() throws {
+        let repo = try scratchFolder()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let check = Self.script("local-config-check.sh")
+        #expect(try Self.run(["git", "init", "--quiet"], in: repo) == 0)
+        let app = repo.appendingPathComponent("App")
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        let plist = try Self.infoPlist(in: app, value: "$(PEBBLE_CLOUD_ENDPOINT)")
+        #expect(try Self.run(["git", "add", "App/Info.plist"], in: repo) == 0)
+        #expect(try Self.run(["sh", check, repo.path], in: repo) == 0)
+        for fine in ["", nil] {
+            _ = try Self.infoPlist(in: app, value: fine)
+            #expect(try Self.run(["sh", check, repo.path], in: repo) == 0, "\(fine ?? "no key")")
+        }
+        for wrong in ["https://cloud.example.com", "${PEBBLE_CLOUD_ENDPOINT}", "$(PEBBLE_CLOUD_ENDPOINT)/v2"] {
+            _ = try Self.infoPlist(in: app, value: wrong)
+            #expect(try Self.run(["sh", check, repo.path], in: repo) == 1, "\(wrong)")
+        }
+        // The key and its value on one line is another shape, and fails.
+        try Data("<plist><dict><key>PebbleCloudEndpoint</key><string>https://cloud.example.com</string></dict></plist>\n".utf8)
+            .write(to: plist)
+        #expect(try Self.run(["sh", check, repo.path], in: repo) == 1)
+        // Binary can't be read line by line.
+        let binary = try PropertyListSerialization.data(fromPropertyList: ["PebbleCloudEndpoint": "https://cloud.example.com"],
+                                                       format: .binary, options: 0)
+        try binary.write(to: plist)
+        #expect(try Self.run(["sh", check, repo.path], in: repo) == 1)
+        try PropertyListSerialization.data(fromPropertyList: ["CFBundleName": "Sample"], format: .binary, options: 0)
+            .write(to: plist)
+        #expect(try Self.run(["sh", check, repo.path], in: repo) == 1)
+        try FileManager.default.removeItem(at: plist)
+        #expect(try Self.run(["sh", check, repo.path], in: repo) == 1)
     }
 
     /// A tracked config it can't read, such as one deleted from the working
@@ -195,6 +245,63 @@ struct ScriptGuardTests {
         }
         #expect(try status("Debug", address) == 0)
         #expect(try status("Debug", address, action: "") == 0)
+    }
+
+    /// Writes an Info.plist into `folder` whose PebbleCloudEndpoint is
+    /// `value`, or which has no such key when it is nil.
+    static func infoPlist(in folder: URL, named name: String = "Info.plist", value: String?) throws -> URL {
+        var keys: [String: String] = ["CFBundleName": "Sample"]
+        keys["PebbleCloudEndpoint"] = value
+        let url = folder.appendingPathComponent(name)
+        try PropertyListSerialization.data(fromPropertyList: keys, format: .xml, options: 0).write(to: url)
+        return url
+    }
+
+    /// An address written straight into the Info.plist key reaches a build
+    /// whatever the setting says, so in any build that could ship the key
+    /// may only be empty or pass the setting through. Debug that isn't an
+    /// archive may still try one; a plist it can't read fails.
+    @Test func theReleaseCheckFailsWhenTheInfoPlistHoldsAnAddress() throws {
+        let folder = try scratchFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let check = Self.script("release-endpoint-check.sh")
+        func status(_ configuration: String, action: String = "build") throws -> Int32 {
+            try Self.run(["sh", check], in: folder, environment: Self.inBuild(folder).merging([
+                "CONFIGURATION": configuration, "PEBBLE_CLOUD_ENDPOINT": "", "ACTION": action,
+                "SRCROOT": folder.path, "INFOPLIST_FILE": "Info.plist",
+            ]) { $1 })
+        }
+        _ = try Self.infoPlist(in: folder, value: "https://cloud.example.com")
+        #expect(try status("Release") == 1)
+        #expect(try status("TestFlight") == 1)
+        #expect(try status("Debug", action: "archive") == 1)
+        #expect(try status("Debug") == 0)
+        for fine in ["", "$(PEBBLE_CLOUD_ENDPOINT)", nil] {
+            _ = try Self.infoPlist(in: folder, value: fine)
+            #expect(try status("Release") == 0, "\(fine ?? "no key")")
+            #expect(try status("Debug", action: "archive") == 0, "\(fine ?? "no key")")
+        }
+        for wrong in ["${PEBBLE_CLOUD_ENDPOINT}", "$(PEBBLE_CLOUD_ENDPOINT)/v2", " "] {
+            _ = try Self.infoPlist(in: folder, value: wrong)
+            #expect(try status("Release") == 1, "\(wrong)")
+        }
+        try FileManager.default.removeItem(at: folder.appendingPathComponent("Info.plist"))
+        #expect(try status("Release") == 1, "a plist it can't read passed")
+        // The value is never printed.
+        _ = try Self.infoPlist(in: folder, value: "https://secret-host.example.com")
+        let run = try Self.output(["sh", check], in: folder, environment: Self.inBuild(folder).merging([
+            "CONFIGURATION": "Release", "PEBBLE_CLOUD_ENDPOINT": "", "ACTION": "build",
+            "SRCROOT": folder.path, "INFOPLIST_FILE": "Info.plist",
+        ]) { $1 })
+        #expect(run.status == 1)
+        #expect(!run.text.contains("secret-host"))
+        // On its own, it reads the plist each configuration names.
+        let environment = try fakeXcodebuild(in: folder, configurations: ["Debug", "Release"], settings: [
+            "Release": "    PEBBLE_CLOUD_ENDPOINT = ' '    SRCROOT = \(folder.path)' '    INFOPLIST_FILE = Info.plist",
+        ])
+        #expect(try Self.run(["sh", check], in: folder, environment: environment) == 1)
+        _ = try Self.infoPlist(in: folder, value: "$(PEBBLE_CLOUD_ENDPOINT)")
+        #expect(try Self.run(["sh", check], in: folder, environment: environment) == 0)
     }
 
     /// The address is meant for one machine, so a failing build says only
@@ -566,10 +673,11 @@ struct ScriptGuardTests {
         let lint = try String(contentsOf: URL(fileURLWithPath: Self.script("comment-lint.sh")), encoding: .utf8)
         let defaults = try #require(lint.split(separator: "\n").first { $0.contains("|| set -- ") })
         for path in ["Packages/PebbleKit/Sources", "Packages/PebbleKit/Tests", "Tools/GuardKit", "App", "AppUITests", "scripts",
-                     "project.yml", "Makefile"] {
+                     "project.yml", "Makefile", ".github", "Config"] {
             #expect(defaults.contains(" \(path)"), "\(path)")
         }
         #expect(lint.contains("-name '*.txt'"))
+        #expect(lint.contains("-name '*.xcconfig'"))
         #expect(try Self.run(["sh", Self.script("comment-lint.sh")], in: Self.root) == 0)
     }
 

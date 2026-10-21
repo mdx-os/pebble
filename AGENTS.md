@@ -118,6 +118,11 @@ in lint, a skill, or CI.
   keys were seen in `UserDefaults`, so they never move over again. It holds
   no data and stays through Forget everything, so it is the one sign left
   that the switch was set; people who never had those keys get none.
+  The cloud setting leaves a second empty file that stays through Forget
+  everything: its sent mark (`CloudHelpFileStore.sentMarkURL`), made just
+  before the first request leaves, so a later Forget everything can say
+  what went can't be erased. It is the one sign left that the cloud was
+  ever used.
 - A switch write that fails is tried again at the next read, and an off
   that hasn't gone in makes the switch unknown. While the switch is
   unknown the runner never reads or writes its own file and shows no cards:
