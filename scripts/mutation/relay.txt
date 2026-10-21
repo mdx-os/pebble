@@ -69,7 +69,7 @@ test: theCanonicalFormIsNineLines theFixtureChainsLink
 file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
 perl: s~"relay-receipt/1",~"relay-receipt/2",~
 
-# Round-1 relay review: each new refusal has an independent mutation.
+# Each new refusal has an independent mutation.
 test: reviewCrossRunReplayIsRefused
 file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
 perl: s~receipt.runId == runId~true~
@@ -115,7 +115,7 @@ test: reviewTargetLimitsAreScalars
 file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
 perl: s~handle.unicodeScalars.count <= 254~handle.count <= 254~
 
-# Round-2 relay review: keep encoding, link text and scalar refusals covered.
+# Keep encoding, link text and scalar refusals covered.
 test: review2LeadingDotIsAScalar
 file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
 perl: s~name.unicodeScalars.first != "\."~!name.hasPrefix(".")~
@@ -132,17 +132,17 @@ test: review2WholeRunUsesItsOwnContext
 file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
 perl: s~terminalState: run.state~terminalState: .done~
 
-# Round-3 relay review: fillers in a target's name.
+# Fillers in a target's name.
 test: review3TargetNameFillersAreRefused
 file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
 perl: s~guard !AskFirst.hasHiddenScalars\(name\) else~guard true else~
 
-# Round-4 relay review: the joiner in a target's name.
+# The joiner in a target's name.
 test: review4JoinedEmojiNameIsRefused
 file: Packages/PebbleKit/Sources/PebbleCore/AskFirst.swift
 perl: s~\.unicodeScalars\.filter \{ !CharacterSet\.controlCharacters~.unicodeScalars.filter { \$0.value == 0x200D || !CharacterSet.controlCharacters~
 
-# Round-8 relay review: a hidden character in an artifact's name.
+# A hidden character in an artifact's name.
 test: review8ArtifactNameHiddenScalarsAreRefused anInvalidFixtureIsRefused
 file: Packages/PebbleKit/Sources/PebbleCore/Relay.swift
 perl: s~guard !AskFirst\.hasHiddenScalars\(name\) else \{ throw refused\("name has hidden characters", decoder\) \}~~

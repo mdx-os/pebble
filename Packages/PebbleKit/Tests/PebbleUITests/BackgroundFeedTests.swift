@@ -265,7 +265,7 @@ struct BackgroundFeedTests {
                                  endsCloudChats: {
                                      #expect(runner.isOn, "the chats end before background work stops")
                                      log.step("cloud chats")
-                                     return true
+                                     return CloudChatsEnded(sent: true)
                                  },
                                  alsoForget: { log.step("private words"); return .privateWords },
                                  background: runner, now: { Self.at(9) },

@@ -263,6 +263,11 @@ public enum DevicePromise {
                     + "that would carry personal words, before anything is shown or sent. It explains a refusal, not "
                     + "where other chats go."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "I didn't send that. Only the sign-in went to the cloud, none of what you wrote, and what you wrote is still here.",
+                reason: cloudSettingName + " CloudWords.stoppedAfterSignIn, said when a sign-in hop went and then the "
+                    + "message didn't (CloudModelError.stoppedAfterSignIn). It says something did go, the opposite of "
+                    + "a device promise, and is about that one message, which is back in the composer."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
                 literal: "Everything I kept is gone. To be sure the words you asked me to hide were gone too, I cleared the cloud setting, so help from the cloud is off. You can turn it on again anytime.",
                 reason: cloudSettingName + " CloudWords.forgotAndCloudOffAfterSending: the setting was erased, so it "
                     + "reads as off, which is what it says. It is said only after something was sent, at this launch or an "
@@ -321,6 +326,10 @@ public enum DevicePromise {
                 literal: "Help from the cloud was off by then, so I put this together without it.",
                 reason: cloudSettingName + " ReconWords.cloudOff names the setting, which was off."),
         Allowed(file: "PebbleCore/Recon.swift",
+                literal: "Only the sign-in went to the cloud, none of what I read, so I put this together without it.",
+                reason: reconCloudNote + " ReconWords.cloudSignInOnly follows a sign-in hop that went before the "
+                    + "summary's request didn't, and says plainly that something left."),
+        Allowed(file: "PebbleCore/Recon.swift",
                 literal: "It was stopped after you said send, so some of what I read may already have gone to the cloud. I put this together without it.",
                 reason: reconCloudNote + " ReconWords.cloudStopped follows a Stop after a yes, and says plainly "
                     + "that words may have left."),
@@ -368,6 +377,7 @@ public enum DevicePromise {
         CloudWords.offSavedLater,
         CloudWords.offAtLaunchNotSaved,
         CloudWords.signInRefused,
+        CloudWords.stoppedAfterSignIn,
         CloudWords.forgotAndCloudOffAfterSending,
         CloudWords.sentCantBeErased,
         CloudWords.onDetail,
@@ -403,6 +413,7 @@ public enum DevicePromise {
         ReconWords.cloudUnavailable,
         ReconWords.cloudWithdrawn,
         ReconWords.cloudOff,
+        ReconWords.cloudSignInOnly,
         ReconWords.cloudStopped,
         ReconWords.stoppedAfterSend,
         ReconWords.keptForCare,

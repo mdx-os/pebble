@@ -679,7 +679,9 @@ final class ChatController: ObservableObject {
     /// its own, which gets no tap since the person didn't just press anything.
     func submit(_ text: String, byHand: Bool = true) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isReplying else { return }
+        // A chat that ended sends nothing more, and a reply started in it
+        // would never settle.
+        guard !trimmed.isEmpty, !isReplying, !hasEnded else { return }
         let clearsDraft = trimmed == draft.trimmingCharacters(in: .whitespacesAndNewlines)
         // The same words sent again after their reply failed or was stopped
         // are already the last line of the chat, so they are asked again,
@@ -826,6 +828,7 @@ final class ChatController: ObservableObject {
         case .ended: CloudWords.chatEnded
         case .endedByOff: CloudWords.chatEndedByOff
         case .notRecorded: CloudWords.notRecorded
+        case .stoppedAfterSignIn: CloudWords.stoppedAfterSignIn
         default: FirstConversation.couldNotAnswer
         }
     }
@@ -840,7 +843,7 @@ final class ChatController: ObservableObject {
     /// or a new chat.
     nonisolated static func pointsAtTheDraft(_ failure: String) -> Bool {
         [FirstConversation.couldNotAnswer, CloudWords.notSent, CloudWords.withdrawn, CloudWords.turnedOff,
-         CloudWords.notesUnreadable, CloudWords.notRecorded].contains(failure)
+         CloudWords.notesUnreadable, CloudWords.notRecorded, CloudWords.stoppedAfterSignIn].contains(failure)
     }
 
     /// True while the draft still starts with the words given back, whole,
@@ -873,6 +876,9 @@ final class ChatController: ObservableObject {
     /// called; URLSession reports a send cut short as a `URLError`, which
     /// is not counted here. Any other transport failure may have come
     /// after the bytes went, so the turn stays.
+    ///
+    /// `stoppedAfterSignIn` counts too: only the sign-in went, which
+    /// carries nothing of the chat, so the line itself never left.
     nonisolated static func nothingWasSent(_ error: Error) -> Bool {
         if error is CancellationError { return true }
         // Refused before sending: labels that weren't shown, an address
@@ -887,7 +893,8 @@ final class ChatController: ObservableObject {
             }
         }
         return switch error as? CloudModelError {
-        case .notSent, .withdrawn, .off, .staysHere, .notesUnreadable, .ended, .endedByOff, .notRecorded: true
+        case .notSent, .withdrawn, .off, .staysHere, .notesUnreadable, .ended, .endedByOff, .notRecorded,
+             .stoppedAfterSignIn: true
         case .unreadableReply, nil: false
         }
     }
@@ -935,9 +942,16 @@ final class ChatController: ObservableObject {
     /// on the wire is cancelled, and the chat lets go of its turns, its
     /// draft (shared with Today's composer, and maybe holding a word being
     /// erased) and everything it hid so far. Nothing more is sent from it.
-    func end() {
+    ///
+    /// With `restarting` false the screen holding it isn't told yet, so it
+    /// starts no fresh chat until `restart()`, as while Forget everything
+    /// is still erasing what a fresh chat would be made from.
+    func end(restarting: Bool = true) {
         guard !hasEnded else { return }
         hasEnded = true
+        defer {
+            if restarting { onEnded?() } else { restartHeld = true }
+        }
         stopReplying()
         review?.cancelPending()
         cloudSession?.end()
@@ -947,6 +961,16 @@ final class ChatController: ObservableObject {
         failure = nil
         unheardReply = nil
         reconOffer = nil
+    }
+
+    /// Set by `end(restarting: false)` until `restart()`.
+    private var restartHeld = false
+
+    /// Tells the screen holding this chat that it ended, once, when `end`
+    /// held that back.
+    func restart() {
+        guard restartHeld else { return }
+        restartHeld = false
         onEnded?()
     }
 

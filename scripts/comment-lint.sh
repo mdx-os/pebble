@@ -5,7 +5,8 @@
 #
 # Checks comments for:
 # - "fix round", in any case
-# - review item and round numbers, like "item 11" or "round 4"
+# - review item and round numbers, like "item 11", "round 4", "Round-4"
+#   or "round #4", and numbered fixes like "fix9"
 # - any name in the list of names, in any case, also as a possessive; a
 #   name of two words matches with any space between
 # Comments are // and /* */ in Swift, every line of a block included; #
@@ -71,7 +72,7 @@ scan() {
       }
       if (!%set) { print "comment-lint: the names list COMMENT_LINT_NAMES names holds no names\n"; exit 3 }
     }
-    my $history = qr/fix(?:ed)?\s+round|(?<![\w])(?:item|round)\s+[0-9]+/i;
+    my $history = qr/fix(?:ed)?\s+round|(?<![\w])(?:item|round)[\s#-]*[0-9]+|(?<![\w])fix[0-9]+(?![\w])/i;
     # A string in double quotes, escapes and all. Never a comment.
     my $quoted = qr/"(?:[^"\\]|\\.)*"/;
     my $found = 0;
@@ -154,6 +155,10 @@ self_test() {
   printf '    // %s %s 5\n' "fix" "ROUND" > "$dir/bad/mixed.swift"
   printf '/// Asked for in %s 11.\nlet x = 1\n' "$item" > "$dir/bad/item.swift"
   printf 'let x = 1 // since %s 4\n' "$round" > "$dir/bad/trailing.swift"
+  printf '// since %s-4\n' "Round" > "$dir/bad/hyphen.swift"
+  printf '// since %s #4\n' "Round" > "$dir/bad/hash.swift"
+  printf '// carried from %s#2\n' "$item" > "$dir/bad/hashtight.swift"
+  printf '# ported from %s9\ntest: aTest\n' "$fix" > "$dir/bad/numberedfix.txt"
   printf '/* %s %s 2 */\n' "$fix" "$round" > "$dir/bad/block.swift"
   printf '/*\n * What this guards.\n * %s %s 3\n */\nlet x = 1\n' "$fix" "$round" > "$dir/bad/continued.swift"
   printf '/**\n   carried over from %s 7\n */\n' "$item" > "$dir/bad/bare.swift"
@@ -182,6 +187,7 @@ self_test() {
   printf '# a note for quillon\ntest: aTest\n' > "$dir/bad/name.txt"
   # Fine: words that only look alike, and the same words outside a comment.
   printf '/// Rounds to 4 places, and lists items 1 to 3.\nlet rounded = 4\n' > "$dir/good/words.swift"
+  printf '/// A round trip, a prefix9 and a fixture2 are not review history.\n' > "$dir/good/near.history.swift"
   printf '#expect(text.contains("%s %s 5"))\n' "$fix" "$round" > "$dir/good/string.swift"
   printf 'let url = "https://example.com" // the sample address\n' > "$dir/good/url.swift"
   printf 'let url = "https://example.com/%s 3"\n' "$item" > "$dir/good/path.swift"
@@ -232,6 +238,16 @@ self_test() {
       failed=1
     fi
   done
+  # A folder the lint can't list fails it, never passes with its files
+  # left unread.
+  mkdir -p "$dir/unlisted/shut"
+  printf '/// %s %s 5\n' "$fix" "$round" > "$dir/unlisted/shut/hidden.swift"
+  chmod 000 "$dir/unlisted/shut"
+  if COMMENT_LINT_NAMES= sh "$0" "$dir/unlisted" >/dev/null 2>&1; then
+    echo "comment-lint self-test: passed a folder it couldn't list"
+    failed=1
+  fi
+  chmod 755 "$dir/unlisted/shut"
   # A list inside the repository is refused, in a copy of the lint whose
   # repository is a scratch folder.
   mkdir -p "$dir/repo/scripts" "$dir/repo/Config"
@@ -276,10 +292,17 @@ for path in "$@"; do
   fi
 done
 
+# Listed into a file first, so a folder find can't read fails the lint,
+# where a pipe would quietly leave its files out.
+list="$(mktemp)"
+trap 'rm -f "$list"' EXIT
+if ! find "$@" -type f \( -name '*.swift' -o -name '*.sh' -o -name '*.py' -o -name '*.yml' -o -name '*.txt' \
+  -o -name Makefile \) ! -path '*/.build/*' ! -name 'comment-lint.sh' > "$list"; then
+  echo "comment-lint: couldn't list every file"
+  exit 1
+fi
 status=0
-hits="$(find "$@" -type f \( -name '*.swift' -o -name '*.sh' -o -name '*.py' -o -name '*.yml' -o -name '*.txt' \
-  -o -name Makefile \) ! -path '*/.build/*' ! -name 'comment-lint.sh' | sort \
-  | scan "$names_file")" || status=$?
+hits="$(sort "$list" | scan "$names_file")" || status=$?
 if [ "$status" -eq 1 ]; then
   echo "comment-lint: say what the code protects, not the review it came from or who asked:"
   printf '%s\n' "$hits"

@@ -1260,14 +1260,93 @@ struct CloudPromiseTests {
         #expect(maker.wire.sent.isEmpty)
     }
 
+    /// When Forget everything has to clear the cloud setting to be sure the
+    /// words went, the home screen's fresh chat starts only once it is
+    /// cleared: it is on the device, with no preview gate, never a cloud
+    /// chat made while the setting still read on. Every other cloud chat's
+    /// session ends as a switch off ends it, one that held nothing too.
+    @Test func theFreshChatAfterForgetEverythingIsMadeWithTheSettingItLeft() throws {
+        let maker = TransportMaker()
+        let memory = scratchMemory("Sam's birthday is May 14.")
+        let store = FailingCloudStore(CloudHelpSettings(isOn: true, for: endpoint, privateWords: ["lemon cake"]))
+        let cloud = help(maker: maker, memory: memory, store: store)
+        let slot = HomeView.chatSlot(newChat(cloud), brand: brand, model: local,
+                                     names: InMemoryAgentNameStore(stored: "Pip"), cloud: cloud)
+        let held = try #require(slot.chat)
+        held.draft = "Plan my week"
+        let idle = newChat(cloud)
+        store.savesToFail = .max
+
+        HomeView.memoryModel(store: memory, place: .mayLeaveDevice, cloud: cloud).forgetEverything()
+
+        #expect(!cloud.usesCloudForNewChats)
+        #expect(held.hasEnded)
+        let fresh = try #require(slot.chat)
+        #expect(fresh !== held)
+        #expect(fresh.review == nil, "a cloud chat was made while the setting still read on")
+        #expect(fresh.cloudSession == nil)
+        #expect(idle.cloudSession?.hasEnded == true)
+        #expect(maker.wire.sent.isEmpty)
+    }
+
+    /// Forget everything can't land between a reply reading the private
+    /// words and adding them to its chat, even in a chat no screen holds,
+    /// as a summary's: the setting ends the chats and erases the words
+    /// under the lock the read takes (`PrivacyChanges`). Asked for on the
+    /// main actor while a reply reads the words, it waits until they are
+    /// added, then finds the chat holding them and ends it. The words are
+    /// the store's second read off the main actor in a reply, after the
+    /// check that the cloud is on; the read waits there, on a generous
+    /// limit, until Forget everything is held back or done.
+    @Test func forgetEverythingWaitsForAReplyReadingTheWords() async throws {
+        let heldBack = DispatchSemaphore(value: 0)
+        let privacy = PrivacyChanges(waiting: { heldBack.signal() })
+        let memory = MemoryStore(fileURL: scratch.add(FileManager.default.temporaryDirectory
+            .appendingPathComponent("cloud-promise-\(UUID().uuidString).json")), privacyChanges: privacy)
+        let forgotten = SessionFlag()
+        let store = ReadHookStore(CloudHelpSettings(isOn: true, for: endpoint, privateWords: ["lemon cake"]))
+        let cloud = help(memory: memory, store: store)
+        store.onSecondReadOffMain = {
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { _ = try? cloud.forgetPrivateWords() }
+                forgotten.value = true
+                heldBack.signal()
+            }
+            #expect(heldBack.wait(timeout: .now() + 60) == .success, "Forget everything neither waited nor finished")
+        }
+        let review = CloudReview()
+        let model = cloud.chatModel(local: local, review: review, madeOnSend: true)
+        let session = try #require(model.cloudSession)
+        let turns = [ChatTurn(id: UUID(), speaker: .person, text: "Bring the lemon cake on Friday.")]
+        let reply = Task.detached { _ = try? await model.reply(to: turns) }
+        _ = await review.shown()
+        review.cancelPending()
+        await reply.value
+        #expect(forgotten.value)
+        #expect(cloud.settings.privateWords.isEmpty)
+        #expect(session.hiddenSoFar.privateWords.isEmpty, "an erased word stayed in the chat")
+    }
+
+    /// A chat that ended takes no more sends, so none starts a reply that
+    /// would never settle.
+    @Test func anEndedChatTakesNoMoreSends() {
+        let chat = newChat(help(CloudHelpSettings(isOn: true, for: endpoint)))
+        chat.end()
+        chat.submit("Plan my week")
+        #expect(!chat.isReplying)
+        #expect(!chat.conversation.turns.contains { $0.speaker == .person })
+    }
+
     /// The home screen's launch line draws only while there is one to say.
     @Test func theLaunchLineShowsOnTheHomeScreenOnlyWhileItHolds() throws {
         let unmarked = FailingCloudStore(CloudHelpSettings(isOn: true, for: endpoint))
         unmarked.savesToFail = .max
         unmarked.markFails = true
         let stuck = CloudHelp(store: unmarked, endpoint: nil, memory: scratchMemory())
-        /// How many bytes of the picture differ from the plain backdrop it
-        /// is drawn on, so a notice that draws nothing counts none.
+        /// How many pixels of the picture differ from the plain backdrop it
+        /// is drawn on, so a notice that draws nothing counts none. Each
+        /// row is read only as far as its width: the bytes a row may be
+        /// padded with past its last pixel are not part of the picture.
         func drawn(_ cloud: CloudHelp) -> Int {
             let renderer = ImageRenderer(content: CloudLaunchNotice(help: cloud)
                 .frame(width: 390, height: 200).background(Color.black))
@@ -1275,8 +1354,14 @@ struct CloudPromiseTests {
             guard let image = renderer.cgImage, let data = image.dataProvider?.data as Data? else { return -1 }
             let step = image.bitsPerPixel / 8
             let backdrop = data.prefix(step)
-            return stride(from: 0, to: data.count - step + 1, by: step)
-                .filter { data[$0..<$0 + step] != backdrop }.count
+            var differ = 0
+            for y in 0..<image.height {
+                for x in 0..<image.width {
+                    let at = data.startIndex + y * image.bytesPerRow + x * step
+                    if data[at..<at + step] != backdrop { differ += 1 }
+                }
+            }
+            return differ
         }
         #expect(drawn(help()) == 0)
         #expect(drawn(stuck) > 1_000)
@@ -1488,5 +1573,39 @@ struct PreviewProbe: View {
 
         var body: some View { Text("Today") }
     }
+}
+
+/// The cloud setting in memory, which runs `onSecondReadOffMain` once, on
+/// the second read made off the main thread, after reading and before
+/// handing the read back, so whatever it does lands between the two.
+final class ReadHookStore: CloudHelpStoring, @unchecked Sendable {
+    private let inner: InMemoryCloudHelpStore
+    private let lock = NSLock()
+    private var readsOffMain = 0
+    private var _hook: (@Sendable () -> Void)?
+
+    init(_ settings: CloudHelpSettings) { inner = InMemoryCloudHelpStore(settings) }
+
+    var onSecondReadOffMain: (@Sendable () -> Void)? {
+        get { lock.withLock { _hook } }
+        set { lock.withLock { _hook = newValue } }
+    }
+
+    func load() throws -> CloudHelpSettings {
+        let read = try inner.load()
+        guard !Thread.isMainThread else { return read }
+        let hook: (@Sendable () -> Void)? = lock.withLock {
+            readsOffMain += 1
+            return readsOffMain == 2 ? _hook : nil
+        }
+        hook?()
+        return read
+    }
+
+    func save(_ settings: CloudHelpSettings) throws { try inner.save(settings) }
+    func erase() throws { try inner.erase() }
+    func markOff() throws { try inner.markOff() }
+    func markSent() throws { try inner.markSent() }
+    var wasSent: Bool { inner.wasSent }
 }
 #endif

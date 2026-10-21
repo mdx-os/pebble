@@ -58,9 +58,12 @@ public struct CloudReconSummarizer: ReconSummarizer {
             return onDevice(ReconWords.declinedCloud)
         } catch CloudModelError.withdrawn {
             // Taken away before the person answered. They didn't choose
-            // this, so the note doesn't say they did. Only a preview with
-            // no answer is withdrawn, so no yes was ever given.
+            // this, so the note doesn't say they did. An earlier preview
+            // may have had a yes, but nothing it sent went: once a sign-in
+            // hop has gone, the model says `stoppedAfterSignIn` instead.
             return onDevice(ReconWords.cloudWithdrawn)
+        } catch CloudModelError.stoppedAfterSignIn {
+            return onDevice(ReconWords.cloudSignInOnly)
         } catch CloudModelError.off, CloudModelError.endedByOff {
             // Off before a preview was shown, or by the time a yes came:
             // nothing was asked, or the yes couldn't be used.

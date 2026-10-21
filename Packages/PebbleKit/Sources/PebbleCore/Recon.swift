@@ -600,6 +600,9 @@ public enum ReconWords {
     /// Help from the cloud was off by the time the summary was ready to go,
     /// before a preview or after a yes. Nothing went, and no one chose that.
     public static let cloudOff = "Help from the cloud was off by then, so I put this together without it."
+    /// The sign-in went to the cloud, then what was read didn't. Never
+    /// "nothing went": the sign-in did, though it carries none of it.
+    public static let cloudSignInOnly = "Only the sign-in went to the cloud, none of what I read, so I put this together without it."
     /// Stopped after the person said send. Some of it may already have
     /// gone, so it says that plainly and never that nothing did.
     public static let cloudStopped = "It was stopped after you said send, so some of what I read may already have gone to the cloud. I put this together without it."
@@ -717,7 +720,7 @@ public enum ReconWords {
          disagreement([("Riverside Gazette", "November 3"), ("City of Riverside Parks", "November 10")],
                       newest: "City of Riverside Parks"),
          sourcesHeading, pointsHeading, morePoints(1), morePoints(2), olderLabel, from(["A", "B"]), sourceNumber(1),
-         declinedCloud, cloudUnreadable, cloudUnavailable, cloudWithdrawn, cloudOff, cloudStopped, stoppedAfterSend, keptForCare,
+         declinedCloud, cloudUnreadable, cloudUnavailable, cloudWithdrawn, cloudOff, cloudSignInOnly, cloudStopped, stoppedAfterSend, keptForCare,
          openSourcesTitle, followUpTitle, rememberTitle,
          openSourcesHint, followUpHint, rememberHint, followUpDraft("the pool"), rememberQuestion,
          rememberThis, remembered, pageLinkTitle, lookIntoTitle, lookIntoHint, askLine("the pool")]

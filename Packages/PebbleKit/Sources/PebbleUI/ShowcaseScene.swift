@@ -855,8 +855,8 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
 #if DEBUG
 /// The showcase's transport. It sends nothing, ever.
 struct NoSendTransport: CloudTransport {
-    func send(_ request: CloudRequest) async throws -> Data {
-        throw CloudModelError.notSent
+    func start(_ request: CloudRequest) -> Task<Data, Error> {
+        Task { throw CloudModelError.notSent }
     }
 }
 

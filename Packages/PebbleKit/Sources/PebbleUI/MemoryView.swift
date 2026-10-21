@@ -80,9 +80,11 @@ public struct MemoryView: View {
     /// What Forget everything does before anything else, when there is a
     /// cloud setting: it ends every open cloud chat, and says whether
     /// anything was ever handed to the cloud, at this launch or before.
-    static func endsCloudChats(_ cloud: CloudHelp?) -> (@MainActor () -> Bool)? {
+    /// The fresh chats start in their places only once all of Forget
+    /// everything is done (`CloudChatsEnded.restart`).
+    static func endsCloudChats(_ cloud: CloudHelp?) -> (@MainActor () -> CloudChatsEnded)? {
         guard let cloud else { return nil }
-        return { cloud.endOpenCloudChats() }
+        return { cloud.endChatsToForget() }
     }
 
     /// The Forget everything question's words: they name the private words
@@ -901,6 +903,17 @@ struct SourceLabel: View {
     }
 }
 
+/// What ending every cloud chat left for the rest of Forget everything.
+struct CloudChatsEnded {
+    /// Something was handed to the cloud, this session or at an earlier
+    /// launch, so Forget everything must say a copy may have left.
+    let sent: Bool
+    /// Starts a fresh chat in each ended chat's place. Called once, after
+    /// everything else Forget everything erases, so a fresh chat is made
+    /// with the settings it left.
+    var restart: @MainActor () -> Void = {}
+}
+
 @MainActor
 final class MemoryModel: ObservableObject {
     let store: MemoryStore
@@ -940,7 +953,7 @@ final class MemoryModel: ObservableObject {
     private let alsoForget: (@MainActor () throws -> CloudHelp.Forgot)?
     /// Runs first of all: ends every open cloud chat, and says whether
     /// anything was ever handed to the cloud, at this launch or before.
-    private let endsCloudChats: (@MainActor () -> Bool)?
+    private let endsCloudChats: (@MainActor () -> CloudChatsEnded)?
 
     /// Forgets what lives outside the memory file, such as tasks.
     private let onForgetEverything: @MainActor () -> ClearedTasks
@@ -1008,7 +1021,7 @@ final class MemoryModel: ObservableObject {
     /// With `othersChanged`, the screen looks again each time it fires, as
     /// when a task elsewhere makes or erases its file, so Forget everything
     /// shows while there is anything to erase.
-    init(store: MemoryStore, place: PrivacyPlace, endsCloudChats: (@MainActor () -> Bool)? = nil,
+    init(store: MemoryStore, place: PrivacyPlace, endsCloudChats: (@MainActor () -> CloudChatsEnded)? = nil,
          alsoForget: (@MainActor () throws -> CloudHelp.Forgot)? = nil,
          background: BackgroundRunner? = nil, grants: GrantBook? = nil, now: @escaping () -> Date = { Date() },
          onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none },
@@ -1232,7 +1245,11 @@ final class MemoryModel: ObservableObject {
         cancelEdit()
         // Before anything is erased, every open cloud chat ends, so no chat
         // still holds what is about to go, and nothing more leaves from one.
-        let sent = endsCloudChats?() ?? false
+        // Their fresh chats start only once everything below has gone, so
+        // none is made with a cloud setting about to be erased.
+        let ended = endsCloudChats?()
+        defer { ended?.restart() }
+        let sent = ended?.sent ?? false
         // Then the rest, even if a file can't be erased: the person asked to
         // forget, and nothing here depends on the files. Each step runs
         // whatever happened to the ones before it.

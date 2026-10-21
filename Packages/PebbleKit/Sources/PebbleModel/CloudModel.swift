@@ -227,7 +227,27 @@ extension CloudReviewing {
 /// Tests use a fake that records requests; nothing in tests or CI touches
 /// the network.
 public protocol CloudTransport: Sendable {
-    func send(_ request: CloudRequest) async throws -> Data
+    /// Hands `request` over before it returns, and gives back the wait for
+    /// its answer. Cancelling the wait stops the send. Whatever the caller
+    /// holds while calling this covers the hand over itself: `CloudModel`
+    /// calls it under `PrivacyChanges`, after its last check, so a private
+    /// word saved once the lock is let go was saved after the request had
+    /// gone. Nothing of the request may wait to be handed over later, as
+    /// in a task that hasn't run yet.
+    func start(_ request: CloudRequest) -> Task<Data, Error>
+}
+
+extension CloudTransport {
+    /// Starts `request` and waits for its answer. Cancelling the wait
+    /// stops the send.
+    public func send(_ request: CloudRequest) async throws -> Data {
+        let call = start(request)
+        return try await withTaskCancellationHandler {
+            try await call.value
+        } onCancel: {
+            call.cancel()
+        }
+    }
 }
 
 /// A sign-in the cloud needs before a message: a hop of its own, sent to
@@ -398,6 +418,11 @@ public enum CloudModelError: Error, Equatable, Sendable {
     /// device, so a later Forget everything couldn't say a copy left.
     /// Nothing was sent.
     case notRecorded
+    /// A sign-in hop went to the cloud, and then the message didn't: it was
+    /// not sent, withdrawn, switched off, or couldn't be checked or noted.
+    /// Only the sign-in went, which carries no chat, notes or private words,
+    /// so nothing here may say that nothing went.
+    case stoppedAfterSignIn
 }
 
 /// The body sent to the cloud model.
@@ -514,27 +539,48 @@ public struct CloudModel: ModelClient {
     ///
     /// A chat a switch off ended says so once the cloud is on again
     /// (`endedByOff`), never that the cloud is off while it reads on.
+    ///
+    /// Once a sign-in hop has gone, in this pass or an earlier one, a
+    /// message that then doesn't go says so (`stoppedAfterSignIn`), never
+    /// that nothing went.
     public func reply(to transcript: [ChatTurn]) async throws -> String {
+        var signInWent = false
         do {
             while true {
-                if let reply = try await replyOnce(to: transcript) { return reply }
+                if let reply = try await replyOnce(to: transcript, signInWent: &signInWent) { return reply }
             }
+        } catch let error as CloudModelError where signInWent && Self.saysNothingWent(error) {
+            throw CloudModelError.stoppedAfterSignIn
         } catch CloudModelError.off where session.endedBySwitchOff && (try? isOn()) == true {
             throw CloudModelError.endedByOff
         }
     }
 
+    /// The reasons a message didn't go whose words say that nothing did.
+    static func saysNothingWent(_ error: CloudModelError) -> Bool {
+        switch error {
+        case .notSent, .withdrawn, .off, .endedByOff, .notesUnreadable, .notRecorded: true
+        case .staysHere, .unreadableReply, .ended, .stoppedAfterSignIn: false
+        }
+    }
+
     /// One preview and its hops. Nil when the privacy inputs changed after
     /// the preview was redacted, before everything was sent: nothing more
-    /// of it goes.
-    private func replyOnce(to transcript: [ChatTurn]) async throws -> String? {
+    /// of it goes. `signInWent` is set once a sign-in hop is handed over.
+    private func replyOnce(to transcript: [ChatTurn], signInWent: inout Bool) async throws -> String? {
         try session.checkOpen()
         try checkOn()
         // The version of the privacy inputs this preview is redacted with:
-        // the notes' names and the private words as they are now.
-        let current = try readRedactor()
+        // the notes' names and the private words as they are now, read and
+        // added to what the chat has hidden under `privacyChanges`, so
+        // Forget everything, which ends the chat under the same lock, can't
+        // land between the two and leave erased words in the chat.
+        let (current, widened) = try privacyChanges.handOver {
+            let current = try readRedactor()
+            return (current, try session.widened(by: current))
+        }
         let preview = try Self.preview(
-            for: transcript, endpoint: endpoint, redactor: try session.widened(by: current),
+            for: transcript, endpoint: endpoint, redactor: widened,
             headers: auth.headers(for: Self.url(for: endpoint)), signIn: auth.signIn(for: endpoint),
             forSummary: CloudAsk.forSummary,
             run: CloudAsk.forSummary ? CloudYes.run : nil
@@ -561,6 +607,7 @@ public struct CloudModel: ModelClient {
             if let signIn = preview.signIn {
                 try readyToSend()
                 guard let handed = try handOver(signIn, ifStill: current) else { return nil }
+                signInWent = true
                 let answer = try await session.finish(handed)
                 // A switch off or Forget everything may have come while it
                 // was on the wire; then nothing it brought back is kept.
@@ -799,17 +846,21 @@ public final class CloudChatSession: @unchecked Sendable {
     }
 
     /// The part of `send` that hands `request` over, with no wait, so a
-    /// caller can do it under a lock of its own (`PrivacyChanges`). Once
-    /// it returns the bytes may be on their way. The `handingOver`
+    /// caller can do it under a lock of its own (`PrivacyChanges`). The
+    /// transport has the request by the time this returns
+    /// (`CloudTransport.start`), so that lock covers the hand over itself,
+    /// not only a task that would hand it over later. The `handingOver`
     /// callback given at init runs under the session's lock, just before
-    /// the request is handed over, so it must not touch the session.
-    /// Always followed by `finish`.
+    /// the request is handed over, so it must not touch the session; the
+    /// transport's `start` runs there too. A reply stopped by then hands
+    /// nothing over. Always followed by `finish`.
     package func handOff(_ request: CloudRequest, through transport: any CloudTransport) throws -> Handed {
         let id = UUID()
         let task: Task<Data, Error> = try lock.withLock {
             if let endedBy { throw endedBy }
+            if Task.isCancelled { throw CancellationError() }
             do { try handingOver() } catch { throw CloudModelError.notRecorded }
-            let task = Task { try await transport.send(request) }
+            let task = transport.start(request)
             onTheWire[id] = task
             return task
         }
@@ -880,7 +931,10 @@ public enum ModelChoice {
 /// person has turned the cloud on.
 public struct URLSessionCloudTransport: CloudTransport {
     public typealias Load = @Sendable (URLRequest) async throws -> (Data, URLResponse)
-    private let load: Load
+    /// Hands a URLRequest over before it returns, and gives back the wait
+    /// for its answer.
+    private typealias Begin = @Sendable (URLRequest) -> Task<(Data, URLResponse), Error>
+    private let begin: Begin
     /// Plain http to this Mac's own loopback address, for a test's local
     /// listener. Only the test-only init below sets it.
     private let allowsLoopbackHTTP: Bool
@@ -890,12 +944,20 @@ public struct URLSessionCloudTransport: CloudTransport {
     package static let loopbackHost = "127.0" + ".0.1"
 
     public init() {
-        self.init(load: Self.live)
+        begin = { request in
+            let session = Self.makeSession()
+            // Let go once the one request it was made for is done.
+            defer { session.finishTasksAndInvalidate() }
+            return Self.started(request, on: session)
+        }
+        allowsLoopbackHTTP = false
     }
 
-    /// Tests pass a fake `load` that records the URLRequest.
+    /// Tests pass a fake `load` that records the URLRequest. It runs in a
+    /// task of its own, so it sees the request just after `start`, not
+    /// within it.
     package init(load: @escaping Load) {
-        self.load = load
+        begin = { request in Task { try await load(request) } }
         allowsLoopbackHTTP = false
     }
 
@@ -906,10 +968,62 @@ public struct URLSessionCloudTransport: CloudTransport {
     /// nothing else ever gets. Debug only, so no shipped build has it.
     package init(loopbackForTests: Void) {
         let session = Self.makeSession()
-        load = { request in try await session.data(for: request, delegate: RefusesRedirects()) }
+        begin = { request in Self.started(request, on: session) }
         allowsLoopbackHTTP = true
     }
     #endif
+
+    /// Hands `request` to `session` before it returns, so the system has
+    /// it by then, and gives back the wait for its answer. Cancelling the
+    /// wait cancels the request.
+    private static func started(_ request: URLRequest, on session: URLSession) -> Task<(Data, URLResponse), Error> {
+        let answer = Answer()
+        let task = session.dataTask(with: request) { data, response, error in answer.settle(data, response, error) }
+        task.resume()
+        return Task {
+            try await withTaskCancellationHandler {
+                try await answer.value()
+            } onCancel: {
+                task.cancel()
+            }
+        }
+    }
+
+    /// The answer to one started request, kept until it is waited for.
+    private final class Answer: @unchecked Sendable {
+        private let lock = NSLock()
+        private var result: Result<(Data, URLResponse), Error>?
+        private var waiting: CheckedContinuation<(Data, URLResponse), Error>?
+
+        func settle(_ data: Data?, _ response: URLResponse?, _ error: Error?) {
+            let settled: Result<(Data, URLResponse), Error>
+            if let error {
+                settled = .failure(error)
+            } else if let response {
+                settled = .success((data ?? Data(), response))
+            } else {
+                settled = .failure(URLError(.badServerResponse))
+            }
+            let waiter: CheckedContinuation<(Data, URLResponse), Error>? = lock.withLock {
+                guard result == nil else { return nil }
+                result = settled
+                defer { waiting = nil }
+                return waiting
+            }
+            waiter?.resume(with: settled)
+        }
+
+        func value() async throws -> (Data, URLResponse) {
+            try await withCheckedThrowingContinuation { continuation in
+                let ready: Result<(Data, URLResponse), Error>? = lock.withLock {
+                    if let result { return result }
+                    waiting = continuation
+                    return nil
+                }
+                if let ready { continuation.resume(with: ready) }
+            }
+        }
+    }
 
     /// Only https leaves, whatever address a request was built for:
     /// `CloudEndpoint` takes no other, and this holds even if something
@@ -919,7 +1033,31 @@ public struct URLSessionCloudTransport: CloudTransport {
         return scheme == "https" || (allowsLoopbackHTTP && scheme == "http" && url.host == Self.loopbackHost)
     }
 
-    public func send(_ request: CloudRequest) async throws -> Data {
+    /// Refuses a request that could go other than shown, with nothing
+    /// handed over; anything else is handed to the system before this
+    /// returns.
+    public func start(_ request: CloudRequest) -> Task<Data, Error> {
+        do {
+            try check(request)
+        } catch {
+            return Task { throw error }
+        }
+        let call = begin(request.urlRequest)
+        return Task {
+            let (data, response) = try await withTaskCancellationHandler {
+                try await call.value
+            } onCancel: {
+                call.cancel()
+            }
+            // A redirect is refused, so it arrives here as a 3xx and fails.
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                throw URLError(.badServerResponse)
+            }
+            return data
+        }
+    }
+
+    private func check(_ request: CloudRequest) throws {
         guard isSecure(request.url) else { throw CloudTransportError.notSecure }
         // Without the fixed User-Agent and Accept-Language the system would
         // add its own, which name the device and the person's languages and
@@ -931,17 +1069,14 @@ public struct URLSessionCloudTransport: CloudTransport {
         guard request.headers == (try? CloudHeaders.merged(with: request.headers)) else {
             throw CloudTransportError.headersNotShown
         }
-        let (data, response) = try await load(request.urlRequest)
-        // A redirect is refused, so it arrives here as a 3xx and fails.
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw URLError(.badServerResponse)
-        }
-        return data
     }
 
     /// A session that keeps nothing and adds nothing: no cookies, cache or
-    /// saved passwords, no extra headers, and every redirect refused, so
-    /// the request can't end up anywhere but the address shown.
+    /// saved passwords, no extra headers, every redirect refused, so the
+    /// request can't end up anywhere but the address shown, and every
+    /// sign-in challenge but the server's own certificate cancelled
+    /// (`RefusesRedirects`), so the system never sends it again with a
+    /// credential the card didn't show.
     static func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
@@ -951,12 +1086,6 @@ public struct URLSessionCloudTransport: CloudTransport {
         configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         configuration.httpAdditionalHeaders = nil
         return URLSession(configuration: configuration, delegate: RefusesRedirects(), delegateQueue: nil)
-    }
-
-    private static let live: Load = { request in
-        let session = makeSession()
-        defer { session.finishTasksAndInvalidate() }
-        return try await session.data(for: request, delegate: RefusesRedirects())
     }
 }
 
@@ -988,6 +1117,13 @@ public enum CloudTransportError: Error, Equatable, Sendable {
 /// Says no to every redirect. A 307 or 308 would carry the same body to
 /// another address, maybe another host or plain http, that the person
 /// never saw.
+///
+/// Says no to every sign-in challenge too, but for the check of the
+/// server's own certificate, which the system makes as it always does.
+/// Taking the default for a 401 or 407 could let the system's own sign-in,
+/// such as single sign-on on a managed Mac, send the body again with an
+/// Authorization line the card never showed. Cancelled, the request fails
+/// and nothing more goes.
 public final class RefusesRedirects: NSObject, URLSessionTaskDelegate, Sendable {
     public override init() {}
 
@@ -996,6 +1132,18 @@ public final class RefusesRedirects: NSObject, URLSessionTaskDelegate, Sendable 
         willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest
     ) async -> URLRequest? {
         nil
+    }
+
+    public func urlSession(
+        _ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge
+    ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        (Self.disposition(for: challenge.protectionSpace.authenticationMethod), nil)
+    }
+
+    /// The default for the server's certificate, and cancel for any other
+    /// way of signing in.
+    static func disposition(for method: String) -> URLSession.AuthChallengeDisposition {
+        method == NSURLAuthenticationMethodServerTrust ? .performDefaultHandling : .cancelAuthenticationChallenge
     }
 }
 

@@ -191,6 +191,22 @@ struct CloudReconTests {
         #expect(summary.note != ReconWords.declinedCloud)
     }
 
+    /// Once the sign-in hop has gone, a summary whose request then didn't
+    /// go says only the sign-in went, never that nothing did.
+    @Test func aSummaryStoppedAfterTheSignInWentSaysTheSignInWent() async {
+        let words = Words()
+        let transport = SignInAddsAWordTransport(words: words, word: "Riverside")
+        let model = CloudModel(endpoint: URL(string: "https://cloud.example.com")!, transport: transport,
+                               reviewer: ScriptedReviewer(answers: [.send, .withdrawn]),
+                               auth: SampleAuth(signIn: CloudSignIn(path: "v1/sign-in", body: Data(#"{"device":"made-up"}"#.utf8))),
+                               redactor: { Redactor(privateWords: words.list) })
+        let summary = await CloudReconSummarizer(model: model)
+            .summarize(task, id: "task:1", sources: sources, gatheredAt: readOn)
+        #expect(transport.sent.map(\.url.path) == ["/v1/sign-in"])
+        #expect(summary.madeOnDevice)
+        #expect(summary.note == ReconWords.cloudSignInOnly)
+    }
+
     @Test func aChatModelOnTheDeviceNeverMayLeaveIt() {
         #expect(!CloudReconSummarizer(model: LocalStubModel()).mayUseCloud)
         #expect(CloudReconSummarizer(model: cloud(RecordingTransport(), RecordingReviewer(answer: .send))).mayUseCloud)
@@ -516,6 +532,8 @@ final class HeldTransport: CloudTransport, @unchecked Sendable {
     let reply: String
     init(reply: String) { self.reply = reply }
     var sentCount: Int { lock.withLock { count } }
+
+    func start(_ request: CloudRequest) -> Task<Data, Error> { Task { try await send(request) } }
 
     func send(_ request: CloudRequest) async throws -> Data {
         let waiting: CheckedContinuation<Void, Never>? = lock.withLock {

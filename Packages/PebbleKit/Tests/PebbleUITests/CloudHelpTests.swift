@@ -277,6 +277,8 @@ final class GatedTransport: CloudTransport, @unchecked Sendable {
         for send in waiting { send.resume() }
     }
 
+    func start(_ request: CloudRequest) -> Task<Data, Error> { Task { try await send(request) } }
+
     func send(_ request: CloudRequest) async throws -> Data {
         await withCheckedContinuation { continuation in
             let (go, starters) = lock.withLock {
@@ -308,6 +310,8 @@ final class HopAnswersFirst: CloudTransport, @unchecked Sendable {
 
     var paths: [String] { lock.withLock { _paths } }
 
+    func start(_ request: CloudRequest) -> Task<Data, Error> { Task { try await send(request) } }
+
     func send(_ request: CloudRequest) async throws -> Data {
         let first = lock.withLock {
             _paths.append(request.url.path)
@@ -330,8 +334,8 @@ enum LoadFailure {
 /// Refuses every request before sending, as the real transport does when
 /// the labels aren't the ones shown.
 struct RefusingTransport: CloudTransport {
-    func send(_ request: CloudRequest) async throws -> Data {
-        throw CloudTransportError.headersNotShown
+    func start(_ request: CloudRequest) -> Task<Data, Error> {
+        Task { throw CloudTransportError.headersNotShown }
     }
 }
 
@@ -2072,7 +2076,7 @@ struct CloudHelpTests {
         defer { try? FileManager.default.removeItem(at: folder) }
         let memory = MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
         _ = try memory.remember("Sam's birthday is May 14.", source: .toldMe)
-        let model = MemoryModel(store: memory, place: .mayLeaveDevice, endsCloudChats: { true },
+        let model = MemoryModel(store: memory, place: .mayLeaveDevice, endsCloudChats: { CloudChatsEnded(sent: true) },
                                 onForgetEverything: { ClearedTasks(forgotten: 1, underway: 0, erased: false) })
         model.forgetEverything()
         let status = try #require(model.status)
@@ -2308,6 +2312,10 @@ struct CloudHelpTests {
         #expect(ChatController.failureLine(for: CloudModelError.ended) == CloudWords.chatEnded)
         #expect(ChatController.failureLine(for: CloudModelError.endedByOff) == CloudWords.chatEndedByOff)
         #expect(ChatController.failureLine(for: CloudModelError.notRecorded) == CloudWords.notRecorded)
+        // Only the sign-in went: never "nothing went", and the words are back.
+        #expect(ChatController.failureLine(for: CloudModelError.stoppedAfterSignIn) == CloudWords.stoppedAfterSignIn)
+        #expect(ChatController.nothingWasSent(CloudModelError.stoppedAfterSignIn))
+        #expect(ChatController.pointsAtTheDraft(CloudWords.stoppedAfterSignIn))
         #expect(ChatController.nothingWasSent(CloudModelError.endedByOff))
         #expect(ChatController.nothingWasSent(CloudModelError.notRecorded))
         #expect(ChatController.failureLine(for: CloudTransportError.signInBodyRefused) == CloudWords.signInRefused)

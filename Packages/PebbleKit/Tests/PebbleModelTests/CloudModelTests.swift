@@ -28,6 +28,8 @@ final class RecordingTransport: CloudTransport, @unchecked Sendable {
         return _sent
     }
 
+    func start(_ request: CloudRequest) -> Task<Data, Error> { Task { try await send(request) } }
+
     func send(_ request: CloudRequest) async throws -> Data {
         lock.withLock { _sent.append(request) }
         return reply
@@ -248,6 +250,33 @@ struct CloudModelTests {
         #expect(followed == nil)
     }
 
+    /// The session's delegate cancels every sign-in challenge but the check
+    /// of the server's own certificate, which goes as the system makes it,
+    /// so a 401 or 407 is never answered with a credential the card didn't
+    /// show.
+    @Test func everySignInChallengeButTheServersCertificateIsCancelled() async throws {
+        let session = URLSessionCloudTransport.makeSession()
+        defer { session.invalidateAndCancel() }
+        // Made but never started, so nothing touches the network.
+        let task = session.dataTask(with: endpoint)
+        let cancelled = [NSURLAuthenticationMethodHTTPBasic, NSURLAuthenticationMethodHTTPDigest,
+                         NSURLAuthenticationMethodNegotiate, NSURLAuthenticationMethodNTLM,
+                         NSURLAuthenticationMethodHTMLForm, NSURLAuthenticationMethodDefault,
+                         NSURLAuthenticationMethodClientCertificate]
+        for method in cancelled + [NSURLAuthenticationMethodServerTrust] {
+            let space = URLProtectionSpace(host: "cloud.example.com", port: 443, protocol: "https", realm: nil,
+                                           authenticationMethod: method)
+            let challenge = URLAuthenticationChallenge(protectionSpace: space, proposedCredential: nil,
+                                                       previousFailureCount: 0, failureResponse: nil, error: nil,
+                                                       sender: IgnoredChallengeSender())
+            let (disposition, credential) = await RefusesRedirects().urlSession(session, task: task, didReceive: challenge)
+            let expected: URLSession.AuthChallengeDisposition = method == NSURLAuthenticationMethodServerTrust
+                ? .performDefaultHandling : .cancelAuthenticationChallenge
+            #expect(disposition == expected, "\(method)")
+            #expect(credential == nil, "\(method)")
+        }
+    }
+
     @Test func aRefusedRedirectIsNotAReply() async {
         let loader = RecordingLoader(status: 308)
         let transport = URLSessionCloudTransport(load: loader.load)
@@ -292,7 +321,7 @@ struct CloudModelTests {
     /// the message reaches it with no Cookie header.
     @Test func aCookieFromTheSignInAnswerNeverRidesOnTheMessage() async throws {
         let server = try LoopbackServer()
-        let port = await server.start()
+        let port = try await server.start()
         defer { server.stop() }
         let endpoint = try #require(URL(string: "http://\(loopbackHost):\(port)"))
         let reviewer = RecordingReviewer(answer: .send)
@@ -320,7 +349,7 @@ struct CloudModelTests {
     /// against the bodies shown.
     @Test func theWireCarriesExactlyTheHeaderLinesTheCardShows() async throws {
         let server = try LoopbackServer()
-        let port = await server.start()
+        let port = try await server.start()
         defer { server.stop() }
         let endpoint = try #require(URL(string: "http://\(loopbackHost):\(port)"))
         let reviewer = RecordingReviewer(answer: .send)
@@ -342,7 +371,42 @@ struct CloudModelTests {
             #expect(wire.path == hop.url.path, "\(wire.path)")
         }
     }
+
+    /// A 401 that asks for a sign-in never makes the system sign in on its
+    /// own and send the message again: the challenge is cancelled, the
+    /// send fails, and the one request that reached the listener carried
+    /// no Authorization line. The real session, talking to a listener on
+    /// this Mac's loopback address only.
+    @Test func aSignInChallengeIsNeverAnsweredByTheSystem() async throws {
+        let server = try LoopbackServer(challenges: true)
+        let port = try await server.start()
+        defer { server.stop() }
+        let endpoint = try #require(URL(string: "http://\(loopbackHost):\(port)"))
+        let cloud = CloudModel(endpoint: endpoint, transport: URLSessionCloudTransport(loopbackForTests: ()),
+                               reviewer: RecordingReviewer(answer: .send))
+        await #expect(throws: URLError.self) { try await cloudChat().sending("Plan my week", with: cloud) }
+        let seen = server.requests
+        #expect(seen.map(\.path) == ["/v1/reply"])
+        #expect(seen.allSatisfy { $0.headers["authorization"] == nil })
+    }
     #endif
+
+    /// The listener's readiness wait ends on its first word, and never
+    /// hangs: a failure throws, and so does a limit passed with no word.
+    /// The limit runs on a clock that has always passed it, or on one
+    /// whose limit is never reached, so no wall clock decides.
+    @Test func theListenersReadinessWaitNeverHangs() async throws {
+        let ready = ListenerReadiness()
+        ready.ready(8080)
+        #expect(try await ready.wait(within: .seconds(3_600), on: ContinuousClock()) == 8080)
+        let failed = ListenerReadiness()
+        failed.failed(URLError(.cannotConnectToHost))
+        await #expect(throws: URLError.self) { try await failed.wait(within: .seconds(3_600), on: ContinuousClock()) }
+        let silent = ListenerReadiness()
+        await #expect(throws: ListenerReadiness.NotReady.self) {
+            try await silent.wait(within: .seconds(60), on: ElapsedClock())
+        }
+    }
 
     // MARK: Sign-in
 
@@ -689,7 +753,8 @@ struct CloudModelTests {
 
     /// Forget everything or a switch off can land while the sign-in hop is
     /// on the wire. Its answer then never reaches sign-in, and the message
-    /// never goes.
+    /// never goes. A switch off says the sign-in went; Forget everything
+    /// ended the chat, which says so.
     @Test func aSignInAnswerThatLandsAfterTheChatEndedIsNotKept() async throws {
         for ends in [true, false] {
             let session = CloudChatSession()
@@ -698,7 +763,7 @@ struct CloudModelTests {
             let auth = SampleAuth(signIn: CloudSignIn(path: "v1/sign-in", body: Data("{}".utf8)))
             let cloud = CloudModel(endpoint: endpoint, transport: transport, reviewer: RecordingReviewer(answer: .send),
                                    auth: auth, isOn: { on.value }, session: session)
-            await #expect(throws: ends ? CloudModelError.ended : CloudModelError.off) {
+            await #expect(throws: ends ? CloudModelError.ended : CloudModelError.stoppedAfterSignIn) {
                 try await cloudChat().sending("Plan my week", with: cloud)
             }
             #expect(transport.sends == 1, "only the hop went")
@@ -889,7 +954,10 @@ struct CloudModelTests {
                                    redactor: { Redactor(privateWords: words.list) })
             let ask = "Bring the lemon cake on Friday."
             if second == .cancel {
-                await #expect(throws: CloudModelError.notSent) { try await cloudChat().sending(ask, with: cloud) }
+                // The sign-in went, so the chat never says nothing did.
+                await #expect(throws: CloudModelError.stoppedAfterSignIn) {
+                    try await cloudChat().sending(ask, with: cloud)
+                }
             } else {
                 _ = try await cloudChat().sending(ask, with: cloud)
             }
@@ -966,6 +1034,117 @@ struct CloudModelTests {
                 #expect(!sent.text.contains(word), "sent unmasked after it was saved")
             }
         }
+    }
+
+    /// The lock covers the transport taking the request, not only the last
+    /// check before it: a private word saved in another window as the
+    /// transport is handed the request waits until it has it. The save
+    /// starts on a thread of its own from inside the transport's `start`,
+    /// which goes on only once the save has finished or is held back, so
+    /// neither order is left to a clock. The words as the transport took
+    /// the request are noted there.
+    @Test func aPrivateWordSavedAsTheTransportTakesTheRequestWaitsForIt() async throws {
+        let words = Words()
+        let saving = SaveFromElsewhere()
+        let privacy = PrivacyChanges(waiting: { saving.heldBack() })
+        let transport = EntryTransport {
+            saving.start { privacy.change { words.add("lemon cake") } }
+            #expect(saving.waitUntilFinishedOrHeldBack(), "the save neither finished nor waited")
+            return words.list
+        }
+        let cloud = CloudModel(endpoint: endpoint, transport: transport, reviewer: RecordingReviewer(answer: .send),
+                               redactor: { Redactor(privateWords: words.list) }, privacyChanges: privacy)
+        _ = try await cloudChat().sending("Bring the lemon cake on Friday.", with: cloud)
+        #expect(saving.waitUntilFinished(), "the save never finished")
+        #expect(words.list == ["lemon cake"], "the save was lost")
+        #expect(transport.wordsAtEntry == [[]], "a word was saved before the transport had the request")
+    }
+
+    /// Forget everything can't land between a reply reading the private
+    /// words and adding them to its chat: the two happen under
+    /// `PrivacyChanges`, which Forget everything takes to end the chat and
+    /// erase the words. Run from a thread of its own inside the read, as
+    /// from another window, it waits; then it finds the chat holding the
+    /// words and ends it, so none of them stay in the chat.
+    @Test func forgetEverythingCantLandBetweenReadingTheWordsAndKeepingThem() async throws {
+        let words = Words()
+        words.add("lemon cake")
+        let forgetting = SaveFromElsewhere()
+        let privacy = PrivacyChanges(waiting: { forgetting.heldBack() })
+        let session = CloudChatSession()
+        let reads = Count()
+        let cloud = CloudModel(
+            endpoint: endpoint, transport: RecordingTransport(), reviewer: RecordingReviewer(answer: .cancel),
+            redactor: {
+                let read = Redactor(privateWords: words.list)
+                if reads.next() == 1 {
+                    // As the cloud setting's Forget everything does: end
+                    // the chats that hold anything, then erase the words.
+                    forgetting.start {
+                        privacy.change {
+                            if session.holdsAnything { session.end() }
+                            words.clear()
+                        }
+                    }
+                    #expect(forgetting.waitUntilFinishedOrHeldBack(), "Forget everything neither finished nor waited")
+                }
+                return read
+            },
+            privacyChanges: privacy, session: session
+        )
+        _ = try? await cloudChat().sending("Bring the lemon cake on Friday.", with: cloud)
+        #expect(forgetting.waitUntilFinished(), "Forget everything never finished")
+        #expect(words.list.isEmpty)
+        #expect(session.hiddenSoFar.privateWords.isEmpty, "an erased word stayed in the chat")
+    }
+
+    /// Once the sign-in hop has gone, a message that then doesn't go never
+    /// says nothing went, whether the next preview is said no to, taken
+    /// away, or the cloud is off by then.
+    @Test func aMessageStoppedAfterTheSignInWentNeverSaysNothingWent() async throws {
+        let hop = CloudSignIn(path: "v1/sign-in", body: Data(#"{"device":"made-up"}"#.utf8))
+        for second in [CloudConsent.cancel, .withdrawn] {
+            let words = Words()
+            let transport = SignInAddsAWordTransport(words: words, word: "lemon cake")
+            let cloud = CloudModel(endpoint: endpoint, transport: transport,
+                                   reviewer: ScriptedReviewer(answers: [.send, second]),
+                                   auth: SampleAuth(signIn: hop), redactor: { Redactor(privateWords: words.list) })
+            await #expect(throws: CloudModelError.stoppedAfterSignIn, "\(second)") {
+                try await cloudChat().sending("Bring the lemon cake on Friday.", with: cloud)
+            }
+            #expect(transport.sent.map(\.url.path) == ["/v1/sign-in"])
+        }
+        // Switched off while the sign-in hop is on the wire.
+        let on = Flag(true)
+        let transport = HopThenTransport(messageFails: false) { on.value = false }
+        let cloud = CloudModel(endpoint: endpoint, transport: transport, reviewer: RecordingReviewer(answer: .send),
+                               auth: SampleAuth(signIn: hop), isOn: { on.value })
+        await #expect(throws: CloudModelError.stoppedAfterSignIn) {
+            try await cloudChat().sending("Plan my week", with: cloud)
+        }
+        #expect(transport.paths == ["/v1/sign-in"])
+        // With no sign-in, the same answers still say nothing went.
+        for (answer, said) in [(CloudConsent.cancel, CloudModelError.notSent), (.withdrawn, .withdrawn)] {
+            let cloud = CloudModel(endpoint: endpoint, transport: RecordingTransport(),
+                                   reviewer: RecordingReviewer(answer: answer))
+            await #expect(throws: said) { try await cloudChat().sending("Plan my week", with: cloud) }
+        }
+    }
+
+    /// A reply stopped before its hand over hands nothing to the
+    /// transport, even once past every earlier check.
+    @Test func aStoppedReplyHandsNothingOver() async throws {
+        let transport = RecordingTransport()
+        let session = CloudChatSession()
+        let request = CloudRequest(url: CloudModel.url(for: endpoint), headers: CloudHeaders.fixed, body: Data("{}".utf8))
+        let stopped = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return Result { try session.handOff(request, through: transport) }
+        }
+        let result = await stopped.value
+        #expect(throws: CancellationError.self) { try result.get() }
+        #expect(session.sendsOnTheWire == 0)
+        #expect(transport.sent.isEmpty)
     }
 
     /// Every writer of the notes takes the same lock as the hand over, so
@@ -1340,6 +1519,8 @@ final class WitnessTransport: CloudTransport, @unchecked Sendable {
 
     var seen: [Bool] { lock.withLock { _seen } }
 
+    func start(_ request: CloudRequest) -> Task<Data, Error> { Task { try await send(request) } }
+
     func send(_ request: CloudRequest) async throws -> Data {
         let now = flag.value
         lock.withLock { _seen.append(now) }
@@ -1358,6 +1539,8 @@ final class EndingTransport: CloudTransport, @unchecked Sendable {
 
     var sends: Int { lock.withLock { _sends } }
 
+    func start(_ request: CloudRequest) -> Task<Data, Error> { Task { try await send(request) } }
+
     func send(_ request: CloudRequest) async throws -> Data {
         lock.withLock { _sends += 1 }
         whileSending()
@@ -1366,7 +1549,7 @@ final class EndingTransport: CloudTransport, @unchecked Sendable {
 }
 
 struct BrokenTransport: CloudTransport {
-    func send(_ request: CloudRequest) async throws -> Data { Data("not json".utf8) }
+    func start(_ request: CloudRequest) -> Task<Data, Error> { Task { Data("not json".utf8) } }
 }
 
 /// Answers the sign-in hop. Then the message either fails on the wire, or
@@ -1384,6 +1567,8 @@ final class HopThenTransport: CloudTransport, @unchecked Sendable {
     }
 
     var paths: [String] { lock.withLock { _paths } }
+
+    func start(_ request: CloudRequest) -> Task<Data, Error> { Task { try await send(request) } }
 
     func send(_ request: CloudRequest) async throws -> Data {
         let first = lock.withLock {
@@ -1435,6 +1620,33 @@ final class Words: @unchecked Sendable {
     private var _list: [String] = []
     var list: [String] { lock.withLock { _list } }
     func add(_ word: String) { lock.withLock { _list.append(word) } }
+    func clear() { lock.withLock { _list = [] } }
+}
+
+/// The sender a made-up sign-in challenge needs. The delegate answers
+/// through its return value, so nothing here is ever called on.
+final class IgnoredChallengeSender: NSObject, URLAuthenticationChallengeSender {
+    func use(_ credential: URLCredential, for challenge: URLAuthenticationChallenge) {}
+    func continueWithoutCredential(for challenge: URLAuthenticationChallenge) {}
+    func cancel(_ challenge: URLAuthenticationChallenge) {}
+}
+
+/// Runs `atEntry` within `start`, as the transport takes each request,
+/// keeps the private words it gives back, and answers.
+final class EntryTransport: CloudTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _wordsAtEntry: [[String]] = []
+    private let atEntry: @Sendable () -> [String]
+
+    init(atEntry: @escaping @Sendable () -> [String]) { self.atEntry = atEntry }
+
+    var wordsAtEntry: [[String]] { lock.withLock { _wordsAtEntry } }
+
+    func start(_ request: CloudRequest) -> Task<Data, Error> {
+        let words = atEntry()
+        lock.withLock { _wordsAtEntry.append(words) }
+        return Task { try JSONEncoder().encode(["reply": "Here's a short note you can send."]) }
+    }
 }
 
 /// Records every request and answers each. The first sign-in hop adds
@@ -1452,6 +1664,8 @@ final class SignInAddsAWordTransport: CloudTransport, @unchecked Sendable {
     }
 
     var sent: [CloudRequest] { lock.withLock { _sent } }
+
+    func start(_ request: CloudRequest) -> Task<Data, Error> { Task { try await send(request) } }
 
     func send(_ request: CloudRequest) async throws -> Data {
         let first = lock.withLock {
@@ -1539,34 +1753,50 @@ final class LoopbackServer: @unchecked Sendable {
     private let listener: NWListener
     private let lock = NSLock()
     private var _requests: [Seen] = []
-    private var ready: CheckedContinuation<UInt16, Never>?
+    private let readiness = ListenerReadiness()
+    /// Answers every request with a 401 that asks for a sign-in, as a
+    /// server wanting the system's own would.
+    private let challenges: Bool
 
     var requests: [Seen] { lock.withLock { _requests } }
 
-    init() throws {
+    init(challenges: Bool = false) throws {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
         listener = try NWListener(using: parameters)
+        self.challenges = challenges
     }
 
-    /// Starts listening, and gives back the port once it is ready.
-    func start() async -> UInt16 {
-        await withCheckedContinuation { continuation in
-            lock.withLock { ready = continuation }
-            listener.stateUpdateHandler = { [weak self] state in
-                guard let self, case .ready = state else { return }
-                let waiting = self.lock.withLock {
-                    defer { self.ready = nil }
-                    return self.ready
-                }
-                waiting?.resume(returning: self.listener.port?.rawValue ?? 0)
+    /// Starts listening, and gives back the port once it is ready. Throws
+    /// if the listener fails or is cancelled first, or isn't ready within
+    /// `limit` on `clock`, so a listener that never comes up fails the
+    /// test rather than hangs it.
+    func start<C: Clock>(within limit: C.Duration, on clock: C) async throws -> UInt16 {
+        listener.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
+            switch state {
+            case .ready: self.readiness.ready(self.listener.port?.rawValue ?? 0)
+            case .failed(let error): self.readiness.failed(error)
+            case .cancelled: self.readiness.failed(CancellationError())
+            default: break
             }
-            listener.newConnectionHandler = { [weak self] connection in
-                connection.start(queue: .global())
-                self?.read(connection, Data())
-            }
-            listener.start(queue: .global())
         }
+        listener.newConnectionHandler = { [weak self] connection in
+            connection.start(queue: .global())
+            self?.read(connection, Data())
+        }
+        listener.start(queue: .global())
+        do {
+            return try await readiness.wait(within: limit, on: clock)
+        } catch {
+            listener.cancel()
+            throw error
+        }
+    }
+
+    /// The same, within a generous 60 seconds.
+    func start() async throws -> UInt16 {
+        try await start(within: .seconds(60), on: ContinuousClock())
     }
 
     func stop() { listener.cancel() }
@@ -1610,13 +1840,86 @@ final class LoopbackServer: @unchecked Sendable {
 
     private func answer(_ connection: NWConnection, signIn: Bool) {
         let body = #"{"reply":"Here's a short note you can send."}"#
-        var head = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \(body.utf8.count)\r\n"
+        var head = challenges
+            ? "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Negotiate\r\nWWW-Authenticate: Basic realm=\"made-up\"\r\n"
+            : "HTTP/1.1 200 OK\r\n"
+        head += "Content-Type: application/json\r\nContent-Length: \(body.utf8.count)\r\n"
         if signIn { head += "Set-Cookie: session=made-up-cookie; Path=/; Max-Age=3600\r\n" }
         head += "Connection: close\r\n\r\n"
         connection.send(content: Data((head + body).utf8), completion: .contentProcessed { _ in connection.cancel() })
     }
 }
 #endif
+
+/// Waits for a listener to say it is ready, failed or was cancelled, for at
+/// most a limit on a clock the caller picks. The first word counts; the
+/// wait throws on a failure, on a limit passed, and when it is cancelled.
+final class ListenerReadiness: @unchecked Sendable {
+    /// The listener wasn't ready within the limit.
+    struct NotReady: Error {}
+
+    private let lock = NSLock()
+    private var outcome: Result<UInt16, Error>?
+    private var waiting: CheckedContinuation<UInt16, Error>?
+
+    func ready(_ port: UInt16) { settle(.success(port)) }
+    func failed(_ error: Error) { settle(.failure(error)) }
+
+    private func settle(_ result: Result<UInt16, Error>) {
+        let waiter: CheckedContinuation<UInt16, Error>? = lock.withLock {
+            guard outcome == nil else { return nil }
+            outcome = result
+            defer { waiting = nil }
+            return waiting
+        }
+        waiter?.resume(with: result)
+    }
+
+    func wait<C: Clock>(within limit: C.Duration, on clock: C) async throws -> UInt16 {
+        try await withThrowingTaskGroup(of: UInt16.self) { group in
+            group.addTask { try await self.told() }
+            group.addTask {
+                try await clock.sleep(for: limit)
+                throw NotReady()
+            }
+            defer { group.cancelAll() }
+            guard let port = try await group.next() else { throw NotReady() }
+            return port
+        }
+    }
+
+    /// The first word the listener gives, or a cancellation once the wait
+    /// is cancelled, which counts as the first word too.
+    private func told() async throws -> UInt16 {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let now: Result<UInt16, Error>? = lock.withLock {
+                    if let outcome { return outcome }
+                    waiting = continuation
+                    return nil
+                }
+                if let now { continuation.resume(with: now) }
+            }
+        } onCancel: {
+            settle(.failure(CancellationError()))
+        }
+    }
+}
+
+/// A clock whose every sleep ends at once, so a limit on it has always
+/// passed by the first look, with no wall clock involved.
+struct ElapsedClock: Clock {
+    struct Instant: InstantProtocol {
+        var offset: Duration
+        func advanced(by duration: Duration) -> Instant { Instant(offset: offset + duration) }
+        func duration(to other: Instant) -> Duration { other.offset - offset }
+        static func < (left: Instant, right: Instant) -> Bool { left.offset < right.offset }
+    }
+
+    var now: Instant { Instant(offset: .zero) }
+    var minimumResolution: Duration { .zero }
+    func sleep(until deadline: Instant, tolerance: Duration?) async throws { try Task.checkCancellation() }
+}
 
 /// Stands in for URLSession: records each URLRequest and answers with a
 /// fixed status. Never touches the network.
@@ -1699,6 +2002,8 @@ final class HangingTransport: CloudTransport, @unchecked Sendable {
             if now { continuation.resume() }
         }
     }
+
+    func start(_ request: CloudRequest) -> Task<Data, Error> { Task { try await send(request) } }
 
     func send(_ request: CloudRequest) async throws -> Data {
         let waiting = lock.withLock {

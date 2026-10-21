@@ -116,6 +116,15 @@ test: privacyRulesCatchEveryWrongCase
 file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
 perl: s~Rule\("privacy\.encryption", encryption\),~~
 
+# A sign-in challenge is let by in the cloud client only, never elsewhere.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\|\| \(\$0 == "URLAuthenticationChallenge" && file != cloud\)~|| false~
+
+test: privacyRulesAllowReviewedContexts
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\(\$0 == "URLAuthenticationChallenge" && file != cloud\)~\$0 == "URLAuthenticationChallenge"~
+
 # Accept a code under any category.
 test: privacyReasonCodesBelongToTheirCategories
 file: Tools/GuardKit/Sources/GuardScan/PrivacyAudit.swift

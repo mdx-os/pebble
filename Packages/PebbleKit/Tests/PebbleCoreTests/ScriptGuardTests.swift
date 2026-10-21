@@ -479,7 +479,8 @@ struct ScriptGuardTests {
         #expect(workflow[verify.upperBound...].hasPrefix("        run: make verify-ci\n"))
     }
 
-    /// CI runs all of make verify on every push and pull request: verify-ci
+    /// CI runs all of make verify on every pull request and every push to
+    /// main: verify-ci
     /// in the Verify job, and the full mutation check, every entry with no
     /// timeout let by, in a job of its own with a longer limit. The whole
     /// mutation job is pinned, so no condition, dependency or extra step

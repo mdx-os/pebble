@@ -413,13 +413,55 @@ public final class CloudHelp: ObservableObject {
     ///
     /// A chat that holds nothing yet, such as the fresh one started in an
     /// ended chat's place, has nothing to let go of and is left open.
+    ///
+    /// While a Forget everything is under way (`holdingRestarts`), an
+    /// ended chat's screen starts its fresh chat only once all of it is
+    /// done, so that chat is made with the settings Forget everything
+    /// left, never with a cloud setting about to be erased.
     @discardableResult
     func endOpenCloudChats() -> Bool {
-        for chat in openChats.allObjects where chat.holdsAnything { chat.end() }
+        for chat in openChats.allObjects where chat.holdsAnything {
+            if restartHolds > 0 {
+                chat.end(restarting: false)
+                heldRestarts.append(chat)
+            } else {
+                chat.end()
+            }
+        }
         for session in sessions.allObjects where session.holdsAnything { session.end() }
         withdrawPreviews()
         recountHeldChats()
         return anythingSent
+    }
+
+    /// Forget everything's first step: `endOpenCloudChats`, with every
+    /// fresh chat held back until `CloudChatsEnded.restart`, which the
+    /// memory screen calls once everything else has gone.
+    func endChatsToForget() -> CloudChatsEnded {
+        restartHolds += 1
+        let sent = endOpenCloudChats()
+        return CloudChatsEnded(sent: sent) { [weak self] in self?.releaseRestarts() }
+    }
+
+    /// Runs `body` with the fresh chats of every chat it ends held back
+    /// until it is done.
+    private func holdingRestarts<T>(_ body: () throws -> T) rethrows -> T {
+        restartHolds += 1
+        defer { releaseRestarts() }
+        return try body()
+    }
+
+    /// How many Forget everything steps are holding fresh chats back, and
+    /// the chats ended meanwhile, whose screens start one once none is.
+    private var restartHolds = 0
+    private var heldRestarts: [ChatController] = []
+
+    private func releaseRestarts() {
+        restartHolds -= 1
+        guard restartHolds == 0 else { return }
+        let ended = heldRestarts
+        heldRestarts = []
+        for chat in ended { chat.restart() }
     }
 
     /// True while every send is held off for this session, as after a
@@ -580,8 +622,20 @@ public final class CloudHelp: ObservableObject {
     /// it erases the whole file it would have read, the only place words
     /// from an earlier launch can be. It throws if that can't be reached or
     /// erased, so Forget everything never says they went when they didn't.
+    ///
+    /// The chats end and the words go under `privacyChanges`, the lock a
+    /// cloud reply reads the words and adds them to its chat under, so no
+    /// reply can read the words before they go and keep them after its
+    /// chat ended. A chat ended here starts its fresh one only once the
+    /// words and the setting are as this leaves them.
     @discardableResult
     func forgetPrivateWords() throws -> Forgot {
+        try holdingRestarts {
+            try privacyChanges.change { try forgetPrivateWordsNow() }
+        }
+    }
+
+    private func forgetPrivateWordsNow() throws -> Forgot {
         // First, whatever happens to the file: no open chat keeps a copy,
         // and sign-in keeps nothing it learned.
         endOpenCloudChats()
@@ -610,8 +664,11 @@ public final class CloudHelp: ObservableObject {
             withdrawPreviews()
             return .privateWords
         }
-        // Off for chats already open, as a switch off is.
+        // Off for chats already open, as a switch off is: every cloud
+        // chat's session ends as `turnOff` ends it, those that held
+        // nothing too.
         switchedOff.value = true
+        for session in sessions.allObjects { session.end(because: .off) }
         withdrawPreviews()
         return .privateWordsAndCloud
     }
@@ -678,12 +735,13 @@ public final class CloudHelp: ObservableObject {
 }
 
 /// A transport made only when a request is sent, which `CloudModel` does
-/// only after the person's yes.
+/// only after the person's yes. Made and handed the request in one step,
+/// so the request is handed over before `start` returns.
 struct MadeOnSend: CloudTransport {
     let make: @Sendable () -> any CloudTransport
 
-    func send(_ request: CloudRequest) async throws -> Data {
-        try await make().send(request)
+    func start(_ request: CloudRequest) -> Task<Data, Error> {
+        make().start(request)
     }
 }
 
@@ -957,7 +1015,7 @@ struct CloudLaunchNotice: View {
         if let line = help.launchNotice {
             GentleNotice(text: line)
                 .padding(.horizontal, Theme.gutter)
-                .padding(.top, 8)
+                .padding(.top, Theme.Space.xs)
                 .frame(maxWidth: Theme.readableWidth)
                 .frame(maxWidth: .infinity)
                 // One element that reads the line, nothing else.
@@ -1189,7 +1247,9 @@ struct CloudPreviewSheet: View {
     /// - nothing of the message's body, which is the redacted chat.
     /// The names still show, so the person sees that a value goes and
     /// under what name. The sheet says the values are covered
-    /// (`CloudWords.previewSignInCovered`).
+    /// (`CloudWords.previewSignInCovered`). The sign-in hop's
+    /// Content-Length shows too, and it is the length of the body that
+    /// goes, so it tells how long the covered values are put together.
     static func displayedText(_ preview: CloudPreview) -> String {
         func shown(_ request: CloudRequest, isSignInHop: Bool) -> String {
             let lines = CloudRequest.shownHeaders(url: request.url, headers: request.headers, body: request.body).map {
@@ -1204,7 +1264,8 @@ struct CloudPreviewSheet: View {
     }
 
     /// What covers a sign-in value on the card. Always the same length, so
-    /// it says nothing of the value's.
+    /// the mask itself says nothing of the value's length. The sign-in
+    /// hop's Content-Length line still gives the length of its whole body.
     static let signInMask = String(repeating: "\u{2022}", count: 8)
 
     /// The names of a sign-in body's parts, in name order, when it is a
@@ -1275,7 +1336,9 @@ struct CloudPreviewSheet: View {
         var lines = [CloudWords.spokenAddress(request.url.absoluteString)]
         // A fixed label, or one the system adds, is read in full. Any other
         // is sign-in, whose value is a secret: VoiceOver says only that it
-        // is hidden, so neither it nor its length is ever spoken aloud.
+        // is hidden, so the value is never spoken aloud. The sign-in hop's
+        // Content-Length is a line the system adds, read in full, so the
+        // length of its whole body is said.
         let labels = CloudRequest.shownHeaders(url: request.url, headers: request.headers, body: request.body).map {
             isSignIn($0.name, $0.value) ? CloudWords.spokenSignIn($0.name) : "\($0.name), \($0.value)"
         }

@@ -157,12 +157,12 @@ perl: s~endOpenCloudChats\(\)\n\s*auth\.forget\(\)\n~endOpenCloudChats()\n~
 # Forget everything ends every open cloud chat first, and says what it can't erase.
 test: forgetEverythingFirstEndsEveryOpenCloudChat forgetEverythingWithNothingSentEndsTheChatAndSaysGone forgetEverythingEndsEveryOpenCloudChatNotOnlyTheHeldOne
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~for chat in openChats\.allObjects where chat\.holdsAnything \{ chat\.end\(\) \}~~
+perl: s~for chat in openChats\.allObjects where chat\.holdsAnything \{~for chat in openChats.allObjects where false {~
 
 # Every open cloud chat, not only the one the home screen holds.
 test: forgetEverythingEndsEveryOpenCloudChatNotOnlyTheHeldOne
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~for chat in openChats\.allObjects where chat\.holdsAnything \{ chat\.end\(\) \}~for chat in openChats.allObjects where chat.holdsAnything \&\& chat.onEnded != nil { chat.end() }~
+perl: s~for chat in openChats\.allObjects where chat\.holdsAnything \{~for chat in openChats.allObjects where chat.holdsAnything \&\& chat.onEnded != nil {~
 perl: s~for session in sessions\.allObjects where session\.holdsAnything \{ session\.end\(\) \}~~
 
 # A summary's send is a cloud send like a chat's: a switch off ends it.
@@ -193,12 +193,12 @@ perl: s~return \[beforeRetry\(line, \[cloudCopy\]\.compactMap \{ \$0 \}\), under
 
 test: forgetEverythingWithNothingSentEndsTheChatAndSaysGone
 file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
-perl: s~let sent = endsCloudChats\?\(\) \?\? false~let sent = true~
+perl: s~let sent = ended\?\.sent \?\? false~let sent = true~
 
 # With background work too, the chats still end first and the line stays honest.
 test: forgetEverythingEndsCloudChatsFirstThenClearsTheSummariesToo
 file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
-perl: s~let sent = endsCloudChats\?\(\) \?\? false~let sent = false~
+perl: s~let sent = ended\?\.sent \?\? false~let sent = false~
 
 test: afterSendingTheSummaryLinesStayHonest
 file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
@@ -330,12 +330,12 @@ perl: s~\n\s*for session in sessions\.allObjects \{ session\.end\(because: \.off
 
 test: aSignInAnswerThatLandsAfterOffOrForgetIsNeverKept
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~(func forgetPrivateWords\(\) throws -> Forgot \{\n(?:\s*//[^\n]*\n)*)\s*endOpenCloudChats\(\)\n~$1~
+perl: s~(func forgetPrivateWordsNow\(\) throws -> Forgot \{\n(?:\s*//[^\n]*\n)*)\s*endOpenCloudChats\(\)\n~$1~
 
 # A sign-in hop that was handed over counts as sent, whatever the message does.
 test: aSignInHopHandedOverCountsAsSentWhateverHappensToTheMessage aSignInHopThatWentCountsAsSentWhateverHappensToTheMessage
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
-perl: s~guard let handed = try handOver\(signIn, ifStill: current\) else \{ return nil \}\n\s*let answer = try await session\.finish\(handed\)~let answer = try await transport.send(signIn)~
+perl: s~guard let handed = try handOver\(signIn, ifStill: current\) else \{ return nil \}\n\s*signInWent = true\n\s*let answer = try await session\.finish\(handed\)~let answer = try await transport.send(signIn)~
 
 # Sign-in may carry a credential or a device token, and nothing of the person's.
 test: aSignInValueWithAPersonalDetailIsRefusedAndNothingIsSent aSignInCarryingAPrivateWordOrANoteNameSendsNothing
@@ -500,7 +500,7 @@ perl: s~notRecorded, signInRefused, ~notRecorded, ~
 
 test: handingARequestOverIsToldFirst
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
-perl: s~do \{ try handingOver\(\) \} catch \{ throw CloudModelError\.notRecorded \}\n(\s*)let task = Task \{ try await transport\.send\(request\) \}~let task = Task { let data = try await transport.send(request); try handingOver(); return data }~
+perl: s~do \{ try handingOver\(\) \} catch \{ throw CloudModelError\.notRecorded \}\n(\s*)let task = transport\.start\(request\)~let task = Task { let data = try await transport.send(request); try handingOver(); return data }~
 
 test: eachTransportRefusalCountsAsNothingSent
 file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
@@ -608,7 +608,7 @@ perl: s~\n\s*guard isSecure\(request\.url\) else \{ throw CloudTransportError\.n
 
 test: theTransportRefusesAnAddressThatIsNotHttps
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
-perl: s~self\.load = load\n(\s*)allowsLoopbackHTTP = false~self.load = load\n$1allowsLoopbackHTTP = true~
+perl: s~(begin = \{ request in Task \{ try await load\(request\) \} \}\n\s*)allowsLoopbackHTTP = false~$1allowsLoopbackHTTP = true~
 
 test: theTransportRefusesAnAddressThatIsNotHttps
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
@@ -769,7 +769,7 @@ perl: s~guard let handed = try handOver\(signIn, ifStill: current\) else \{ retu
 
 test: aPrivateWordAddedDuringSignInNeedsAFreshPreviewAndANewYes
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
-perl: s~if let reply = try await replyOnce\(to: transcript\) \{ return reply \}~guard let reply = try await replyOnce(to: transcript) else { throw CloudModelError.withdrawn }\n            return reply~
+perl: s~if let reply = try await replyOnce\(to: transcript, signInWent: &signInWent\) \{ return reply \}~guard let reply = try await replyOnce(to: transcript, signInWent: \&signInWent) else { throw CloudModelError.withdrawn }\n                return reply~
 
 # A yes for another address, or none, is saved off once a locked launch can read the file.
 test: aYesSavedOffAfterALockedLaunchStaysOffForItsAddress
@@ -816,7 +816,7 @@ perl: s~(\n\s*)settings = \.off\n(\s*)readable = true\n~$1settings = .off$1sent 
 # lock every writer of the notes and private words takes.
 test: aPrivateWordSavedJustBeforeTheHandOverWaitsForIt
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
-perl: s~try privacyChanges\.handOver \{~try PrivacyChanges().handOver {~
+perl: s~try privacyChanges\.handOver \{\n(\s*)guard try readRedactor\(\) == current~try PrivacyChanges().handOver {\n$1guard try readRedactor() == current~
 
 test: aNoteSavedDuringAHandOverWaitsForIt
 file: Packages/PebbleKit/Sources/PebbleCore/Memory.swift
@@ -870,3 +870,62 @@ perl: s~let holds = open\.contains \{ \$0\.holdsAnything \} \|\| ~let holds = ~
 test: aChatOnlyAccountStillOffersForgetEverything
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
 perl: s~Task \{ \@MainActor in self\?\.recountHeldChats\(\) \}~_ = self~
+
+# The privacy lock covers the transport taking the request, not only the
+# last check before it: a task that hands it over later lets a word saved
+# in between miss the check.
+test: aPrivateWordSavedAsTheTransportTakesTheRequestWaitsForIt
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~let task = transport\.start\(request\)~let task = Task { try await transport.send(request) }~
+
+# A reply reads the private words and adds them to its chat under the
+# same lock Forget everything takes, in the model and in the setting.
+test: forgetEverythingCantLandBetweenReadingTheWordsAndKeepingThem forgetEverythingWaitsForAReplyReadingTheWords
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~let \(current, widened\) = try privacyChanges\.handOver \{\n\s*let current = try readRedactor\(\)\n\s*return \(current, try session\.widened\(by: current\)\)\n\s*\}~let current = try readRedactor()\n        let widened = try session.widened(by: current)~
+
+test: forgetEverythingWaitsForAReplyReadingTheWords
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~try privacyChanges\.change \{ try forgetPrivateWordsNow\(\) \}~try forgetPrivateWordsNow()~
+
+# Forget everything's fresh chat is made only once the setting is as it
+# leaves it, and a cleared setting ends every cloud chat as a switch off.
+test: theFreshChatAfterForgetEverythingIsMadeWithTheSettingItLeft
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~if restartHolds > 0 \{~if false {~
+
+test: theFreshChatAfterForgetEverythingIsMadeWithTheSettingItLeft
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~defer \{ ended\?\.restart\(\) \}~~
+
+test: theFreshChatAfterForgetEverythingIsMadeWithTheSettingItLeft
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~(\n\s*switchedOff\.value = true)\n\s*for session in sessions\.allObjects \{ session\.end\(because: \.off\) \}\n(\s*withdrawPreviews\(\)\n\s*return \.privateWordsAndCloud)~$1\n$2~
+
+# Once the sign-in hop has gone, nothing says that nothing went.
+test: aMessageStoppedAfterTheSignInWentNeverSaysNothingWent aPrivateWordAddedDuringSignInNeedsAFreshPreviewAndANewYes aSignInAnswerThatLandsAfterTheChatEndedIsNotKept aSummaryStoppedAfterTheSignInWentSaysTheSignInWent
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~\n\s*signInWent = true\n~\n~
+
+test: aSummaryStoppedAfterTheSignInWentSaysTheSignInWent
+file: Packages/PebbleKit/Sources/PebbleModel/CloudRecon.swift
+perl: s~return onDevice\(ReconWords\.cloudSignInOnly\)~return onDevice(ReconWords.cloudWithdrawn)~
+
+test: eachFailureHasItsOwnLine
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~case \.stoppedAfterSignIn: CloudWords\.stoppedAfterSignIn~case .stoppedAfterSignIn: CloudWords.withdrawn~
+
+# The system never answers a sign-in challenge but the server's certificate.
+test: everySignInChallengeButTheServersCertificateIsCancelled
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~\? \.performDefaultHandling : \.cancelAuthenticationChallenge~? .performDefaultHandling : .performDefaultHandling~
+
+# A reply stopped by its hand over hands nothing over.
+test: aStoppedReplyHandsNothingOver
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~\n\s*if Task\.isCancelled \{ throw CancellationError\(\) \}~~
+
+# A chat that ended takes no more sends.
+test: anEndedChatTakesNoMoreSends
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~guard !trimmed\.isEmpty, !isReplying, !hasEnded else \{ return \}~guard !trimmed.isEmpty, !isReplying else { return }~

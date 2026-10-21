@@ -33,7 +33,8 @@ public final class PrivacyChanges: @unchecked Sendable {
     }
 
     /// Runs `handOver`, the last check of a request against the notes and
-    /// private words and its hand over to the transport, while nothing
+    /// private words and its hand over to the transport, or a reply's
+    /// first read of them and what its chat keeps of it, while nothing
     /// changes them.
     public func handOver<T>(_ handOver: () throws -> T) rethrows -> T {
         try holding(handOver)

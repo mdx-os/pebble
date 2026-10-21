@@ -1209,6 +1209,11 @@ extension GuardWrongCaseTests {
         WrongCase(rule: "privacy.speech", text: "func unrestricted() {\n    let other = SFSpeechAudioBufferRecognitionRequest()\n    SFSpeechRecognizer()?.recognitionTask(with: other) { _, _ in }\n}", file: PrivacyRules.speechHelper),
         WrongCase(rule: "privacy.upload", text: "let x = MKLocalSearch(request: request)", file: "App/Sources/Wrong.swift"),
         WrongCase(rule: "privacy.encryption", text: "import CryptoKit", file: PrivacyRules.cloud),
+        // A sign-in challenge outside the cloud client, and a trust read inside it.
+        WrongCase(rule: "privacy.encryption", text: "func answer(_ challenge: URLAuthenticationChallenge) {}",
+                  file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.encryption", text: "let trust = challenge.protectionSpace.serverTrust", file: PrivacyRules.cloud),
+        WrongCase(rule: "privacy.encryption", text: "let chain = SecTrustCopyCertificateChain(trust)", file: PrivacyRules.cloud),
         // Remote readers with no flagged name.
         WrongCase(rule: "privacy.network", text: "var body: some View { WebView(url: url) }", file: "App/Sources/Wrong.swift"),
         WrongCase(rule: "privacy.network", text: "let page = WebPage()", file: "App/Sources/Wrong.swift"),
@@ -1284,6 +1289,10 @@ extension GuardWrongCaseTests {
         // The cloud client may hand its request a url:.
         #expect(!PrivacyRules.findings(in: SyntaxSource("let x = URLRequest(url: url)"), file: PrivacyRules.cloud).contains { $0.rule == "privacy.urlRead" })
         #expect(!PrivacyRules.findings(in: SyntaxSource("static func makeSession() {}"), file: PrivacyRules.cloud).contains { $0.rule == "privacy.sessionFactory" })
+        // The cloud client may hold a sign-in challenge to cancel it.
+        let declines = "func urlSession(_ s: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge)"
+            + " async -> (URLSession.AuthChallengeDisposition, URLCredential?) { (.cancelAuthenticationChallenge, nil) }"
+        #expect(!PrivacyRules.findings(in: SyntaxSource(declines), file: PrivacyRules.cloud).contains { $0.rule == "privacy.encryption" })
         // The voice adapter may hear speech, every request on the device.
         let adapter = "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    request.requiresOnDeviceRecognition = true\n"
             + "    task = SFSpeechRecognizer()?.recognitionTask(with: request) { _, _ in }\n}"
