@@ -6,7 +6,10 @@
 # Simulator, Release archives for iOS and for macOS, and a Release build or
 # archive in verify for every platform `make -n build-release` builds.
 # Usage: scripts/verify-coverage-check.sh [dir]   (default: the repository)
-# The dir holds the Makefile to read; nothing in it is run.
+# The dir holds the Makefile to read. `make -n` prints the recipes and runs
+# none of them itself, but it still starts any `$(MAKE)` sub-make, any
+# recipe line marked `+` and any `$(shell ...)`, so point it only at a
+# Makefile you trust.
 set -eu
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -17,22 +20,63 @@ fail() { echo "verify-coverage-check: $*"; status=1; }
 # The xcodebuild lines a target would run, one per line as "kind
 # configuration platform", where kind is build or archive and platform is
 # the destination's, such as "iOS Simulator" or "macOS". A missing
-# -configuration is Debug, as xcodebuild takes it for this scheme.
+# -configuration is the scheme's own: Debug for build, which uses its Run
+# action, and Release for archive, which uses its Archive action. A shell
+# comment line is no build, and xcodebuild counts only where a command
+# starts, so an echo that names it is not one either.
 xcodebuilds() {
   out="$(cd "$dir" && env -u MAKEFLAGS -u MFLAGS -u MAKELEVEL make --no-print-directory -n "$1" 2>&1)" || {
     echo "verify-coverage-check: make -n $1 failed: $out" >&2
     return 1
   }
   printf '%s\n' "$out" | perl -0pe 's/\\\n\s*/ /g' | perl -ne '
-    next unless /\bxcodebuild\s+(build|archive)\b/;
+    next if /^\s*#/;
+    next unless /(?:^|[;&|(])\s*(?:\w+=\S*\s+)*xcodebuild\s+(build|archive)\b/;
     my $kind = $1;
-    my $config = /-configuration\s+(\S+)/ ? $1 : "Debug";
+    my $config = /-configuration\s+(\S+)/ ? $1 : ($kind eq "archive" ? "Release" : "Debug");
     while (/-destination\s+(?:\x27([^\x27]*)\x27|"([^"]*)"|(\S+))/g) {
       my $dest = $1 // $2 // $3;
       my ($platform) = $dest =~ /(?:^|,|generic\/)platform=([^,]+)/;
       print "$kind $config ", ($platform // "unknown"), "\n";
     }'
 }
+
+# The targets verify and archive reach, through prerequisites and
+# `$(MAKE)` sub-makes, with an xcodebuild recipe line marked `-`, so make
+# would go on as if it had built. `make -n` drops that mark, so this reads
+# the Makefile itself.
+ignored="$(perl -ne '
+  if (/^\t/) {
+    $text .= $_;
+    if ($text !~ /\\\n\z/) {
+      push @{$lines{$_}}, $text for @current;
+      $text = "";
+    }
+    next;
+  }
+  $text = "";
+  next if /^\s*(#|$)/;
+  if (/^([^\s:=#][^:=#]*?)\s*:(?![=:])\s*([^;#]*)/) {
+    @current = split " ", $1;
+    push @{$deps{$_}}, split(" ", $2) for @current;
+  } else {
+    @current = ();
+  }
+  END {
+    my @todo = ("verify", "archive");
+    my %seen;
+    while (defined(my $t = shift @todo)) {
+      next if $seen{$t}++;
+      push @todo, @{$deps{$t} || []};
+      for my $line (@{$lines{$t} || []}) {
+        push @todo, $1 while $line =~ /\$[({]MAKE[)}](?:\s+-\S+)*\s+([\w.-]+)/g;
+        print "$t\n" if $line =~ /^\t[@+\s]*-[@+\-\s]*(?:\w+=\S*\s+)*xcodebuild\b/;
+      }
+    }
+  }' "$dir/Makefile" | sort -u)"
+for target in $ignored; do
+  fail "make $target runs xcodebuild with its errors ignored (a recipe line starting with -), so a failed build would not stop verify"
+done
 
 verify="$(xcodebuilds verify)" || exit 1
 release="$(xcodebuilds build-release)" || exit 1

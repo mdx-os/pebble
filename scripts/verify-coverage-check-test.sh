@@ -3,13 +3,17 @@
 # Makefile in build/verify-coverage-check-test. The Makefile as it is
 # passes; then each way verify could stop covering a Release build must
 # fail the check, for that reason: archive dropped from verify, the
-# simulator build dropped, either archive gone or no longer Release, and a
-# new Release build in build-release that verify never makes.
+# simulator build dropped, either archive gone or no longer Release, a
+# new Release build in build-release that verify never makes, the macOS
+# archive commented out, and an xcodebuild line with its errors ignored.
+# An archive with no -configuration still passes, as it archives in
+# Release.
 set -eu
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 check="$root/scripts/verify-coverage-check.sh"
 scratch="$root/build/verify-coverage-check-test"
+trap 'rm -rf "$scratch"' EXIT
 failures=0
 
 fresh() {
@@ -78,7 +82,17 @@ fresh
 change "s~(\nbuild-release:[^\n]*\n)~\$1\txcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'generic/platform=visionOS Simulator'\n~"
 expect fail "a new Release build verify never makes" "make build-release builds Release for visionOS Simulator, but make verify neither builds nor archives it"
 
-rm -rf "$scratch"
+fresh
+change "s~(\t+)(xcodebuild archive [^\n]*\\\\\n)(\t+)([^\n]*'generic/platform=macOS'[^\n]*\\\\\n)(\t+)~\$1# \$2\$3# \$4\$5# ~"
+expect fail "the macOS archive commented out" "make verify no longer archives Release for macOS"
+
+fresh
+change "s~(xcodebuild archive [^\n]*) -configuration Release([^\n]*\\\\\n[^\n]*'generic/platform=macOS')~\$1\$2~"
+expect pass "the macOS archive with no -configuration, which archives in Release"
+
+fresh
+change "s~\txcodebuild archive ([^\n]*\\\\\n[^\n]*'generic/platform=macOS')~\t-xcodebuild archive \$1~"
+expect fail "the macOS archive with its errors ignored" "make archive runs xcodebuild with its errors ignored"
 if [ "$failures" -ne 0 ]; then
   echo "verify-coverage-check-test: $failures case(s) went the wrong way"
   exit 1
