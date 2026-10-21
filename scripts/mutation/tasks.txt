@@ -131,3 +131,8 @@ perl: s~guard kept\.unreadable\.keys\.allSatisfy\(\{ all\[\$0\] == nil \}\) else
 test: aRecordNoOneCanUnderstandCostsOnlyItsOwnTask
 file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
 perl: s~kept\.unreadable\[taskID\] = nil\n~~
+
+# The app's task engine reads the setting's notes store, the one the redactor reads.
+test: theAppMakesOneNotesStore
+file: App/Sources/PebbleApp.swift
+perl: s~let tasks = cloud\.memory\.map \{ OnDeviceTasks~let tasks = (try? MemoryStore.onDevice()).map { OnDeviceTasks~

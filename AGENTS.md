@@ -19,7 +19,7 @@ in lint, a skill, or CI.
 - `make test`: package unit tests (Swift Testing), PebbleKit's and then the source guards' in `Tools/GuardKit`
 - `make mutation-check`: breaks the code each test in `scripts/mutation-manifest.txt` covers, on a copy in `build/mutation`, and requires the test to fail. Every new package behavior test gets a manifest entry; a test that passes with its code broken protects nothing. The check runs `swift test` in both packages, so a UI test that guards a promise needs a package twin pinning the same thing, with entries, listed at the top of `scripts/mutation/cloud.txt`
 - `make release-test`: runs the "a shipped build reads no cloud address" promise in a Release build of PebbleCore (part of verify). Package tests run in Debug, so they can't see that code
-- `make comment-lint`: no review history ("fix round", "item 11", "round 4") or personal names in code comments, project.yml, the Makefile or the mutation manifest. Say what the code or test protects. The names it blocks are never committed in plain text: `Config/comment-lint-names.sha256` holds a salt and the SHA-256 of each name, and CI needs no secret. The plain list lives only in the git-ignored `Config/comment-lint-names.local.txt`; after changing it, run `make hash-names` and commit the hash file. A match prints the file and line, never the name. Never print, copy or quote the local list
+- `make comment-lint`: no review history ("fix round", "item 11", "round 4") or personal names in code comments, project.yml, the Makefile or the mutation manifest. Say what the code or test protects. The names it blocks are never in the repository, in plain text or hashed: a hash of a short name is undone by trying every name. The names part runs only when `COMMENT_LINT_NAMES` names a plain list kept outside the repository (one inside it is refused, ignored by git or not); without one the lint says the names were not checked and still checks review history, as in CI. A match prints the file and line, never the name. Never print, copy or quote the list
 - `make build-release`: Release builds for macOS and the iOS Simulator. Verify runs only the Simulator one (`build-release-simulator`), since the macOS archive is the same Release build for the Mac. Anything behind `#if DEBUG`, like the showcase, must only be used behind it too. Every build with a cloud address fails unless it is Debug and not an archive, whatever the configuration is called
 - `make archive`: unsigned Release archives for iOS and macOS, checked for App Store Connect. `docs/RELEASE.md` covers signing and upload
 - `make privacy-check`: fails when code uses a required-reason API that `App/Resources/PrivacyInfo.xcprivacy` does not list, or network code outside the opt-in cloud client's files named in `scripts/privacy-check.sh`. `make privacy-check-test` runs it on `scripts/privacy-fixtures`
@@ -48,7 +48,9 @@ in lint, a skill, or CI.
   or `Packages/` (part of verify). A camel case name is also read in its parts and in
   every run of up to 8 parts joined, within that one name only. The owner fills the plain list in the git ignored
   `Config/private-words.local.txt` and runs `make hash-private-words`; the hash file
-  committed now is built from a made up placeholder word
+  committed now is built from a made up placeholder word. Never put a real word in it:
+  the salt is committed beside the hashes, so anyone can hash every name or short
+  word and find a match in minutes. A real word there is as good as public
 
 ## Layout and layers
 

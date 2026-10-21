@@ -91,10 +91,10 @@ test: everyReleaseBuildRunsTheCheck
 file: Makefile
 perl: s~\nbuild-release: generate build-release-simulator\n~\nbuild-release: generate\n~
 
-# Names are matched by salted hash, as words and pairs of words, in any case and as possessives.
-test: theCommentLintCatchesReviewHistoryAndNames theNamesAreCommittedOnlyAsSaltedHashes
+# Names from the list are matched as words and pairs of words, in any case and as possessives.
+test: theCommentLintCatchesReviewHistoryAndNames theNamesListIsNeverInTheRepository
 file: scripts/comment-lint.sh
-perl: s~return Digest::SHA::sha256_hex\(\$bytes\);~return \$bytes;~
+perl: s~\$set\{join\(" ", \@words\)\} = 1;~\$set{\$line} = 1;~
 
 test: theCommentLintCatchesReviewHistoryAndNames
 file: scripts/comment-lint.sh
@@ -112,18 +112,18 @@ test: theCommentLintCatchesReviewHistoryAndNames
 file: scripts/comment-lint.sh
 perl: s~print "\$file:\$n: a name from the list\\n"~print "\$file:\$n:\$line\\n"~
 
-# A hash file with no salt, a stray line or no names is an error, never a pass.
+# A names list that can't be read, holds a name of three words or holds no names is an error, never a pass.
 test: theCommentLintCatchesReviewHistoryAndNames
 file: scripts/comment-lint.sh
-perl: s~return \(undef, undef, "\$file has no salt line"\) unless defined \$salt;~\$salt //= "";~
+perl: s~names list COMMENT_LINT_NAMES names\\n"; exit 3~names list COMMENT_LINT_NAMES names\\n"; exit 0~
 
 test: theCommentLintCatchesReviewHistoryAndNames
 file: scripts/comment-lint.sh
-perl: s~else \{ return \(undef, undef, "line \$n of \$file is not the salt, a hash or a # comment"\) \}~else { }~
+perl: s~if \(\@words > 2\) \{~if (0) {~
 
 test: theCommentLintCatchesReviewHistoryAndNames
 file: scripts/comment-lint.sh
-perl: s~if \(!%\$set\) \{~if (0) {~
+perl: s~if \(!%set\) \{~if (0) {~
 
 test: theCommentLintCatchesReviewHistoryAndNames
 file: scripts/comment-lint.sh
@@ -145,16 +145,25 @@ test: theCommentLintCoversTheProjectFiles
 file: scripts/comment-lint.sh
 perl: s~ Tools/GuardKit App~ App~
 
-# The plain list stays out of the repository; --hash-names keeps the salt, and a stale hash file fails.
-test: theNamesAreCommittedOnlyAsSaltedHashes
+# The names list stays out of the repository: one inside it is refused, a
+# list given is used, and with none the lint says it checked no names.
+test: theNamesListIsNeverInTheRepository
 file: scripts/comment-lint.sh
-perl: s~-e \$hashes \? read_hashes\(\$hashes\) : ~0 ? read_hashes(\$hashes) : ~
+perl: s~"\$repo"/\*\)~"/nowhere"/*)~
 
-test: theNamesAreCommittedOnlyAsSaltedHashes
+test: theNamesListIsNeverInTheRepository
 file: scripts/comment-lint.sh
 perl: s~if \(\$names ne ""\) \{~if (0) {~
 
-test: theNamesAreCommittedOnlyAsSaltedHashes
+test: theNamesListIsNeverInTheRepository
+file: scripts/comment-lint.sh
+perl: s~  echo "comment-lint: no names list~  true "comment-lint: no names list~
+
+test: theNamesListIsNeverInTheRepository
+file: scripts/comment-lint.sh
+perl: s~if \[ -z "\$names_file" \]; then~if true; then~
+
+test: theNamesListIsNeverInTheRepository
 file: .gitignore
 perl: s~\nConfig/comment-lint-names\.local\.txt\n~\n~
 

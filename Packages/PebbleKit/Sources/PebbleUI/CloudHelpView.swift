@@ -159,24 +159,10 @@ public final class CloudHelp: ObservableObject {
         self.auth = auth
         self.makeTransport = transport
         self.unopenedFile = unopenedFile
-        var read = storeOpened ? try? store.load() : nil
-        // A saved on counts only for the address it was said yes to. With
-        // no address in this build, another one, or none saved with it, it
-        // is off, and saved off, so no build turns it back on without a
-        // fresh yes. If that can't be saved, the private words are kept
-        // (nothing is erased behind the person's back), every send is held
-        // off until the app closes, the file is marked off if it can be,
-        // and the person is told; `refresh` tries the save again.
-        var holdsOff = false
-        var launchStatus: Status?
-        if var stale = read, stale.isOn, !stale.isOn(for: endpoint) {
-            stale.turnOff()
-            read = stale
-            if (try? store.save(stale)) == nil {
-                holdsOff = true
-                launchStatus = (try? store.markOff()) != nil ? .offSavedLater : .offAtLaunchNotSaved
-            }
-        }
+        let launch = Self.reconciled(storeOpened ? try? store.load() : nil, endpoint: endpoint, store: store)
+        let read = launch.read
+        let holdsOff = launch.holdsOff
+        let launchStatus = launch.status
         settings = read ?? .off
         mayKeepUnseenWords = storeOpened ? read == nil : unopenedFile != nil
         if holdsOff { switchedOff.value = true }
@@ -193,6 +179,31 @@ public final class CloudHelp: ObservableObject {
                 Task { @MainActor in self?.refresh() }
             }
         }
+    }
+
+    /// A saved on counts only for the address it was said yes to. With no
+    /// address in this build, another one, or none saved with it, it is
+    /// off, and saved off, so no build turns it back on without a fresh
+    /// yes. If that can't be saved, the private words are kept (nothing is
+    /// erased behind the person's back), every send is held off until the
+    /// app closes, the file is marked off if it can be, and the person is
+    /// told; `refresh` tries the save again. Run at launch and again by
+    /// `refresh`, since a launch that couldn't read the file, as on a
+    /// locked device, could do none of this then.
+    private static func reconciled(_ loaded: CloudHelpSettings?, endpoint: URL?, store: any CloudHelpStoring)
+        -> (read: CloudHelpSettings?, holdsOff: Bool, status: Status?) {
+        var read = loaded
+        var holdsOff = false
+        var launchStatus: Status?
+        if var stale = read, stale.isOn, !stale.isOn(for: endpoint) {
+            stale.turnOff()
+            read = stale
+            if (try? store.save(stale)) == nil {
+                holdsOff = true
+                launchStatus = (try? store.markOff()) != nil ? .offSavedLater : .offAtLaunchNotSaved
+            }
+        }
+        return (read, holdsOff, launchStatus)
     }
 
     /// Posted when a locked device is unlocked and its protected files can
@@ -371,9 +382,14 @@ public final class CloudHelp: ObservableObject {
     /// Reads the settings again, as after the device was locked at launch,
     /// or once it is unlocked (`unlocked`). A switch off that couldn't be
     /// saved before is saved now, if it can be, and the line that said it
-    /// would be goes.
+    /// would be goes. A yes for another address, or none, is settled as
+    /// launch settles it (`reconciled`), since a launch that couldn't read
+    /// the file left it as it was.
     func refresh() {
-        guard storeOpened, var fresh = try? store.load() else { return }
+        guard storeOpened, let loaded = try? store.load() else { return }
+        let settled = Self.reconciled(loaded, endpoint: endpoint, store: store)
+        var fresh = settled.read ?? loaded
+        if settled.holdsOff { switchedOff.value = true }
         let waiting = state?.waitsForASave ?? false
         // A marked off reads as off, so the line says whether it waits.
         if switchedOff.value, fresh.isOn || waiting {
@@ -382,6 +398,12 @@ public final class CloudHelp: ObservableObject {
         }
         settings = fresh
         mayKeepUnseenWords = false
+        // Said as launch says it, and on the home screen too, since the
+        // person asked for nothing. Said once, not at every refresh.
+        if let status = settled.status, state != status {
+            state = status
+            fromLaunch = true
+        }
     }
 
     /// Does `action` on the shared setting as `window`, so a line it sets

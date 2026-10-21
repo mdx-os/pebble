@@ -1048,6 +1048,65 @@ struct CloudPromiseTests {
         #expect(maker.wire.sent.isEmpty)
     }
 
+    /// A yes for this address, then a launch with no address while the
+    /// device is locked, so the file can't be read. Once it is unlocked the
+    /// yes is saved off, as launch would have, and the next build with the
+    /// address is off until a new yes. When that save fails at unlock the
+    /// sends are held off, the file is marked off and the person is told,
+    /// and the next refresh saves it.
+    @Test func aYesSavedOffAfterALockedLaunchStaysOffForItsAddress() throws {
+        let saved = CloudHelpSettings(isOn: true, for: endpoint, privateWords: ["lemon cake"])
+        let store = FailingCloudStore(saved)
+        store.loadFails = .locked
+        let locked = CloudHelp(store: store, endpoint: nil, memory: scratchMemory())
+        #expect(store.saved == saved)
+        store.loadFails = nil
+        locked.refresh()
+        #expect(store.saved == CloudHelpSettings(privateWords: ["lemon cake"]))
+        #expect(!locked.usesCloudForNewChats)
+        let later = CloudHelp(store: store, endpoint: endpoint, memory: scratchMemory())
+        #expect(!later.usesCloudForNewChats)
+        #expect(newChat(later).privacyPlace == .onDevice)
+        #expect(later.setOn(true), "a new yes is asked for")
+        later.confirmTurnOn()
+        #expect(later.usesCloudForNewChats)
+
+        let stuck = FailingCloudStore(saved)
+        stuck.loadFails = .locked
+        let unlocked = CloudHelp(store: stuck, endpoint: nil, memory: scratchMemory())
+        stuck.loadFails = nil
+        stuck.savesToFail = .max
+        unlocked.refresh()
+        #expect(unlocked.holdsSendsOff)
+        #expect(stuck.markedOff)
+        #expect(unlocked.status == CloudWords.offSavedLater)
+        #expect(unlocked.statusCount == 1)
+        unlocked.refresh()
+        #expect(unlocked.statusCount == 1, "said once, not at every refresh")
+        #expect(!CloudHelp(store: stuck, endpoint: endpoint, memory: scratchMemory()).usesCloudForNewChats)
+        stuck.savesToFail = 0
+        unlocked.refresh()
+        #expect(stuck.saved == CloudHelpSettings(privateWords: ["lemon cake"]))
+        #expect(unlocked.status == nil)
+        #expect(!CloudHelp(store: stuck, endpoint: endpoint, memory: scratchMemory()).usesCloudForNewChats)
+
+        // Not even marked off: the home screen says so, once, however
+        // often it is refreshed.
+        let unmarked = FailingCloudStore(saved)
+        unmarked.loadFails = .locked
+        let bare = CloudHelp(store: unmarked, endpoint: nil, memory: scratchMemory())
+        unmarked.loadFails = nil
+        unmarked.savesToFail = .max
+        unmarked.markFails = true
+        bare.refresh()
+        #expect(bare.holdsSendsOff)
+        #expect(bare.launchNotice == CloudWords.offAtLaunchNotSaved)
+        #expect(bare.statusCount == 1)
+        bare.refresh()
+        #expect(bare.statusCount == 1)
+        #expect(bare.launchNotice == CloudWords.offAtLaunchNotSaved)
+    }
+
     /// The app's state, made the way the app makes it, keeps the notes
     /// store with no cloud address, as every shipped build has, whether the
     /// setting opens or not.

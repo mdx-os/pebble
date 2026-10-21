@@ -756,3 +756,34 @@ perl: s~guard usesCloud\(settings: settings, endpoint: endpoint\), let endpoint 
 test: aSwitchOffJustAfterTheCheckNeverShowsAPreview
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
 perl: s~if Task\.isCancelled \|\| !isOn\(\) \{ return \.withdrawn \}~if Task.isCancelled { return .withdrawn }~
+
+# Notes or private words changed after a preview was redacted: no hop of it
+# goes, and a fresh preview needs a new yes.
+test: aPrivateWordAddedDuringSignInNeedsAFreshPreviewAndANewYes
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~guard try readRedactor\(\) == current else \{ return nil \}\n(\s*let data = )~$1~
+
+test: aPrivateWordAddedBeforeTheYesSendsNoHopOfThatPreview
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~guard try readRedactor\(\) == current else \{ return nil \}\n(\s*let answer = )~$1~
+
+test: aPrivateWordAddedDuringSignInNeedsAFreshPreviewAndANewYes
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~if let reply = try await replyOnce\(to: transcript\) \{ return reply \}~guard let reply = try await replyOnce(to: transcript) else { throw CloudModelError.withdrawn }\n            return reply~
+
+# A yes for another address, or none, is saved off once a locked launch can read the file.
+test: aYesSavedOffAfterALockedLaunchStaysOffForItsAddress
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~let settled = Self\.reconciled\(loaded, endpoint: endpoint, store: store\)~let settled = (read: Optional(loaded), holdsOff: false, status: Status?.none)~
+
+test: aYesSavedOffAfterALockedLaunchStaysOffForItsAddress
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~if settled\.holdsOff \{ switchedOff\.value = true \}~if settled.holdsOff { }~
+
+test: aYesSavedOffAfterALockedLaunchStaysOffForItsAddress
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~if let status = settled\.status, state != status \{~if let status = settled.status, true {~
+
+test: aYesSavedOffAfterALockedLaunchStaysOffForItsAddress
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~(\n\s*state = status\n)\s*fromLaunch = true\n~$1~

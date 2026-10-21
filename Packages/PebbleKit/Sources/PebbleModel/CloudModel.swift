@@ -43,12 +43,13 @@ public struct CloudRequest: Sendable, Equatable {
     }
 
     /// The lines URLSession adds to every request whatever it is given, as
-    /// a listener on this Mac's loopback address sees them
+    /// a listener on this Mac's loopback address sees them over HTTP/1.1
     /// (`theWireCarriesExactlyTheHeaderLinesTheCardShows`): no-cache, from
     /// the request's cache policy, and keep-alive. Neither says anything
-    /// of the person or the device, and both are shown, so the card holds
+    /// of the person or the device, and both are shown. That test speaks
+    /// HTTP/1.1 only, so it is over HTTP/1.1 that the card is shown to hold
     /// every line that goes. Over HTTP/2 the connection line is left out,
-    /// which only means the card shows one line more than went.
+    /// so the card may show one line more than went; no test covers that.
     public static let systemLines: [String: String] = [
         "Cache-Control": "no-cache",
         "Connection": "keep-alive",
@@ -456,7 +457,9 @@ public struct CloudPayload: Codable, Sendable, Equatable {
 ///    gets less private: see `CloudChatSession`.
 /// 3. The person sees the exact request, and any sign-in hop before it,
 ///    and chooses to send them or not.
-/// 4. Only then do those same bytes go to the transport, once each.
+/// 4. Only then do those same bytes go to the transport, once each. If
+///    the notes or private words change before a hop goes, nothing more of
+///    that preview goes, and a fresh one asks again.
 public struct CloudModel: ModelClient {
     /// Where requests go, under the configured address.
     public static let path = "v1/reply"
@@ -505,17 +508,25 @@ public struct CloudModel: ModelClient {
 
     public var runsOnDevice: Bool { Self.place.staysOnDevice }
 
+    /// Each pass shows a preview and, on its yes, sends its hops. A pass
+    /// that finds the notes or private words changed before a hop goes
+    /// drops every hop not yet sent, and the next pass redacts afresh and
+    /// asks for a new yes. Each pass waits on the person, so they bound it.
     public func reply(to transcript: [ChatTurn]) async throws -> String {
+        while true {
+            if let reply = try await replyOnce(to: transcript) { return reply }
+        }
+    }
+
+    /// One preview and its hops. Nil when the privacy inputs changed after
+    /// the preview was redacted, before everything was sent: nothing more
+    /// of it goes.
+    private func replyOnce(to transcript: [ChatTurn]) async throws -> String? {
         try session.checkOpen()
         try checkOn()
-        let current: Redactor
-        do {
-            current = try self.redactor()
-        } catch {
-            // Without the notes and private words it isn't known what to
-            // take out, so nothing goes.
-            throw CloudModelError.notesUnreadable
-        }
+        // The version of the privacy inputs this preview is redacted with:
+        // the notes' names and the private words as they are now.
+        let current = try readRedactor()
         let preview = try Self.preview(
             for: transcript, endpoint: endpoint, redactor: try session.widened(by: current),
             headers: auth.headers(for: Self.url(for: endpoint)), signIn: auth.signIn(for: endpoint),
@@ -543,6 +554,7 @@ public struct CloudModel: ModelClient {
             // each is checked again just before it goes.
             if let signIn = preview.signIn {
                 try readyToSend()
+                guard try readRedactor() == current else { return nil }
                 let answer = try await session.send(signIn, through: transport)
                 // A switch off or Forget everything may have come while it
                 // was on the wire; then nothing it brought back is kept.
@@ -554,11 +566,25 @@ public struct CloudModel: ModelClient {
                 try session.handOver { auth.signedIn(answer) }
             }
             try readyToSend()
+            // A private word added or a note saved while sign-in was on the
+            // wire isn't hidden in this message, so it never goes.
+            guard try readRedactor() == current else { return nil }
             let data = try await session.send(preview.request, through: transport)
             guard let reply = try? JSONDecoder().decode(CloudPayload.Reply.self, from: data) else {
                 throw CloudModelError.unreadableReply
             }
             return reply.reply
+        }
+    }
+
+    /// The redactor for the notes and private words as they are now.
+    private func readRedactor() throws -> Redactor {
+        do {
+            return try redactor()
+        } catch {
+            // Without the notes and private words it isn't known what to
+            // take out, so nothing goes.
+            throw CloudModelError.notesUnreadable
         }
     }
 

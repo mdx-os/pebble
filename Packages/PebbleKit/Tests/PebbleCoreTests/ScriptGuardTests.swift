@@ -1,5 +1,4 @@
 #if os(macOS)
-import CryptoKit
 import Foundation
 import Testing
 import TestScratch
@@ -346,15 +345,12 @@ struct ScriptGuardTests {
         let folder = try scratchFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let lint = Self.script("comment-lint.sh")
-        // Made-up names under a made-up salt, hashed here and not by the
-        // lint, so no real name is ever in the repository and a lint that
-        // stops hashing as it promises misses them.
-        let salt = "0badc0de5a17ed00feedfacecafebeef"
-        let hashes = folder.appendingPathComponent("names.sha256")
-        try Data((["# Made up.", "salt: \(salt)"] + ["ada byron", "jo ann", "quillon"].map { Self.sha256(salt + $0) })
-            .joined(separator: "\n").appending("\n").utf8).write(to: hashes)
+        // Made-up names, in a list outside the repository, so no real name
+        // is ever in it.
+        let list = folder.appendingPathComponent("names.txt")
+        try Data("# Made up.\n\nAda Byron\nJo Ann\nQuillon\n".utf8).write(to: list)
         func lintRun(_ file: URL) throws -> Int32 {
-            try Self.run(["sh", lint, "--hashes", hashes.path, file.path], in: folder)
+            try Self.run(["sh", lint, file.path], in: folder, environment: ["COMMENT_LINT_NAMES": list.path])
         }
         let names = ["Ada Byron", "Jo.Ann", "Quillon"]
         // Built from pieces, so this file never holds what the lint looks for.
@@ -398,92 +394,83 @@ struct ScriptGuardTests {
         #expect(try lintRun(two) == 0)
         // A match says where, and never the name.
         try Data("// asked by Ada Byron\n".utf8).write(to: two)
-        let found = try Self.output(["sh", lint, "--hashes", hashes.path, two.path], in: folder)
+        let found = try Self.output(["sh", lint, two.path], in: folder, environment: ["COMMENT_LINT_NAMES": list.path])
         #expect(found.status == 1)
         #expect(found.text.contains("Two.swift:1: a name from the list"))
         #expect(!found.text.lowercased().contains("byron"))
-        // A hash file it can't read, or with no salt, is an error.
-        #expect(try Self.run(["sh", lint, "--hashes", folder.appendingPathComponent("nowhere").path, good.path],
-                             in: folder) == 1)
-        let text = try String(contentsOf: hashes, encoding: .utf8)
-        try Data(text.replacingOccurrences(of: "salt: \(salt)\n", with: "").utf8).write(to: hashes)
-        #expect(try lintRun(good) == 1)
+        // A list it can't read, with a name of three words, or with no
+        // names is an error, never a pass.
+        func withList(_ names: String) throws -> Int32 {
+            try Self.run(["sh", lint, good.path], in: folder, environment: ["COMMENT_LINT_NAMES": names])
+        }
+        #expect(try withList(folder.appendingPathComponent("nowhere").path) == 1)
+        let broken = folder.appendingPathComponent("broken.txt")
+        for text in ["Ada Lovelace Byron\n", "# nothing here\n\n"] {
+            try Data(text.utf8).write(to: broken)
+            #expect(try withList(broken.path) == 1, "\(text)")
+        }
         #expect(try Self.run(["sh", lint, "--self-test"], in: folder) == 0)
     }
 
-    static func sha256(_ text: String) -> String {
-        SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
-    }
-
-    /// The real names are never in the repository in plain text: no list
-    /// is committed, the local one is ignored by git, and the committed
-    /// file holds one salt and then only hashes and comments.
-    @Test func theNamesAreCommittedOnlyAsSaltedHashes() throws {
-        #expect(!FileManager.default.fileExists(atPath: Self.script("comment-lint-names.txt")))
+    /// The names are never in the repository, in plain text or hashed: a
+    /// hash of a short name is undone by trying every name. No list or
+    /// hash file is committed, a local list is ignored by git, and a list
+    /// inside the repository is refused. With no list the lint says it
+    /// checked no names, and still fails on review history.
+    @Test func theNamesListIsNeverInTheRepository() throws {
+        for gone in ["scripts/comment-lint-names.txt", "Config/comment-lint-names.txt", "Config/comment-lint-names.sha256"] {
+            #expect(!FileManager.default.fileExists(atPath: Self.root.appendingPathComponent(gone).path), "\(gone)")
+        }
         let ignore = try String(contentsOf: Self.root.appendingPathComponent(".gitignore"), encoding: .utf8)
         #expect(ignore.split(separator: "\n").contains("Config/comment-lint-names.local.txt"))
-        let committed = try String(contentsOf: Self.root.appendingPathComponent("Config/comment-lint-names.sha256"),
-                                   encoding: .utf8)
-        #expect(Self.hashFileProblems(committed).isEmpty, "\(Self.hashFileProblems(committed))")
-        #expect(!Self.hashFileProblems("# no salt\n\(Self.sha256("x"))\n").isEmpty)
-        #expect(!Self.hashFileProblems("salt: 0badc0de5a17ed00feedfacecafebeef\nquillon\n").isEmpty)
-        #expect(!Self.hashFileProblems("salt: 0badc0de5a17ed00feedfacecafebeef\n\n").isEmpty)
-        // A copy of the lint in a scratch repository with no hash file
-        // fails, rather than checking no names.
+        let source = try String(contentsOf: URL(fileURLWithPath: Self.script("comment-lint.sh")), encoding: .utf8)
+        for gone in ["Digest::SHA", "sha256", "--hash-names"] {
+            #expect(!source.contains(gone), "\(gone)")
+        }
         let folder = try scratchFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
         try FileManager.default.createDirectory(at: folder.appendingPathComponent("scripts"),
                                                 withIntermediateDirectories: true)
         let lint = folder.appendingPathComponent("scripts/comment-lint.sh")
         try FileManager.default.copyItem(atPath: Self.script("comment-lint.sh"), toPath: lint.path)
+        func lintRun(_ file: URL, names: String) throws -> (status: Int32, text: String) {
+            try Self.output(["sh", lint.path, file.path], in: folder, environment: ["COMMENT_LINT_NAMES": names])
+        }
         let code = folder.appendingPathComponent("Code.swift")
-        try Data("/// Rounds to 4 places.\nlet x = 1\n".utf8).write(to: code)
-        #expect(try Self.run(["sh", lint.path, code.path], in: folder) == 1)
-        // --hash-names hashes a made-up local list with a fresh salt, and
-        // keeps that salt when run again.
-        let local = folder.appendingPathComponent("Config/comment-lint-names.local.txt")
-        let made = folder.appendingPathComponent("Config/comment-lint-names.sha256")
-        try Data("# Made up.\n\nQuillon\nAda  Byron\n".utf8).write(to: local)
-        let hashed = try Self.output(["sh", lint.path, "--hash-names"], in: folder)
-        #expect(hashed.status == 0, "\(hashed.text)")
-        #expect(!hashed.text.lowercased().contains("quillon"), "it never prints the list")
-        let first = try String(contentsOf: made, encoding: .utf8)
-        #expect(Self.hashFileProblems(first).isEmpty, "\(Self.hashFileProblems(first))")
-        let salt = String(try #require(first.split(separator: "\n").first { $0.hasPrefix("salt: ") }?.dropFirst(6)))
-        let hashes = first.split(separator: "\n").filter { !$0.hasPrefix("#") && !$0.hasPrefix("salt: ") }.map(String.init)
-        #expect(Set(hashes) == Set(["quillon", "ada byron"].map { Self.sha256(salt + $0) }))
-        #expect(try Self.run(["sh", lint.path, "--hash-names"], in: folder) == 0)
-        #expect(try String(contentsOf: made, encoding: .utf8) == first)
-        // In step with the local list the lint passes and finds the names;
-        // behind it, it fails until the hash file is rebuilt.
-        #expect(try Self.run(["sh", lint.path, code.path], in: folder) == 0)
-        try Data("/// Quillon asked for this.\n".utf8).write(to: code)
-        #expect(try Self.run(["sh", lint.path, code.path], in: folder) == 1)
+        try Data("/// Quillon asked for this.\nlet x = 1\n".utf8).write(to: code)
+        // No list: the name passes, and the lint says it checked no names.
+        let unchecked = try lintRun(code, names: "")
+        #expect(unchecked.status == 0, "\(unchecked.text)")
+        #expect(unchecked.text.contains("names were not checked"))
+        // Review history fails with no list all the same.
+        let item = "item"
+        let history = folder.appendingPathComponent("History.swift")
+        try Data("/// Asked for in \(item) 11.\n".utf8).write(to: history)
+        #expect(try lintRun(history, names: "").status == 1)
+        // A list inside the repository is refused, and never printed; the
+        // same list outside it finds the name.
+        let inside = folder.appendingPathComponent("names.txt")
+        try Data("Quillon\n".utf8).write(to: inside)
+        let refused = try lintRun(code, names: inside.path)
+        #expect(refused.status == 1)
+        #expect(refused.text.contains("inside the repository"))
+        #expect(!refused.text.lowercased().contains("quillon"), "it never prints the list")
+        let outside = try scratchFolder()
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let list = outside.appendingPathComponent("names.txt")
+        try FileManager.default.copyItem(at: inside, to: list)
+        let caught = try lintRun(code, names: list.path)
+        #expect(caught.status == 1)
+        #expect(caught.text.contains("Code.swift:1: a name from the list"))
+        #expect(!caught.text.lowercased().contains("quillon"))
         try Data("/// Rounds to 4 places.\n".utf8).write(to: code)
-        try Data("Quillon\nAda Byron\nZeno Quark\n".utf8).write(to: local)
-        #expect(try Self.run(["sh", lint.path, code.path], in: folder) == 1)
-        #expect(try Self.run(["sh", lint.path, "--hash-names"], in: folder) == 0)
-        #expect(try Self.run(["sh", lint.path, code.path], in: folder) == 0)
+        let clean = try lintRun(code, names: list.path)
+        #expect(clean.status == 0)
+        #expect(!clean.text.contains("names were not checked"))
     }
 
-    /// What is wrong with a hash file: it must hold exactly one salt line
-    /// of 32 hex digits, and every other line is a hash of 64 or a comment.
-    static func hashFileProblems(_ text: String) -> [String] {
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).dropLast(text.hasSuffix("\n") ? 1 : 0)
-        func isHex(_ text: Substring, count: Int) -> Bool {
-            text.count == count && text.allSatisfy { "0123456789abcdef".contains($0) }
-        }
-        func isSalt(_ line: Substring) -> Bool { line.hasPrefix("salt: ") && isHex(line.dropFirst(6), count: 32) }
-        var problems = lines.enumerated().compactMap { index, line in
-            isSalt(line) || isHex(line, count: 64) || line.hasPrefix("#")
-                ? nil : "line \(index + 1) is not the salt, a hash or a comment"
-        }
-        let salts = lines.filter(isSalt).count
-        if salts != 1 { problems.append("\(salts) salt lines") }
-        return problems
-    }
-
-    /// CI runs the lint with no secret, a fork's pull request included.
+    /// CI runs the lint with no secret, a fork's pull request included, so
+    /// it checks review history there and says it checked no names.
     @Test func ciRunsTheCommentLintWithNoSecret() throws {
         let workflow = try String(contentsOf: Self.root.appendingPathComponent(".github/workflows/ci.yml"), encoding: .utf8)
         #expect(!workflow.contains("COMMENT_LINT"))

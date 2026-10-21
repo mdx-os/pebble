@@ -877,6 +877,59 @@ struct CloudModelTests {
         }
     }
 
+    /// A private word added while the sign-in hop is on the wire: the
+    /// message redacted before it never goes. The rest of that yes is
+    /// dropped, a fresh preview hides the word, and only a new yes to it
+    /// sends anything more. Said no to, nothing more goes at all.
+    @Test func aPrivateWordAddedDuringSignInNeedsAFreshPreviewAndANewYes() async throws {
+        let hop = CloudSignIn(path: "v1/sign-in", body: Data(#"{"device":"made-up"}"#.utf8))
+        for second in [CloudConsent.send, .cancel] {
+            let words = Words()
+            let transport = SignInAddsAWordTransport(words: words, word: "lemon cake")
+            let reviewer = ScriptedReviewer(answers: [.send, second])
+            let cloud = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer,
+                                   auth: SampleAuth(signIn: hop),
+                                   redactor: { Redactor(privateWords: words.list) })
+            let ask = "Bring the lemon cake on Friday."
+            if second == .cancel {
+                await #expect(throws: CloudModelError.notSent) { try await cloudChat().sending(ask, with: cloud) }
+            } else {
+                _ = try await cloudChat().sending(ask, with: cloud)
+            }
+            #expect(reviewer.seen.count == 2, "a new yes is asked for")
+            #expect(reviewer.seen.first?.request.text.contains("lemon cake") == true)
+            #expect(reviewer.seen.last?.request.text.contains("lemon cake") == false)
+            #expect(reviewer.seen.last?.request.text.contains("Bring the [private] on Friday.") == true)
+            for sent in transport.sent {
+                #expect(!sent.text.contains("lemon cake"), "sent unmasked")
+            }
+            let messages = transport.sent.filter { $0.url.path == "/v1/reply" }
+            if second == .cancel {
+                #expect(transport.sent.count == 1, "only the first sign-in hop went")
+                #expect(messages.isEmpty)
+            } else {
+                #expect(messages == [try #require(reviewer.seen.last).request])
+            }
+        }
+    }
+
+    /// A private word added while the preview waits for its yes: that yes
+    /// sends nothing, not even the sign-in hop, and only a new yes to a
+    /// fresh preview does.
+    @Test func aPrivateWordAddedBeforeTheYesSendsNoHopOfThatPreview() async throws {
+        let hop = CloudSignIn(path: "v1/sign-in", body: Data(#"{"device":"made-up"}"#.utf8))
+        let words = Words()
+        let transport = RecordingTransport()
+        let reviewer = ScriptedReviewer(answers: [.send, .cancel]) { words.add("lemon cake") }
+        let cloud = CloudModel(endpoint: endpoint, transport: transport, reviewer: reviewer,
+                               auth: SampleAuth(signIn: hop), redactor: { Redactor(privateWords: words.list) })
+        await #expect(throws: CloudModelError.notSent) {
+            try await cloudChat().sending("Bring the lemon cake on Friday.", with: cloud)
+        }
+        #expect(reviewer.seen.count == 2)
+        #expect(transport.sent.isEmpty)
+    }
+
     // MARK: Notes that can't be read
 
     @Test func unreadableNotesSendNothingAndShowNothing() async {
@@ -1241,6 +1294,69 @@ final class HopThenTransport: CloudTransport, @unchecked Sendable {
             return Data(#"{"token":"made-up"}"#.utf8)
         }
         throw URLError(.networkConnectionLost)
+    }
+}
+
+/// The private words, as a list the test can add to while a reply is under way.
+final class Words: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _list: [String] = []
+    var list: [String] { lock.withLock { _list } }
+    func add(_ word: String) { lock.withLock { _list.append(word) } }
+}
+
+/// Records every request and answers each. The first sign-in hop adds
+/// `word` to the private words while it is on the wire, as the person
+/// adding one then would.
+final class SignInAddsAWordTransport: CloudTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _sent: [CloudRequest] = []
+    private let words: Words
+    private let word: String
+
+    init(words: Words, word: String) {
+        self.words = words
+        self.word = word
+    }
+
+    var sent: [CloudRequest] { lock.withLock { _sent } }
+
+    func send(_ request: CloudRequest) async throws -> Data {
+        let first = lock.withLock {
+            _sent.append(request)
+            return _sent.count == 1
+        }
+        if request.url.path == "/v1/reply" {
+            return try JSONEncoder().encode(["reply": "Here's a short note you can send."])
+        }
+        if first { words.add(word) }
+        return Data(#"{"token":"made-up"}"#.utf8)
+    }
+}
+
+/// Records every preview and gives the next answer in `answers`, then
+/// cancel once they run out. `whileFirstShows` runs before the first
+/// answer, as something the person does while the preview is up.
+final class ScriptedReviewer: CloudReviewing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _seen: [CloudPreview] = []
+    private var answers: [CloudConsent]
+    private let whileFirstShows: @Sendable () -> Void
+
+    init(answers: [CloudConsent], whileFirstShows: @escaping @Sendable () -> Void = {}) {
+        self.answers = answers
+        self.whileFirstShows = whileFirstShows
+    }
+
+    var seen: [CloudPreview] { lock.withLock { _seen } }
+
+    func review(_ preview: CloudPreview) async -> CloudConsent {
+        let first = lock.withLock {
+            _seen.append(preview)
+            return _seen.count == 1
+        }
+        if first { whileFirstShows() }
+        return lock.withLock { answers.isEmpty ? .cancel : answers.removeFirst() }
     }
 }
 

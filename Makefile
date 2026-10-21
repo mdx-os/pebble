@@ -1,6 +1,6 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify verify-ci generate test release-test repeat-test mutation-check mutation-manifest-check mutation-manifest-check-test build build-release build-release-simulator archive screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check privacy-check privacy-check-test local-config-check private-check hash-private-words graph-check graph-check-test comment-lint hash-names secrets-check pulse clean
+.PHONY: verify verify-ci generate test release-test repeat-test mutation-check mutation-manifest-check mutation-manifest-check-test build build-release build-release-simulator archive screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check privacy-check privacy-check-test local-config-check private-check hash-private-words graph-check graph-check-test comment-lint secrets-check pulse clean
 
 ## verify: everything CI runs. Run this before every PR. It is verify-ci and
 ## then the full mutation check, which CI runs as a job of its own beside
@@ -169,15 +169,11 @@ local-config-check:
 	sh scripts/local-config-check.sh
 
 ## comment-lint: no review history or personal names in code comments. The
-## names are held as salted hashes in Config/comment-lint-names.sha256
+## names are checked only when COMMENT_LINT_NAMES names a list kept outside
+## the repository; without one the lint says so and checks the rest
 comment-lint:
 	sh scripts/comment-lint.sh --self-test
 	sh scripts/comment-lint.sh
-
-## hash-names: rebuild Config/comment-lint-names.sha256 from the git-ignored
-## Config/comment-lint-names.local.txt, keeping its salt
-hash-names:
-	sh scripts/comment-lint.sh --hash-names
 
 ## private-check: fail on any file in git with a word whose hash is in
 ## Config/private-words.sha256, printing the file and line, never the word.

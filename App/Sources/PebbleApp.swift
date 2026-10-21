@@ -53,25 +53,25 @@ struct PebbleApp: App {
         #if os(macOS)
         SnapshotMode.runIfRequested(brand: brand)
         #endif
-        // One notes store, given to the setting and the task engine both,
-        // so the redactor and the engine read the same notes.
-        let memory = try? MemoryStore.onDevice()
         // The setting is kept next to the notes. If either can't be opened,
         // nothing typed into the setting could be kept, so it reads as off,
         // can't be turned on, and says so plainly. The notes store is held
         // either way, with or without a cloud address.
-        _cloud = State(initialValue: CloudHelp.forApp(
-            memory: memory,
+        let cloud = CloudHelp.forApp(
+            memory: try? MemoryStore.onDevice(),
             endpoint: CloudEndpoint.url(infoDictionary: Bundle.main.infoDictionary),
             openStore: { try CloudHelpFileStore.onDevice() }
-        ))
+        )
+        _cloud = State(initialValue: cloud)
         // Before launch finishes, so a nudge opened from the lock screen
         // reaches Today even when it starts the app. Asks for nothing.
         LocalQuestionNotifier.shared.install()
         let kept = (try? TaskStore.onDevice()) ?? TaskStore.forgetOnly()
         self.kept = kept
         let model = self.model
-        let tasks = memory.map { OnDeviceTasks.engine(model: model, notes: $0, store: kept) }
+        // The engine reads the notes from the setting, so it and the
+        // redactor read one store.
+        let tasks = cloud.memory.map { OnDeviceTasks.engine(model: model, notes: $0, store: kept) }
         self.tasks = tasks
         // The person's grants, read only while the device is unlocked. The
         // rule consults them before it asks; only the question sheet adds one.

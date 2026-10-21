@@ -36,10 +36,11 @@ jobs:
       - name: Private words check
         run: make private-check
 
-      # The comment lint needs no secret: it checks names against the salted
-      # hashes in Config/comment-lint-names.sha256, so a fork's pull request
-      # is checked the same as any other. This is make verify but the
-      # mutation check, which runs in full in the job below.
+      # The comment lint gets no names list here, so a fork's pull request
+      # is checked the same as any other: review history everywhere, and
+      # names only on a machine where the lint is pointed at a list kept
+      # outside the repository. This is make verify but the mutation
+      # check, which runs in full in the job below.
       - name: Verify
         run: make verify-ci
 

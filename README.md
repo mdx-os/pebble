@@ -92,7 +92,9 @@ chooses one.
   every header including the Host, Content-Length, Cache-Control and
   Connection lines the system adds, and body, before it is sent; a test
   against a listener on the Mac's own loopback address holds the lines
-  that arrive up against the card's. Redirects, plain http and the header
+  that arrive over HTTP/1.1 up against the card's. That is the only
+  protocol tested: over HTTP/2 the system leaves out the Connection line,
+  so the card may show a line more than went. Redirects, plain http and the header
   names URLSession reserves are refused. Words of crisis and chats that promised to stay on
   the device are never sent, and nothing is sent when the notes or private
   words can't be read. The setting and the private words are kept next to
@@ -104,8 +106,8 @@ chooses one.
   which the hop's Content-Length still shows. Since its values are
   covered, sign-in may carry only a credential or a device token: a name
   or value with a name, a private word or another personal detail in it,
-  a name that isn't a short token, or a body that isn't a few short
-  values, is refused before anything is shown or sent. What goes is those
+  a name that isn't a short token, or a body that isn't a flat object of
+  short values, is refused before anything is shown or sent. What goes is those
   checked values, written again, never the body sign-in handed over. The
   check knows only what the redactor knows, so the rest rests on the
   `CloudAuth` contract. The transport keeps and
