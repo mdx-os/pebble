@@ -12,7 +12,11 @@
 # ignored any other way fail too: .IGNORE naming archive or naming none,
 # -$(MAKE) archive, $(MAKE) archive || true, $(MAKE) -i archive,
 # MAKEFLAGS += -i, -/usr/bin/xcodebuild, -$(XB) with XB := xcodebuild,
-# .ONESHELL, SHELL set, and an include this check can't read. So do a new
+# .ONESHELL, SHELL set, and an include this check can't read, and so do
+# SHELL, .SHELLFLAGS, MAKEFLAGS or MFLAGS set for archive alone or on a
+# $(MAKE) archive line, $(IGN)xcodebuild and @${IGN}xcodebuild with
+# IGN := -, .IGNORE naming archive through a variable, and a prerequisite
+# of verify given through a variable whose recipe ignores errors. So do a new
 # Release build with its action after the options or with none, the macOS
 # archive turned into -showBuildSettings, given an option the check
 # doesn't know, or of another scheme. An archive with no -configuration
@@ -214,6 +218,49 @@ expect fail "the macOS archive with an option this check doesn't know" "$cant_re
 fresh
 change "s~(xcodebuild archive [^\n]*-scheme )Pebble([^\n]*\\\\\n[^\n]*'generic/platform=macOS')~\$1Other\$2~"
 expect fail "the macOS archive of another scheme" "make verify runs xcodebuild on another scheme or project"
+
+for name in SHELL .SHELLFLAGS MAKEFLAGS MFLAGS; do
+  case "$name" in
+    SHELL) value=/usr/bin/true ;;
+    .SHELLFLAGS) value=-c ;;
+    *) value=-i ;;
+  esac
+
+  fresh
+  change "s~(\n\.PHONY:)~\narchive: $name := $value\$1~"
+  expect fail "$name set for archive alone" "for one target"
+
+  fresh
+  change "$drop_archive"
+  change "s~(\n\t\\\$\(MAKE\) graph-check\n)~\$1\t\\\$(MAKE) archive $name=$value\n~"
+  expect fail "archive run as \$(MAKE) archive $name=$value" "make verify runs a sub-make this check can't read"
+done
+
+fresh
+change "s~(\n\.PHONY:)~\nIGN := -\$1~"
+change "s~\txcodebuild archive ([^\n]*\\\\\n[^\n]*'generic/platform=macOS')~\t\\\$(IGN)xcodebuild archive \$1~"
+expect fail "the macOS archive run as \$(IGN)xcodebuild with IGN := -" "make archive runs a recipe line that starts with a variable"
+
+fresh
+change "s~(\n\.PHONY:)~\nIGN := -\$1~"
+change "s~\txcodebuild archive ([^\n]*\\\\\n[^\n]*'generic/platform=macOS')~\t@\\\${IGN}xcodebuild archive \$1~"
+expect fail "the macOS archive run as @\${IGN}xcodebuild with IGN := -" "make archive runs a recipe line that starts with a variable"
+
+fresh
+change "s~(\n\.PHONY:)~\nIGNORED_TARGETS := archive\n.IGNORE: \\\$(IGNORED_TARGETS)\$1~"
+expect fail ".IGNORE naming archive through \$(IGNORED_TARGETS)" "names its targets through a variable"
+
+fresh
+change "s~(\n\.PHONY:)~\nIGNORED_TARGETS := archive\n.IGNORE: \\\${IGNORED_TARGETS}\$1~"
+expect fail ".IGNORE naming archive through \${IGNORED_TARGETS}" "names its targets through a variable"
+
+fresh
+change "s~$verify_line build-release-simulator\b~\$1~"
+change "s~(\n\.PHONY:)~\nSIMULATOR := build-release-simulator\$1~"
+change "s~($verify_line)\n~\$1 \\\$(SIMULATOR)\n~"
+change "s~(\nbuild-release-simulator:[^\n]*\n\t)xcodebuild~\$1-xcodebuild~"
+expect fail "build-release-simulator reached only through \$(SIMULATOR), with its errors ignored" "make verify names a prerequisite through a variable"
+
 if [ "$failures" -ne 0 ]; then
   echo "verify-coverage-check-test: $failures case(s) went the wrong way"
   exit 1

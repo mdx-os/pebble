@@ -1,7 +1,7 @@
 #!/bin/sh
 # Fails unless `make verify` builds every Release build `make build-release`
-# does. verify runs only build-release-simulator, because its macOS archive
-# is the same Release build for the Mac; this check keeps that true. It
+# does. verify runs only build-release-simulator, because its macOS Release
+# archive stands in for the Mac's Release build; this check keeps it there. It
 # reads `make -n verify` and requires a Release build for the iOS
 # Simulator, Release archives for iOS and for macOS, and a Release build or
 # archive in verify for every platform `make -n build-release` builds.
@@ -171,11 +171,20 @@ xcodebuilds() {
 # marked `-`, whatever it runs, a target named in `.IGNORE` (or an
 # `.IGNORE` naming none, which covers them all), and a `$(MAKE)` line that
 # is more than `$(MAKE)`, a few plain flags, NAME=value words and targets,
-# such as `$(MAKE) archive || true` or `$(MAKE) -i archive`. In the whole
-# Makefile: MAKEFLAGS or MFLAGS given -i or --ignore-errors, `.ONESHELL`
-# (one shell for a recipe, which goes on past a failed line), SHELL or
-# .SHELLFLAGS set, and an include, whose file this never reads. -k is
-# fine: make still fails at the end.
+# such as `$(MAKE) archive || true` or `$(MAKE) -i archive`, or that sets
+# SHELL, MAKEFLAGS, MFLAGS or a name starting with a dot, such as
+# .SHELLFLAGS. Make reads a line's -, @ and + after expanding it, so a
+# recipe line there that starts with a variable other than `$(MAKE)`, as
+# `$(IGN)xcodebuild` with IGN := -, fails too, and so does a prerequisite
+# given through a variable, which this check can't follow. In the whole
+# Makefile: MAKEFLAGS or MFLAGS given -i or --ignore-errors, or anything
+# through a variable, `.ONESHELL` (one shell for a recipe, which goes on
+# past a failed line), SHELL or .SHELLFLAGS set, SHELL, .SHELLFLAGS,
+# MAKEFLAGS or MFLAGS set for one target, an `.IGNORE` or a rule's targets
+# named through a variable, a variable named through another, an eval,
+# and an include, whose file this never reads. Where it can't be sure
+# what a variable holds, it fails. -k is fine: make still fails at the
+# end.
 problems="$(perl -e '
   local $/;
   my $all = <>;
@@ -191,11 +200,17 @@ problems="$(perl -e '
     if ($l =~ /^\s*-?s?include\s/) {
       print "global the Makefile includes another file, which this check never reads: $l\n";
     }
-    if ($l =~ /\b(?:MAKEFLAGS|MFLAGS)\b[^=]*=(.*)/ && $ignores->(split " ", $1)) {
-      print "global the Makefile sets MAKEFLAGS to ignore errors: $l\n";
+    if ($l =~ /\b(?:MAKEFLAGS|MFLAGS)\b[^=]*=(.*)/ && ($ignores->(split " ", $1) || $1 =~ /\$/)) {
+      print "global the Makefile sets MAKEFLAGS to ignore errors, or through a variable: $l\n";
     }
-    if ($l =~ /^\s*(?:export\s+|override\s+)*(?:SHELL|\.SHELLFLAGS)\s*[:+?!]?=/) {
+    if ($l =~ /^\s*(?:(?:export|unexport|override|private|define)\s+)*(?:SHELL|\.SHELLFLAGS)\b/) {
       print "global the Makefile sets SHELL or .SHELLFLAGS, so this check cannot tell how a failed line ends: $l\n";
+    }
+    if ($l =~ /^\s*(?:(?:export|unexport|override|private|define)\s+)*[^\s:=#]*\$[^\s:=#]*\s*(?:[:+?!]?=|\z)/) {
+      print "global the Makefile names a variable through another variable, so this check cannot tell what it sets: $l\n";
+    }
+    if ($l =~ /\$[({]eval\s/) {
+      print "global the Makefile uses eval, whose lines this check never reads: $l\n";
     }
     if ($l =~ /^\.ONESHELL\s*:/) {
       print "global the Makefile sets .ONESHELL, so a failed line in a recipe would not stop it\n";
@@ -203,7 +218,20 @@ problems="$(perl -e '
     if ($l =~ /^([^\s:=#][^:=#]*?)\s*:(?![=:])\s*([^;#]*)(?:;(.*))?/) {
       my ($names, $prereqs, $inline) = ($1, $2, $3);
       @current = split " ", $names;
-      if ($names eq ".IGNORE") {
+      if ($names =~ /\$/) {
+        print "global the Makefile names a rule\x27s targets through a variable, so this check cannot tell whose recipe is whose: $l\n";
+      }
+      if ($prereqs =~ /^(?:(?:export|unexport|override|private)\s+)*([^\s:=#]+)\s*[:+?!]?=/) {
+        my $name = $1;
+        if ($name =~ /^(?:SHELL|\.SHELLFLAGS|MAKEFLAGS|MFLAGS)\z/ || $name =~ /\$/) {
+          print "global the Makefile sets $name for one target, so this check cannot tell how a failed line there ends: $l\n";
+        }
+        next;
+      }
+      if (grep { $_ eq ".IGNORE" } @current) {
+        if ($prereqs =~ /\$/) {
+          print "global the Makefile\x27s .IGNORE names its targets through a variable, so this check cannot tell which errors it ignores: $l\n";
+        }
         $ignore{$_} = 1 for split " ", $prereqs;
         $ignoreall = 1 unless $prereqs =~ /\S/;
       }
@@ -220,15 +248,20 @@ problems="$(perl -e '
   while (defined(my $t = shift @todo)) {
     next if $seen{$t}++;
     push @todo, @{$deps{$t} || []};
+    print "varprereq $t\n" if grep { /\$/ } @{$deps{$t} || []};
     print "ignored $t\n" if $ignoreall || $ignore{$t};
     for my $line (@{$lines{$t} || []}) {
       my ($mark, $body) = $line =~ /^\t([\s@+-]*)(.*)/;
       print "ignored $t\n" if $mark =~ /-/;
+      if ($body =~ /^\$(?!\$)/ && $body !~ /^\$[({]MAKE[)}](?:\s|\z)/) {
+        print "varstart $t $body\n";
+      }
       next unless $body =~ /\$[({]MAKE[)}]/;
       my ($rest) = $body =~ /^\$[({]MAKE[)}](\s.*|)\z/;
       my @words = split " ", $rest // "";
       my $plain = defined $rest && $rest !~ /[;&|()<>`#"\x27\\\$]/
         && !(grep { /^-/ && !/^-(?:s|j\d*|-silent|-no-print-directory)\z/ } @words)
+        && !(grep { /^(?:SHELL|MAKEFLAGS|MFLAGS|\.[^=]*)=/ } @words)
         && !$ignores->(@words);
       print "submake $t $body\n" unless $plain;
       push @todo, grep { !/^-/ && !/=/ } @words;
@@ -244,7 +277,13 @@ printf '%s\n' "$problems" | sed -n 's/^submake //p' | while IFS= read -r line; d
   echo "verify-coverage-check: make ${line%% *} runs a sub-make this check can't read, which could hide a failed build: ${line#* }"
   echo "verify-coverage-check: write it as \$(MAKE) and its targets alone"
 done
-if printf '%s\n' "$problems" | grep -qE '^(global|ignored|submake) '; then status=1; fi
+for target in $(printf '%s\n' "$problems" | sed -n 's/^varprereq //p' | sort -u); do
+  echo "verify-coverage-check: make $target names a prerequisite through a variable, so this check cannot follow it to its recipe"
+done
+printf '%s\n' "$problems" | sed -n 's/^varstart //p' | while IFS= read -r line; do
+  echo "verify-coverage-check: make ${line%% *} runs a recipe line that starts with a variable, which could mark it - and ignore its errors: ${line#* }"
+done
+if printf '%s\n' "$problems" | grep -qE '^(global|ignored|submake|varprereq|varstart) '; then status=1; fi
 
 verify="$(xcodebuilds verify)" || exit 1
 release="$(xcodebuilds build-release)" || exit 1
