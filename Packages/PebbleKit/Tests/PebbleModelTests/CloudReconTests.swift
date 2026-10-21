@@ -454,11 +454,25 @@ struct CloudReconTests {
     }
 
     @Test func theCloudIsUsedOnlyWhenItIsOn() {
-        let on = ModelChoice.model(settings: CloudHelpSettings(isOn: true), endpoint: endpoint, local: LocalStubModel()) { _ in
+        let on = ModelChoice.model(settings: CloudHelpSettings(isOn: true, for: endpoint), endpoint: endpoint, local: LocalStubModel()) { _ in
             cloud(RecordingTransport(), RecordingReviewer(answer: .send))
         }
         #expect(ReconSummarizers.choose(for: on) is CloudReconSummarizer)
         #expect(ReconSummarizers.choose(for: LocalStubModel()) is LocalReconSummarizer)
+    }
+
+    /// A yes given for another address is no yes here, so a summary is put
+    /// together on this device and no cloud model is made for it.
+    @Test func aSummaryUsesTheCloudOnlyWithTheYesForThisAddress() {
+        let elsewhere = URL(string: "https://other.example.com")!
+        var made = 0
+        let model = ModelChoice.model(settings: CloudHelpSettings(isOn: true, for: elsewhere), endpoint: endpoint,
+                                      local: LocalStubModel()) { _ in
+            made += 1
+            return cloud(RecordingTransport(), RecordingReviewer(answer: .send))
+        }
+        #expect(ReconSummarizers.choose(for: model) is LocalReconSummarizer)
+        #expect(made == 0)
     }
 
     @Test func thePromptReadsPlainlyAndHasNoDashes() {

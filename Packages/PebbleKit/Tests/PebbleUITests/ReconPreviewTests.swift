@@ -19,7 +19,7 @@ struct ReconPreviewTests {
     /// Today as the home screen makes it, with the cloud on.
     func cloudToday(transport: @escaping @Sendable () -> any CloudTransport,
                     notes: MemoryStore) throws -> (FeedModel, ReconRunner, CloudHelp) {
-        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)), endpoint: endpoint,
                               memory: notes, transport: transport)
         let model = HomeView.reconFeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()),
                                             tasks: nil, drivesTasks: false, reading: ReconTestData.sources,
@@ -154,6 +154,45 @@ struct ReconPreviewTests {
         #expect(!runner.sentToCloud(id))
     }
 
+    /// A summary's request is on the wire when the cloud is turned off. Its
+    /// send is cancelled, as an open chat's is, and nothing more goes.
+    @Test func turningOffEndsASummarysSendOnTheWire() async throws {
+        let maker = TransportMaker(hangs: true)
+        let notes = ShowcaseScene.emptyMemory()
+        defer { discard(notes) }
+        let (model, runner, cloud) = try cloudToday(transport: { maker.make() }, notes: notes)
+        #expect(model.lookInto(SampleSources.poolTopic))
+        runner.advance(by: 12)
+        let shown = await model.cloudReview.shown()
+        model.cloudReview.answer(.send, for: shown.id)
+        #expect(await finishes { await maker.wire.started() }, "nothing reached the wire")
+        cloud.turnOff()
+        #expect(await finishes { await maker.wire.whenCancelled() }, "the summary's send was never cancelled")
+        #expect(maker.wire.sent.count == 1)
+        // Whatever happened above, nothing is left waiting on the wire.
+        _ = runner.clear()
+    }
+
+    /// Forget everything ends a summary's send on the wire before anything
+    /// is erased, as it does an open chat's, and says that what went may be
+    /// in the cloud now.
+    @Test func forgetEverythingEndsASummarysSendOnTheWire() async throws {
+        let maker = TransportMaker(hangs: true)
+        let notes = ShowcaseScene.emptyMemory()
+        defer { discard(notes) }
+        let (model, runner, cloud) = try cloudToday(transport: { maker.make() }, notes: notes)
+        #expect(model.lookInto(SampleSources.poolTopic))
+        runner.advance(by: 12)
+        let shown = await model.cloudReview.shown()
+        model.cloudReview.answer(.send, for: shown.id)
+        #expect(await finishes { await maker.wire.started() }, "nothing reached the wire")
+        let memory = HomeView.memoryModel(store: notes, place: .mayLeaveDevice, cloud: cloud, feed: model)
+        memory.forgetEverything()
+        #expect(await finishes { await maker.wire.whenCancelled() }, "the summary's send was never cancelled")
+        #expect(memory.status?.contains(CloudWords.sentCantBeErased) == true)
+        #expect(maker.wire.sent.count == 1)
+    }
+
     /// Stopping one run leaves another run's preview waiting as it was.
     @Test func stopTakesAwayOnlyItsOwnPreview() async throws {
         let maker = TransportMaker()
@@ -187,6 +226,7 @@ struct ReconPreviewTests {
         let id = try #require(runner.tasks.first?.id)
         engine.advance(by: 30)
         await eventually { runner.summariesMayLeaveDevice == 1 }
+        #expect(runner.summariesMayLeaveDevice == 1)
         model.stop(try #require(runner.tasks.first { $0.id == id }))
         await gate.open()
         await eventually { heard.answers.count == 1 }
@@ -250,7 +290,7 @@ struct ReconPreviewTests {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
         defer { discard(notes) }
-        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let engine = ReplayEngine()
         let runner = ReconRunner(engine: engine, provider: ReconTestData.sources, now: { [morning] in morning })

@@ -34,6 +34,10 @@ struct OneNotesStoreTests {
             #expect(!text.contains("MemoryStore(fileURL"), "\(file.lastPathComponent) makes a store")
         }
         #expect(opened == 1)
+        // The task engine reads its notes from the setting, so it and the
+        // redactor read one store.
+        let entry = try code(app.appendingPathComponent("Sources/PebbleApp.swift"))
+        #expect(entry.contains("let tasks = cloud.memory.map { OnDeviceTasks.engine("))
         let makers = try swiftFiles(in: Self.root.appendingPathComponent("Sources")).filter {
             try code($0).contains("MemoryStore(fileURL")
         }.map(\.lastPathComponent).sorted()

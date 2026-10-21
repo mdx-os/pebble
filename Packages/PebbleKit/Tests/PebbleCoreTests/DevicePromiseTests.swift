@@ -108,12 +108,24 @@ struct DevicePromiseTests {
     /// sees.
     static let allowedResources: [AllowedResource] = [
         AllowedResource(file: "project.yml",
-                        text: "        # Empty unless set in Config/Cloud.xcconfig. Empty means no cloud model.",
+                        text: "        # Empty unless set in Config/Cloud.local.xcconfig, which git ignores.",
+                        reason: "A YAML comment beside the cloud address setting. It never reaches the plist or "
+                            + "the screen, and it names the file the address comes from, not where words go."),
+        AllowedResource(file: "project.yml",
+                        text: "        # Empty means no cloud model, and every build but Debug must keep it empty.",
                         reason: "A YAML comment beside the cloud address setting. It never reaches the plist or "
                             + "the screen, and it says when there is no cloud model, not where words go."),
         AllowedResource(file: "App/Info.plist", text: speechUsage, reason: speechUsageReason),
         AllowedResource(file: "project.yml", text: "        NSSpeechRecognitionUsageDescription: " + speechUsage,
                         reason: speechUsageReason),
+        AllowedResource(file: "project.yml",
+                        text: "    # Every build checks first, so any build with a cloud address fails",
+                        reason: "A YAML comment over the build check that fails a Release build with a cloud "
+                            + "address. It never reaches the plist or the screen."),
+        AllowedResource(file: "project.yml",
+                        text: "      - name: No cloud address in Release",
+                        reason: "The name of that build phase, seen only in Xcode's build log, never by a person "
+                            + "using the app, and it says the cloud is kept out of a build."),
     ]
 
     /// The speech recognition question's words, which the system shows.

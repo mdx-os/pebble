@@ -1,3 +1,23 @@
+# The task ledger on Today. The first entry breaks its test a second way
+# beside its entry in scripts/mutation-manifest.txt; the other two replace
+# manifest entries that no longer applied after the task engine changes.
+
+# Today: a task no engine picked up at launch says it stopped.
+test: atLaunchATaskNoEngineHasSaysItStopped
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~        ledger\?\.launch\(live: tasks\?\.tasks \?\? \[\],\n\s*restorationComplete: [^\n]*\)\n~~
+
+# Every simultaneous completion reaches observers before the engine's trim.
+test: thirteenTasksFinishingTogetherAllReachTheirLedgers
+file: Packages/PebbleKit/Sources/PebbleCore/LocalFakeEngine.swift
+perl: s~        lockRuns\(\)\n        let after = runs~        lockRuns()\n        dropOldEnded()\n        let after = runs~
+perl: s~\.filter \{ runs\[\$0\]\.endTold \}~.filter { _ in true }~
+
+# Restored outcomes are recorded before the launch sweep.
+test: finalQuestionExpiringWhileClosedKeepsItsFinish
+file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
+perl: s~        if let flow, let keeper \{\n            flow\.store\.restore~        ledger?.launch(live: tasks?.tasks ?? [], restorationComplete: true)\n        if let flow, let keeper {\n            flow.store.restore~
+
 # The retry and resume kit (docs/RETRY.md). A finished step whose
 # checkpoint is never kept is done again after the app closes.
 test: closingMidTaskThenPickingUpRepeatsNothing aRunThatCannotKeepItsPlaceStopsThere
@@ -111,3 +131,8 @@ perl: s~guard kept\.unreadable\.keys\.allSatisfy\(\{ all\[\$0\] == nil \}\) else
 test: aRecordNoOneCanUnderstandCostsOnlyItsOwnTask
 file: Packages/PebbleKit/Sources/PebbleCore/CheckpointRunner.swift
 perl: s~kept\.unreadable\[taskID\] = nil\n~~
+
+# The app's task engine reads the setting's notes store, the one the redactor reads.
+test: theAppMakesOneNotesStore
+file: App/Sources/PebbleApp.swift
+perl: s~let tasks = cloud\.memory\.map \{ OnDeviceTasks~let tasks = (try? MemoryStore.onDevice()).map { OnDeviceTasks~

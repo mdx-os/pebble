@@ -757,7 +757,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         let memory = sampleMemory()
         let auth = SampleSignIn()
         let help = CloudHelp(
-            store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"])),
+            store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: sampleEndpoint, privateWords: ["lemon cake"])),
             endpoint: sampleEndpoint, memory: memory, auth: auth, transport: { NoSendTransport() }
         )
         let review = CloudReview()
@@ -767,7 +767,8 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
         let conversation = Conversation(turns: turns, place: model.privacyPlace)
         let redactor = Redactor(memory: memory.notes(), privateWords: help.settings.privateWords)
         if let preview = try? CloudModel.preview(for: turns, endpoint: sampleEndpoint, redactor: redactor,
-                                                 headers: auth.headers(for: CloudModel.url(for: sampleEndpoint))) {
+                                                 headers: auth.headers(for: CloudModel.url(for: sampleEndpoint)),
+                                                 signIn: auth.signIn(for: sampleEndpoint)) {
             review.show(preview)
         }
         let controller = ChatController.make(brand: brand, model: model, names: InMemoryAgentNameStore(stored: "Pip"),
@@ -859,9 +860,21 @@ struct NoSendTransport: CloudTransport {
     }
 }
 
-/// The showcase's sign-in: one made-up header, so the preview shows how a
-/// sign-in label looks and VoiceOver can be heard leaving its value out.
+/// The showcase's sign-in: a made-up sign-in hop, so the preview shows how
+/// one looks ahead of the message, and one made-up header, so it shows a
+/// sign-in label with its value covered and VoiceOver leaving it out.
+/// Tests give it other values, to see what sign-in may never carry.
 struct SampleSignIn: CloudAuth {
-    func headers(for url: URL) -> [String: String] { ["X-Sample-Sign-In": "made-up-sample"] }
+    var header = "made-up-sample"
+    var device = "made-up-sample-device"
+    var headerName = "X-Sample-Sign-In"
+    var bodyKey = "device"
+
+    func headers(for url: URL) -> [String: String] { [headerName: header] }
+
+    func signIn(for endpoint: URL) -> CloudSignIn? {
+        let body = (try? JSONEncoder().encode([bodyKey: device])) ?? Data()
+        return CloudSignIn(path: "v1/sign-in", body: body)
+    }
 }
 #endif

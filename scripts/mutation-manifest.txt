@@ -640,11 +640,6 @@ test: anEvictedEndIsNotRecreatedByAnUnchangedSnapshot aLongTaskOutlastsSixtyEarl
 file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
 perl: s~        guard last\[key\]\?\.state\.isFinished != true else \{ return \}\n~~
 
-# Every simultaneous completion reaches observers before the engine's trim.
-test: thirteenTasksFinishingTogetherAllReachTheirLedgers
-file: Packages/PebbleKit/Sources/PebbleCore/LocalFakeEngine.swift
-perl: s~        lockRuns\(\)\n        let after = runs~        lockRuns()\n        dropOldEnded()\n        let after = runs~
-
 # Folder proofs cannot traverse a symlink out of the root.
 test: aFolderRejectsSymlinksOutsideItsRoot
 file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
@@ -737,11 +732,6 @@ perl: s~ \|\| hadLedgers,~,~
 test: aFolderRejectsSymlinksOutsideItsRoot
 file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
 perl: s~let resolvedRoot = root\.resolvingSymlinksInPath\(\)~let resolvedRoot = root~
-
-# The initial observation records restored outcomes before the launch sweep.
-test: finalQuestionExpiringWhileClosedKeepsItsFinish
-file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
-perl: s~        let hops = pendingRefreshes\n        watching = tasks\?\.observe~        launchLedger()\n        let hops = pendingRefreshes\n        watching = tasks?.observe~
 
 # Terminal tasks in the reconciled snapshot are present, never orphans.
 test: reconciledTerminalTaskIsNotAnOrphan

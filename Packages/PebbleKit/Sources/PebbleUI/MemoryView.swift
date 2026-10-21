@@ -34,7 +34,9 @@ public struct MemoryView: View {
     public init(store: MemoryStore, place: PrivacyPlace, cloud: CloudHelp? = nil, background: BackgroundRunner? = nil,
                 grants: GrantBook? = nil,
                 onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none }) {
-        _model = StateObject(wrappedValue: MemoryModel(store: store, place: place, alsoForget: Self.alsoForget(cloud),
+        _model = StateObject(wrappedValue: MemoryModel(store: store, place: place,
+                                                       endsCloudChats: Self.endsCloudChats(cloud),
+                                                       alsoForget: Self.alsoForget(cloud),
                                                        background: background, grants: grants,
                                                        onForgetEverything: onForgetEverything))
         self.place = place
@@ -73,6 +75,14 @@ public struct MemoryView: View {
     static func alsoForget(_ cloud: CloudHelp?) -> (@MainActor () throws -> CloudHelp.Forgot)? {
         guard let cloud else { return nil }
         return { try cloud.forgetPrivateWords() }
+    }
+
+    /// What Forget everything does before anything else, when there is a
+    /// cloud setting: it ends every open cloud chat, and says whether
+    /// anything was handed to the cloud this session.
+    static func endsCloudChats(_ cloud: CloudHelp?) -> (@MainActor () -> Bool)? {
+        guard let cloud else { return nil }
+        return { cloud.endOpenCloudChats() }
     }
 
     /// The Forget everything question's words: they name the private words
@@ -927,6 +937,9 @@ final class MemoryModel: ObservableObject {
     /// Anything else Forget everything erases: the private words, and
     /// sometimes the cloud setting with them.
     private let alsoForget: (@MainActor () throws -> CloudHelp.Forgot)?
+    /// Runs first of all: ends every open cloud chat, and says whether
+    /// anything was handed to the cloud this session.
+    private let endsCloudChats: (@MainActor () -> Bool)?
 
     /// Forgets what lives outside the memory file, such as tasks.
     private let onForgetEverything: @MainActor () -> ClearedTasks
@@ -994,7 +1007,8 @@ final class MemoryModel: ObservableObject {
     /// With `othersChanged`, the screen looks again each time it fires, as
     /// when a task elsewhere makes or erases its file, so Forget everything
     /// shows while there is anything to erase.
-    init(store: MemoryStore, place: PrivacyPlace, alsoForget: (@MainActor () throws -> CloudHelp.Forgot)? = nil,
+    init(store: MemoryStore, place: PrivacyPlace, endsCloudChats: (@MainActor () -> Bool)? = nil,
+         alsoForget: (@MainActor () throws -> CloudHelp.Forgot)? = nil,
          background: BackgroundRunner? = nil, grants: GrantBook? = nil, now: @escaping () -> Date = { Date() },
          onForgetEverything: @escaping @MainActor () -> ClearedTasks = { .none },
          othersStored: @escaping @MainActor () -> Bool = { false },
@@ -1003,6 +1017,7 @@ final class MemoryModel: ObservableObject {
          forgetQuotes: @escaping @MainActor (MemoryNote) -> QuotesForgotten = { _ in .notQuoted }) {
         self.store = store
         self.place = place
+        self.endsCloudChats = endsCloudChats
         self.alsoForget = alsoForget
         self.background = background
         self.grants = grants
@@ -1214,7 +1229,10 @@ final class MemoryModel: ObservableObject {
     /// Forget everything covers, then says what actually went.
     func forgetEverything() {
         cancelEdit()
-        // First, and even if a file can't be erased: the person asked to
+        // Before anything is erased, every open cloud chat ends, so no chat
+        // still holds what is about to go, and nothing more leaves from one.
+        let sent = endsCloudChats?() ?? false
+        // Then the rest, even if a file can't be erased: the person asked to
         // forget, and nothing here depends on the files. Each step runs
         // whatever happened to the ones before it.
         // Background work stops with the tasks it counts, so nothing runs
@@ -1237,7 +1255,7 @@ final class MemoryModel: ObservableObject {
         let rest = alsoForget.map { forget in try? forget() }
         // A step said yes to may have happened, so the line says so here too.
         status = Self.forgotLineWithTasks(notesGone: notesGone, rest: rest, cleared: tasks, summaries: summaries,
-                                          hadNotes: hadNotes)
+                                          hadNotes: hadNotes, sent: sent)
         let restGone = rest.map { $0 != nil } == true
         if notesGone || restGone || (tasks.forgotten > 0 && tasks.erased) || summaries == .erased {
             forgottenCount += 1
@@ -1248,16 +1266,20 @@ final class MemoryModel: ObservableObject {
     /// The same, with the tasks as the engine left them. Tasks whose file
     /// couldn't be erased are never called gone: the line says so, after
     /// what happened to everything else and before any step that may have
-    /// happened.
+    /// happened. With `sent`, as in `forgotLine`, nothing says "I no longer
+    /// have it", and what went to the cloud is said last but for any advice
+    /// to try again.
     static func forgotLineWithTasks(notesGone: Bool, rest: CloudHelp.Forgot??, cleared tasks: ClearedTasks,
-                                    summaries: Summaries? = nil, hadNotes: Bool = true) -> String {
+                                    summaries: Summaries? = nil, hadNotes: Bool = true, sent: Bool = false) -> String {
         guard !tasks.erased else {
             return forgotLine(notesGone: notesGone, rest: rest, tasksGone: tasks.forgotten > 0, summaries: summaries,
-                              underway: tasks.underwayLine, hadNotes: hadNotes)
+                              underway: tasks.underwayLine, hadNotes: hadNotes, sent: sent)
         }
+        // Worked out as if nothing was sent, so the tasks' sentence comes
+        // before the cloud's.
         let line = forgotLine(notesGone: notesGone, rest: rest, tasksGone: false, summaries: summaries,
                               hadNotes: hadNotes)
-        let said: String
+        var said: String
         if line == MemoryWords.forgotten {
             said = TaskWords.forgotNotesNotTasks
         } else if MemoryWords.retryAdvice.contains(where: { line.hasSuffix(" " + $0) }) {
@@ -1266,7 +1288,12 @@ final class MemoryModel: ObservableObject {
         } else {
             said = line + " " + TaskWords.couldNotEraseTasks
         }
-        return beforeRetry(said, [tasks.underwayLine].compactMap { $0 })
+        // Chosen by what went, as in `forgotLine`: with the cloud setting
+        // cleared too, the line opens with its words for after sending.
+        if sent, notesGone, rest == .some(.some(.privateWordsAndCloud)), said.hasPrefix(CloudWords.forgotAndCloudOff) {
+            said = CloudWords.forgotAndCloudOffAfterSending + said.dropFirst(CloudWords.forgotAndCloudOff.count)
+        }
+        return beforeRetry(said, [tasks.underwayLine, sent ? CloudWords.sentCantBeErased : nil].compactMap { $0 })
     }
 
     /// What Forget everything says went, from what each part did, with
@@ -1280,10 +1307,27 @@ final class MemoryModel: ObservableObject {
     /// try again then comes last. Where only the summaries stayed, the
     /// line names only what went: the notes only with `hadNotes`. With
     /// nothing to say of the summaries, `underway` simply follows the line.
+    ///
+    /// With `sent`, something was handed to the cloud this session, and a
+    /// copy of it may be there now. Nothing here can erase that, so the line
+    /// never says "I no longer have it", and says so plainly, just before
+    /// any advice to try again.
     static func forgotLine(notesGone: Bool, rest: CloudHelp.Forgot??, tasksGone: Bool,
-                           summaries: Summaries? = nil, underway: String? = nil, hadNotes: Bool = true) -> String {
-        let line = notesWordsAndTasksLine(notesGone: notesGone, rest: rest, tasksGone: tasksGone)
-        guard let summaries else { return [line, underway].compactMap { $0 }.joined(separator: " ") }
+                           summaries: Summaries? = nil, underway: String? = nil, hadNotes: Bool = true,
+                           sent: Bool = false) -> String {
+        let plain = notesWordsAndTasksLine(notesGone: notesGone, rest: rest, tasksGone: tasksGone)
+        // Chosen by what went, the same cases `notesWordsAndTasksLine` reads,
+        // not by the words of the line, so no "I no longer have it" can slip through.
+        let line = switch (sent, notesGone, rest) {
+        case (false, _, _): plain
+        case (true, true, nil), (true, true, .privateWords?): CloudWords.forgotAfterSending
+        case (true, true, .privateWordsAndCloud?): CloudWords.forgotAndCloudOffAfterSending
+        default: plain
+        }
+        let cloudCopy = sent ? CloudWords.sentCantBeErased : nil
+        guard let summaries else {
+            return [beforeRetry(line, [cloudCopy].compactMap { $0 }), underway].compactMap { $0 }.joined(separator: " ")
+        }
         let restWent = notesGone && (rest.map { $0 != nil } ?? true)
         let said: String
         let aboutSummaries: String?
@@ -1301,7 +1345,7 @@ final class MemoryModel: ObservableObject {
         case (.stayed, false):
             said = line; aboutSummaries = MemoryWords.summariesStayed
         }
-        return beforeRetry(said, [aboutSummaries, underway].compactMap { $0 })
+        return beforeRetry(said, [aboutSummaries, underway, cloudCopy].compactMap { $0 })
     }
 
     /// `line` with `sentences` after it, but before its advice to try

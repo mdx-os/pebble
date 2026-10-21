@@ -38,10 +38,9 @@ test: reviewFixedDiagnosticPathsAreRedacted
 file: scripts/private-check.swift
 perl: s~return diagnosticPath\(path, salt: salt, hashes: Set\(lines.dropFirst\(\)\)\)~return path~
 
-# Round-2 relay review: keep encoding covered.
-# Since round 5 every whole data reading is scanned beside the readings
-# after a BOM, so an entry that breaks a BOM's reading also breaks the
-# whole data reading in the same encoding, or it changes nothing.
+# Every encoding stays covered. Every whole data reading is scanned beside
+# the readings after a BOM, so an entry that breaks a BOM's reading also
+# breaks the whole data reading in the same encoding, or it changes nothing.
 test: review2UTF32IsChecked
 file: scripts/private-check.swift
 perl: s~\(\[0xff, 0xfe, 0x00, 0x00\], \.utf32LittleEndian, 4, false\),~~
@@ -136,8 +135,8 @@ test: review7EitherSpellingOfAWordIsFound review7EitherSpellingOfAWordInAPathIsR
 file: scripts/private-check.swift
 perl: s~word\.lowercased\(\)\.precomposedStringWithCanonicalMapping~word.lowercased()~
 
-# Since round 8 joined parts of the capital run reading give every part
-# of the plainer reading, so this entry stops the joins too.
+# Joined parts of the capital run reading give every part of the plainer
+# reading, so this entry stops the joins too.
 test: review7CapitalRunSplitOnlyAddsParts
 file: scripts/private-check.swift
 perl: s~for capitalRuns in \[false, true\]~for capitalRuns in [true]~

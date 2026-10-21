@@ -88,7 +88,7 @@ struct ReconFeedTests {
 
     @Test func withTheCloudTurnedOnSinceAnOnDeviceChatNothingIsSent() throws {
         let maker = TransportMaker()
-        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)), endpoint: endpoint,
                               memory: nil, transport: { maker.make() })
         let (model, engine, runner) = feed()
         let review = model.cloudReview
@@ -113,7 +113,7 @@ struct ReconFeedTests {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
         defer { discard(notes) }
-        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let model = HomeView.reconFeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: nil,
                                             drivesTasks: false, reading: ReconTestData.sources, place: .mayLeaveDevice,
@@ -276,7 +276,7 @@ struct ReconFeedTests {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
         defer { discard(notes) }
-        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let model = HomeView.reconFeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()),
                                             tasks: nil, drivesTasks: false, reading: ReconTestData.sources,
@@ -413,7 +413,7 @@ struct ReconFeedTests {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
         defer { discard(notes) }
-        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let (model, engine, runner) = feed()
         let today = model.cloudReview
@@ -435,6 +435,7 @@ struct ReconFeedTests {
         #expect(today.pending == nil)
         await runner.settle(id)
         await eventually { !chat.isReplying }
+        #expect(!chat.isReplying)
         #expect(maker.wire.sent.isEmpty)
         #expect(runner.summary(for: id)?.note == ReconWords.cloudWithdrawn)
     }
@@ -445,7 +446,7 @@ struct ReconFeedTests {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
         defer { discard(notes) }
-        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let engine = ReplayEngine()
         let runner = ReconRunner(engine: engine, provider: ReconTestData.sources, now: { [morning] in morning })
@@ -722,7 +723,7 @@ struct ReconFeedTests {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
         defer { discard(notes) }
-        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let (model, engine, runner) = feed()
         let review = model.cloudReview
@@ -735,6 +736,7 @@ struct ReconFeedTests {
         let id = try #require(runner.tasks.first?.id)
         engine.advance(by: 12)
         await eventually { runner.summariesMayLeaveDevice == 1 }
+        #expect(runner.summariesMayLeaveDevice == 1)
         #expect(review.pending == nil)
 
         model.forgetTasks()
@@ -869,7 +871,7 @@ struct ReconFeedTests {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
         defer { discard(notes) }
-        let store = InMemoryCloudHelpStore(CloudHelpSettings(isOn: true))
+        let store = InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint))
         let cloud = CloudHelp(store: store, endpoint: endpoint, memory: notes, transport: { maker.make() })
         let model = HomeView.reconFeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: nil,
                                             drivesTasks: false, reading: ReconTestData.sources, place: .mayLeaveDevice,
@@ -900,7 +902,7 @@ struct ReconFeedTests {
         let maker = TransportMaker()
         let notes = ShowcaseScene.emptyMemory()
         defer { discard(notes) }
-        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let (model, engine, runner) = feed()
         let review = model.cloudReview
@@ -938,7 +940,7 @@ struct ReconFeedTests {
         let wire = HeldWire(reply: "POINT: The pool reopens on November 10. [2]")
         let notes = ShowcaseScene.emptyMemory()
         defer { discard(notes) }
-        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)), endpoint: endpoint,
                               memory: notes, transport: { URLSessionCloudTransport(load: wire.load) })
         let (model, engine, runner) = feed()
         let review = model.cloudReview
@@ -1190,7 +1192,7 @@ struct ReconFeedTests {
     func cloudToday(reading pages: any SourceProvider = ReconTestData.sources,
                     transport: @escaping @Sendable () -> any CloudTransport,
                     notes: MemoryStore) throws -> (FeedModel, ReconRunner, CloudHelp) {
-        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)), endpoint: endpoint,
                               memory: notes, transport: transport)
         let model = HomeView.reconFeedModel(sources: [SampleFeedSource()], needsYou: NeedsYou(rule: .isolated()),
                                             tasks: nil, drivesTasks: false, reading: pages, place: .mayLeaveDevice,
@@ -1399,7 +1401,7 @@ struct ReconFeedTests {
             let maker = TransportMaker()
             let notes = ShowcaseScene.emptyMemory()
             defer { discard(notes) }
-            let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, privateWords: ["lemon cake"])),
+            let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint, privateWords: ["lemon cake"])),
                                   endpoint: endpoint, memory: notes, transport: { maker.make() })
             let provider = CountingProvider(now: { [morning] in morning })
             provider.give([named])
@@ -1461,7 +1463,7 @@ struct ReconFeedTests {
         let notes = ShowcaseScene.emptyMemory()
         defer { discard(notes) }
         let maker = TransportMaker()
-        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let model = cloud.chatModel(local: LocalStubModel(), review: reviewer, madeOnSend: true)
         let text = "Please look into the pool using only the sources below, and answer in plain words."

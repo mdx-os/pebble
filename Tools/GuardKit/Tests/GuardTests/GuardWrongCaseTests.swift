@@ -1209,7 +1209,7 @@ extension GuardWrongCaseTests {
         WrongCase(rule: "privacy.speech", text: "func unrestricted() {\n    let other = SFSpeechAudioBufferRecognitionRequest()\n    SFSpeechRecognizer()?.recognitionTask(with: other) { _, _ in }\n}", file: PrivacyRules.speechHelper),
         WrongCase(rule: "privacy.upload", text: "let x = MKLocalSearch(request: request)", file: "App/Sources/Wrong.swift"),
         WrongCase(rule: "privacy.encryption", text: "import CryptoKit", file: PrivacyRules.cloud),
-        // Round 3: remote readers with no flagged name.
+        // Remote readers with no flagged name.
         WrongCase(rule: "privacy.network", text: "var body: some View { WebView(url: url) }", file: "App/Sources/Wrong.swift"),
         WrongCase(rule: "privacy.network", text: "let page = WebPage()", file: "App/Sources/Wrong.swift"),
         WrongCase(rule: "privacy.network", text: "let x = MCSession(peer: peer)", file: "App/Sources/Wrong.swift"),
@@ -1233,7 +1233,7 @@ extension GuardWrongCaseTests {
         WrongCase(rule: "privacy.urlRead", text: "let x = type(of: data).init(contentsOf:options:)", file: "App/Sources/Wrong.swift"),
         WrongCase(rule: "privacy.urlRead", text: "try FileManager.default.copyItem(at: remote, to: local)", file: "App/Sources/Wrong.swift"),
         WrongCase(rule: "privacy.urlRead", text: "let x = FileManager.default.copyItem(at:to:)", file: "App/Sources/Wrong.swift"),
-        // Round 4. An alias of any case, from this file or another.
+        // An alias of any case, from this file or another.
         WrongCase(rule: "privacy.urlRead", text: "typealias bytes = Data\nlet x = try bytes(contentsOf: remote)", file: "App/Sources/Wrong.swift"),
         WrongCase(rule: "privacy.urlRead", text: "let x = try bytes(contentsOf: remote)", file: "App/Sources/Wrong.swift"),
         WrongCase(rule: "privacy.urlRead", text: "enum Kinds { typealias bytes = Data }\nlet x = try Kinds.bytes(contentsOf: remote)", file: "App/Sources/Wrong.swift"),

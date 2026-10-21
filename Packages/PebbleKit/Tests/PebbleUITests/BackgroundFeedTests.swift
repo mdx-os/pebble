@@ -249,6 +249,69 @@ struct BackgroundFeedTests {
         #expect(log.steps == ["background", "tasks", "notes", "private words", "done"])
     }
 
+    /// With the cloud setting too, one Forget everything ends every open
+    /// cloud chat before anything else, then takes the summaries, the
+    /// tasks, the notes and the private words. Something went to the cloud
+    /// this session, so the line never says "I no longer have it".
+    @Test func forgetEverythingEndsCloudChatsFirstThenClearsTheSummariesToo() throws {
+        let notes = scratchMemory()
+        _ = try notes.remember("Sam's birthday is May 14.", source: .toldMe)
+        let log = StepLog(notes: notes)
+        let runner = runner(on: true)
+        let today = model(runner) { Self.at(9) }
+        today.refresh()
+        #expect(!runner.results.isEmpty, "a summary to forget")
+        let memory = MemoryModel(store: notes, place: .mayLeaveDevice,
+                                 endsCloudChats: {
+                                     #expect(runner.isOn, "the chats end before background work stops")
+                                     log.step("cloud chats")
+                                     return true
+                                 },
+                                 alsoForget: { log.step("private words"); return .privateWords },
+                                 background: runner, now: { Self.at(9) },
+                                 onForgetEverything: { log.step("tasks"); return today.forgetEverything() })
+        memory.forgetEverything()
+        #expect(log.steps.first == "cloud chats")
+        #expect(log.steps.filter { $0 != "background" } == ["cloud chats", "tasks", "notes", "private words"])
+        #expect(!runner.isOn)
+        #expect(runner.results.isEmpty)
+        expectNoSummaryFiles(runner.store)
+        #expect(today.feed.isEmpty)
+        #expect(notes.notes().isEmpty)
+        #expect(memory.status == CloudWords.forgotAfterSending + " " + CloudWords.sentCantBeErased)
+    }
+
+    /// After sending, every way the summaries can land keeps the line
+    /// honest: never "I no longer have it", the summaries named as before,
+    /// and the cloud's copy named last but for any advice to try again.
+    @Test func afterSendingTheSummaryLinesStayHonest() {
+        let rests: [CloudHelp.Forgot??] = [nil, .some(nil), .some(.some(.privateWords)),
+                                          .some(.some(.privateWordsAndCloud))]
+        for notes in [false, true] {
+            for rest in rests {
+                for tasks in [false, true] {
+                    for summaries: MemoryModel.Summaries in [.erased, .stayed] {
+                        let line = MemoryModel.forgotLine(notesGone: notes, rest: rest, tasksGone: tasks,
+                                                          summaries: summaries, sent: true)
+                        let unsent = MemoryModel.forgotLine(notesGone: notes, rest: rest, tasksGone: tasks,
+                                                            summaries: summaries)
+                        #expect(!line.contains("I no longer have it"), "\(line)")
+                        let retry = MemoryWords.retryAdvice.first { unsent.hasSuffix(" " + $0) }
+                        let tail = " " + CloudWords.sentCantBeErased + (retry.map { " " + $0 } ?? "")
+                        #expect(line.hasSuffix(tail), "\(line)")
+                        if summaries == .stayed {
+                            #expect(line.contains("couldn't erase your morning summaries"), "\(line)")
+                        }
+                        if !unsent.contains("I no longer have it") {
+                            let body = retry.map { String(unsent.dropLast($0.count + 1)) } ?? unsent
+                            #expect(line == body + tail, "\(line)")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Another window's Today with a summary open to read: Forget
     /// everything in this window takes its card away, and the open summary
     /// closes with it there too.
@@ -808,8 +871,10 @@ struct BackgroundFeedTests {
     /// it, found by what its code names in the packages and the app, writes
     /// a file, encodes it, or puts it in `UserDefaults` or scene storage,
     /// but for the passes below, each with its reason. The one
-    /// `UserDefaults` the chat screen touches keeps the agent's name.
-    @Test func theChatIsNeverKeptOnDisk() throws {
+    /// `UserDefaults` the chat screen touches keeps the agent's name. Off
+    /// the main actor, like every sweep of the sources, so it never holds
+    /// the main actor tests running beside it.
+    @Test nonisolated func theChatIsNeverKeptOnDisk() throws {
         let keeping = ["write(to", "FileManager", "createFile", "FileHandle", "AppStorage", "SceneStorage",
                        "JSONEncoder", "PropertyListEncoder", "NSKeyedArchiver", "UserDefaults.", "UserDefaults(",
                        "BackgroundStore", "MemoryStore", "CloudHelpFileStore"]
@@ -837,7 +902,7 @@ struct BackgroundFeedTests {
 
     /// Where a file that can hold the chat names something that keeps
     /// words on disk, and why that is never the chat. By file and word.
-    static let keepsNoChat: [String: String] = [
+    nonisolated static let keepsNoChat: [String: String] = [
         "PebbleModel/CloudModel.swift: JSONEncoder":
             "CloudRequest.encoded turns the request into bytes in memory, for the preview and for the one ephemeral "
             + "session that sends it. The file writes nothing: no write(to, FileManager or UserDefaults, which this "
@@ -866,12 +931,15 @@ struct BackgroundFeedTests {
         "PebbleUI/ShowcaseScene.swift: BackgroundStore":
             "The showcase, Debug only, runs background work on BackgroundStore.memoryOnly, which writes nothing "
             + "anywhere and holds only counts and times.",
+        "PebbleUI/ShowcaseScene.swift: JSONEncoder":
+            "The showcase, Debug only, encodes its made-up sign-in body (a sample device name) into bytes in "
+            + "memory for the cloud preview. It never encodes a chat, and the bytes are not written anywhere.",
     ]
 
     /// Every source that can hold chat text, in the packages and the app,
     /// found by what its code names, not from a list. The public source
     /// watch never sees a chat.
-    static func chatFiles() throws -> [(name: String, code: String)] {
+    nonisolated static func chatFiles() throws -> [(name: String, code: String)] {
         let root = SwiftSource.repositoryRoot(from: #filePath)
         let package = try SwiftSource.files(under: root.appendingPathComponent("Packages/PebbleKit/Sources"))
         let app = try SwiftSource.files(under: root.appendingPathComponent("App/Sources"))
@@ -887,7 +955,8 @@ struct BackgroundFeedTests {
     /// from a list, writes nothing to the system log, which keeps it on
     /// disk, and the one session that sends a chat to the cloud keeps no
     /// cache. Only the public source watch, which never sees a chat, prints.
-    @Test func theChatNeverReachesTheLogOrACache() throws {
+    /// Off the main actor, since it sweeps every source file.
+    @Test nonisolated func theChatNeverReachesTheLogOrACache() throws {
         let root = SwiftSource.repositoryRoot(from: #filePath)
         let sources = root.appendingPathComponent("Packages/PebbleKit/Sources")
         let logging = try NSRegularExpression(pattern: #"\b(Logger|os_log|os_signpost|NSLog|print|debugPrint|dump|OSLog)\b"#)
