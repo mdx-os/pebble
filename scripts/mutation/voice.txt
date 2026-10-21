@@ -1,0 +1,284 @@
+# Talking to the agent: hold to talk, let go to send, and the Talk shortcut.
+
+# The request no longer asks for on-device recognition, so speech could go
+# to a server.
+test: speechIsHeardOnTheDeviceOnlyAndNeverKept
+file: Packages/PebbleKit/Sources/PebbleVoice/DeviceSpeech.swift
+perl: s~\n        request\.requiresOnDeviceRecognition = true~~
+
+# The same, turned off rather than left out.
+test: speechIsHeardOnTheDeviceOnlyAndNeverKept
+file: Packages/PebbleKit/Sources/PebbleVoice/DeviceSpeech.swift
+perl: s~request\.requiresOnDeviceRecognition = true~request.requiresOnDeviceRecognition = false~
+
+# The capture asks for a listen that may leave the device.
+test: noServerFallbackIsEverRequested
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~ListenRequest\(onDeviceOnly: true\)~ListenRequest(onDeviceOnly: false)~
+
+# A cancel sends what was heard.
+test: cancelSendsNothing
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~        target\.write\(target\.before\)\n        stop\(asking~        target.send(heard)\n        target.write(target.before)\n        stop(asking~
+
+# A release with nothing heard sends an empty message.
+test: aShortTapWithNothingHeardSendsNothing emptyOrBlankWordsSendNothing
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~guard !words\.isEmpty else \{~guard true else {~
+
+# A declined microphone still starts listening.
+test: aDeclinedMicrophoneSaysSoAndNeverStarts
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~case \.microphoneDeclined: return stop\(\.unavailable\(\.microphoneDeclined\)\)~case .microphoneDeclined: break~
+
+# Declined speech still starts listening.
+test: declinedSpeechSaysSoAndNeverStarts
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~case \.speechDeclined: return stop\(\.unavailable\(\.speechDeclined\)\)~case .speechDeclined: break~
+
+# A device that can't hear the language by itself is asked anyway.
+test: withoutOnDeviceRecognitionNothingIsAskedOrStarted
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~guard listener\.hearsOnDevice else \{ return stop\(\.unavailable\(\.notOnDevice\)\) \}~~
+
+# A hold the system's question took starts listening after all.
+test: lettingGoWhileAskedSendsNothingAndDoesNotListen
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~if mode == \.hold, letGoWhileAsking \{ return stop\(\.idle\) \}~~
+
+# Something heard is printed, so it would reach a log.
+test: speechIsHeardOnTheDeviceOnlyAndNeverKept
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~(        let message = message\(with: words\)\n)~$1        print(message)\n~
+
+# The Talk shortcut no longer opens the app.
+test: theTalkShortcutOpensTheAppListening
+file: Packages/PebbleKit/Sources/PebbleVoice/TalkIntent.swift
+perl: s~public static let openAppWhenRun = true~public static let openAppWhenRun = false~
+
+# The Talk shortcut opens the app but asks for nothing.
+test: theTalkShortcutOpensTheAppListening
+file: Packages/PebbleKit/Sources/PebbleVoice/TalkIntent.swift
+perl: s~        TalkRequests\.shared\.ask\(\)\n~~
+
+# A shortcut run long ago still turns the microphone on.
+test: aShortcutRunLongAgoIsLetGo
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~return now\.timeIntervalSince\(asked\) <= Self\.freshFor~return true~
+
+# An answer from the listen before reaches the one going now, so its late
+# words show in the new listen and its end ends it with the finger down.
+test: aLateAnswerFromTheListenBeforeNeverReachesTheNextOne
+file: Packages/PebbleKit/Sources/PebbleVoice/DeviceSpeech.swift
+perl: s~guard current == listen, listening else \{ return \}~guard listening else { return }~
+
+# Stopping keeps the same listen number, so the next listen takes the old
+# one's answers as its own.
+test: aLateAnswerFromTheListenBeforeNeverReachesTheNextOne
+file: Packages/PebbleKit/Sources/PebbleVoice/DeviceSpeech.swift
+perl: s~        hearing\.stop\(\)\n        listen \+= 1\n~        hearing.stop()\n~
+
+# A stop no longer stops the recognizer.
+test: aCancelStopsTheRecognizerAndDropsItsLateAnswers
+file: Packages/PebbleKit/Sources/PebbleVoice/DeviceSpeech.swift
+perl: s~    private func tearDown\(\) \{\n        hearing\.stop\(\)\n~    private func tearDown() {\n~
+
+# The last listen's wait for its words runs out on the next listen's finish.
+test: theWaitForTheLastListensWordsNeverEndsTheNextOne
+file: Packages/PebbleKit/Sources/PebbleVoice/DeviceSpeech.swift
+perl: s~guard current == listen, let done = finishing~guard let done = finishing~
+
+# A finish cancelled while it waits stops the listen begun after it.
+test: aFinishCancelledAndFollowedByANewListenLeavesTheNewOneGoing
+file: Packages/PebbleKit/Sources/PebbleVoice/DeviceSpeech.swift
+perl: s~if current == listen \{ tearDown\(\) \}~tearDown()~
+
+# A touch the system takes sends the words, as a lift would.
+test: aCancelledTouchWithWordsSendsNothingAndPutsTheDraftBack
+file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
+perl: s~or sends\.\n        voice\.cancel\(owner: owner\)~or sends.\n        Task { await voice.release(owner: owner) }~
+
+# A touch the system takes leaves the microphone on and the words in the draft.
+test: aCancelledTouchWithWordsSendsNothingAndPutsTheDraftBack
+file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
+perl: s~or sends\.\n        voice\.cancel\(owner: owner\)~or sends.~
+
+# A touch taken while the system asks waits for the answer instead of
+# cancelling, so a late yes on a tap starts listening and can send.
+test: aTouchTakenWhileAskedNeverListensOnALateYes
+file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
+perl: s~or sends\.\n        voice\.cancel\(owner: owner\)~or sends.\n        if voice.phase == .asking { Task { await voice.release(owner: owner) } } else { voice.cancel(owner: owner) }~
+
+# The reset after a lift takes it for a cancelled touch, so nothing sends.
+test: theGesturesOwnEndSendsOnceAndItsResetAfterDoesNothing
+file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
+perl: s~(at translation: CGSize\) \{\n        guard isDown else \{ return \}\n)        isDown = false\n~$1~
+
+# A lift reads where the finger was last seen, not where it lifted, so a
+# slide past the line just before lifting still sends, and a slide back
+# inside cancels.
+test: aSlidePastTheLineAsTheFingerLiftsSendsNothing aSlideBackInsideTheLineAsTheFingerLiftsSends
+file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
+perl: s~let slidAway = Self\.cancels\(at: translation\)~let slidAway = showsCancel~
+
+# A cancel while the system asks shows "I didn't send anything" though
+# nothing had begun, unlike the first hold before.
+test: cancelWhileAskedNeverListens aTouchTakenWhileAskedNeverListensOnALateYes
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~stop\(asking \? \.idle : \.cancelled\)~stop(.cancelled)~
+
+# An edit of the person's own while listening is ignored, so later words,
+# Send or Don't send write over it and Send sends the heard words.
+test: anEditWhileListeningIsNeverLostOrSent anEditWhileTheLastWordsComeIsKept
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~text != shown else \{ return \}~false else { return }~
+
+# An edit ends listening but leaves the microphone on.
+test: anEditWhileListeningIsNeverLostOrSent
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~        if phase != \.asking \{ listener\.cancel\(\) \}\n        stop\(\.idle\)~        stop(.idle)~
+
+# The capture forgets what it wrote, so its own words read as an edit and
+# end listening.
+test: anEditWhileListeningIsNeverLostOrSent
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~        shown = text\n~~
+
+# One capture serves every window. The entries below each bring back an
+# owner shared by every window, or a control that acts on any composer's
+# listening, so a second iPad window could show, send, cancel or edit
+# the first's.
+
+# The composer listens under its identifier alone, the same in every window.
+test: aComposerGoingAwayStopsOnlyItsOwnWindowsListening eachHomeScreenGivesItsComposersItsOwnWindow
+file: Packages/PebbleKit/Sources/PebbleUI/Composer.swift
+perl: s~private var owner: String \{ TalkWindow\.owner\(of: identifier, in: window\) \}~private var owner: String { identifier }~
+
+# A window's owner leaves the window out.
+test: theSameComposerInTwoWindowsHasTwoOwners theSecondWindowsControlsNeverActOnTheFirsts
+file: Packages/PebbleKit/Sources/PebbleUI/Composer.swift
+perl: s~guard let window else \{ return identifier \}\n        return window\.uuidString \+ "\." \+ identifier~return identifier~
+
+# The home screen never tells its composers which window they are in.
+test: eachHomeScreenGivesItsComposersItsOwnWindow
+file: Packages/PebbleKit/Sources/PebbleUI/HomeView.swift
+perl: s~\n        \.environment\(\\\.talkWindow, feed\.window\)~~
+
+# Every composer takes the capture for its own.
+test: aSecondWindowsComposerNeverActsOnTheFirsts
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~(func belongs\(to owner: String\) -> Bool \{\n        )self\.owner == owner~${1}true~
+
+# Another composer's Send sends this one's words.
+test: aSecondWindowsComposerNeverActsOnTheFirsts theSecondWindowsControlsNeverActOnTheFirsts
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~(func release\(owner: String\) async \{\n)        guard belongs\(to: owner\) else \{ return \}\n~$1~
+
+# Another composer's Don't send, or its going away, cancels this one.
+test: onlyTheOwnerCancelsByName aSecondWindowsComposerNeverActsOnTheFirsts
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~(public func cancel\(owner: String\) \{\n)        guard belongs\(to: owner\) else \{ return \}\n~$1~
+
+# Typing in another composer ends this one's listening.
+test: aSecondWindowsComposerNeverActsOnTheFirsts typingEndsOnlyItsOwnWindowsListening
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~(func stopKeepingWords\(owner: String\) \{\n        )guard isActive, belongs\(to: owner\) else~${1}guard isActive else~
+
+# A composer going away cancels whatever listens, in any window.
+test: aComposerGoingAwayStopsOnlyItsOwnWindowsListening
+file: Packages/PebbleKit/Sources/PebbleUI/Composer.swift
+perl: s~\.onDisappear \{ voice\?\.cancel\(owner: owner\) \}~.onDisappear { voice?.cancel() }~
+
+# VoiceOver's double tap on another window's microphone sends this one's words.
+test: theSecondWindowsControlsNeverActOnTheFirsts
+file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
+perl: s~if voice\.phase == \.listening, voice\.belongs\(to: owner\) \{\n            Task \{ await voice\.release\(owner: owner\) \}~if voice.phase == .listening {\n            Task { await voice.release() }~
+
+# Lifting a finger from another window's microphone sends this one's words.
+test: theSecondWindowsControlsNeverActOnTheFirsts
+file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
+perl: s~        guard voice\.belongs\(to: owner\) else \{ return \}\n        switch~        switch~
+perl: s~if voice\.phase == \.listening \{ Task \{ await voice\.release\(owner: owner\) \} \}~if voice.phase == .listening { Task { await voice.release() } }~
+
+# A touch lost on another window's microphone cancels this one.
+test: theSecondWindowsControlsNeverActOnTheFirsts
+file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
+perl: s~guard voice\.isActive\(for: owner\) else \{ return \}~guard voice.isActive else { return }~
+perl: s~or sends\.\n        voice\.cancel\(owner: owner\)~or sends.\n        voice.cancel()~
+
+# The Talk shortcut starts in any window, not the one in front.
+test: theShortcutStartsInTheWindowInFront noWindowInFrontLetsAnyTakeIt
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~        if let window, let front, front != window \{ return false \}\n~~
+
+# A window that went away stays in front, so no other takes the shortcut.
+test: noWindowInFrontLetsAnyTakeIt
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~if front == window \{ front = nil \}~_ = window~
+
+# Typing while listening no longer ends it, so a later word writes over
+# what was typed.
+test: typingEndsOnlyItsOwnWindowsListening
+file: Packages/PebbleKit/Sources/PebbleUI/Composer.swift
+perl: s~            set: \{ new in\n                voice\?\.edited\(owner: owner, to: new\)\n~            set: { new in\n~
+
+# Shift Return on the Mac no longer ends listening.
+test: aLineBreakEndsListeningAndStays
+file: Packages/PebbleKit/Sources/PebbleUI/Composer.swift
+perl: s~        voice\?\.edited\(owner: owner, to: new\)\n        draft\.wrappedValue = new~        draft.wrappedValue = new~
+
+# A suggestion's fill no longer ends listening, so the next word heard
+# writes over it.
+test: aSuggestionEndsListeningInItsOwnWindowOnly
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~\n        voice\?\.draftFilled\(controller\.draft, in: window\)~~
+
+# Talk about this, from a card, no longer ends listening.
+test: talkingAboutACardEndsListeningInItsOwnWindowOnly
+file: Packages/PebbleKit/Sources/PebbleUI/HomeView.swift
+perl: s~\n        voice\?\.draftFilled\(line, in: window\)~~
+
+# A fill ends listening under the identifier alone, so it misses the
+# window's composer.
+test: aSuggestionEndsListeningInItsOwnWindowOnly talkingAboutACardEndsListeningInItsOwnWindowOnly
+file: Packages/PebbleKit/Sources/PebbleUI/Composer.swift
+perl: s~edited\(owner: TalkWindow\.owner\(of: identifier, in: window\), to: text\)~edited(owner: identifier, to: text)~
+
+# A start the composer has not claimed yet. The capture is made the
+# composer's only once the task runs, so a lift, a lost touch or the
+# composer going away before then finds nothing to end, and the task then
+# listens with nobody holding.
+test: aHoldEndedBeforeItsStartRunsNeverListens
+file: Packages/PebbleKit/Sources/PebbleUI/Composer.swift
+perl: s~guard let start = voice\.claim\(mode, owner: owner, draft: draft\.wrappedValue,\n\s+write: \{ draft\.wrappedValue = \$0 \}, send: send\) else \{ return nil \}\n        return Task \{ await voice\.begin\(start\) \}~return Task { await voice.begin(mode, owner: owner, draft: draft.wrappedValue, write: { draft.wrappedValue = \$0 }, send: send) }~
+
+# A claimed start runs though it was ended before it ran, so the microphone
+# turns on after the finger lifted or the composer went away.
+test: aHoldEndedBeforeItsStartRunsNeverListens aClaimedStartEndedBeforeItRunsStartsNothing
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~        guard started == generation, phase == \.asking else \{ return \}\n~~
+
+# A lift before listening began waits for the start instead of ending it.
+test: aHoldEndedBeforeItsStartRunsNeverListens
+file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
+perl: s~if slidAway \|\| voice\.phase == \.asking \{~if slidAway {~
+
+# A sheet over the composer leaves it listening, with its Send hidden.
+test: aSheetOverTheComposerEndsListeningAndKeepsTheWords
+file: Packages/PebbleKit/Sources/PebbleUI/Composer.swift
+perl: s~\n        voice\?\.stopKeepingWords\(owner: owner\)~~
+
+# The sheet going away ends listening too.
+test: aSheetOverTheComposerEndsListeningAndKeepsTheWords
+file: Packages/PebbleKit/Sources/PebbleUI/Composer.swift
+perl: s~        guard !sends else \{ return \}\n~~
+
+# Ending for the sheet puts the draft back, so what was heard is lost.
+test: aSheetOverTheComposerEndsListeningAndKeepsTheWords
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~(if phase != \.asking \{ listener\.cancel\(\) \}\n)(        stop\(\.idle\)\n    \}\n\n    /// The same, only)~${1}        target?.write(target?.before ?? "")\n$2~
+
+# Listening that stops on its own with nothing heard just goes quiet.
+test: stoppingOnItsOwnWithNothingHeardSaysSo
+file: Packages/PebbleKit/Sources/PebbleCore/VoiceCapture.swift
+perl: s~self\.stop\(self\.heard\.isEmpty \? \.unavailable\(\.couldNotStart\) : \.idle\)~self.stop(.idle)~

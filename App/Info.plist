@@ -28,6 +28,10 @@
 	<false/>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>So you can talk instead of typing. I listen only while you're talking to me, and I keep no recording.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>So I can turn what you say into words. That happens on this device, and what you say is never sent anywhere to be understood.</string>
 	<key>PebbleBrandName</key>
 	<string>$(BRAND_NAME)</string>
 	<key>PebbleCloudEndpoint</key>

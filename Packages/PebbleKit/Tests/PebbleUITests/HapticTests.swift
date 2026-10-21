@@ -11,7 +11,7 @@ struct HapticTests {
     let action = ProposedAction(kind: .send, recipient: Recipient(id: "c:1", displayName: "Sam", handle: "416 555 0101"), details: "Hi")
 
     @Test func onlyAPhoneFeelsATap() {
-        for haptic in [Haptic.sent, .answered, .saved, .forgotten] {
+        for haptic in [Haptic.sent, .answered, .saved, .forgotten, .listening] {
             #expect(haptic.feedback(on: .phone) != nil, "\(haptic) on phone")
             #expect(haptic.feedback(on: .pad) == nil, "\(haptic) on pad")
             #expect(haptic.feedback(on: .mac) == nil, "\(haptic) on mac")

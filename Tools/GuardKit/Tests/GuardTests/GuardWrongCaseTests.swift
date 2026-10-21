@@ -877,6 +877,109 @@ struct GuardWrongCaseTests {
         }
     }
 
+    // MARK: Speech, on the device only
+
+    static let adapter = SpeechGate.adapterFile
+
+    static func speech(_ rule: String, _ text: String, file: String = adapter) -> WrongCase {
+        WrongCase(rule: "speech." + rule, text: text, file: file)
+    }
+
+    static let speechWrong: [WrongCase] = [
+        // Made and never asked to stay on the device.
+        speech("requestNotOnDevice", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    request.shouldReportPartialResults = true\n}"),
+        speech("requestNotOnDevice", "func start() {\n    let request = `SFSpeechAudioBufferRecognitionRequest`()\n}"),
+        speech("requestNotOnDevice", "func start() {\n    let request = Speech.SFSpeechURLRecognitionRequest(url: url)\n}"),
+        speech("requestNotOnDevice", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest.init()\n}"),
+        speech("requestNotOnDevice", "func start() {\n    let request: SFSpeechAudioBufferRecognitionRequest = .init()\n}"),
+        // Set on some other request, or only sometimes.
+        speech("requestNotOnDevice", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    other.requiresOnDeviceRecognition = true\n}"),
+        speech("requestNotOnDevice", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    if quiet { request.requiresOnDeviceRecognition = true }\n}"),
+        speech("requestNotOnDevice", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    request.requiresOnDeviceRecognition = onDevice\n}"),
+        // Made where it can't be named.
+        speech("requestNotOnDevice", "func start() {\n    task = recognizer.recognitionTask(with: SFSpeechAudioBufferRecognitionRequest(), resultHandler: handle)\n}"),
+        speech("requestNotOnDevice", "let make = SFSpeechAudioBufferRecognitionRequest.init"),
+        // Set, and then swapped for a request that isn't.
+        speech("requestUnresolved", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    request.requiresOnDeviceRecognition = true\n    self.request = request\n    self.request = .init()\n}"),
+        speech("requestUnresolved", "func start() {\n    request.requiresOnDeviceRecognition = true\n    request = .init()\n}"),
+        speech("requestUnresolved", "func start() {\n    task = recognizer.recognitionTask(with: .init(), resultHandler: handle)\n}"),
+        speech("requestUnresolved", "typealias Asked = SFSpeechAudioBufferRecognitionRequest"),
+        speech("requestUnresolved", "typealias Asked = Speech.`SFSpeechURLRecognitionRequest`"),
+        speech("requestReassigned", "func start() {\n    var request = SFSpeechAudioBufferRecognitionRequest()\n    request.requiresOnDeviceRecognition = true\n}"),
+        speech("requestReassigned", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    request.requiresOnDeviceRecognition = true\n    request = other\n}"),
+        speech("requestReassigned", "func start() {\n    var request = SFSpeechAudioBufferRecognitionRequest()\n    request.requiresOnDeviceRecognition = true\n    request = SFSpeechAudioBufferRecognitionRequest()\n}"),
+        // Used before it is set to stay on the device.
+        speech("usedBeforeOnDevice", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    task = recognizer.recognitionTask(with: request, resultHandler: handle)\n    request.requiresOnDeviceRecognition = true\n}"),
+        speech("usedBeforeOnDevice", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    self.request = request\n    request.requiresOnDeviceRecognition = true\n}"),
+        speech("usedBeforeOnDevice", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in request.append(buffer) }\n    request.`requiresOnDeviceRecognition` = true\n}"),
+        // Set only in some builds, while the request is used in all of them.
+        speech("onDeviceOnlySometimes", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    #if DEBUG\n    request.requiresOnDeviceRecognition = true\n    #endif\n    task = recognizer.recognitionTask(with: request, resultHandler: handle)\n}"),
+        speech("onDeviceOnlySometimes", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    #if os(iOS)\n    request.requiresOnDeviceRecognition = true\n    #else\n    request.requiresOnDeviceRecognition = true\n    #endif\n    task = recognizer.recognitionTask(with: request, resultHandler: handle)\n}"),
+        speech("onDeviceOnlySometimes", "func start() {\n    #if DEBUG\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    #if os(iOS)\n    request.requiresOnDeviceRecognition = true\n    #endif\n    task = recognizer.recognitionTask(with: request, resultHandler: handle)\n    #endif\n}"),
+        // Turned off, however it is written.
+        speech("onDeviceTurnedOff", "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    request.requiresOnDeviceRecognition = true\n    clear(&request.requiresOnDeviceRecognition)\n}"),
+        speech("onDeviceTurnedOff", "extension SFSpeechRecognitionRequest {\n    func open() { clear(&`requiresOnDeviceRecognition`) }\n}"),
+        speech("onDeviceTurnedOff", "request.requiresOnDeviceRecognition = false"),
+        speech("onDeviceTurnedOff", "request.`requiresOnDeviceRecognition` = false"),
+        speech("onDeviceTurnedOff", "request.requiresOnDeviceRecognition = !true"),
+        speech("onDeviceTurnedOff", "request.requiresOnDeviceRecognition = onDevice"),
+        speech("onDeviceTurnedOff", "extension SFSpeechRecognitionRequest {\n    func open() { requiresOnDeviceRecognition = false }\n}"),
+        speech("onDeviceTurnedOff", "request.requiresOnDeviceRecognition.toggle()"),
+        speech("onDeviceTurnedOff", "request[keyPath: \\.requiresOnDeviceRecognition] = false"),
+        speech("onDeviceTurnedOff", "request.setValue(false, forKey: \"requiresOnDeviceRecognition\")"),
+        // Speech anywhere but the adapter.
+        speech("outsideAdapter", "let recognizer = SFSpeechRecognizer()", file: "PebbleUI/Composer.swift"),
+        speech("outsideAdapter", "let recognizer = `SFSpeechRecognizer`()", file: "PebbleCore/VoiceCapture.swift"),
+        speech("outsideAdapter", "import Speech", file: "PebbleVoice/TalkIntent.swift"),
+        speech("outsideAdapter", "let analyzer = SpeechAnalyzer(modules: [transcriber])", file: "App/PebbleApp.swift"),
+        speech("outsideAdapter", "var task: SFSpeechRecognitionTask?", file: "PebbleModel/Conversation.swift"),
+        // Anything that would keep what was heard.
+        speech("keepsWords", "try words.write(to: url, atomically: true, encoding: .utf8)"),
+        speech("keepsWords", "try Data(words.utf8).write(to: url)", file: "PebbleCore/VoiceCapture.swift"),
+        speech("keepsWords", "print(words)", file: "PebbleUI/TalkButton.swift"),
+        speech("keepsWords", "Logger().info(\"\\(words)\")"),
+        speech("keepsWords", "import os", file: "PebbleVoice/TalkIntent.swift"),
+        speech("keepsWords", "UserDefaults.standard.set(words, forKey: \"last\")", file: "PebbleCore/VoiceCapture.swift"),
+        speech("keepsWords", "let file = try AVAudioFile(forWriting: url, settings: settings)"),
+        speech("keepsWords", "FileManager.default.createFile(atPath: path, contents: nil)"),
+        speech("keepsWords", "NSLog(\"%@\", words)"),
+        speech("keepsWords", "`print`(words)"),
+    ]
+
+    static let speechRight: [RightCase] = [
+        fine("func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    request.requiresOnDeviceRecognition = true\n    request.shouldReportPartialResults = true\n}",
+             file: adapter),
+        fine("func start() {\n    let request = `SFSpeechAudioBufferRecognitionRequest`()\n    request.`requiresOnDeviceRecognition` = true\n}",
+             file: adapter),
+        fine("func start() {\n    let request: SFSpeechAudioBufferRecognitionRequest = .init()\n    request.requiresOnDeviceRecognition = true\n}",
+             file: adapter),
+        fine("private var request: SFSpeechAudioBufferRecognitionRequest?\nlet recognizer = SFSpeechRecognizer(locale: locale)",
+             file: adapter),
+        fine("let heard = request.requiresOnDeviceRecognition", file: adapter),
+        // Set first, then used and kept.
+        fine("func start() {\n    self.request = nil\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    request.requiresOnDeviceRecognition = true\n    request.addsPunctuation = true\n    self.request = request\n    task = recognizer.recognitionTask(with: request, resultHandler: handle)\n}",
+             file: adapter),
+        // Made and set under the same `#if`.
+        fine("func start() {\n    #if os(iOS)\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    request.requiresOnDeviceRecognition = true\n    #if DEBUG\n    request.shouldReportPartialResults = true\n    #endif\n    task = recognizer.recognitionTask(with: request, resultHandler: handle)\n    #endif\n}",
+             file: adapter),
+        fine("let wait: Duration = .init(secondsComponent: 1, attosecondsComponent: 0)", file: adapter),
+        // Elsewhere, `.init(...)` makes what it makes; the Speech names are kept to the adapter.
+        fine("var request: URLRequest\nrequest = .init(url: url)", file: "PebbleCore/Relay.swift"),
+        fine("// SFSpeechRecognizer, in a comment", file: "PebbleUI/Composer.swift"),
+        fine("let note = \"SFSpeechRecognizer, in words\"", file: "PebbleUI/Composer.swift"),
+        fine("target.write(words)\nvoice.begin(.hold, write: { draft.wrappedValue = $0 })", file: "PebbleCore/VoiceCapture.swift"),
+        fine("#if os(iOS)\nlet session = AVAudioSession.sharedInstance()\n#endif", file: adapter),
+        // Files that don't handle speech may keep what they keep.
+        fine("UserDefaults.standard.set(true, forKey: \"done\")", file: "PebbleCore/Onboarding.swift"),
+        fine("try data.write(to: url)", file: "PebbleCore/Memory.swift"),
+    ]
+
+    @Test func theSpeechGuardCatchesEveryWrongCase() {
+        check(Self.speechWrong, Self.speechRight, rules: SpeechGate.rules.map(\.name)) {
+            SpeechGate.problems(in: $0, file: $1)
+        }
+    }
+
     // MARK: The connector gate
 
     static func connector(_ rule: String, _ text: String) -> WrongCase {
@@ -943,9 +1046,10 @@ struct GuardWrongCaseTests {
     /// added, or stop working, unseen.
     @Test func everyRuleHasAWrongCase() {
         let all = Self.promiseWrong + Self.contrastWrong + Self.accentWrong + Self.tokenWrong + Self.platformWrong
-            + Self.grantWrong + Self.connectorWrong
+            + Self.grantWrong + Self.speechWrong + Self.connectorWrong
         let rules = PromiseRules.allRuleNames + ContrastLint.rules.map(\.name) + TokenLint.rules.map(\.name)
-            + PlatformGate.rules.map(\.name) + GrantIssuerGate.rules.map(\.name) + ConnectorGate.rules.map(\.name)
+            + PlatformGate.rules.map(\.name) + GrantIssuerGate.rules.map(\.name) + SpeechGate.rules.map(\.name)
+            + ConnectorGate.rules.map(\.name)
         #expect(Set(rules).count == rules.count, "each rule has its own name")
         for rule in rules {
             #expect(all.contains { $0.rule == rule }, "no wrong case for \(rule)")
@@ -1102,7 +1206,7 @@ extension GuardWrongCaseTests {
         WrongCase(rule: "privacy.sessionFactory", text: "public static func makeSession() -> URLSession { fatalError() }", file: PrivacyRules.cloud),
         WrongCase(rule: "privacy.requiredReason", text: "let x = fstat\n (fd, &info)", file: "App/Sources/Wrong.swift"),
         WrongCase(rule: "privacy.speech", text: "local.requiresOnDeviceRecognition = true\nrecognizer.recognitionTask(with: unrestricted) { _, _ in }", file: "App/Sources/Wrong.swift"),
-        WrongCase(rule: "privacy.speech", text: "func unrestricted() { SFSpeechRecognizer() }", file: PrivacyRules.speechHelper),
+        WrongCase(rule: "privacy.speech", text: "func unrestricted() {\n    let other = SFSpeechAudioBufferRecognitionRequest()\n    SFSpeechRecognizer()?.recognitionTask(with: other) { _, _ in }\n}", file: PrivacyRules.speechHelper),
         WrongCase(rule: "privacy.upload", text: "let x = MKLocalSearch(request: request)", file: "App/Sources/Wrong.swift"),
         WrongCase(rule: "privacy.encryption", text: "import CryptoKit", file: PrivacyRules.cloud),
         // Round 3: remote readers with no flagged name.
@@ -1180,6 +1284,10 @@ extension GuardWrongCaseTests {
         // The cloud client may hand its request a url:.
         #expect(!PrivacyRules.findings(in: SyntaxSource("let x = URLRequest(url: url)"), file: PrivacyRules.cloud).contains { $0.rule == "privacy.urlRead" })
         #expect(!PrivacyRules.findings(in: SyntaxSource("static func makeSession() {}"), file: PrivacyRules.cloud).contains { $0.rule == "privacy.sessionFactory" })
+        // The voice adapter may hear speech, every request on the device.
+        let adapter = "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    request.requiresOnDeviceRecognition = true\n"
+            + "    task = SFSpeechRecognizer()?.recognitionTask(with: request) { _, _ in }\n}"
+        #expect(!PrivacyRules.findings(in: SyntaxSource(adapter), file: PrivacyRules.speechHelper).contains { $0.rule == "privacy.speech" })
     }
 
     @Test func privacyReasonCodesBelongToTheirCategories() {

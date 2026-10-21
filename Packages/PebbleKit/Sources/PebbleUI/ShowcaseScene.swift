@@ -12,8 +12,9 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     /// memory: the sidebar on a wide window, one column on a narrow one.
     case home, homeMemory, shortcuts
     /// Today with sample work, with a question waiting, and for a brand new
-    /// person with nothing yet.
-    case today, todayNeedsYou, todayEmpty
+    /// person with nothing yet. `todayListening` is Today as the Talk
+    /// shortcut opens it, listening, with the words heard so far.
+    case today, todayNeedsYou, todayEmpty, todayListening
     /// A reply on its way, a new chat with its starters, a memory with
     /// nothing in it yet, and a note just saved.
     case thinking, newChat, memoryEmpty, memorySaved
@@ -84,7 +85,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     // Its own rule, so the showcase never touches the app's.
                     needsYou: needsYou(at: morning) ?? NeedsYou(rule: .isolated())
                 )
-            case .today, .todayNeedsYou, .todayEmpty:
+            case .today, .todayNeedsYou, .todayEmpty, .todayListening:
                 HomeView(
                     brand: brand, model: LocalStubModel(), names: InMemoryAgentNameStore(stored: "Pip"),
                     onboarding: InMemoryOnboardingStore(finished: true), memory: Self.sampleMemory(),
@@ -93,6 +94,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
                     needsYou: needsYou(at: morning) ?? NeedsYou(rule: .isolated()),
                     now: { morning }
                 )
+                .environment(self == .todayListening ? Self.listeningVoice() : nil)
             case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive, .taskProven, .taskUnchecked,
                  .askWaiting, .askSheet, .askAnswered, .askClosed, .askLive:
                 taskHome(brand: brand, looks: looks)
@@ -238,7 +240,7 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
     func needsYou(at now: Date = morning, rule: AskFirst = .isolated()) -> NeedsYou? {
         switch self {
         case .todayNeedsYou, .todaySummary: Self.sampleQuestion(at: now)
-        case .today, .todayEmpty, .home, .homeMemory: NeedsYou(rule: .isolated())
+        case .today, .todayEmpty, .todayListening, .home, .homeMemory: NeedsYou(rule: .isolated())
         case .reconOffer: NeedsYou(rule: .isolated())
         case .taskRunning, .taskRetrying, .taskWaiting, .taskDone, .tasksLive, .taskProven, .taskUnchecked,
              .reconRunning, .reconReady, .askWaiting, .askSheet, .askAnswered, .askClosed, .askLive: NeedsYou(rule: rule)
@@ -275,6 +277,36 @@ public enum ShowcaseScene: String, CaseIterable, Sendable {
             return store
         default: return nil
         }
+    }
+
+    @MainActor private static var listening: VoiceCapture?
+
+    /// Talking, as the Talk shortcut opens it, on a listener that hears one
+    /// sample line and never touches the microphone. Its own requests, so
+    /// the showcase never takes a real shortcut's ask.
+    @MainActor
+    static func listeningVoice() -> VoiceCapture {
+        if let listening { return listening }
+        let requests = TalkRequests()
+        requests.ask()
+        let voice = VoiceCapture(listener: SampleListener(), requests: requests)
+        listening = voice
+        return voice
+    }
+
+    /// Hears "Remind me to call Sam after lunch" as soon as it starts.
+    @MainActor
+    final class SampleListener: SpeechListening {
+        static let line = "Remind me to call Sam after lunch"
+        let access = SpeechAccess.allowed
+        let hearsOnDevice = true
+        func askForAccess() async -> SpeechAccess { access }
+        func start(_ request: ListenRequest, heard: @escaping @MainActor (String) -> Void,
+                   ended: @escaping @MainActor () -> Void) throws {
+            Task { @MainActor in heard(Self.line) }
+        }
+        func finish() async -> String? { Self.line }
+        func cancel() {}
     }
 
     @MainActor private static var askStores: [ShowcaseScene: TaskStore] = [:]

@@ -51,10 +51,11 @@ keys that never enter the repo.
   (`offByDefaultMakesNoTransportAndKeepsChatsOnDevice`,
   `anEmptyAddressMeansDisabledEvenIfSavedOn`) go away. It also fails on
   system APIs that send the person's data to Apple: `CLGeocoder`,
-  `MKLocalSearch`, the iCloud container, and speech recognition outside the reserved
-  `PebbleModel/OnDeviceSpeech.swift` helper named `recognizeOnDevice`.
-  No speech helper ships today. Adding it requires reviewing the exact
-  request passed to recognition and tests that keep recognition on device.
+  `MKLocalSearch`, the iCloud container, and speech recognition outside the
+  voice adapter `PebbleVoice/DeviceSpeech.swift`. The adapter itself passes
+  only while the speech guard (`SpeechGate`, `make test`) finds every
+  request there asking for on-device recognition, set before it is used
+  and never turned off.
   Swift source is parsed by GuardScan in the separate Tools/GuardKit package.
   All compiled App sources are enumerated; languages the checker cannot
   read fail until a parser and fixtures are added.

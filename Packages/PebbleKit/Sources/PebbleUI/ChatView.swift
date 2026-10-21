@@ -15,6 +15,10 @@ public struct ChatView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.sendsFromKeyboard) private var sendsFromKeyboard
+    /// Talking in the composer, and the window it is in, so a suggestion's
+    /// fill ends listening here and only here.
+    @Environment(VoiceCapture.self) private var voice: VoiceCapture?
+    @Environment(\.talkWindow) private var window
     /// The pending "thinking" announcement, cancelled if the reply lands first.
     @State private var thinkingNotice: Task<Void, Never>?
     #if os(iOS)
@@ -468,13 +472,22 @@ public struct ChatView: View {
             FlowRows(spacing: Theme.Space.xs) {
                 ForEach(Array(FirstConversation.jobs.enumerated()), id: \.element.id) { index, job in
                     StarterChip(title: job.title, symbol: ChatStyle.symbol(forStarter: job.id), index: index) {
-                        controller.fill(withSuggestion: job.prompt)
+                        Self.fill(job.prompt, in: controller, voice: voice, window: window)
                         composerFocused = true
                     }
                     .disabled(controller.isReplying)
                 }
             }
         }
+    }
+
+    /// A suggestion tapped, apart from the cursor, so tests can drive it.
+    /// Its words go in the composer as `ChatController.fill` allows, and
+    /// listening in this window ends with them, so no word heard after
+    /// writes over the suggestion.
+    static func fill(_ suggestion: String, in controller: ChatController, voice: VoiceCapture?, window: UUID?) {
+        controller.fill(withSuggestion: suggestion)
+        voice?.draftFilled(controller.draft, in: window)
     }
 
     private var composer: some View {

@@ -1,3 +1,75 @@
+# The source guards. Each rule turned off must fail the wrong-case suite.
+
+# The speech guard: a request made without on-device recognition.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~Rule\("speech\.requestNotOnDevice", requestNotOnDevice\)~Rule("speech.requestNotOnDevice", { _, _ in [] })~
+
+# The speech guard: on-device recognition turned off.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~Rule\("speech\.onDeviceTurnedOff", onDeviceTurnedOff\)~Rule("speech.onDeviceTurnedOff", { _, _ in [] })~
+
+# The speech guard: the Speech framework outside the adapter.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~Rule\("speech\.outsideAdapter", outsideAdapter\)~Rule("speech.outsideAdapter", { _, _ in [] })~
+
+# The speech guard: a voice file that could keep what was heard.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~Rule\("speech\.keepsWords", keepsWords\)~Rule("speech.keepsWords", { _, _ in [] })~
+
+# A request whose on-device setting sits in a block inside the one that
+# made it, as behind an `if`, is let by.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~,\n                  SyntaxSource\.enclosingBraces\(of: infix\)\?\.id == scope\.id else~ else~
+
+# The speech guard: a `.init(...)` in the adapter that could make a request
+# without the flag, as `request = .init()` after the flag was set.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~Rule\("speech\.requestUnresolved", requestUnresolved\)~Rule("speech.requestUnresolved", { _, _ in [] })~
+
+# The speech guard: a request type under another name, through a typealias.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~return made \+ aliases~return made~
+
+# The speech guard: a request bound with `var`, or given another after.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~Rule\("speech\.requestReassigned", requestReassigned\)~Rule("speech.requestReassigned", { _, _ in [] })~
+
+# The speech guard: a request bound with `var` is let by.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~decl\.bindingSpecifier\.tokenKind == \.keyword\(\.var\)~decl.bindingSpecifier.tokenKind == .keyword(.inout)~
+
+# The speech guard: a request used before its on-device setting.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~Rule\("speech\.usedBeforeOnDevice", usedBeforeOnDevice\)~Rule("speech.usedBeforeOnDevice", { _, _ in [] })~
+
+# The speech guard: an on-device setting only under `#if DEBUG`, or another
+# branch, while the request is used in every build.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~Rule\("speech\.onDeviceOnlySometimes", onDeviceOnlySometimes\)~Rule("speech.onDeviceOnlySometimes", { _, _ in [] })~
+
+# The speech guard: a `#if` branch around the setting is not counted, so a
+# setting in each of `#if` and `#else` passes for one made in every build.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~                clauses\.append\(clause\.id\)\n~~
+
+# The speech guard: the on-device setting passed as inout, where a helper
+# could set it back to false.
+test: theSpeechGuardCatchesEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/SpeechRules.swift
+perl: s~if written\.parent\?\.is\(InOutExprSyntax\.self\) == true \{~if false {~
+
 # Disable the privacy network rule.
 test: privacyRulesCatchEveryWrongCase
 file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
@@ -27,6 +99,12 @@ perl: s~Rule\("privacy\.requiredReason", requiredReason\),~~
 test: privacyRulesCatchEveryWrongCase
 file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
 perl: s~Rule\("privacy\.speech", speech\),~~
+
+# The voice adapter let by whatever the speech guard finds in it, so a
+# request there without on-device recognition passes the privacy check.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~if file == speechHelper, SpeechGate\.problems\(in: source, file: SpeechGate\.adapterFile\)\.isEmpty \{ return \[\] \}~if file == speechHelper { return [] }~
 
 # Disable the privacy upload rule.
 test: privacyRulesCatchEveryWrongCase
@@ -203,7 +281,6 @@ perl: s~ && !plain\.contains\(calleeName\(call\.calledExpression\)\)~~
 test: privacyRulesAllowReviewedContexts
 file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
 perl: s~file != cloud && !labels~!labels~
-
 
 # The connector gate: each rule turned off on its own.
 test: theConnectorGateCatchesEveryWrongCase

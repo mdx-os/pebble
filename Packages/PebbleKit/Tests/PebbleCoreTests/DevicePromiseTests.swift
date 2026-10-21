@@ -111,7 +111,20 @@ struct DevicePromiseTests {
                         text: "        # Empty unless set in Config/Cloud.xcconfig. Empty means no cloud model.",
                         reason: "A YAML comment beside the cloud address setting. It never reaches the plist or "
                             + "the screen, and it says when there is no cloud model, not where words go."),
+        AllowedResource(file: "App/Info.plist", text: speechUsage, reason: speechUsageReason),
+        AllowedResource(file: "project.yml", text: "        NSSpeechRecognitionUsageDescription: " + speechUsage,
+                        reason: speechUsageReason),
     ]
+
+    /// The speech recognition question's words, which the system shows.
+    static let speechUsage = "So I can turn what you say into words. That happens on this device, and what you say "
+        + "is never sent anywhere to be understood."
+
+    /// Why the speech question may promise the device whatever the model.
+    static let speechUsageReason = "It is about turning speech into words, not where a chat goes. Speech is heard "
+        + "on the device whatever the model: DeviceSpeech asks every request for on-device recognition, refuses "
+        + "to start when the device can't, and SpeechGate in Tools/GuardKit keeps it that way. Once sent, the "
+        + "words are a message like a typed one, and the chat's own lines say where those go."
 
     /// Every word a person can see that lives outside Swift: each string in
     /// `App/Info.plist`, each line of project.yml (its `info:` properties

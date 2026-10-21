@@ -22,7 +22,7 @@ in lint, a skill, or CI.
 - `make archive`: unsigned Release archives for iOS and macOS, checked for App Store Connect. `docs/RELEASE.md` covers signing and upload
 - `make privacy-check`: fails when code uses a required-reason API that `App/Resources/PrivacyInfo.xcprivacy` does not list, or network code outside the opt-in cloud client's files named in `scripts/privacy-check.sh`. `make privacy-check-test` runs it on `scripts/privacy-fixtures`
 - `make pulse`: fetch the public source watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
-- `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`, plus dark shots of the
+- `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`, Today listening on iPhone, plus dark shots of the
   blue fill that `scripts/check-screenshots.sh` checks. Worktrees share simulators and
   the bundle ID, so when another session runs at once pass free ones:
   `make verify PEBBLE_IPAD="iPad Air 13-inch (M4)" PEBBLE_IPHONE="iPhone 17e"`
@@ -57,6 +57,7 @@ in lint, a skill, or CI.
   - `PebblePulse`: public source watch fetching and snapshots. Imports PebbleCore.
   - `PebbleModel`: model adapter. `ModelClient`, the on-device placeholder and `CloudModel` (off by default, every request previewed and redacted by `Redactor` in PebbleCore). Imports PebbleCore. MLX and Ollama adapters plug in here. The on-device task engine lives here too, made only by `OnDeviceTasks` from a key the compiler keeps private.
   - `PebbleBackground`: gives the background runner time (`BGTaskScheduler` on iOS, `NSBackgroundActivityScheduler` on the Mac). Imports PebbleCore. Scheduling decisions are pure functions in `BackgroundPlan`; the runner, its store and its switch live in PebbleCore's `Background.swift`, so no platform code goes there.
+  - `PebbleVoice`: listening on the device. `DeviceSpeech`, the thin Speech and AVFoundation adapter behind PebbleCore's `SpeechListening`, and `TalkIntent`. Imports PebbleCore. The capture's logic is `VoiceCapture` in PebbleCore, tested on a fake recognizer. Only `DeviceSpeech.swift` names Speech, every request asks for on-device recognition, and no voice file names a file, a setting or a log (`SpeechGate` in GuardKit).
   - `PebbleConnectors`: read only connectors to what the person keeps in other apps (calendar and reminders through EventKit). Imports none of our layers; reading never asks, and `ConnectorGate` keeps it free of network, files and logs. See `docs/CONNECTORS.md`.
   - `PebbleUI`: SwiftUI views shared by every platform. Imports PebbleCore and PebbleModel.
 - Where work is done (kept context, a framework, the relay, a remote run,
@@ -251,4 +252,7 @@ Some things can't be proven by an automated test. Check these by hand before a r
 - **Done's focus ring on the Mac:** turn on Full Keyboard Access, open a sheet, and Tab to Done. Exactly one ring shows around it, in light and in dark. If the system draws a second ring, add `.focusEffectDisabled()` to the button.
 - **Done's focus ring on iPad:** with a hardware keyboard, Tab to Done. The ring shows in light and in dark.
 - **Done's pointer hover on iPad:** with a trackpad or mouse, hover over Done. It shows the hover effect.
+- **Hold to talk on iPhone:** hold the microphone on Today the first time. The two system questions come then, not at launch. Hold again, speak, and the words show as you talk; let go and they send. Slide away and nothing sends. Turn on Airplane Mode and check it still hears you.
+- **Talk with VoiceOver:** double tap the microphone, speak, double tap again; the words send. Nothing is spoken while it listens.
+- **The Action Button:** assign Talk to the Action Button in Settings, press it with the app closed. The app opens listening; Send sends.
 - **Today's count on the Mac:** with something waiting and another row chosen, turn on VoiceOver and move to Today in the sidebar. It says the count as "3 waiting for you", not just "3". If it says only the number, the system badge is dropping the label.

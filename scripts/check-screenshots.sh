@@ -49,7 +49,7 @@ for scene in $asked; do
   esac
 done
 
-for name in iphone ipad mac ipad-sidebar-dark ipad-sidebar-badge-dark iphone-sheet-dark mac-sheet mac-sheet-dark; do
+for name in iphone iphone-listening ipad mac ipad-sidebar-dark ipad-sidebar-badge-dark iphone-sheet-dark mac-sheet mac-sheet-dark; do
   if [ ! -s "$dir/$name.png" ]; then
     echo "check-screenshots: $dir/$name.png is missing" >&2
     exit 1

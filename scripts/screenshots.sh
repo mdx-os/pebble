@@ -78,6 +78,13 @@ for kind in iPhone iPad; do
   file="$out/$(echo "$kind" | tr '[:upper:]' '[:lower:]').png"
   launch_and_shoot "$udid" "$bundle_id" "$file" -showcaseStill YES
   echo "screenshots: $file"
+  # Today as the Talk shortcut opens it, listening, on a sample listener
+  # that never touches the microphone.
+  if [ "$kind" = iPhone ]; then
+    file="$out/iphone-listening.png"
+    launch_and_shoot "$udid" "$bundle_id" "$file" -showcaseScreen todayListening -showcaseStill YES
+    echo "screenshots: $file"
+  fi
   # In dark mode, where white words on the blue fill are hardest to
   # read: the iPad sidebar with Today selected, then with a question
   # waiting so its count shows on the chosen row, and the memory sheet with

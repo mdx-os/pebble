@@ -1,7 +1,7 @@
-// into: Packages/PebbleKit/Sources/PebbleModel
-// filename: OnDeviceSpeech.swift
+// into: Packages/PebbleKit/Sources/PebbleVoice
+// filename: DeviceSpeech.swift
 // expect: speech recognition outside the reviewed helper
-func recognizeOnDevice() {
+func hear() {
     let local = SFSpeechAudioBufferRecognitionRequest()
     local.requiresOnDeviceRecognition = true
     SFSpeechRecognizer()?.recognitionTask(with: local) { _, _ in }

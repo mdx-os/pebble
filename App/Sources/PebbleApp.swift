@@ -2,6 +2,7 @@ import PebbleBackground
 import PebbleCore
 import PebbleModel
 import PebbleUI
+import PebbleVoice
 import SwiftUI
 
 @main
@@ -36,6 +37,12 @@ struct PebbleApp: App {
     /// can't be opened they are kept in memory, and Forget everything still
     /// deletes a file an earlier launch left.
     private let kept: TaskStore
+    #if os(iOS)
+    /// Hold to talk in the composers, heard on this device only. Nothing is
+    /// asked until the person first starts talking, by a hold, the Talk
+    /// shortcut or VoiceOver. Not on the Mac yet.
+    @State private var voice = VoiceCapture(listener: DeviceSpeech())
+    #endif
 
     init() {
         guard let brand = Brand(infoDictionary: Bundle.main.infoDictionary) else {
@@ -122,5 +129,8 @@ struct PebbleApp: App {
             cloud: cloud,
             background: background.runner
         )
+        #if os(iOS)
+        .environment(voice)
+        #endif
     }
 }

@@ -7,7 +7,7 @@ public enum PrivacyRules {
     public static let cloud = "Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift"
     public static let gate = "Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift"
     public static let gateTests = "Packages/PebbleKit/Tests/PebbleUITests/CloudHelpTests.swift"
-    public static let speechHelper = "Packages/PebbleKit/Sources/PebbleModel/OnDeviceSpeech.swift"
+    public static let speechHelper = "Packages/PebbleKit/Sources/" + SpeechGate.adapterFile
 
     public static let rules: [Rule] = [
         Rule("privacy.network", network),
@@ -285,15 +285,16 @@ public enum PrivacyRules {
         }
     }
 
-    /// Speech is not shipped today. Reserve one reviewed helper instead of
-    /// treating a true assignment elsewhere in a file as permission to upload.
-    /// Adding that helper requires review of its request construction and tests.
+    /// Speech ships only in the voice adapter, `DeviceSpeech.swift`, never
+    /// on a true assignment elsewhere in a file taken as permission to upload.
+    /// The adapter is let by only while the speech guard finds nothing in it:
+    /// every request made there asks for on-device recognition, set before
+    /// it is used and never turned off (`SpeechGate`).
     static func speech(_ source: SyntaxSource, _ file: String) -> [Finding] {
-        identifiers(source).compactMap { token in
+        if file == speechHelper, SpeechGate.problems(in: source, file: SpeechGate.adapterFile).isEmpty { return [] }
+        return identifiers(source).compactMap { token in
             let name = SyntaxSource.name(token)
             guard name.hasPrefix("SFSpeech") || name == "recognitionTask" else { return nil }
-            if file == speechHelper, let function = ancestor(token, FunctionDeclSyntax.self),
-               SyntaxSource.name(function.name) == "recognizeOnDevice" { return nil }
             return Finding("privacy.speech", at: token, in: source, "speech recognition outside the reviewed helper (requiresOnDeviceRecognition must be enforced there)")
         }
     }

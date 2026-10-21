@@ -1,9 +1,10 @@
-// into: Packages/PebbleKit/Sources/PebbleModel
-// filename: OnDeviceSpeech.swift
+// into: Packages/PebbleKit/Sources/PebbleVoice
+// filename: DeviceSpeech.swift
 // expect: ok
 import Speech
 
-func recognizeOnDevice(_ request: SFSpeechAudioBufferRecognitionRequest) -> SFSpeechRecognizer? {
+func hear(_ recognizer: SFSpeechRecognizer) -> SFSpeechRecognitionTask {
+    let request = SFSpeechAudioBufferRecognitionRequest()
     request.requiresOnDeviceRecognition = true
-    return SFSpeechRecognizer()
+    return recognizer.recognitionTask(with: request) { _, _ in }
 }
