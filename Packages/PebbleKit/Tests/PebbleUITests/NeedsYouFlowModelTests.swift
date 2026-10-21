@@ -19,6 +19,14 @@ private final class FlowClock: @unchecked Sendable {
     func advance(_ seconds: Double) { lock.lock(); time += .milliseconds(Int64(seconds * 1000)); lock.unlock() }
 }
 
+extension AskFirst {
+    /// A rule on a clock that stands still unless a test moves it. On the
+    /// wall clock, a test waiting its turn on the main actor for 210 s or
+    /// more would leave its question under `NeedsYouFlow.leastTimeLeft`,
+    /// and it would never nudge.
+    fileprivate static func steady() -> AskFirst { .isolated(now: FlowClock().now) }
+}
+
 /// Stands in for the system's notifications: says what it is told to,
 /// and writes down every call.
 private final class FakeNotifier: QuestionNotifying, @unchecked Sendable {
@@ -207,7 +215,7 @@ struct NeedsYouFlowModelTests {
     /// Today with the dentist search, and the flow around it.
     private func today(rule: AskFirst? = nil, store: TaskStore = .inMemory(), notifier: FakeNotifier = FakeNotifier(),
                        origin: Date = morning, start: Bool = true) -> (FeedModel, LocalFakeEngine, NeedsYouFlow) {
-        let rule = rule ?? .isolated()
+        let rule = rule ?? .steady()
         let engine = LocalFakeEngine(rule: rule, origin: origin)
         if start { engine.start(SampleTasks.dentist) }
         // The device clock and the engine's agree, as they do in the app.
@@ -420,12 +428,12 @@ struct NeedsYouFlowModelTests {
     @Test func aQuestionFromAForeignRuleIsNeitherPinnedNorNudgedNorAnswerable() async throws {
         let notifier = FakeNotifier()
         let store = TaskStore.inMemory(.init(nudges: .allowed))
-        let engine = LocalFakeEngine(rule: .isolated(), origin: Self.morning)
+        let engine = LocalFakeEngine(rule: .steady(), origin: Self.morning)
         engine.start(SampleTasks.dentist)
         engine.advance(by: 42)
         let flow = NeedsYouFlow(store: store, notifier: notifier, agentName: { "Pip" })
         // Today's rule is not the one the engine asked through.
-        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: .isolated()), tasks: engine, place: .onDevice,
+        let model = FeedModel(sources: [], needsYou: NeedsYou(rule: .steady()), tasks: engine, place: .onDevice,
                               flow: flow, now: { Self.morning })
         let task = try #require(engine.tasks.first)
         #expect(task.waitsForApproval)
@@ -484,7 +492,7 @@ struct NeedsYouFlowModelTests {
         let offMain: OffMainEngine
         let drain: @MainActor () async -> Void
         do {
-            let rule = AskFirst.isolated()
+            let rule = AskFirst.steady()
             let engine = LocalFakeEngine(rule: rule, origin: Self.morning)
             engine.start(SampleTasks.dentist)
             offMain = OffMainEngine(engine)
@@ -626,7 +634,7 @@ struct NeedsYouFlowModelTests {
     /// Every way the engine leaves a step undone marks it, so each closing
     /// line keeps the "I didn't" line from showing twice.
     @Test func everyStepLeftUndoneIsMarked() throws {
-        let rule = AskFirst.isolated()
+        let rule = AskFirst.steady()
         let engine = LocalFakeEngine(rule: rule, origin: Self.morning)
         engine.start(SampleTasks.dentist)
         engine.advance(by: 42)
@@ -708,7 +716,7 @@ struct NeedsYouFlowModelTests {
     @Test func forgetEverythingInOneWindowForgetsInTheOther() async throws {
         let store = TaskStore.inMemory()
         let flow = NeedsYouFlow(store: store, notifier: FakeNotifier(), agentName: { "Pip" })
-        let rule = AskFirst.isolated()
+        let rule = AskFirst.steady()
         let engine = LocalFakeEngine(rule: rule, origin: Self.morning)
         engine.start(SampleTasks.dentist)
         engine.advance(by: 42)
@@ -740,7 +748,7 @@ struct NeedsYouFlowModelTests {
     @Test func forgetEverythingInOneWindowClosesTheSheetOpenInTheOther() async throws {
         let store = TaskStore.inMemory()
         let flow = NeedsYouFlow(store: store, notifier: FakeNotifier(), agentName: { "Pip" })
-        let rule = AskFirst.isolated()
+        let rule = AskFirst.steady()
         let engine = LocalFakeEngine(rule: rule, origin: Self.morning)
         engine.start(SampleTasks.dentist)
         engine.advance(by: 42)
@@ -783,7 +791,7 @@ struct NeedsYouFlowModelTests {
     @Test func forgetEverythingShowsTheSameLinesInEveryWindow() async throws {
         let store = TaskStore.inMemory()
         let flow = NeedsYouFlow(store: store, notifier: FakeNotifier(), agentName: { "Pip" })
-        let rule = AskFirst.isolated()
+        let rule = AskFirst.steady()
         let engine = LocalFakeEngine(rule: rule, origin: Self.morning)
         engine.start(SampleTasks.dentist)
         engine.advance(by: 42)
@@ -825,7 +833,7 @@ struct NeedsYouFlowModelTests {
         }
         #expect(store.tasks.first?.phase == .approved)
         // The app opens again, with two windows on one engine.
-        let rule = AskFirst.isolated()
+        let rule = AskFirst.steady()
         let origin = Self.morning + 43
         let engine = LocalFakeEngine(rule: rule, origin: origin)
         let flow = NeedsYouFlow(store: store, notifier: FakeNotifier(), agentName: { "Pip" })
@@ -877,7 +885,7 @@ struct NeedsYouFlowModelTests {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = folder.appendingPathComponent("tasks.json")
         let store = TaskStore(fileURL: url, forgetMarker: folder.appendingPathComponent("pending/tasks-forgotten"))
-        let rule = AskFirst.isolated()
+        let rule = AskFirst.steady()
         let engine = LocalFakeEngine(rule: rule, origin: Self.morning)
         engine.start(SampleTasks.dentist)
         engine.advance(by: 42)
@@ -918,7 +926,7 @@ struct NeedsYouFlowModelTests {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = folder.appendingPathComponent("tasks.json")
         let marker = folder.appendingPathComponent("pending/tasks-forgotten")
-        let rule = AskFirst.isolated()
+        let rule = AskFirst.steady()
         let before = LocalFakeEngine(rule: rule, origin: Self.morning)
         before.start(SampleTasks.dentist)
         before.advance(by: 42)
@@ -945,7 +953,7 @@ struct NeedsYouFlowModelTests {
 
     @Test func forgetEverythingFromTheMemoryScreenClearsReceipts() throws {
         let store = TaskStore.inMemory()
-        let rule = AskFirst.isolated()
+        let rule = AskFirst.steady()
         let engine = LocalFakeEngine(rule: rule, origin: Self.morning)
         engine.start(SampleTasks.dentist)
         engine.advance(by: 42)
@@ -1124,7 +1132,7 @@ struct NeedsYouFlowModelTests {
         let store = TaskStore.inMemory(.init(nudges: .allowed))
         let flow = NeedsYouFlow.forApp(store: store, notifier: notifier, agentName: { "Pip" })
         #expect(NeedsYouFlow.forApp(store: store, notifier: notifier, agentName: { "Pip" }) === flow)
-        let rule = AskFirst.isolated()
+        let rule = AskFirst.steady()
         let engine = LocalFakeEngine(rule: rule, origin: Self.morning)
         engine.start(SampleTasks.dentist)
         engine.advance(by: 42)
@@ -1163,7 +1171,7 @@ struct NeedsYouFlowModelTests {
         #expect(one === two)
         #expect(notifier.clears == 1)
         #expect(notifier.listeners == 1)
-        let rule = AskFirst.isolated()
+        let rule = AskFirst.steady()
         let engine = LocalFakeEngine(rule: rule, origin: Self.morning)
         engine.start(SampleTasks.dentist)
         engine.advance(by: 42)
@@ -1208,7 +1216,7 @@ struct NeedsYouFlowModelTests {
         let notifier = FakeNotifier()
         let store = TaskStore.inMemory(.init(nudges: .allowed))
         let flow = NeedsYouFlow(store: store, notifier: notifier, agentName: { "Pip" })
-        let rule = AskFirst.isolated()
+        let rule = AskFirst.steady()
         let engine = LocalFakeEngine(rule: rule, origin: Self.morning)
         engine.start(SampleTasks.dentist)
         engine.advance(by: 42)
@@ -1285,7 +1293,7 @@ struct NeedsYouFlowModelTests {
     /// PERMANENT GUARD. A nudge carries only that the agent has a question
     /// and which card to open. Nothing for a lock screen to show.
     @Test func aNudgeShowsNothingOfTheQuestion() throws {
-        let engine = LocalFakeEngine(rule: .isolated(), origin: Self.morning)
+        let engine = LocalFakeEngine(rule: .steady(), origin: Self.morning)
         engine.start(SampleTasks.dentist)
         engine.advance(by: 42)
         let task = try #require(engine.tasks.first)
@@ -1326,7 +1334,7 @@ struct NeedsYouFlowModelTests {
     @Test func onlyQuestionNudgesAreHiddenWhileTheAppIsInFront() throws {
         #expect(LocalQuestionNotifier.presentation(inThread: LocalQuestionNotifier.thread).isEmpty)
         #expect(LocalQuestionNotifier.presentation(inThread: "other") == [.banner, .list, .sound])
-        let question = try #require(AskFirst.isolated().ask(SampleTasks.holdVisit))
+        let question = try #require(AskFirst.steady().ask(SampleTasks.holdVisit))
         let content = LocalQuestionNotifier.content(for: QuestionNudge(question: question, taskID: "task:1", agentName: "Pip"))
         #expect(content.threadIdentifier == LocalQuestionNotifier.thread)
     }
@@ -1364,7 +1372,7 @@ struct NeedsYouFlowModelTests {
     /// so nothing here may reach for one.
     @Test func aNotifierThatWasNeverInstalledTouchesNothing() throws {
         let notifier = LocalQuestionNotifier()
-        let question = try #require(AskFirst.isolated().ask(SampleTasks.holdVisit))
+        let question = try #require(AskFirst.steady().ask(SampleTasks.holdVisit))
         notifier.post(QuestionNudge(question: question, taskID: "task:1", agentName: "Pip"), after: 30)
         notifier.remove(["question:1"])
         notifier.removeAll()
@@ -1402,7 +1410,7 @@ struct NeedsYouFlowModelTests {
     @Test func aNudgeTakenAwayOnItsWayIsTakenAwayOnceItLands() async throws {
         let center = FakeCenter()
         let notifier = LocalQuestionNotifier(center: center)
-        let question = try #require(AskFirst.isolated().ask(SampleTasks.holdVisit))
+        let question = try #require(AskFirst.steady().ask(SampleTasks.holdVisit))
         let nudge = QuestionNudge(question: question, taskID: "task:1", agentName: "Pip")
         center.hold()
         notifier.post(nudge, after: 30)
@@ -1424,7 +1432,7 @@ struct NeedsYouFlowModelTests {
     func everyNudgeTakenAwayTakesOneStillOnItsWay(byForgetting: Bool) async throws {
         let center = FakeCenter()
         let notifier = LocalQuestionNotifier(center: center)
-        let question = try #require(AskFirst.isolated().ask(SampleTasks.holdVisit))
+        let question = try #require(AskFirst.steady().ask(SampleTasks.holdVisit))
         let nudge = QuestionNudge(question: question, taskID: "task:1", agentName: "Pip")
         center.hold()
         notifier.post(nudge, after: 30)
@@ -1541,7 +1549,7 @@ struct NeedsYouFlowModelTests {
                               approvedAt: Self.morning, endedAt: Self.morning, outcome: .done, isSample: true)
         let card = try measured(ReceiptCard(receipt: receipt, time: "9:41 AM", onClear: {}), width: 361, text: text)
         #expect(card.width <= 361.5, "the receipt is \(card.width) wide at \(text)")
-        let rule = AskFirst.isolated()
+        let rule = AskFirst.steady()
         let request = try #require(rule.ask(SampleTasks.holdVisit))
         let sheet = ConfirmationSheet(request: request, rule: rule, isExample: true, onApprove: { _ in }, onDecline: {})
             .unscrolled()
@@ -1761,7 +1769,7 @@ struct NeedsYouFlowModelTests {
 
     @Test func eachAskSceneShowsItsMoment() throws {
         func dentist(_ scene: ShowcaseScene) -> AgentTask? {
-            ShowcaseScene.askTasks(scene, rule: .isolated()).tasks.first { $0.title == SampleTasks.dentistTitle }
+            ShowcaseScene.askTasks(scene, rule: .steady()).tasks.first { $0.title == SampleTasks.dentistTitle }
         }
         #expect(dentist(.askWaiting)?.waitsForApproval == true)
         #expect(dentist(.askAnswered)?.state == .done)

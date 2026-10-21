@@ -79,7 +79,7 @@ public struct MemoryView: View {
 
     /// What Forget everything does before anything else, when there is a
     /// cloud setting: it ends every open cloud chat, and says whether
-    /// anything was handed to the cloud this session.
+    /// anything was ever handed to the cloud, at this launch or before.
     static func endsCloudChats(_ cloud: CloudHelp?) -> (@MainActor () -> Bool)? {
         guard let cloud else { return nil }
         return { cloud.endOpenCloudChats() }
@@ -938,7 +938,7 @@ final class MemoryModel: ObservableObject {
     /// sometimes the cloud setting with them.
     private let alsoForget: (@MainActor () throws -> CloudHelp.Forgot)?
     /// Runs first of all: ends every open cloud chat, and says whether
-    /// anything was handed to the cloud this session.
+    /// anything was ever handed to the cloud, at this launch or before.
     private let endsCloudChats: (@MainActor () -> Bool)?
 
     /// Forgets what lives outside the memory file, such as tasks.
@@ -1308,7 +1308,8 @@ final class MemoryModel: ObservableObject {
     /// line names only what went: the notes only with `hadNotes`. With
     /// nothing to say of the summaries, `underway` simply follows the line.
     ///
-    /// With `sent`, something was handed to the cloud this session, and a
+    /// With `sent`, something was handed to the cloud, at this launch or
+    /// before (`CloudHelp.anythingSent`), and a
     /// copy of it may be there now. Nothing here can erase that, so the line
     /// never says "I no longer have it", and says so plainly, just before
     /// any advice to try again.

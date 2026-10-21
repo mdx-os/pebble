@@ -251,8 +251,8 @@ struct BackgroundFeedTests {
 
     /// With the cloud setting too, one Forget everything ends every open
     /// cloud chat before anything else, then takes the summaries, the
-    /// tasks, the notes and the private words. Something went to the cloud
-    /// this session, so the line never says "I no longer have it".
+    /// tasks, the notes and the private words. Something went to the cloud,
+    /// so the line never says "I no longer have it".
     @Test func forgetEverythingEndsCloudChatsFirstThenClearsTheSummariesToo() throws {
         let notes = scratchMemory()
         _ = try notes.remember("Sam's birthday is May 14.", source: .toldMe)

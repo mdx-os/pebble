@@ -126,7 +126,7 @@ public protocol CloudHelpStoring: Sendable {
     /// Saves `settings`, and clears any `markOff`.
     func save(_ settings: CloudHelpSettings) throws
     /// Erases everything saved, even when it can't be read, the off mark
-    /// included.
+    /// included. The sent mark stays (`markSent`).
     func erase() throws
     /// Records that the person switched the cloud off, in a place that can
     /// be written even when the settings can't be, as on a locked device.
@@ -135,6 +135,14 @@ public protocol CloudHelpStoring: Sendable {
     /// `save` clears it, since CloudHelp only ever saves a switch off it
     /// still holds, or a fresh yes.
     func markOff() throws
+    /// Records that something was handed to the cloud, as a flag with no
+    /// words, so Forget everything at a later launch still says a copy
+    /// may have left. `erase` leaves it: erasing the setting can't call
+    /// back what was sent.
+    func markSent() throws
+    /// True once `markSent` has been made here, at this launch or an
+    /// earlier one.
+    var wasSent: Bool { get }
 }
 
 extension CloudHelpStoring {
@@ -183,6 +191,25 @@ public final class CloudHelpFileStore: CloudHelpStoring, @unchecked Sendable {
     /// already reading this app's folder: that the cloud was switched off.
     public var offMarkURL: URL {
         fileURL.deletingLastPathComponent().appendingPathComponent("." + fileURL.lastPathComponent + ".off")
+    }
+
+    /// The sent mark (`markSent`). Empty, like the off mark, and left
+    /// unlocked the same way. It stays through Forget everything, so its
+    /// one tell, to someone already reading this app's folder, is that
+    /// something was once sent to the cloud.
+    public var sentMarkURL: URL {
+        fileURL.deletingLastPathComponent().appendingPathComponent("." + fileURL.lastPathComponent + ".sent")
+    }
+
+    public func markSent() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !FileManager.default.fileExists(atPath: sentMarkURL.path) else { return }
+        try Data().write(to: sentMarkURL, options: Self.offMarkWriting)
+    }
+
+    public var wasSent: Bool {
+        lock.withLock { FileManager.default.fileExists(atPath: sentMarkURL.path) }
     }
 
     public func load() throws -> CloudHelpSettings {
@@ -295,6 +322,15 @@ public final class InMemoryCloudHelpStore: CloudHelpStoring, @unchecked Sendable
     public func markOff() throws {
         lock.withLock { markedOff = true }
     }
+
+    private var sent = false
+
+    /// Kept through `erase`, as the file store's mark is.
+    public func markSent() throws {
+        lock.withLock { sent = true }
+    }
+
+    public var wasSent: Bool { lock.withLock { sent } }
 }
 
 /// The address of the cloud helper.
@@ -586,13 +622,13 @@ public enum CloudWords {
     /// that isn't a few short labelled values. Nothing was shown or sent.
     public static let signInRefused = "I didn't send that. Signing in to the cloud asked to carry more than a sign-in should, so I stopped before anything left."
     /// Forget everything erased all it kept, after something went to the
-    /// cloud this session. Said in place of `MemoryWords.forgotten`, whose
+    /// cloud, at this launch or an earlier one. Said in place of `MemoryWords.forgotten`, whose
     /// "I no longer have it" can't speak for a copy that already left.
     public static let forgotAfterSending = "Everything I kept is gone."
     /// The same in place of `forgotAndCloudOff`.
     public static let forgotAndCloudOffAfterSending = "Everything I kept is gone. To be sure the words you asked me to hide were gone too, I cleared the cloud setting, so help from the cloud is off. You can turn it on again anytime."
     /// Added to whatever Forget everything says once anything was handed to
-    /// the cloud this session.
+    /// the cloud, at this launch or an earlier one.
     public static let sentCantBeErased = "What I already sent to the cloud can't be erased from here."
 
     /// Every fixed line. `offDetail` follows a place, which only the model

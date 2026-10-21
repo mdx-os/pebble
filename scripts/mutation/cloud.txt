@@ -787,3 +787,26 @@ perl: s~if let status = settled\.status, state != status \{~if let status = sett
 test: aYesSavedOffAfterALockedLaunchStaysOffForItsAddress
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
 perl: s~(\n\s*state = status\n)\s*fromLaunch = true\n~$1~
+
+# What went to the cloud at an earlier launch is still said by Forget
+# everything: the send is marked in the store, the mark is read at the
+# next launch, and erasing the setting leaves it.
+test: forgetEverythingAfterARelaunchStillSaysWhatWentCantBeErased
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~sent\.value = true; try\? store\.markSent\(\)~sent.value = true~
+
+test: forgetEverythingAfterARelaunchStillSaysWhatWentCantBeErased
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~withdrawPreviews\(\)\n(\s*)return anythingSent~withdrawPreviews()\n$1return sent.value~
+
+test: forgetEverythingAfterARelaunchStillSaysWhatWentCantBeErased theSentMarkOutlivesARelaunchAndAnErase
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~lock\.withLock \{ FileManager\.default\.fileExists\(atPath: sentMarkURL\.path\) \}~lock.withLock { false }~
+
+test: theSentMarkOutlivesARelaunchAndAnErase
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~(\n\s*)try removeOffMark\(\)\n(\s*)\}~$1try removeOffMark()$1try? FileManager.default.removeItem(at: sentMarkURL)\n$2}~
+
+test: theSentMarkOutlivesARelaunchAndAnErase
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~(\n\s*)settings = \.off\n(\s*)readable = true\n~$1settings = .off$1sent = false\n$2readable = true\n~

@@ -124,13 +124,25 @@ public final class CloudHelp: ObservableObject {
     private let switchedOff = SessionFlag()
     /// Set once anything has been handed to the cloud this session, so
     /// Forget everything never claims a copy that already left is gone.
+    /// The store's sent mark (`CloudHelpStoring.markSent`) carries the same
+    /// to later launches.
     private let sent = SessionFlag()
     /// Reads the settings again once a locked device is unlocked, so a
     /// switch off that couldn't be saved is saved then.
     private var unlockWatch: AnyCancellable?
 
-    /// True once anything has been handed to the cloud since launch.
-    public var anythingSentThisSession: Bool { sent.value }
+    /// True once anything has been handed to the cloud, at this launch or
+    /// an earlier one.
+    public var anythingSent: Bool { sent.value || sentAtAnEarlierLaunch }
+
+    /// The sent mark, read from the store, or from the file a setting that
+    /// couldn't be opened would have read. A file that can't be reached
+    /// can't say nothing went, so it counts as sent.
+    private var sentAtAnEarlierLaunch: Bool {
+        if storeOpened { return store.wasSent }
+        guard let unopenedFile else { return false }
+        return (try? unopenedFile())?.wasSent ?? true
+    }
 
     public convenience init(
         store: any CloudHelpStoring,
@@ -322,7 +334,8 @@ public final class CloudHelp: ObservableObject {
             let memory = self.memory
             let switchedOff = self.switchedOff
             let sent = self.sent
-            let session = CloudChatSession(handingOver: { sent.value = true })
+            // Marked in the store too, so a later launch still knows.
+            let session = CloudChatSession(handingOver: { sent.value = true; try? store.markSent() })
             sessions.add(session)
             return CloudModel(
                 endpoint: url, transport: madeOnSend ? MadeOnSend(make: makeTransport) : makeTransport(),
@@ -360,9 +373,10 @@ public final class CloudHelp: ObservableObject {
     /// being erased are left in a chat. The home screen then starts a
     /// fresh chat in its place.
     ///
-    /// True when something was handed to the cloud this session, a send
-    /// cancelled here included: that copy may already have left, and
-    /// nothing here can erase it, so Forget everything must say so.
+    /// True when something was handed to the cloud, this session or at an
+    /// earlier launch, a send cancelled here included: that copy may
+    /// already have left, and nothing here can erase it, so Forget
+    /// everything must say so.
     ///
     /// A chat that holds nothing yet, such as the fresh one started in an
     /// ended chat's place, has nothing to let go of and is left open.
@@ -371,7 +385,7 @@ public final class CloudHelp: ObservableObject {
         for chat in openChats.allObjects where chat.holdsAnything { chat.end() }
         for session in sessions.allObjects where session.holdsAnything { session.end() }
         withdrawPreviews()
-        return sent.value
+        return anythingSent
     }
 
     /// True while every send is held off for this session, as after a

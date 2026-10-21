@@ -81,11 +81,23 @@ chooses one.
 
 - Cloud: `CloudModel` sends to the address in `Config/Cloud.local.xcconfig`,
   which git ignores and which doesn't exist by default, so the setting can't
-  be turned on. It is for Debug builds only: every build with an address
-  fails unless it is Debug and not an archive, whatever the configuration
-  is called, until who runs the server, how long it keeps what it is sent,
-  and what sign-in sends are decided, and outside a Debug build the app
-  reads no address at all, even if those checks were skipped. Turning it on (What I
+  be turned on. The policy for the server is decided. We run it ourselves,
+  as a small service of our own, so no third party sees requests. It keeps
+  no request bodies: only counts of requests and of errors, for 7 days.
+  Sign-in is Sign in with Apple, asking for no email and no name. The app
+  sends Apple's identity token with a one-time nonce it made; the server
+  checks the token once (Apple's signature, issuer, audience, expiry and
+  the nonce), keeps only Apple's anonymous user ID and a per-device key,
+  and then drops the token, which is never stored or logged. Work handed
+  to the relay as a run is held in memory only, dropped when the device
+  deletes it or 30 minutes after the run ends ([docs/RELAY.md](docs/RELAY.md);
+  no build uses runs yet).
+  The app's side of that sign-in is not built yet, and the setting is
+  still for Debug builds only: every build with an address fails unless
+  it is Debug and not an archive, whatever the configuration is called,
+  until the address it is given matches this policy, and outside a Debug
+  build the app reads no address at all, even if those checks were
+  skipped. Turning it on (What I
   remember, then Help from the cloud) asks first, holds only for that
   address, and counts from the next new chat. Every request is redacted on
   the device by `Redactor` and shown to the person in full, method, address,
@@ -121,7 +133,12 @@ chooses one.
   off can't be saved, as on a locked device, an empty file is left to mark
   it off. It is left unprotected so it can be written while locked, and it
   holds nothing personal; its only tell, to someone already reading the
-  app's folder, is that the cloud was switched off.
+  app's folder, is that the cloud was switched off. Once anything is sent,
+  another empty file marks that it was, so Forget everything at a later
+  launch still says what went can't be erased from here. It holds no
+  words, is left unprotected the same way, and stays through Forget
+  everything, since erasing the device's copy can't call back what was
+  sent; its only tell is that something was once sent to the cloud.
 
 ## Looking into things
 

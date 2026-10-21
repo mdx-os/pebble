@@ -419,6 +419,15 @@ final class FailingCloudStore: CloudHelpStoring, @unchecked Sendable {
             _markedOff = true
         }
     }
+
+    private var _sent = false
+
+    /// Kept through `erase`, as the file store's mark is.
+    func markSent() throws {
+        lock.withLock { _sent = true }
+    }
+
+    var wasSent: Bool { lock.withLock { _sent } }
 }
 
 /// Runs a step on the main thread the first time a message's headers are
@@ -855,7 +864,7 @@ struct CloudHelpTests {
         await controller.settled()
         #expect(transport.paths.first == "/v1/sign-in")
         #expect(transport.paths.count == (messageFails ? 2 : 1))
-        #expect(cloud.anythingSentThisSession)
+        #expect(cloud.anythingSent)
         #expect(auth.signIns == (messageFails ? 1 : 0), "an answer is handed over only while still on")
     }
 
@@ -884,7 +893,7 @@ struct CloudHelpTests {
         #expect(controller.draft == "Plan my week")
         #expect(personTurns(controller).isEmpty)
         #expect(maker.wire.sent.isEmpty)
-        #expect(!cloud.anythingSentThisSession)
+        #expect(!cloud.anythingSent)
     }
 
     /// The showcase's sign-in, with nothing personal in it, still shows.
@@ -1755,7 +1764,7 @@ struct CloudHelpTests {
         #expect(CloudWords.forgetEverythingWithSummariesDetail.contains("stops any task still going"))
     }
 
-    /// Once anything was handed to the cloud this session, no outcome says
+    /// Once anything was handed to the cloud, at this launch or before, no outcome says
     /// "I no longer have it", and every one says what went there can't be
     /// erased from here, last but for any advice to try again.
     @Test func afterSendingNoForgetLineSaysGone() {

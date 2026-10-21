@@ -133,6 +133,30 @@ struct CloudHelpSettingsTests {
         #expect(try memory.load().isOn(for: here))
     }
 
+    /// The sent mark survives a new store on the same file, as after a
+    /// relaunch, holds no words, and stays through a save and an erase,
+    /// since erasing the setting can't call back what was sent.
+    @Test func theSentMarkOutlivesARelaunchAndAnErase() throws {
+        let (store, folder) = try scratchStore()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        #expect(!store.wasSent)
+        try store.save(CloudHelpSettings(privateWords: ["lemon cake"]))
+        try store.markSent()
+        try store.markSent()
+        let relaunched = CloudHelpFileStore(fileURL: store.fileURL)
+        #expect(relaunched.wasSent)
+        #expect(try Data(contentsOf: store.sentMarkURL).isEmpty, "the mark holds nothing")
+        try relaunched.save(.off)
+        try relaunched.erase()
+        #expect(CloudHelpFileStore(fileURL: store.fileURL).wasSent)
+        // The in-memory store keeps the same rule.
+        let memory = InMemoryCloudHelpStore()
+        #expect(!memory.wasSent)
+        try memory.markSent()
+        try memory.erase()
+        #expect(memory.wasSent)
+    }
+
     /// The real off mark is written so it can be made while the device is
     /// locked: no protection, or protection only until the first unlock
     /// after a restart. Complete protection would make the write fail

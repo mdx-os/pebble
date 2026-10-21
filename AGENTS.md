@@ -234,6 +234,11 @@ in lint, a skill, or CI.
   sweeps the sources is `nonisolated`, never on the main actor, and a
   limit on work that needs the main actor is about 60 s, never 20.
   `BackgroundServiceTests` and `finishes` in `CloudHelpTests` follow this.
+- A test whose question crosses an `await` never puts its `AskFirst` on the
+  wall clock: a turn on the main actor can take minutes on CI, and a
+  question with under `NeedsYouFlow.leastTimeLeft` left never nudges.
+  `NeedsYouFlowModelTests` uses `AskFirst.steady()`, a clock that moves only
+  when the test moves it.
 - A check made off the main actor can go stale before the main actor acts on
   it. A cloud preview asks whether the cloud is on again where it goes on
   screen, on the main actor, where the switch is turned off.

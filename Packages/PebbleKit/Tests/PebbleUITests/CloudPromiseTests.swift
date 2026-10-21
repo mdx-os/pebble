@@ -1168,6 +1168,37 @@ struct CloudPromiseTests {
         chat.stopReplying()
     }
 
+    /// Something went to the cloud, then the app was closed and opened
+    /// again. Forget everything at the new launch still says that copy
+    /// can't be erased from here, and never "I no longer have it".
+    @Test func forgetEverythingAfterARelaunchStillSaysWhatWentCantBeErased() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("cloud-sent-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let fileURL = folder.appendingPathComponent("cloud-help.json")
+        let file = CloudHelpFileStore(fileURL: fileURL)
+        try file.save(CloudHelpSettings(isOn: true, for: endpoint, privateWords: ["lemon cake"]))
+        let maker = TransportMaker()
+        let memory = scratchMemory("Sam's birthday is May 14.")
+        let first = help(maker: maker, memory: memory, store: file)
+        let chat = newChat(first)
+        let review = try #require(chat.review)
+        chat.submit("Ask Sam about the lemon cake")
+        review.answer(.send, for: await review.shown().id)
+        await chat.settled()
+        #expect(maker.wire.sent.count == 1)
+
+        // A new launch: a new store on the same file, a new setting.
+        let relaunched = help(memory: memory, store: CloudHelpFileStore(fileURL: fileURL))
+        #expect(relaunched.anythingSent)
+        let model = HomeView.memoryModel(store: memory, place: .mayLeaveDevice, cloud: relaunched)
+        model.forgetEverything()
+        #expect(model.status == CloudWords.forgotAfterSending + " " + CloudWords.sentCantBeErased)
+        #expect(model.status?.contains("I no longer have it") == false)
+        // Forgetting can't call back what went, so the next one says it too.
+        #expect(help(memory: memory, store: CloudHelpFileStore(fileURL: fileURL)).anythingSent)
+    }
+
     /// Two cloud chats are open: the one the home screen holds, and one it
     /// doesn't, as another window's would be. Forget everything ends both,
     /// and both let go of every word they hid.
@@ -1285,7 +1316,7 @@ struct CloudPromiseTests {
                 "announced only behind the claim")
     }
 
-    /// With nothing handed to the cloud this session, an open cloud chat
+    /// With nothing ever handed to the cloud, an open cloud chat
     /// still ends, and the line is the plain one.
     @Test func forgetEverythingWithNothingSentEndsTheChatAndSaysGone() async throws {
         let maker = TransportMaker()
@@ -1304,7 +1335,7 @@ struct CloudPromiseTests {
         #expect(chat.hasEnded)
         #expect(review.pending == nil)
         #expect(slot.chat !== chat)
-        #expect(!cloud.anythingSentThisSession)
+        #expect(!cloud.anythingSent)
         #expect(model.status == MemoryWords.forgotten)
         #expect(maker.wire.sent.isEmpty)
     }

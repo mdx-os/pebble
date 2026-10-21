@@ -261,7 +261,8 @@ public enum DevicePromise {
         Allowed(file: "PebbleCore/CloudHelp.swift",
                 literal: "Everything I kept is gone. To be sure the words you asked me to hide were gone too, I cleared the cloud setting, so help from the cloud is off. You can turn it on again anytime.",
                 reason: cloudSettingName + " CloudWords.forgotAndCloudOffAfterSending: the setting was erased, so it "
-                    + "reads as off, which is what it says. It is said only after something was sent this session, and "
+                    + "reads as off, which is what it says. It is said only after something was sent, at this launch or an "
+                    + "earlier one, and "
                     + "MemoryModel.forgotLine follows it with CloudWords.sentCantBeErased."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
                 literal: "What I already sent to the cloud can't be erased from here.",
