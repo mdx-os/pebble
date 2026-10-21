@@ -112,7 +112,14 @@ perl: s~or sends\.\n        voice\.cancel\(owner: owner\)~or sends.\n        if 
 # The reset after a lift takes it for a cancelled touch, so nothing sends.
 test: theGesturesOwnEndSendsOnceAndItsResetAfterDoesNothing
 file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
-perl: s~(slidAway: Bool\) \{\n        guard isDown else \{ return \}\n)        isDown = false\n~$1~
+perl: s~(at translation: CGSize\) \{\n        guard isDown else \{ return \}\n)        isDown = false\n~$1~
+
+# A lift reads where the finger was last seen, not where it lifted, so a
+# slide past the line just before lifting still sends, and a slide back
+# inside cancels.
+test: aSlidePastTheLineAsTheFingerLiftsSendsNothing aSlideBackInsideTheLineAsTheFingerLiftsSends
+file: Packages/PebbleKit/Sources/PebbleUI/TalkButton.swift
+perl: s~let slidAway = Self\.cancels\(at: translation\)~let slidAway = showsCancel~
 
 # A cancel while the system asks shows "I didn't send anything" though
 # nothing had begun, unlike the first hold before.

@@ -81,7 +81,7 @@ struct TalkPressTests {
         press.down(voice) { started = start($0) }
         #expect(voice.isActive(for: "composer"), "claimed before the task runs")
         switch end {
-        case .lifted: press.lifted(voice, owner: "composer", slidAway: false)
+        case .lifted: press.lifted(voice, owner: "composer", at: .zero)
         case .touchTaken: press.reset(voice, owner: "composer")
         case .composerGone: voice.cancel(owner: "composer")
         }
@@ -134,7 +134,7 @@ struct TalkPressTests {
 
     @Test func theGesturesOwnEndSendsOnceAndItsResetAfterDoesNothing() async throws {
         try await holdAndSay("call Sam")
-        press.lifted(voice, owner: "composer", slidAway: false)
+        press.lifted(voice, owner: "composer", at: .zero)
         press.reset(voice, owner: "composer")
         #expect(await until { draft.sent == ["Before call Sam"] })
         #expect(listener.cancels == 0)
@@ -144,12 +144,42 @@ struct TalkPressTests {
 
     @Test func slidAwayTheEndSendsNothing() async throws {
         try await holdAndSay("call Sam")
-        press.lifted(voice, owner: "composer", slidAway: true)
+        press.lifted(voice, owner: "composer", at: CGSize(width: 0, height: -200))
         press.reset(voice, owner: "composer")
         #expect(voice.phase == .cancelled)
         #expect(draft.text == "Before")
         await settle()
         #expect(draft.sent.isEmpty)
+    }
+
+    /// The last place the finger was seen is inside the line, but it slid
+    /// past it as it lifted: the lift's own place cancels.
+    @Test func aSlidePastTheLineAsTheFingerLiftsSendsNothing() async throws {
+        try await holdAndSay("call Sam")
+        let inside = CGSize(width: 0, height: -(TalkPress.slideToCancel - 10))
+        let outside = CGSize(width: 0, height: -(TalkPress.slideToCancel + 10))
+        #expect(!press.moved(to: inside), "the line still says let go to send")
+        press.lifted(voice, owner: "composer", at: outside)
+        press.reset(voice, owner: "composer")
+        #expect(voice.phase == .cancelled)
+        #expect(draft.text == "Before")
+        await settle()
+        #expect(draft.sent.isEmpty)
+        #expect(listener.finishes == 0)
+    }
+
+    /// The reverse: last seen past the line, then back inside as it lifted.
+    /// The lift's own place sends.
+    @Test func aSlideBackInsideTheLineAsTheFingerLiftsSends() async throws {
+        try await holdAndSay("call Sam")
+        let inside = CGSize(width: TalkPress.slideToCancel - 10, height: 0)
+        let outside = CGSize(width: TalkPress.slideToCancel + 10, height: 0)
+        #expect(press.moved(to: outside), "the line says let go to cancel")
+        press.lifted(voice, owner: "composer", at: inside)
+        press.reset(voice, owner: "composer")
+        #expect(await until { draft.sent == ["Before call Sam"] })
+        #expect(listener.cancels == 0)
+        #expect(!press.showsCancel)
     }
 
     /// Holds the system's question open until the test answers it.

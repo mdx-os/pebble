@@ -16,9 +16,6 @@ struct TalkButton: View {
     @Binding var slidAway: Bool
     @ScaledMetric(relativeTo: .body) private var size: CGFloat = ChatStyle.sendSize
 
-    /// How far a finger slides before letting go cancels, in points.
-    static let slideToCancel: CGFloat = 70
-
     private var listeningHere: Bool { voice.isActive(for: owner) }
 
     var body: some View {
@@ -32,7 +29,7 @@ struct TalkButton: View {
                 .updating($touch) { value, state, _ in
                     state = value.translation
                 }
-                .onEnded { _ in letGo() })
+                .onEnded { value in letGo(at: value.translation) })
             .onChange(of: touch == nil) { _, gone in
                 if gone {
                     // After the gesture's end this does nothing; with no end, the system took the touch.
@@ -44,7 +41,7 @@ struct TalkButton: View {
             }
             .onChange(of: touch) { _, moved in
                 guard let moved else { return }
-                slidAway = hypot(moved.width, moved.height) > Self.slideToCancel
+                slidAway = press.moved(to: moved)
             }
             .accessibilityElement()
             .accessibilityLabel(listeningHere ? VoiceWords.sendTitle : VoiceWords.talkTitle)
@@ -60,11 +57,10 @@ struct TalkButton: View {
             .haptic(.listening, trigger: voice.phase == .listening && voice.belongs(to: owner), when: { $0 })
     }
 
-    /// The gesture's own end: the finger lifted.
-    private func letGo() {
-        let cancels = slidAway
+    /// The gesture's own end: the finger lifted, this far from where it came down.
+    private func letGo(at translation: CGSize) {
         slidAway = false
-        press.lifted(voice, owner: owner, slidAway: cancels)
+        press.lifted(voice, owner: owner, at: translation)
     }
 
     /// VoiceOver's double tap: start, or send.
@@ -83,6 +79,18 @@ struct TalkButton: View {
 @MainActor
 final class TalkPress {
     private(set) var isDown = false
+    /// Whether the finger, where it was last seen, would cancel. Only for
+    /// the line above the composer: a lift works it out again from where
+    /// the finger lifted, which can be past the last place seen.
+    private(set) var showsCancel = false
+
+    /// How far a finger slides before letting go cancels, in points.
+    static let slideToCancel: CGFloat = 70
+
+    /// Whether a finger this far from where it came down cancels.
+    static func cancels(at translation: CGSize) -> Bool {
+        hypot(translation.width, translation.height) > slideToCancel
+    }
 
     /// The finger came down: listening starts, unless it is on already.
     /// `start` claims the capture before it returns (`Composer.listen`),
@@ -90,15 +98,25 @@ final class TalkPress {
     func down(_ voice: VoiceCapture, start: (VoiceCapture.Mode) -> Void) {
         guard !isDown else { return }
         isDown = true
+        showsCancel = false
         guard !voice.isActive else { return }
         start(.hold)
     }
 
-    /// The gesture ended as it should, with the finger lifted: sends,
-    /// unless it slid away.
-    func lifted(_ voice: VoiceCapture, owner: String, slidAway: Bool) {
+    /// The finger moved while down. Returns whether letting go here would
+    /// cancel, for the line above the composer.
+    func moved(to translation: CGSize) -> Bool {
+        showsCancel = isDown && Self.cancels(at: translation)
+        return showsCancel
+    }
+
+    /// The gesture ended as it should, with the finger lifted this far
+    /// from where it came down: sends, unless it slid away.
+    func lifted(_ voice: VoiceCapture, owner: String, at translation: CGSize) {
         guard isDown else { return }
         isDown = false
+        let slidAway = Self.cancels(at: translation)
+        showsCancel = false
         guard voice.belongs(to: owner) else { return }
         switch voice.mode {
         case .hold:
@@ -120,6 +138,7 @@ final class TalkPress {
     func reset(_ voice: VoiceCapture, owner: String) {
         guard isDown else { return }
         isDown = false
+        showsCancel = false
         guard voice.isActive(for: owner) else { return }
         // Cancelled at once, even while the system's question is open, so
         // a yes that comes later never starts listening or sends.

@@ -88,9 +88,9 @@ struct TalkWindowTests {
         var started = 0
         press.down(voice) { _ in started += 1 }
         #expect(started == 0, "nothing starts while the first listens")
-        press.lifted(voice, owner: theirs, slidAway: false)
+        press.lifted(voice, owner: theirs, at: .zero)
         press.down(voice) { _ in started += 1 }
-        press.lifted(voice, owner: theirs, slidAway: true)
+        press.lifted(voice, owner: theirs, at: CGSize(width: 0, height: -200))
         press.down(voice) { _ in started += 1 }
         press.reset(voice, owner: theirs)
         // VoiceOver's double tap on it.
