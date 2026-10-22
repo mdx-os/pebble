@@ -647,6 +647,11 @@ public enum CloudWords {
     /// place of a line that would say nothing went. The sign-in carries
     /// none of the chat, so what was written is still only here.
     public static let stoppedAfterSignIn = "I didn't send that. Only the sign-in went to the cloud, none of what you wrote, and what you wrote is still here."
+    /// The message was handed to the cloud, and then no reply came: it was
+    /// stopped on the wire, or the connection or the server failed. It may
+    /// have gone, so it says that plainly, like `ReconWords.cloudStopped`,
+    /// and never that nothing went. The person's line stays in the chat.
+    public static let stoppedAfterSend = "I didn't get a reply. Your message may already have reached the cloud, and that can't be called back. What you sent is still in the chat."
     /// Forget everything erased all it kept, after something went to the
     /// cloud, at this launch or an earlier one. Said in place of `MemoryWords.forgotten`, whose
     /// "I no longer have it" can't speak for a copy that already left.
@@ -676,7 +681,7 @@ public enum CloudWords {
         forgotNotesAndTasksNotWords, forgotTasksAndWordsNotNotes, forgotTasksNotNotesOrWords,
         forgotTasksAndWordsAndCloudNotNotes, forgetTasksAndWordsDetail, tasksAndWordsForgotten,
         tasksAndWordsAndCloudForgotten, tasksForgottenNotWords,
-        chatEnded, chatEndedByOff, notRecorded, signInRefused, stoppedAfterSignIn, forgotAfterSending, forgotAndCloudOffAfterSending, sentCantBeErased,
+        chatEnded, chatEndedByOff, notRecorded, signInRefused, stoppedAfterSignIn, stoppedAfterSend, forgotAfterSending, forgotAndCloudOffAfterSending, sentCantBeErased,
         forgetEverythingWithSummariesDetail,
     ] + forgotAndCloudOffNotSummariesLines + askPoints + Redaction.Kind.allCases.map(\.spoken)
 }

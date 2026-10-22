@@ -1117,7 +1117,9 @@ public struct URLSessionCloudTransport: CloudTransport {
         // Without the fixed User-Agent and Accept-Language the system would
         // add its own, which name the device and the person's languages and
         // were never shown. Such a request is refused, not quietly fixed, so
-        // what goes is always exactly what was shown.
+        // the body and the headers the app sets are always the ones shown,
+        // with sign-in values covered on the card. Lines the system may add
+        // over HTTP/2 are not checked here (`CloudRequest.systemLines`).
         if let name = request.headers.keys.sorted().first(where: { CloudHeaders.reserved.contains($0.lowercased()) }) {
             throw CloudTransportError.reservedHeader(name)
         }

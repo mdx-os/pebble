@@ -1011,3 +1011,38 @@ perl: s~\n\s*if Task\.isCancelled \{ throw CancellationError\(\) \}~~
 test: anEndedChatTakesNoMoreSends
 file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
 perl: s~guard !trimmed\.isEmpty, !isReplying, !hasEnded else \{ return \}~guard !trimmed.isEmpty, !isReplying else { return }~
+
+# The turn on question's points are pinned whole, so no server's line slips in.
+test: theQuestionPromisesOnlyWhatHoldsForAnyServer
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~(\n\s*)keptByThatComputer,\n~$1keptByThatComputer,$1"A made-up server keeps it a while.",\n~
+
+# A chat whose message went and got no reply says it may have gone.
+test: eachFailureHasItsOwnLine aFailureAfterTheHandOverSaysTheMessageMayHaveGone
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~if let error, mayHaveGone\(error, place: place\) \{ return CloudWords\.stoppedAfterSend \}~~
+
+test: eachFailureHasItsOwnLine aFailureAfterTheHandOverSaysTheMessageMayHaveGone
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~return error is URLError && place\?\.staysOnDevice == false~return false~
+
+test: eachFailureHasItsOwnLine
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~return error is URLError && place\?\.staysOnDevice == false~return error is URLError~
+
+test: aFailureAfterTheHandOverSaysTheMessageMayHaveGone
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~\} else if let error, Self\.mayHaveGone\(error, place: privacyPlace\) \{~} else if false {~
+
+test: aFailureAfterTheHandOverSaysTheMessageMayHaveGone
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~failure = Self\.failureLine\(for: error, place: privacyPlace\)\n(\s*\} else if let error, Self\.mayHaveGone)~failure = Self.failureLine(for: error)\n$1~
+
+# The setting's file is read under the lock every writer of the private words takes.
+test: aRefreshWaitsForAPrivacyChangeHeldElsewhere
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~let read = privacyChanges\.change \{ \(\) ->~let read = PrivacyChanges().change { () ->~
+
+test: theLaunchReadWaitsForAPrivacyChangeHeldElsewhere
+file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
+perl: s~let launch = privacyChanges\.change \{~let launch = PrivacyChanges().change {~

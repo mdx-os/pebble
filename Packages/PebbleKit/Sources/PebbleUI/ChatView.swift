@@ -763,12 +763,15 @@ final class ChatController: ObservableObject {
                 lastLineUnanswered = false
                 returnedWords = trimmed
                 draft = Self.draft(givingBack: trimmed, to: draft)
-                failure = Self.failureLine(for: error)
+                failure = Self.failureLine(for: error, place: privacyPlace)
             } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 // The failure line promises the words are back, ready to send.
                 returnedWords = trimmed
                 draft = trimmed
-                failure = Self.failureLine(for: error)
+                failure = Self.failureLine(for: error, place: privacyPlace)
+            } else if let error, Self.mayHaveGone(error, place: privacyPlace) {
+                // Points at the bubble too, and says the message may have gone.
+                failure = CloudWords.stoppedAfterSend
             } else {
                 // A newer draft is never replaced, so point at the bubble instead.
                 failure = FirstConversation.couldNotAnswerKeptDraft
@@ -812,12 +815,15 @@ final class ChatController: ObservableObject {
     }
 
     /// What to say when no reply came. Choosing not to send is not a failure.
-    nonisolated static func failureLine(for error: Error?) -> String {
+    /// `place` is the chat's, which decides whether a `URLError` may have
+    /// come after the message went (`mayHaveGone`). With none, it never does.
+    nonisolated static func failureLine(for error: Error?, place: PrivacyPlace? = nil) -> String {
         switch error as? CloudTransportError {
         case .signInBodyRefused?, .signInHeaderRefused?, .signInCarriesPersonalDetails?:
             return CloudWords.signInRefused
         default: break
         }
+        if let error, mayHaveGone(error, place: place) { return CloudWords.stoppedAfterSend }
         return switch error as? CloudModelError {
         case .notSent: CloudWords.notSent
         // Taken away unanswered, so it never says the person chose.
@@ -874,9 +880,10 @@ final class ChatController: ObservableObject {
     /// reached the transport. `CloudModel` throws `CancellationError` only
     /// before it hands the message over; once a sign-in hop has gone, it
     /// says `stoppedAfterSignIn` instead, as it does for a refusal then,
-    /// and once the message itself has gone, `stoppedAfterSend`. URLSession reports a send cut short as a `URLError`, which is not
-    /// counted here. Any other transport failure may have come after the
-    /// bytes went, so the turn stays.
+    /// and once the message itself has gone, `stoppedAfterSend`. URLSession
+    /// reports a send cut short as a `URLError`, which is not counted here.
+    /// Any other transport failure may have come after the bytes went, so
+    /// the turn stays.
     ///
     /// `stoppedAfterSignIn` counts too: only the sign-in went, which
     /// carries nothing of the chat, so the line itself never left.
@@ -898,6 +905,20 @@ final class ChatController: ObservableObject {
              .stoppedAfterSignIn: true
         case .unreadableReply, .stoppedAfterSend, nil: false
         }
+    }
+
+    /// True when the message was handed to the cloud and then no reply
+    /// came, so it may have gone: a stop once it was on the wire
+    /// (`stoppedAfterSend`), or a `URLError`, which in a chat only the
+    /// cloud's transport throws, once it has a request in hand. A failed
+    /// sign-in hop says so too, which is cautious but never says nothing
+    /// went. The chat says it plainly (`CloudWords.stoppedAfterSend`), as a
+    /// summary does (`ReconWords.cloudFailedAfterSend`).
+    /// A `URLError` counts only in a chat whose words may leave, so a model
+    /// on this device that throws one never says anything reached the cloud.
+    nonisolated static func mayHaveGone(_ error: Error, place: PrivacyPlace?) -> Bool {
+        if case .stoppedAfterSend? = error as? CloudModelError { return true }
+        return error is URLError && place?.staysOnDevice == false
     }
 
     /// The home screen went away. A preview still waiting for an answer is

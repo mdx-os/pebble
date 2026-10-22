@@ -268,6 +268,11 @@ public enum DevicePromise {
                     + "message didn't (CloudModelError.stoppedAfterSignIn). It says something did go, the opposite of "
                     + "a device promise, and is about that one message, which is back in the composer."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "I didn't get a reply. Your message may already have reached the cloud, and that can't be called back. What you sent is still in the chat.",
+                reason: cloudSettingName + " CloudWords.stoppedAfterSend, said when a chat's message was handed to "
+                    + "the cloud and no reply came (CloudModelError.stoppedAfterSend, or a URLError from the "
+                    + "transport). It says words may have left, the opposite of a device promise."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
                 literal: "Everything I kept is gone. To be sure the words you asked me to hide were gone too, I cleared the cloud setting, so help from the cloud is off. You can turn it on again anytime.",
                 reason: cloudSettingName + " CloudWords.forgotAndCloudOffAfterSending: the setting was erased, so it "
                     + "reads as off, which is what it says. It is said only after something was sent, at this launch or an "
@@ -382,6 +387,7 @@ public enum DevicePromise {
         CloudWords.offAtLaunchNotSaved,
         CloudWords.signInRefused,
         CloudWords.stoppedAfterSignIn,
+        CloudWords.stoppedAfterSend,
         CloudWords.forgotAndCloudOffAfterSending,
         CloudWords.sentCantBeErased,
         CloudWords.onDetail,

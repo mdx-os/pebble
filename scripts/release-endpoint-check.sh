@@ -1,8 +1,7 @@
 #!/bin/sh
-# Fails every build that could ship while it has a cloud address. The
-# server's policy is decided (README, "Cloud"), but the app's side of its
-# sign-in is not built, so no build that could reach TestFlight or the App
-# Store may reach a cloud model until it is.
+# Fails every build that could ship while it has a cloud address. For now
+# no build that could reach TestFlight or the App Store may reach a cloud
+# model; a cloud address is only for Debug builds on one machine.
 #
 # Only one kind of build passes with an address: CONFIGURATION is Debug and
 # the action is not install or archive. Everything else fails, whatever
@@ -31,7 +30,7 @@ set -eu
 
 refuse() {
   echo "error: PEBBLE_CLOUD_ENDPOINT is set for a $1 build. The address is not shown here."
-  echo "error: A build that could ship can't reach a cloud model until the app's side of the decided sign-in (README, \"Cloud\") is built."
+  echo "error: For now a build that could ship may not reach a cloud model."
   echo "error: Remove the address from Config/Cloud.local.xcconfig, or build Debug (not an archive) to try it."
   exit 1
 }
