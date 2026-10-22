@@ -1,0 +1,5 @@
+# verify leaves the Mac's Release build to its macOS archive, so archive
+# dropped from verify must fail the coverage check.
+test: verifyCoversEveryReleaseBuild
+file: Makefile
+perl: s~(\nverify:[^\n]*?) archive\b~$1~
