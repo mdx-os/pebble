@@ -334,6 +334,10 @@ public enum DevicePromise {
                 reason: reconCloudNote + " ReconWords.cloudStopped follows a Stop after a yes, and says plainly "
                     + "that words may have left."),
         Allowed(file: "PebbleCore/Recon.swift",
+                literal: "The cloud didn't finish after you said send, so some of what I read may already have gone to it. I put this together without it.",
+                reason: reconCloudNote + " ReconWords.cloudFailedAfterSend follows an error once the request was "
+                    + "handed over, and says plainly that words may have left."),
+        Allowed(file: "PebbleCore/Recon.swift",
                 literal: "I stopped, as you asked. You'd already said send, so some of what I read may already have gone to the cloud, and that can't be called back.",
                 reason: reconCloudNote + " ReconWords.stoppedAfterSend is a stopped card's step once a yes let a "
                     + "request go (ReconRunner.sentToCloud), and says plainly that words may have left."),
@@ -415,6 +419,7 @@ public enum DevicePromise {
         ReconWords.cloudOff,
         ReconWords.cloudSignInOnly,
         ReconWords.cloudStopped,
+        ReconWords.cloudFailedAfterSend,
         ReconWords.stoppedAfterSend,
         ReconWords.keptForCare,
         ReconWords.wordedInCloud,

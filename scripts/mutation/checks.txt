@@ -230,7 +230,7 @@ perl: s~ Tools/GuardKit App~ App~
 # list given is used, and with none the lint says it checked no names.
 test: theNamesListIsNeverInTheRepository
 file: scripts/comment-lint.sh
-perl: s~"\$repo"/\*\)~"/nowhere"/*)~
+perl: s~exit 1 if index\(\$file, "\$path/"\) == 0;~~
 
 test: theNamesListIsNeverInTheRepository
 file: scripts/comment-lint.sh

@@ -1318,10 +1318,28 @@ struct CloudPromiseTests {
         let model = cloud.chatModel(local: local, review: review, madeOnSend: true)
         let session = try #require(model.cloudSession)
         let turns = [ChatTurn(id: UUID(), speaker: .person, text: "Bring the lemon cake on Friday.")]
+        // The chat ends before its preview is built, so no preview shows
+        // and the reply settles by itself. Should one show, as when Forget
+        // everything lands outside the lock, it is closed unsent, so the
+        // test fails on what it finds rather than waiting for ever.
+        let previewShown = SessionFlag()
+        let replyDone = SessionFlag()
+        let closer = Task { @MainActor in
+            let shown = await review.shown()
+            if !replyDone.value { previewShown.value = true }
+            review.answer(.withdrawn, for: shown.id)
+        }
         let reply = Task.detached { _ = try? await model.reply(to: turns) }
-        _ = await review.shown()
-        review.cancelPending()
         await reply.value
+        replyDone.value = true
+        #expect(!previewShown.value, "a preview showed for a chat Forget everything ended")
+        if !previewShown.value {
+            // Nothing showed, so the closer still waits: a stand-in it
+            // withdraws lets it go.
+            let standIn = try CloudModel.preview(for: turns, endpoint: endpoint, redactor: Redactor())
+            #expect(await review.review(standIn) == .withdrawn)
+        }
+        await closer.value
         #expect(forgotten.value)
         #expect(cloud.settings.privateWords.isEmpty)
         #expect(session.hiddenSoFar.privateWords.isEmpty, "an erased word stayed in the chat")

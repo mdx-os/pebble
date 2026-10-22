@@ -70,11 +70,25 @@ public struct CloudReconSummarizer: ReconSummarizer {
             return onDevice(ReconWords.cloudOff)
         } catch CloudModelError.staysHere {
             return onDevice(ReconWords.keptForCare)
+        } catch CloudModelError.notRecorded, CloudModelError.notesUnreadable {
+            // Refused on this device before anything was handed over.
+            return onDevice(ReconWords.cloudWithdrawn)
+        } catch is CloudTransportError {
+            // Refused by the transport, so the request never went.
+            return onDevice(ReconWords.cloudUnavailable)
         } catch is CancellationError {
             // Stopped after the yes. Never "nothing went": that isn't known.
             return onDevice(ReconWords.cloudStopped)
+        } catch CloudModelError.unreadableReply {
+            return onDevice(ReconWords.cloudUnreadable)
+        } catch CloudModelError.stoppedAfterSend {
+            return onDevice(ReconWords.cloudStopped)
+        } catch let error as URLError where error.code == .cancelled {
+            return onDevice(ReconWords.cloudStopped)
         } catch {
-            return onDevice(ReconWords.cloudUnavailable)
+            // A server error, a dropped connection or anything else that
+            // came once the request was handed over: it may have gone.
+            return onDevice(ReconWords.cloudFailedAfterSend)
         }
         return Self.parse(reply, task: task, id: id, sources: sources, gatheredAt: gatheredAt)
             ?? onDevice(ReconWords.cloudUnreadable)

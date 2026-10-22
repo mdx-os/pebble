@@ -83,25 +83,16 @@ chooses one.
   which git ignores and which doesn't exist by default, so the setting can't
   be turned on.
   The server is not in this repository, so nothing here can prove how it
-  behaves. What follows is the policy decided for the server we will run,
-  not something this code shows; the protocol is in
-  [docs/RELAY.md](docs/RELAY.md). The server runs on Render, a hosting
-  provider, so Render's machines carry the requests. It keeps no request
-  bodies: only counts of requests and of errors, for 7 days. Sign-in is
-  Sign in with Apple, asking for no email and no name. The app sends
-  Apple's identity token once; the server checks it, keeps only Apple's
-  anonymous user ID for the person (`sub`) and a per-device key, and then
-  discards the token. That one anonymous ID stays the same, so the server
-  can link requests that come from the same person, though it never learns
-  their name or email. Work handed to the relay as a run is held in memory
-  only, dropped when the device deletes it or 30 minutes after the run
-  ends (no build uses runs yet).
-  The app's side of that sign-in is not built yet, and the setting is
-  still for Debug builds only: every build with an address fails unless
-  it is Debug and not an archive, whatever the configuration is called,
-  until the address it is given matches this policy, and outside a Debug
-  build the app reads no address at all, even if those checks were
-  skipped. Turning it on (What I
+  behaves: what it keeps, for how long, and who runs it are up to whoever
+  runs the address a build is given, and the turn on question says so.
+  The protocol is in [docs/RELAY.md](docs/RELAY.md). The app signs in to
+  nothing yet. A server's own promises about sign-in and what it keeps
+  are said in the turn on question only for the server they were made
+  for, and only once the app signs in to it (`CloudServerPolicy`); none
+  are published yet. The setting is still for Debug builds only: every
+  build with an address fails unless it is Debug and not an archive,
+  whatever the configuration is called, and outside a Debug build the app
+  reads no address at all, even if those checks were skipped. Turning it on (What I
   remember, then Help from the cloud) asks first, holds only for that
   address, and counts from the next new chat. Every request is redacted on
   the device by `Redactor` and shown to the person before it is sent:

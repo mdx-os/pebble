@@ -248,6 +248,11 @@ in lint, a skill, or CI.
   it. A cloud preview asks whether the cloud is on again where it goes on
   screen, on the main actor, where the switch is turned off.
   `aSwitchOffJustAfterTheCheckNeverShowsAPreview` guards this.
+- A test never awaits `CloudReview.shown()` for a preview the code may
+  withdraw unshown, as for a chat Forget everything or a switch off has
+  ended: the wait has no limit, and the whole run hangs. Await the reply,
+  and close any preview that does show from a task beside it.
+  `forgetEverythingWaitsForAReplyReadingTheWords` does this.
 - The Recon UI tests' `eventually` waits up to 60 s and their suites allow 3
   minutes: main-actor tests queue behind each other, about 16 s on a fast Mac
   and past 30 s on CI.

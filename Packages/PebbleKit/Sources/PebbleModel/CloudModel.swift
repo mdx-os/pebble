@@ -280,10 +280,9 @@ public struct CloudSignIn: Sendable, Equatable {
     /// contract.
     public static let maxValueLength = 512
 
-    /// The body part that carries Apple's identity token, the one value
-    /// allowed past `maxValueLength`. Sign in with Apple's token is a
-    /// signed JWT, usually well over 512 characters, and the server checks
-    /// it once and keeps only the anonymous user ID it names. Every other
+    /// The body part that carries an identity token, the one value allowed
+    /// past `maxValueLength`. Such a token is a signed JWT, usually well
+    /// over 512 characters. Every other
     /// part keeps the short limit, and the token is held to the same
     /// checks as any value: the redactor must leave it unchanged, so a
     /// token that by chance looks like a phone number is refused, not sent.
@@ -404,9 +403,15 @@ public protocol CloudAuth: Sendable {
     /// Lets go of everything `signedIn` kept, such as a token. Called when
     /// the cloud is turned off and by Forget everything.
     func forget()
+
+    /// True when this signs in to its server, so the turn on question may
+    /// say what that server promises about sign-in (`CloudServerPolicy`).
+    /// Answered without signing in or reaching the network.
+    var signsIn: Bool { get }
 }
 
 extension CloudAuth {
+    public var signsIn: Bool { false }
     public func signIn(for endpoint: URL) -> CloudSignIn? { nil }
     public func signedIn(_ answer: Data) {}
     public func forget() {}
@@ -448,6 +453,10 @@ public enum CloudModelError: Error, Equatable, Sendable {
     /// Only the sign-in went, which carries no chat, notes or private words,
     /// so nothing here may say that nothing went.
     case stoppedAfterSignIn
+    /// The message itself was handed to the cloud, and then the reply was
+    /// stopped before an answer came, as when the chat was ended while it
+    /// was on the wire. It may have gone, so nothing may say it didn't.
+    case stoppedAfterSend
 }
 
 /// The body sent to the cloud model.
@@ -571,12 +580,20 @@ public struct CloudModel: ModelClient {
     /// preview, such as a sign-in value that now holds a private word
     /// saved while the hop was on the wire, and a stop, as both read as
     /// nothing having left.
+    ///
+    /// Once the message itself has been handed over, a stop says so
+    /// (`stoppedAfterSend`), never that only the sign-in went or that
+    /// nothing did.
     public func reply(to transcript: [ChatTurn]) async throws -> String {
         var signInWent = false
+        var messageWent = false
         do {
             while true {
-                if let reply = try await replyOnce(to: transcript, signInWent: &signInWent) { return reply }
+                if let reply = try await replyOnce(to: transcript, signInWent: &signInWent,
+                                                   messageWent: &messageWent) { return reply }
             }
+        } catch is CancellationError where messageWent {
+            throw CloudModelError.stoppedAfterSend
         } catch let error as CloudModelError where signInWent && Self.saysNothingWent(error) {
             throw CloudModelError.stoppedAfterSignIn
         } catch is CloudTransportError where signInWent {
@@ -592,14 +609,16 @@ public struct CloudModel: ModelClient {
     static func saysNothingWent(_ error: CloudModelError) -> Bool {
         switch error {
         case .notSent, .withdrawn, .off, .endedByOff, .notesUnreadable, .notRecorded: true
-        case .staysHere, .unreadableReply, .ended, .stoppedAfterSignIn: false
+        case .staysHere, .unreadableReply, .ended, .stoppedAfterSignIn, .stoppedAfterSend: false
         }
     }
 
     /// One preview and its hops. Nil when the privacy inputs changed after
     /// the preview was redacted, before everything was sent: nothing more
-    /// of it goes. `signInWent` is set once a sign-in hop is handed over.
-    private func replyOnce(to transcript: [ChatTurn], signInWent: inout Bool) async throws -> String? {
+    /// of it goes. `signInWent` is set once a sign-in hop is handed over,
+    /// and `messageWent` once the message itself is.
+    private func replyOnce(to transcript: [ChatTurn], signInWent: inout Bool,
+                           messageWent: inout Bool) async throws -> String? {
         try session.checkOpen()
         try checkOn()
         // The version of the privacy inputs this preview is redacted with:
@@ -657,6 +676,7 @@ public struct CloudModel: ModelClient {
             // A private word added or a note saved while sign-in was on the
             // wire isn't hidden in this message, so it never goes.
             guard let handed = try handOver(preview.request, ifStill: current) else { return nil }
+            messageWent = true
             let data = try await session.finish(handed)
             guard let reply = try? JSONDecoder().decode(CloudPayload.Reply.self, from: data) else {
                 throw CloudModelError.unreadableReply

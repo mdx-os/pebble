@@ -198,7 +198,8 @@ self_test() {
   # Fine: words that only look alike, and the same words outside a comment.
   printf '/// Rounds to 4 places, and lists items 1 to 3.\nlet rounded = 4\n' > "$dir/good/words.swift"
   printf '/// A round trip, a prefix9 and a fixture2 are not review history.\n' > "$dir/good/near.history.swift"
-  printf '/// Round once, round to tens, fix it, fixes 9 times and a prefix 9 are fine too.\n' > "$dir/good/near.words.swift"  printf '#expect(text.contains("%s %s 5"))\n' "$fix" "$round" > "$dir/good/string.swift"
+  printf '/// Round once, round to tens, fix it, fixes 9 times and a prefix 9 are fine too.\n' > "$dir/good/near.words.swift"
+  printf '#expect(text.contains("%s %s 5"))\n' "$fix" "$round" > "$dir/good/string.swift"
   printf 'let url = "https://example.com" // the sample address\n' > "$dir/good/url.swift"
   printf 'let url = "https://example.com/%s 3"\n' "$item" > "$dir/good/path.swift"
   printf 'let a = 2 * 3\n/* a\n * product */\n' > "$dir/good/product.swift"
@@ -276,6 +277,33 @@ self_test() {
     echo "comment-lint self-test: refused a names list outside the repository"
     failed=1
   fi
+  # A link outside that points at a list inside is refused.
+  ln -s "$dir/repo/Config/names.txt" "$dir/linked.txt"
+  if COMMENT_LINT_NAMES="$dir/linked.txt" sh "$dir/repo/scripts/comment-lint.sh" "$dir/good" >/dev/null 2>&1; then
+    echo "comment-lint self-test: took a names list through a link into the repository"
+    failed=1
+  fi
+  # The same folder in other letter case is still inside. On a disk that
+  # tells case apart the path names no file, and the lint fails anyway.
+  if COMMENT_LINT_NAMES="$dir/REPO/config/names.txt" sh "$dir/repo/scripts/comment-lint.sh" "$dir/good" >/dev/null 2>&1; then
+    echo "comment-lint self-test: took a names list inside the repository named in other letter case"
+    failed=1
+  fi
+  # A list in another worktree of the same repository is refused.
+  if git init -q "$dir/main" >/dev/null 2>&1 \
+    && git -C "$dir/main" -c user.name=lint -c user.email=lint@example.com commit -q --allow-empty -m start >/dev/null 2>&1 \
+    && git -C "$dir/main" worktree add -q --detach "$dir/sibling" >/dev/null 2>&1; then
+    mkdir -p "$dir/main/scripts" "$dir/sibling/Config"
+    cp "$0" "$dir/main/scripts/comment-lint.sh"
+    cp "$dir/names.txt" "$dir/sibling/Config/names.txt"
+    if COMMENT_LINT_NAMES="$dir/sibling/Config/names.txt" sh "$dir/main/scripts/comment-lint.sh" "$dir/good" >/dev/null 2>&1; then
+      echo "comment-lint self-test: took a names list from a sibling worktree"
+      failed=1
+    fi
+  else
+    echo "comment-lint self-test: couldn't make a scratch repository with a second worktree"
+    failed=1
+  fi
   if [ "$failed" -ne 0 ]; then exit 1; fi
   echo "comment-lint self-test: ok"
 }
@@ -286,16 +314,36 @@ if [ "${1:-}" = "--self-test" ]; then
 fi
 
 # A list inside the repository could be committed with it, so it is
-# refused, ignored by git or not.
+# refused, ignored by git or not. The list itself is resolved, so a link
+# to a file inside is refused too, and paths are compared in any letter
+# case, as the Mac's disks match them. Every worktree of the repository
+# counts as inside, so a list in a sibling checkout is refused as well.
 if [ -n "$names_file" ] && [ -e "$names_file" ]; then
   repo="$(cd "$(dirname "$0")/.." && pwd -P)"
-  where="$(cd "$(dirname "$names_file")" && pwd -P)"
-  case "$where/" in
-    "$repo"/*)
-      echo "comment-lint: the names list is inside the repository; keep it outside, where it can't be committed"
-      exit 1
-      ;;
-  esac
+  roots="$repo"
+  if worktrees="$(git -C "$repo" worktree list --porcelain 2>/dev/null)"; then
+    roots="$roots
+$(printf '%s\n' "$worktrees" | sed -n 's/^worktree //p')"
+  fi
+  if ! printf '%s\n' "$roots" | perl -MCwd=abs_path -e '
+      use strict; use warnings;
+      my $file = abs_path($ARGV[0]);
+      exit 1 unless defined $file;
+      $file = lc $file;
+      while (my $root = <STDIN>) {
+        chomp $root;
+        next if $root eq "";
+        my $resolved = abs_path($root) // $root;
+        for my $path (map { lc } $resolved, $root) {
+          $path =~ s{/+$}{};
+          exit 1 if index($file, "$path/") == 0;
+        }
+      }
+      exit 0;
+    ' "$names_file"; then
+    echo "comment-lint: the names list is inside the repository; keep it outside, where it can't be committed"
+    exit 1
+  fi
 fi
 
 [ "$#" -gt 0 ] || set -- Packages/PebbleKit/Sources Packages/PebbleKit/Tests Tools/GuardKit App AppUITests scripts project.yml Makefile .github Config

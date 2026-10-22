@@ -139,6 +139,12 @@ public final class CloudHelp: ObservableObject {
     /// an earlier one.
     public var anythingSent: Bool { sent.value || sentAtAnEarlierLaunch }
 
+    /// The turn on question's points for this build's address: a server's
+    /// own promises only where they hold (`CloudServerPolicy`).
+    var askPoints: [String] {
+        CloudWords.askPoints(serverPolicy: CloudServerPolicy.points(for: endpoint, signsIn: auth.signsIn))
+    }
+
     /// The sent mark, read from the store, or from the file a setting that
     /// couldn't be opened would have read. A file that can't be reached
     /// can't say nothing went, so it counts as sent.
@@ -178,7 +184,11 @@ public final class CloudHelp: ObservableObject {
         self.auth = auth
         self.makeTransport = transport
         self.unopenedFile = unopenedFile
-        let launch = Self.reconciled(storeOpened ? try? store.load() : nil, endpoint: endpoint, store: store)
+        // The file keeps the private words too, so it is read and written
+        // under the lock every other writer of them takes.
+        let launch = privacyChanges.change {
+            Self.reconciled(storeOpened ? try? store.load() : nil, endpoint: endpoint, store: store)
+        }
         let read = launch.read
         let holdsOff = launch.holdsOff
         let launchStatus = launch.status
@@ -440,7 +450,8 @@ public final class CloudHelp: ObservableObject {
     func endChatsToForget() -> CloudChatsEnded {
         restartHolds += 1
         let sent = endOpenCloudChats()
-        return CloudChatsEnded(sent: sent) { [weak self] in self?.releaseRestarts() }
+        return CloudChatsEnded(sent: sent, restart: { [weak self] in self?.releaseRestarts() },
+                               sentSince: { [weak self] in self?.anythingSent ?? true })
     }
 
     /// Runs `body` with the fresh chats of every chat it ends held back
@@ -476,16 +487,28 @@ public final class CloudHelp: ObservableObject {
     /// launch settles it (`reconciled`), since a launch that couldn't read
     /// the file left it as it was.
     func refresh() {
-        guard storeOpened, let loaded = try? store.load() else { return }
-        let settled = Self.reconciled(loaded, endpoint: endpoint, store: store)
-        var fresh = settled.read ?? loaded
-        if settled.holdsOff { switchedOff.value = true }
+        guard storeOpened else { return }
         let waiting = state?.waitsForASave ?? false
-        // A marked off reads as off, so the line says whether it waits.
-        if switchedOff.value, fresh.isOn || waiting {
-            fresh.turnOff()
-            if (try? store.save(fresh)) != nil, waiting { state = nil }
+        let heldOff = switchedOff.value
+        // Read and written under the lock every writer of the private
+        // words takes, since the file keeps them too.
+        let read = privacyChanges.change { () -> (fresh: CloudHelpSettings, holdsOff: Bool, status: Status?, saved: Bool)? in
+            guard let loaded = try? store.load() else { return nil }
+            let settled = Self.reconciled(loaded, endpoint: endpoint, store: store)
+            var fresh = settled.read ?? loaded
+            var saved = false
+            // A marked off reads as off, so the line says whether it waits.
+            if heldOff || settled.holdsOff, fresh.isOn || waiting {
+                fresh.turnOff()
+                saved = (try? store.save(fresh)) != nil
+            }
+            return (fresh, settled.holdsOff, settled.status, saved)
         }
+        guard let read else { return }
+        let fresh = read.fresh
+        let settled = read
+        if settled.holdsOff { switchedOff.value = true }
+        if read.saved, waiting { state = nil }
         settings = fresh
         mayKeepUnseenWords = false
         // Said as launch says it, and on the home screen too, since the
@@ -927,7 +950,7 @@ public struct CloudHelpView: View {
             }
         }
         .sheet(isPresented: $asksToTurnOn) {
-            CloudTurnOnSheet(onYes: { asksToTurnOn = false; act { $0.confirmTurnOn() } },
+            CloudTurnOnSheet(points: help.askPoints, onYes: { asksToTurnOn = false; act { $0.confirmTurnOn() } },
                              onNo: { asksToTurnOn = false })
         }
     }
@@ -1169,6 +1192,8 @@ struct CloudHelpRow: View {
 /// The question before the cloud is turned on, saying in plain words what
 /// changes.
 struct CloudTurnOnSheet: View {
+    /// `CloudHelp.askPoints`, for the address it would turn on.
+    var points: [String] = CloudWords.askPoints
     let onYes: () -> Void
     let onNo: () -> Void
 
@@ -1186,7 +1211,7 @@ struct CloudTurnOnSheet: View {
                     .multilineTextAlignment(.center)
                     .accessibilityAddTraits(.isHeader)
                 VStack(alignment: .leading, spacing: Theme.Space.m) {
-                    ForEach(Array(CloudWords.askPoints.enumerated()), id: \.offset) { index, point in
+                    ForEach(Array(points.enumerated()), id: \.offset) { index, point in
                         Label {
                             Text(point)
                                 .fixedSize(horizontal: false, vertical: true)

@@ -873,8 +873,8 @@ final class ChatController: ObservableObject {
     /// labels weren't the ones shown, or the reply was cancelled before it
     /// reached the transport. `CloudModel` throws `CancellationError` only
     /// before it hands the message over; once a sign-in hop has gone, it
-    /// says `stoppedAfterSignIn` instead, as it does for a refusal then.
-    /// URLSession reports a send cut short as a `URLError`, which is not
+    /// says `stoppedAfterSignIn` instead, as it does for a refusal then,
+    /// and once the message itself has gone, `stoppedAfterSend`. URLSession reports a send cut short as a `URLError`, which is not
     /// counted here. Any other transport failure may have come after the
     /// bytes went, so the turn stays.
     ///
@@ -896,7 +896,7 @@ final class ChatController: ObservableObject {
         return switch error as? CloudModelError {
         case .notSent, .withdrawn, .off, .staysHere, .notesUnreadable, .ended, .endedByOff, .notRecorded,
              .stoppedAfterSignIn: true
-        case .unreadableReply, nil: false
+        case .unreadableReply, .stoppedAfterSend, nil: false
         }
     }
 

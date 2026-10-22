@@ -428,20 +428,24 @@ public enum CloudWords {
         // rest rests on `CloudAuth`'s contract: first-party sign-in that
         // supplies only credentials or a device token.
         "Signing in never carries your chats, notes or private words.",
-        // The server policy that was decided (README, "Cloud"): Sign in
-        // with Apple with no email or name scope, the token checked once
-        // and dropped, and only Apple's anonymous ID and a per device key
-        // kept. One ID that never changes lets the server link what one
-        // person sends, so this says so.
-        "To sign in, I use Sign in with Apple, without your email or name. That computer keeps one anonymous ID for you, so it can tell what came from the same person.",
-        // Also decided: no bodies kept, only counts for 7 days, and the
-        // server runs on a hosting provider, named here.
-        "It keeps none of what you send, only counts of how often it's used and how often something went wrong, for 7 days. It runs on Render, a hosting company, so Render's computers carry what you send too.",
+        // True of any address a build is given. A server's own promises
+        // take this line's place only where they hold (`CloudServerPolicy`).
+        keptByThatComputer,
         "Your notes themselves never leave this device.",
         "Like any website, the computer it goes to can see this device's internet address.",
         "If you tell me you might be in danger, I answer here and send nothing.",
         "You can turn this off anytime.",
     ]
+    public static let keptByThatComputer = "What that computer keeps, and for how long, is up to whoever runs it."
+
+    /// The turn on question's points for a server whose own promises hold
+    /// (`CloudServerPolicy.points`): they stand where `keptByThatComputer`
+    /// would. With none, the points are `askPoints`.
+    public static func askPoints(serverPolicy: [String]) -> [String] {
+        guard !serverPolicy.isEmpty else { return askPoints }
+        return askPoints.flatMap { $0 == keptByThatComputer ? serverPolicy : [$0] }
+    }
+
     public static let askYes = "Turn it on"
     public static let askNo = "Not now"
 
@@ -675,4 +679,35 @@ public enum CloudWords {
         chatEnded, chatEndedByOff, notRecorded, signInRefused, stoppedAfterSignIn, forgotAfterSending, forgotAndCloudOffAfterSending, sentCantBeErased,
         forgetEverythingWithSummariesDetail,
     ] + forgotAndCloudOffNotSummariesLines + askPoints + Redaction.Kind.allCases.map(\.spoken)
+}
+
+/// What a server has promised about signing in and what it keeps, said in
+/// the turn on question only where it holds: for the server it was made
+/// for, and only once the app signs in to it. Any other address a build is
+/// given gets `CloudWords.keptByThatComputer`, which is true of every one.
+///
+/// No server's promises are published yet, so `decided` is nil and the
+/// question says only what holds for any address.
+public struct CloudServerPolicy: Sendable {
+    /// Whether `endpoint` is the server these promises were made for.
+    public let isFor: @Sendable (URL) -> Bool
+    /// The lines, in the person's words, said in the question.
+    public let points: [String]
+
+    public init(isFor: @escaping @Sendable (URL) -> Bool, points: [String]) {
+        self.isFor = isFor
+        self.points = points
+    }
+
+    /// The promises of the server the app is built for, once they are
+    /// decided and published. Nil until then.
+    public static let decided: CloudServerPolicy? = nil
+
+    /// The lines for `endpoint`: `policy`'s when it is for that server and
+    /// the app signs in (`signsIn`), as its sign-in line promises, and none
+    /// otherwise.
+    public static func points(for endpoint: URL?, signsIn: Bool, policy: CloudServerPolicy? = decided) -> [String] {
+        guard let policy, let endpoint, signsIn, policy.isFor(endpoint) else { return [] }
+        return policy.points
+    }
 }

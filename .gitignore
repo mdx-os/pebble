@@ -18,7 +18,9 @@ Config/Signing.local.xcconfig
 *.certSigningRequest
 # A real cloud address for one machine. Never committed.
 Config/Cloud.local.xcconfig
-# The real names the comment lint blocks. Never committed.
+# Not where the comment lint's names list goes: the lint refuses a list
+# anywhere in the repository. Ignored only so a copy left here by mistake
+# is never committed.
 Config/comment-lint-names.local.txt
 # The private words in plain text, kept only by the owner. Never committed;
 # Config/private-words.sha256 holds their hashes.

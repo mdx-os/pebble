@@ -912,6 +912,10 @@ struct CloudChatsEnded {
     /// everything else Forget everything erases, so a fresh chat is made
     /// with the settings it left.
     var restart: @MainActor () -> Void = {}
+    /// Reads again whether anything was handed to the cloud, so a send
+    /// from a chat that held nothing when the chats were ended, and went
+    /// before its own part of Forget everything ended it, is still said.
+    var sentSince: @MainActor () -> Bool = { false }
 }
 
 @MainActor
@@ -1249,7 +1253,6 @@ final class MemoryModel: ObservableObject {
         // none is made with a cloud setting about to be erased.
         let ended = endsCloudChats?()
         defer { ended?.restart() }
-        let sent = ended?.sent ?? false
         // Then the rest, even if a file can't be erased: the person asked to
         // forget, and nothing here depends on the files. Each step runs
         // whatever happened to the ones before it.
@@ -1271,6 +1274,10 @@ final class MemoryModel: ObservableObject {
         let notesGone = (try? store.forgetEverything()) != nil
         // nil when there is nothing else; .some(nil) when it couldn't go.
         let rest = alsoForget.map { forget in try? forget() }
+        // Read again once everything else has gone: a chat that held
+        // nothing when the chats were ended, such as a summary's, may have
+        // handed something over before its own step ended it.
+        let sent = ended.map { $0.sent || $0.sentSince() } ?? false
         // A step said yes to may have happened, so the line says so here too.
         status = Self.forgotLineWithTasks(notesGone: notesGone, rest: rest, cleared: tasks, summaries: summaries,
                                           hadNotes: hadNotes, sent: sent)

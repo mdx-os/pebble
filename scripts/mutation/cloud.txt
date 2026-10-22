@@ -44,7 +44,7 @@ perl: s~launchStatus = \(try\? store\.markOff\(\)\) != nil \? \.offSavedLater : 
 
 test: aStaleYesThatCantBeSavedOffKeepsTheWordsAndSaysSo aSwitchOffWhileTheDeviceIsLockedKeepsThePrivateWords aSwitchOffThatCantBeSavedOrErasedStaysOffForTheSession
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
-perl: s~if \(try\? store\.save\(fresh\)\) != nil, waiting \{ state = nil \}~_ = try? store.save(fresh)~
+perl: s~saved = \(try\? store\.save\(fresh\)\) != nil~_ = try? store.save(fresh)~
 
 # Whether a line waits for a save is decided where it is set, not by its words.
 test: aStaleYesThatCantBeSavedOffKeepsTheWordsAndSaysSo aSwitchOffThatCantBeSavedOrErasedStaysOffForTheSession aSwitchOffWhileLockedThatCantBeMarkedSaysItMayReadAsOn
@@ -193,12 +193,12 @@ perl: s~return \[beforeRetry\(line, \[cloudCopy\]\.compactMap \{ \$0 \}\), under
 
 test: forgetEverythingWithNothingSentEndsTheChatAndSaysGone
 file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
-perl: s~let sent = ended\?\.sent \?\? false~let sent = true~
+perl: s~let sent = ended\.map \{ \$0\.sent \|\| \$0\.sentSince\(\) \} \?\? false~let sent = true~
 
 # With background work too, the chats still end first and the line stays honest.
 test: forgetEverythingEndsCloudChatsFirstThenClearsTheSummariesToo
 file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
-perl: s~let sent = ended\?\.sent \?\? false~let sent = false~
+perl: s~let sent = ended\.map \{ \$0\.sent \|\| \$0\.sentSince\(\) \} \?\? false~let sent = false~
 
 test: afterSendingTheSummaryLinesStayHonest
 file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
@@ -782,7 +782,7 @@ perl: s~guard let handed = try handOver\(signIn, ifStill: current\) else \{ retu
 
 test: aPrivateWordAddedDuringSignInNeedsAFreshPreviewAndANewYes
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
-perl: s~if let reply = try await replyOnce\(to: transcript, signInWent: &signInWent\) \{ return reply \}~guard let reply = try await replyOnce(to: transcript, signInWent: \&signInWent) else { throw CloudModelError.withdrawn }\n                return reply~
+perl: s~if let reply = try await replyOnce\(to: transcript, signInWent: &signInWent,\n(\s*)messageWent: &messageWent\) \{ return reply \}~guard let reply = try await replyOnce(to: transcript, signInWent: \&signInWent,\n$1messageWent: \&messageWent) else { throw CloudModelError.withdrawn }\n                return reply~
 
 # A yes for another address, or none, is saved off once a locked launch can read the file.
 test: aYesSavedOffAfterALockedLaunchStaysOffForItsAddress
@@ -811,6 +811,7 @@ perl: s~try store\.markSent\(\); sent\.value = true~sent.value = true~
 test: forgetEverythingAfterARelaunchStillSaysWhatWentCantBeErased
 file: Packages/PebbleKit/Sources/PebbleUI/CloudHelpView.swift
 perl: s~recountHeldChats\(\)\n(\s*)return anythingSent~recountHeldChats()\n$1return sent.value~
+perl: s~sentSince: \{ \[weak self\] in self\?\.anythingSent \?\? true \}~sentSince: { [weak self] in self?.sent.value ?? true }~
 
 test: forgetEverythingAfterARelaunchStillSaysWhatWentCantBeErased theSentMarkOutlivesARelaunchAndAnErase
 file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
@@ -933,14 +934,55 @@ test: aRefusalOrAStopAfterTheSignInWentSaysOnlyTheSignInWent
 file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
 perl: s~catch is CloudTransportError where signInWent~catch is CloudTransportError where true~
 
-# The turn on question says what the decided server policy keeps, and who carries it.
-test: theQuestionSaysWhatTheServerKeepsAndWhoCarriesIt
+# The turn on question says a server's own promises only where they hold.
+test: theQuestionPromisesOnlyWhatHoldsForAnyServer
 file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
-perl: s~ That computer keeps one anonymous ID for you, so it can tell what came from the same person\.~~
+perl: s~guard let policy, let endpoint, signsIn, policy\.isFor\(endpoint\) else~guard let policy, let endpoint, policy.isFor(endpoint) else~
 
-test: theQuestionSaysWhatTheServerKeepsAndWhoCarriesIt
+test: theQuestionPromisesOnlyWhatHoldsForAnyServer
 file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
-perl: s~ It runs on Render, a hosting company, so Render's computers carry what you send too\.~~
+perl: s~guard let policy, let endpoint, signsIn, policy\.isFor\(endpoint\) else~guard let policy, let endpoint, signsIn else~
+
+test: theQuestionPromisesOnlyWhatHoldsForAnyServer
+file: Packages/PebbleKit/Sources/PebbleCore/CloudHelp.swift
+perl: s~\$0 == keptByThatComputer \? serverPolicy~false ? serverPolicy~
+
+# A stop once the message itself went never says only the sign-in went.
+test: aStopAfterTheMessageWentNeverSaysOnlyTheSignInWent
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~\} catch is CancellationError where messageWent \{\n\s*throw CloudModelError\.stoppedAfterSend\n\s*~~
+
+test: aStopAfterTheMessageWentNeverSaysOnlyTheSignInWent
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~\n\s*messageWent = true~~
+
+# A summary's request that went and then failed never says nothing went.
+test: aServerErrorAfterTheSendNeverSaysNothingWent
+file: Packages/PebbleKit/Sources/PebbleModel/CloudRecon.swift
+perl: s~return onDevice\(ReconWords\.cloudFailedAfterSend\)~return onDevice(ReconWords.cloudUnavailable)~
+
+test: aSendCancelledOnTheWireSaysItWasStopped
+file: Packages/PebbleKit/Sources/PebbleModel/CloudRecon.swift
+perl: s~catch let error as URLError where error\.code == \.cancelled~catch let error as URLError where error.code == .timedOut~
+
+test: aRefusalOnTheDeviceSaysNothingWent
+file: Packages/PebbleKit/Sources/PebbleModel/CloudRecon.swift
+perl: s~\} catch CloudModelError\.notRecorded, CloudModelError\.notesUnreadable \{\n.*\n\s*return onDevice\(ReconWords\.cloudWithdrawn\)\n\s*~~
+
+# The system's own sign-in never answers a challenge for a cloud request.
+test: aSignInChallengeIsNeverAnsweredByTheSystem
+file: Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift
+perl: s~\(Self\.disposition\(for: challenge\.protectionSpace\.authenticationMethod\), nil\)~(challenge.previousFailureCount == 0 ? .useCredential : .cancelAuthenticationChallenge, URLCredential(user: "made-up", password: "made-up", persistence: .none))~
+
+# The loopback listener's readiness wait throws once its limit passes.
+test: theListenersReadinessWaitNeverHangs
+file: Packages/PebbleKit/Tests/PebbleModelTests/CloudModelTests.swift
+perl: s~try await clock\.sleep\(for: limit\)\n\s*throw NotReady\(\)~try await clock.sleep(for: limit)\n                return 0~
+
+# Forget everything reads again whether anything went, once the rest has gone.
+test: aSendJustAfterTheChatsEndedIsStillSaid
+file: Packages/PebbleKit/Sources/PebbleUI/MemoryView.swift
+perl: s~\$0\.sent \|\| \$0\.sentSince\(\)~\$0.sent~
 
 # A preview for a chat that has ended never shows.
 test: aPreviewForAChatEndedOnTheWayToTheScreenNeverShows

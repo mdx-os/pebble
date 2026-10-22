@@ -1304,19 +1304,33 @@ struct CloudHelpTests {
         #expect(CloudWords.askPoints.contains("Signing in never carries your chats, notes or private words."))
     }
 
-    /// The question says what the decided server policy says, and no more:
-    /// Sign in with Apple with no email or name, one anonymous ID that lets
-    /// the server tell what came from the same person, nothing sent kept
-    /// but counts for 7 days, and the hosting company named rather than
-    /// "no third party".
-    @Test func theQuestionSaysWhatTheServerKeepsAndWhoCarriesIt() {
+    /// The question promises only what holds for any address a build is
+    /// given: no way of signing in, no time a server keeps things, and no
+    /// company that runs it. A server's own promises take the place of
+    /// `keptByThatComputer` only for the server they were made for, and
+    /// only once the app signs in to it.
+    @Test func theQuestionPromisesOnlyWhatHoldsForAnyServer() {
         let words = CloudWords.askPoints.joined(separator: " ")
-        for promise in ["Sign in with Apple, without your email or name", "one anonymous ID for you",
-                        "tell what came from the same person", "keeps none of what you send", "for 7 days",
-                        "Render, a hosting company"] {
-            #expect(words.contains(promise), "missing: \(promise)")
+        for plan in ["Sign in with Apple", "anonymous ID", "7 days", "hosting company", "third party"] {
+            #expect(!words.contains(plan), "promises: \(plan)")
         }
-        #expect(!words.contains("third party"))
+        #expect(CloudWords.askPoints.contains(CloudWords.keptByThatComputer))
+        #expect(CloudServerPolicy.decided == nil)
+        let ours = URL(string: "https://made-up.example.com")!
+        let other = URL(string: "https://elsewhere.example.com")!
+        let policy = CloudServerPolicy(isFor: { $0.host == "made-up.example.com" }, points: ["A made-up promise."])
+        #expect(CloudServerPolicy.points(for: ours, signsIn: true, policy: policy) == ["A made-up promise."])
+        #expect(CloudServerPolicy.points(for: ours, signsIn: false, policy: policy).isEmpty)
+        #expect(CloudServerPolicy.points(for: other, signsIn: true, policy: policy).isEmpty)
+        #expect(CloudServerPolicy.points(for: nil, signsIn: true, policy: policy).isEmpty)
+        #expect(CloudServerPolicy.points(for: ours, signsIn: true, policy: nil).isEmpty)
+        let promised = CloudWords.askPoints(serverPolicy: ["A made-up promise."])
+        #expect(promised.contains("A made-up promise."))
+        #expect(!promised.contains(CloudWords.keptByThatComputer))
+        #expect(CloudWords.askPoints(serverPolicy: []) == CloudWords.askPoints)
+        // The app's own setting, with no sign-in, asks with the plain points.
+        let cloud = help(endpoint: ours, maker: TransportMaker())
+        #expect(cloud.askPoints == CloudWords.askPoints)
     }
 
     // MARK: The preview
@@ -2099,6 +2113,30 @@ struct CloudHelpTests {
                                                           cleared: ClearedTasks(forgotten: 1, underway: 0, erased: false),
                                                           sent: true))
         #expect(status.contains(TaskWords.tasksStayed))
+        #expect(status.contains(CloudWords.sentCantBeErased))
+    }
+
+    /// A chat that held nothing when the chats were ended, such as a
+    /// summary's with a yes and nothing hidden yet, can hand its request
+    /// over before its own step of Forget everything ends it. The line is
+    /// worked out after that, so it never says "Gone" without the copy.
+    @Test func aSendJustAfterTheChatsEndedIsStillSaid() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("cloud-forget-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let memory = MemoryStore(fileURL: folder.appendingPathComponent("memory.json"))
+        _ = try memory.remember("Sam's birthday is May 14.", source: .toldMe)
+        @MainActor final class Mark { var value = false }
+        let handedOver = Mark()
+        let model = MemoryModel(store: memory, place: .mayLeaveDevice,
+                                endsCloudChats: { CloudChatsEnded(sent: false, sentSince: { handedOver.value }) },
+                                onForgetEverything: {
+                                    // The summary's request goes just before its task is forgotten.
+                                    handedOver.value = true
+                                    return ClearedTasks(forgotten: 1, underway: 0, erased: true)
+                                })
+        model.forgetEverything()
+        let status = try #require(model.status)
         #expect(status.contains(CloudWords.sentCantBeErased))
     }
 

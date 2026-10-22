@@ -543,7 +543,7 @@ struct CloudModelTests {
         #expect(transport.sent.isEmpty)
     }
 
-    /// Sign in with Apple's identity token is longer than any other sign-in
+    /// An identity token is longer than any other sign-in
     /// value may be, so its own named part takes up to
     /// `maxIdentityTokenLength`, and not a character more. Any other name
     /// still keeps the short limit.
@@ -1155,6 +1155,26 @@ struct CloudModelTests {
         }
     }
 
+    /// A stop that comes once the message itself was handed over, after a
+    /// sign-in hop, never says only the sign-in went: the message may have
+    /// gone too. Before the message goes, the same stop still says so.
+    @Test func aStopAfterTheMessageWentNeverSaysOnlyTheSignInWent() async throws {
+        let hop = CloudSignIn(path: "v1/sign-in", body: Data(#"{"device":"made-up"}"#.utf8))
+        let transport = HopThenThrowsTransport(error: CancellationError())
+        let cloud = CloudModel(endpoint: endpoint, transport: transport, reviewer: RecordingReviewer(answer: .send),
+                               auth: SampleAuth(signIn: hop))
+        await #expect(throws: CloudModelError.stoppedAfterSend) {
+            try await cloudChat().sending("Plan my week", with: cloud)
+        }
+        #expect(transport.paths == ["/v1/sign-in", "/v1/reply"])
+        // With no sign-in, the same stop after the hand over says so too.
+        let plain = CloudModel(endpoint: endpoint, transport: HopThenThrowsTransport(error: CancellationError(), hops: 0),
+                               reviewer: RecordingReviewer(answer: .send))
+        await #expect(throws: CloudModelError.stoppedAfterSend) {
+            try await cloudChat().sending("Plan my week", with: plain)
+        }
+    }
+
     /// A chat a switch off ends while its preview is on the way to the
     /// screen never shows it, even with the cloud on again by then: Send
     /// would only be refused.
@@ -1651,6 +1671,34 @@ final class HopThenTransport: CloudTransport, @unchecked Sendable {
             return Data(#"{"token":"made-up"}"#.utf8)
         }
         throw URLError(.networkConnectionLost)
+    }
+}
+
+/// Answers the first `hops` requests, as a sign-in hop, then throws
+/// `error` for the next, after it was handed over.
+final class HopThenThrowsTransport: CloudTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _paths: [String] = []
+    private let error: any Error & Sendable
+    private let hops: Int
+
+    init(error: any Error & Sendable, hops: Int = 1) {
+        self.error = error
+        self.hops = hops
+    }
+
+    var paths: [String] { lock.withLock { _paths } }
+
+    func start(_ request: CloudRequest) -> Task<Data, Error> {
+        let answered = lock.withLock {
+            _paths.append(request.url.path)
+            return _paths.count <= hops
+        }
+        let error = error
+        return Task {
+            guard answered else { throw error }
+            return Data(#"{"token":"made-up"}"#.utf8)
+        }
     }
 }
 
