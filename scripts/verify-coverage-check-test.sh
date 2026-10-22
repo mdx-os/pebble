@@ -23,7 +23,9 @@
 # `override define MFLAGS` holding -i, and any MAKE, MAKEFLAGS or MFLAGS
 # assignment: MAKE := make -i with $(MAKE) archive in verify,
 # verify: MAKE := make -i, MAKEFLAGS := -ij2, MFLAGS = -ki and
-# override MAKEFLAGS += -i. So do a new
+# override MAKEFLAGS += -i, the simulator build moved into a pattern
+# rule `release-%:` or a suffix rule `.c.o:` with its errors ignored, a
+# .SUFFIXES line, and archive: SHELL ::= /usr/bin/true. So do a new
 # Release build with its action after the options or with none, the macOS
 # archive turned into -showBuildSettings, given an option the check
 # doesn't know, or of another scheme. An archive with no -configuration
@@ -310,6 +312,23 @@ for assignment in "verify: MAKE := make -i" "MAKEFLAGS := -ij2" "MFLAGS = -ki" "
   change "s~(\n\.PHONY:)~\n$assignment\$1~"
   expect fail "$assignment" "$sets_make"
 done
+
+fresh
+change "s~(\nbuild-release-simulator:[^\n]*)\n\t(xcodebuild[^\n]*\n)~\$1 release-simulator\n\nrelease-%:\n\t-\$2~"
+expect fail "the simulator build moved to release-% with its errors ignored" "the Makefile has a pattern rule"
+
+fresh
+touch "$scratch/simulator.c"
+change "s~(\nbuild-release-simulator:[^\n]*)\n\t(xcodebuild[^\n]*\n)~\$1 simulator.o\n\n.c.o:\n\t-\$2~"
+expect fail "the simulator build moved to a suffix rule .c.o with its errors ignored" "the Makefile has an old style suffix rule"
+
+fresh
+change "s~(\n\.PHONY:)~\n.SUFFIXES: .sim .done\$1~"
+expect fail "a .SUFFIXES line" "the Makefile has an old style suffix rule"
+
+fresh
+change "s~(\n\.PHONY:)~\narchive: SHELL ::= /usr/bin/true\$1~"
+expect fail "archive: SHELL ::= /usr/bin/true" "for one target"
 
 if [ "$failures" -ne 0 ]; then
   echo "verify-coverage-check-test: $failures case(s) went the wrong way"

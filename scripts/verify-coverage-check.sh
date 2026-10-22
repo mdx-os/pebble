@@ -183,12 +183,17 @@ xcodebuilds() {
 # are too many ways to spell -i to read one by one, and the Makefile needs
 # none of them, `.ONESHELL` (one shell for a recipe, which goes on
 # past a failed line), SHELL or .SHELLFLAGS set, SHELL or .SHELLFLAGS
-# set for one target, an `.IGNORE` or a rule's targets
+# set for one target by any of those operators, as
+# `archive: SHELL ::= /usr/bin/true`, an `.IGNORE` or a rule's targets
 # named through a variable, a variable named through another, an eval,
 # .RECIPEPREFIX, a conditional (ifeq, ifneq, ifdef, ifndef, else, endif),
 # whose lines make keeps adding to the rule above it, a define or endef,
-# even after override or export, as `define MAKEFLAGS` holding -i, and an
-# include, whose file this never reads. A line
+# even after override or export, as `define MAKEFLAGS` holding -i, an
+# include, whose file this never reads, a pattern rule (any % in a rule's
+# targets or prerequisites, as `release-%:`), and an old style suffix rule
+# (a rule whose target starts with a dot and is not one of make's special
+# targets, as `.c.o:`, or any line naming .SUFFIXES), since make can give
+# such a rule's recipe to a target this check follows by name. A line
 # starting with a tab is a recipe line; any other line is read as make
 # reads it, after its leading spaces, so ` .IGNORE: archive` is an
 # .IGNORE, and a rule may end in : or ::. Where it can't be sure
@@ -199,6 +204,10 @@ problems="$(perl -e '
   my $all = <>;
   $all =~ s/\\\n[ \t]*/ /g;
   my (%deps, %lines, @current, %ignore, $ignoreall);
+  my %special = map { $_ => 1 } qw(.PHONY .DEFAULT .PRECIOUS .INTERMEDIATE
+    .NOTINTERMEDIATE .SECONDARY .SECONDEXPANSION .DELETE_ON_ERROR .IGNORE
+    .LOW_RESOLUTION_TIME .SILENT .EXPORT_ALL_VARIABLES .NOTPARALLEL .ONESHELL
+    .POSIX .WAIT);
   my $ignores = sub { grep { /^--ig/ || /^-?[bBdehikLnpqrRsStvw]*i[bBdehikLnpqrRsStvw]*\z/ } @_ };
   for my $l (split /\n/, $all) {
     if ($l =~ /^\t/) {
@@ -228,6 +237,9 @@ problems="$(perl -e '
     if ($l =~ /\.RECIPEPREFIX\b/) {
       print "global the Makefile sets .RECIPEPREFIX, so this check cannot tell which lines are recipes: $l\n";
     }
+    if ($l =~ /\.SUFFIXES\b/) {
+      print "global the Makefile has an old style suffix rule, whose recipe this check cannot tie to the targets it builds: $l\n";
+    }
     if ($l =~ /^(?:(?:export|unexport|override|private)\s+)*(?:ifeq|ifneq|ifdef|ifndef|else|endif|define|endef)\b/) {
       print "global the Makefile uses a conditional or define, so this check cannot tell which recipe a line belongs to or what a variable holds: $l\n";
     }
@@ -237,7 +249,13 @@ problems="$(perl -e '
       if ($names =~ /\$/) {
         print "global the Makefile names a rule\x27s targets through a variable, so this check cannot tell whose recipe is whose: $l\n";
       }
-      if ($prereqs =~ /^(?:(?:export|unexport|override|private)\s+)*([^\s:=#]+)\s*[:+?!]?=/) {
+      if ("$names $prereqs" =~ /%/) {
+        print "global the Makefile has a pattern rule, whose recipe this check cannot tie to the targets it builds: $l\n";
+      }
+      if (grep { /^\./ && !$special{$_} } @current) {
+        print "global the Makefile has an old style suffix rule, whose recipe this check cannot tie to the targets it builds: $l\n";
+      }
+      if ($prereqs =~ /^(?:(?:export|unexport|override|private)\s+)*([^\s:=#]+)\s*(?::{1,3}|[+?!])?=/) {
         my $name = $1;
         if ($name =~ /^(?:SHELL|\.SHELLFLAGS|MAKE|MAKEFLAGS|MFLAGS)\z/ || $name =~ /\$/) {
           print "global the Makefile sets $name for one target, so this check cannot tell how a failed line there ends: $l\n";
