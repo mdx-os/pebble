@@ -1,15 +1,20 @@
 #!/bin/sh
-# Fails unless `make verify` builds every Release build `make build-release`
-# does. verify runs only build-release-simulator, because its macOS Release
-# archive stands in for the Mac's Release build; this check keeps it there. It
-# reads `make -n verify` and requires a Release build for the iOS
-# Simulator, Release archives for iOS and for macOS, and a Release build or
-# archive in verify for every platform `make -n build-release` builds.
+# Fails unless `make verify` builds, in Release, every platform
+# `make build-release` builds in Release. verify runs only
+# build-release-simulator, because its macOS Release archive stands in for
+# the Mac's Release build; this check keeps it there. It reads
+# `make -n verify` and requires a Release build for the iOS Simulator,
+# Release archives for iOS and for macOS, and a Release build or archive in
+# verify for every platform `make -n build-release` builds in Release. It
+# compares platforms, not each build, so a second macOS build with another
+# arch needs no build of its own in verify.
 # Usage: scripts/verify-coverage-check.sh [dir]   (default: the repository)
 # The dir holds the Makefile to read. `make -n` prints the recipes and runs
 # none of them itself, but it still starts any `$(MAKE)` sub-make, any
-# recipe line marked `+` and any `$(shell ...)`, so point it only at a
-# Makefile you trust.
+# recipe line marked `+` and any `$(shell ...)`. The check reads the
+# Makefile first and stops on any problem it finds there, before either
+# `make -n`, so a rejected `+` line in what verify and archive reach never
+# runs; still, point it only at a Makefile you trust.
 set -eu
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -45,6 +50,13 @@ fail() { echo "verify-coverage-check: $*"; status=1; }
 # `xcodebuild ... || true` or two archives joined by &&, could skip the
 # build, ignore its errors or take another's configuration, so it prints
 # "unsupported" and the line, and the check fails on it.
+#
+# A line that builds in Release may set only the build settings in a known
+# list, today just CODE_SIGNING_ALLOWED=NO, before xcodebuild or after it,
+# and no -xcconfig. Any other, such as
+# SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG, could build the code kept to
+# Debug, which is what build-release keeps out, so it prints "setting" and
+# the line, and the check fails on it.
 xcodebuilds() {
   out="$(cd "$dir" && env -u MAKEFLAGS -u MFLAGS -u MAKELEVEL make --no-print-directory -n "$1" 2>&1)" || {
     echo "verify-coverage-check: make -n $1 failed: $out" >&2
@@ -99,7 +111,8 @@ xcodebuilds() {
     $end->();
     my $mentions = grep { m{(?:^|/)xcodebuild\z} } @words;
     next unless $mentions;
-    shift @words while @words && $words[0] =~ /^\w+=/;
+    my @settings;
+    push @settings, shift @words while @words && $words[0] =~ /^\w+=/;
     my $configs = grep { $_ eq "-configuration" } @words;
     if ($odd || $mentions > 1 || $configs > 1 || $words[0] !~ m{(?:^|/)xcodebuild\z}) {
       print "unsupported $line\n";
@@ -141,6 +154,7 @@ xcodebuilds() {
           else { $opt{$w} //= $v }
         } else { $bad = 1 }
       } elsif ($w =~ /^\w+=/) {
+        push @settings, $w;
       } elsif ($actions{$w}) {
         push @acts, $w;
       } else { $bad = 1 }
@@ -153,6 +167,12 @@ xcodebuilds() {
     if (($opt{"-scheme"} // "") ne "Pebble" || ($opt{"-project"} // "") ne "Pebble.xcodeproj"
         || exists $opt{"-workspace"} || exists $opt{"-target"}) {
       print "foreign $line\n";
+      next;
+    }
+    my %allowed = map { $_ => 1 } qw(CODE_SIGNING_ALLOWED=NO);
+    my $release = grep { ($config // ($_ eq "archive" ? "Release" : "Debug")) eq "Release" } @acts;
+    if ($release && (exists $opt{"-xcconfig"} || grep { !$allowed{$_} } @settings)) {
+      print "setting $line\n";
       next;
     }
     for my $kind (@acts) {
@@ -339,7 +359,9 @@ done
 printf '%s\n' "$problems" | sed -n 's/^bymake //p' | while IFS= read -r line; do
   echo "verify-coverage-check: make ${line%% *} runs make by name, not as \$(MAKE), so this check cannot read the sub-make or its flags: ${line#* }"
 done
-if printf '%s\n' "$problems" | grep -qE '^(global|ignored|submake|varprereq|varstart|plus|bymake) '; then status=1; fi
+# Stop here on any of these, before either `make -n`, which would run a
+# recipe line marked + or a sub-make the check has just turned down.
+if printf '%s\n' "$problems" | grep -qE '^(global|ignored|submake|varprereq|varstart|plus|bymake) '; then exit 1; fi
 
 verify="$(xcodebuilds verify)" || exit 1
 release="$(xcodebuilds build-release)" || exit 1
@@ -354,7 +376,11 @@ for target in verify build-release; do
     echo "verify-coverage-check: make $target runs xcodebuild on another scheme or project, so it isn't the app's build: $line"
     echo "verify-coverage-check: name -project Pebble.xcodeproj -scheme Pebble on it"
   done
-  if printf '%s\n' "$lines" | grep -qE '^(unsupported|foreign) '; then status=1; fi
+  printf '%s\n' "$lines" | sed -n 's/^setting //p' | while IFS= read -r line; do
+    echo "verify-coverage-check: make $target gives a Release xcodebuild a build setting or -xcconfig this check doesn't allow, which could change what Release compiles, such as the code kept to Debug: $line"
+    echo "verify-coverage-check: the only setting allowed there is CODE_SIGNING_ALLOWED=NO"
+  done
+  if printf '%s\n' "$lines" | grep -qE '^(unsupported|foreign|setting) '; then status=1; fi
 done
 
 has() { printf '%s\n' "$verify" | grep -qx "$1"; }

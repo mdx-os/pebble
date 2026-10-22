@@ -56,8 +56,8 @@ build: generate
 
 ## build-release: compile the app in Release for macOS and the iOS Simulator, so
 ## code kept to Debug (the showcase screens) can never break a shipped build.
-## verify runs only build-release-simulator: its macOS archive is the same
-## Release build for the Mac, so it stands in for the arm64 line below.
+## verify runs only build-release-simulator: its macOS archive compiles the
+## same Release code for the Mac, so it stands in for the arm64 line below.
 build-release: generate build-release-simulator
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath $(DERIVED)
 
@@ -149,7 +149,7 @@ graph-check-test:
 	sh scripts/graph-check-test.sh
 
 ## verify-coverage-check: fail unless verify builds or archives in Release
-## every platform build-release builds, with the iOS Simulator build and
+## every platform build-release builds in Release, with the iOS Simulator build and
 ## both archives, so dropping archive from verify can't drop the Mac's
 verify-coverage-check:
 	sh scripts/verify-coverage-check.sh

@@ -28,7 +28,12 @@
 # .SUFFIXES line, archive: SHELL ::= /usr/bin/true, the simulator build
 # moved into .DEFAULT with its errors ignored, and archive run as
 # +make -i archive, +sh -c 'make -i archive', make -i archive or
-# /usr/bin/gmake -i archive. So do a new
+# /usr/bin/gmake -i archive. A rejected +touch review-marker under archive
+# must fail and never run, so the marker must not exist afterward, as the
+# check stops before any `make -n`. The macOS archive given
+# SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG, after xcodebuild or before
+# it, or given -xcconfig, fails, as a Release line may set only
+# CODE_SIGNING_ALLOWED=NO. So do a new
 # Release build with its action after the options or with none, the macOS
 # archive turned into -showBuildSettings, given an option the check
 # doesn't know, or of another scheme. An archive with no -configuration
@@ -343,6 +348,30 @@ for line in "+make -i archive" "+sh -c 'make -i archive'"; do
   change "s~(\n\t\\\$\(MAKE\) graph-check\n)~\$1\t$line\n~"
   expect fail "archive run as $line" "make verify runs a recipe line marked +"
 done
+
+fresh
+change "s~(\narchive:[^\n]*\n)~\$1\t+touch review-marker\n~"
+expect fail "archive with +touch review-marker" "make archive runs a recipe line marked +"
+if [ -e "$scratch/review-marker" ]; then
+  echo "verify-coverage-check-test: FAILED, the check ran the rejected +touch review-marker before it failed"
+  failures=$((failures + 1))
+else
+  echo "verify-coverage-check-test: ok, the rejected +touch review-marker never ran"
+fi
+
+sets_setting="make verify gives a Release xcodebuild a build setting or -xcconfig this check doesn't allow"
+
+fresh
+change "s~($macos_archive)\n~\$1 SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG\n~"
+expect fail "the macOS archive given SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG" "$sets_setting"
+
+fresh
+change "s~\txcodebuild archive ([^\n]*\\\\\n[^\n]*'generic/platform=macOS')~\tSWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG xcodebuild archive \$1~"
+expect fail "the macOS archive run with SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG before xcodebuild" "$sets_setting"
+
+fresh
+change "s~($macos_archive)\n~\$1 -xcconfig Config/Debug.xcconfig\n~"
+expect fail "the macOS archive given -xcconfig" "$sets_setting"
 
 for line in "make -i archive" "/usr/bin/gmake -i archive"; do
   fresh
