@@ -57,7 +57,7 @@ build: generate
 ## build-release: compile the app in Release for macOS and the iOS Simulator, so
 ## code kept to Debug (the showcase screens) can never break a shipped build.
 ## verify runs only build-release-simulator: its macOS archive is the same
-## Release build for the Mac, on arm64 and x86_64, so it stands in for the line below.
+## Release build for the Mac, so it stands in for the arm64 line below.
 build-release: generate build-release-simulator
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath $(DERIVED)
 

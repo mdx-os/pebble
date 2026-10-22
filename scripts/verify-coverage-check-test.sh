@@ -25,7 +25,10 @@
 # verify: MAKE := make -i, MAKEFLAGS := -ij2, MFLAGS = -ki and
 # override MAKEFLAGS += -i, the simulator build moved into a pattern
 # rule `release-%:` or a suffix rule `.c.o:` with its errors ignored, a
-# .SUFFIXES line, and archive: SHELL ::= /usr/bin/true. So do a new
+# .SUFFIXES line, archive: SHELL ::= /usr/bin/true, the simulator build
+# moved into .DEFAULT with its errors ignored, and archive run as
+# +make -i archive, +sh -c 'make -i archive', make -i archive or
+# /usr/bin/gmake -i archive. So do a new
 # Release build with its action after the options or with none, the macOS
 # archive turned into -showBuildSettings, given an option the check
 # doesn't know, or of another scheme. An archive with no -configuration
@@ -329,6 +332,24 @@ expect fail "a .SUFFIXES line" "the Makefile has an old style suffix rule"
 fresh
 change "s~(\n\.PHONY:)~\narchive: SHELL ::= /usr/bin/true\$1~"
 expect fail "archive: SHELL ::= /usr/bin/true" "for one target"
+
+fresh
+change "s~(\nbuild-release-simulator:[^\n]*)\n\t(xcodebuild[^\n]*\n)~\$1 simulator-release\n\n.DEFAULT:\n\t-\$2~"
+expect fail "the simulator build moved to .DEFAULT with its errors ignored" "the Makefile has a .DEFAULT rule"
+
+for line in "+make -i archive" "+sh -c 'make -i archive'"; do
+  fresh
+  change "$drop_archive"
+  change "s~(\n\t\\\$\(MAKE\) graph-check\n)~\$1\t$line\n~"
+  expect fail "archive run as $line" "make verify runs a recipe line marked +"
+done
+
+for line in "make -i archive" "/usr/bin/gmake -i archive"; do
+  fresh
+  change "$drop_archive"
+  change "s~(\n\t\\\$\(MAKE\) graph-check\n)~\$1\t$line\n~"
+  expect fail "archive run as $line" "make verify runs make by name"
+done
 
 if [ "$failures" -ne 0 ]; then
   echo "verify-coverage-check-test: $failures case(s) went the wrong way"

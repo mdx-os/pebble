@@ -173,7 +173,11 @@ xcodebuilds() {
 # is more than `$(MAKE)`, a few plain flags, NAME=value words and targets,
 # such as `$(MAKE) archive || true` or `$(MAKE) -i archive`, or that sets
 # SHELL, MAKE, MAKEFLAGS, MFLAGS or a name starting with a dot, such as
-# .SHELLFLAGS. Make reads a line's -, @ and + after expanding it, so a
+# .SHELLFLAGS. A recipe line marked `+` fails, whatever it runs, since
+# `make -n` runs it too, as in `+make -i archive` or
+# `+sh -c 'make -i archive'`, and so does a line whose first command is
+# make or gmake, by name or by path, rather than `$(MAKE)`, whose flags
+# this check would not read. Make reads a line's -, @ and + after expanding it, so a
 # recipe line there that starts with a variable other than `$(MAKE)`, as
 # `$(IGN)xcodebuild` with IGN := -, fails too, and so does a prerequisite
 # given through a variable, which this check can't follow. In the whole
@@ -193,12 +197,16 @@ xcodebuilds() {
 # targets or prerequisites, as `release-%:`), and an old style suffix rule
 # (a rule whose target starts with a dot and is not one of make's special
 # targets, as `.c.o:`, or any line naming .SUFFIXES), since make can give
-# such a rule's recipe to a target this check follows by name. A line
+# such a rule's recipe to a target this check follows by name, and for
+# the same reason any `.DEFAULT` rule, whose recipe make runs for a
+# prerequisite no rule names. A line
 # starting with a tab is a recipe line; any other line is read as make
 # reads it, after its leading spaces, so ` .IGNORE: archive` is an
 # .IGNORE, and a rule may end in : or ::. Where it can't be sure
-# what a variable holds, it fails. -k is fine: make still fails at the
-# end.
+# what a variable holds, it fails. A -k given to the make that runs
+# verify is fine, as make still fails at the end, but a sub-make given
+# -k, as `$(MAKE) -k archive`, fails the check like any other flag it
+# doesn't read.
 problems="$(perl -e '
   local $/;
   my $all = <>;
@@ -255,6 +263,9 @@ problems="$(perl -e '
       if (grep { /^\./ && !$special{$_} } @current) {
         print "global the Makefile has an old style suffix rule, whose recipe this check cannot tie to the targets it builds: $l\n";
       }
+      if (grep { $_ eq ".DEFAULT" } @current) {
+        print "global the Makefile has a .DEFAULT rule, whose recipe this check cannot tie to the targets it builds: $l\n";
+      }
       if ($prereqs =~ /^(?:(?:export|unexport|override|private)\s+)*([^\s:=#]+)\s*(?::{1,3}|[+?!])?=/) {
         my $name = $1;
         if ($name =~ /^(?:SHELL|\.SHELLFLAGS|MAKE|MAKEFLAGS|MFLAGS)\z/ || $name =~ /\$/) {
@@ -287,6 +298,11 @@ problems="$(perl -e '
     for my $line (@{$lines{$t} || []}) {
       my ($mark, $body) = $line =~ /^\t([\s@+-]*)(.*)/;
       print "ignored $t\n" if $mark =~ /-/;
+      print "plus $t $body\n" if $mark =~ /\+/;
+      my @first = split " ", $body;
+      shift @first while @first && $first[0] =~ /^\w+=/;
+      (my $first = $first[0] // "") =~ s/["\x27\\]//g;
+      print "bymake $t $body\n" if $first =~ m{(?:^|/)g?make\z};
       if ($body =~ /^\$(?!\$)/ && $body !~ /^\$[({]MAKE[)}](?:\s|\z)/) {
         print "varstart $t $body\n";
       }
@@ -317,7 +333,13 @@ done
 printf '%s\n' "$problems" | sed -n 's/^varstart //p' | while IFS= read -r line; do
   echo "verify-coverage-check: make ${line%% *} runs a recipe line that starts with a variable, which could mark it - and ignore its errors: ${line#* }"
 done
-if printf '%s\n' "$problems" | grep -qE '^(global|ignored|submake|varprereq|varstart) '; then status=1; fi
+printf '%s\n' "$problems" | sed -n 's/^plus //p' | while IFS= read -r line; do
+  echo "verify-coverage-check: make ${line%% *} runs a recipe line marked +, which make -n runs too, so this check cannot tell what it builds or whether it ignores a failed build: ${line#* }"
+done
+printf '%s\n' "$problems" | sed -n 's/^bymake //p' | while IFS= read -r line; do
+  echo "verify-coverage-check: make ${line%% *} runs make by name, not as \$(MAKE), so this check cannot read the sub-make or its flags: ${line#* }"
+done
+if printf '%s\n' "$problems" | grep -qE '^(global|ignored|submake|varprereq|varstart|plus|bymake) '; then status=1; fi
 
 verify="$(xcodebuilds verify)" || exit 1
 release="$(xcodebuilds build-release)" || exit 1

@@ -39,8 +39,8 @@ tests use the showcase (`ShowcaseScene.morning`, `ShowcaseScene.emptyMemory()`),
 which is Debug only, so `swift test -c release` does not build them. `make
 verify` builds Release for the iOS Simulator (`build-release-simulator`) and
 makes the unsigned iOS and macOS Release archives. It does not run the arm64
-macOS build that `make build-release` runs; the macOS Release archive (all
-architectures) stands in for the arm64 Release build. `make verify-coverage-check` fails if verify stops
+macOS build that `make build-release` runs; the macOS Release archive
+stands in for the arm64 Release build. `make verify-coverage-check` fails if verify stops
 making any of these. `make build-release` still runs both Release builds,
 macOS and the iOS Simulator, by hand.
 
