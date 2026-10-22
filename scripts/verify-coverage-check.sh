@@ -182,7 +182,10 @@ xcodebuilds() {
 # past a failed line), SHELL or .SHELLFLAGS set, SHELL, .SHELLFLAGS,
 # MAKEFLAGS or MFLAGS set for one target, an `.IGNORE` or a rule's targets
 # named through a variable, a variable named through another, an eval,
-# .RECIPEPREFIX, and an include, whose file this never reads. A line
+# .RECIPEPREFIX, a conditional (ifeq, ifneq, ifdef, ifndef, else, endif),
+# whose lines make keeps adding to the rule above it, a define or endef,
+# even after override or export, as `define MAKEFLAGS` holding -i, and an
+# include, whose file this never reads. A line
 # starting with a tab is a recipe line; any other line is read as make
 # reads it, after its leading spaces, so ` .IGNORE: archive` is an
 # .IGNORE, and a rule may end in : or ::. Where it can't be sure
@@ -207,10 +210,10 @@ problems="$(perl -e '
     if ($l =~ /\b(?:MAKEFLAGS|MFLAGS)\b[^=]*=(.*)/ && ($ignores->(split " ", $1) || $1 =~ /\$/)) {
       print "global the Makefile sets MAKEFLAGS to ignore errors, or through a variable: $l\n";
     }
-    if ($l =~ /^\s*(?:(?:export|unexport|override|private|define)\s+)*(?:SHELL|\.SHELLFLAGS)\b/) {
+    if ($l =~ /^(?:(?:export|unexport|override|private|define)\s+)*(?:SHELL|\.SHELLFLAGS)\b/) {
       print "global the Makefile sets SHELL or .SHELLFLAGS, so this check cannot tell how a failed line ends: $l\n";
     }
-    if ($l =~ /^\s*(?:(?:export|unexport|override|private|define)\s+)*[^\s:=#]*\$[^\s:=#]*\s*(?:[:+?!]?=|\z)/) {
+    if ($l =~ /^(?:(?:export|unexport|override|private|define)\s+)*[^\s:=#]*\$[^\s:=#]*\s*(?:[:+?!]?=|\z)/) {
       print "global the Makefile names a variable through another variable, so this check cannot tell what it sets: $l\n";
     }
     if ($l =~ /\$[({]eval\s/) {
@@ -221,6 +224,9 @@ problems="$(perl -e '
     }
     if ($l =~ /\.RECIPEPREFIX\b/) {
       print "global the Makefile sets .RECIPEPREFIX, so this check cannot tell which lines are recipes: $l\n";
+    }
+    if ($l =~ /^(?:(?:export|unexport|override|private)\s+)*(?:ifeq|ifneq|ifdef|ifndef|else|endif|define|endef)\b/) {
+      print "global the Makefile uses a conditional or define, so this check cannot tell which recipe a line belongs to or what a variable holds: $l\n";
     }
     if ($l =~ /^([^\s:=#][^:=#]*?)\s*::?(?![=:])\s*([^;#]*)(?:;(.*))?/) {
       my ($names, $prereqs, $inline) = ($1, $2, $3);

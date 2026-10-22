@@ -18,7 +18,9 @@
 # IGN := -, .IGNORE naming archive through a variable, and a prerequisite
 # of verify given through a variable whose recipe ignores errors, an
 # .IGNORE or an archive rule written after spaces, a double-colon rule
-# with its errors ignored, and a .RECIPEPREFIX. So do a new
+# with its errors ignored, a .RECIPEPREFIX, the macOS archive inside
+# ifeq and endif with its errors ignored, and `define MAKEFLAGS` or
+# `override define MFLAGS` holding -i. So do a new
 # Release build with its action after the options or with none, the macOS
 # archive turned into -showBuildSettings, given an option the check
 # doesn't know, or of another scheme. An archive with no -configuration
@@ -280,6 +282,17 @@ expect fail "build-release-simulator as a double-colon rule with its errors igno
 fresh
 change "s~(\n\.PHONY:)~\n.RECIPEPREFIX := >\$1~"
 expect fail ".RECIPEPREFIX set, which make 3.82 and later read as a new recipe prefix" "the Makefile sets .RECIPEPREFIX"
+
+fresh
+change "s~($macos_archive\n)~ifeq (1,1)\n\$1endif\n~"
+change "s~\txcodebuild archive ([^\n]*\\\\\n[^\n]*'generic/platform=macOS')~\t-xcodebuild archive \$1~"
+expect fail "the macOS archive inside ifeq and endif, with its errors ignored" "the Makefile uses a conditional or define"
+
+for opener in "define MAKEFLAGS" "override define MFLAGS"; do
+  fresh
+  change "s~(\n\.PHONY:)~\n$opener\n-i\nendef\$1~"
+  expect fail "$opener holding -i" "the Makefile uses a conditional or define"
+done
 
 if [ "$failures" -ne 0 ]; then
   echo "verify-coverage-check-test: $failures case(s) went the wrong way"
