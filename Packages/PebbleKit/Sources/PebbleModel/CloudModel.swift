@@ -4,8 +4,10 @@ import PebbleCore
 import FoundationNetworking
 #endif
 
-/// One request to the cloud model, exactly as it leaves the device: the
-/// method, the full address, every header and the body.
+/// One request to the cloud model as the app hands it over: the method,
+/// the full address, every header the app sets and the body. The system
+/// adds lines of its own, and over HTTP/2 may add some no test covers
+/// (`systemLines`).
 public struct CloudRequest: Sendable, Equatable {
     public let method: String
     public let url: URL
@@ -983,8 +985,10 @@ public enum ModelChoice {
 }
 
 /// Sends requests with URLSession: one POST, no cookies, no cache, no
-/// redirects, and only the headers the preview showed. Only made once the
-/// person has turned the cloud on.
+/// redirects, and of the headers the app sets, only those the preview
+/// showed. The system adds its own lines, and over HTTP/2 may add some
+/// the preview doesn't show (`CloudRequest.systemLines`). Only made once
+/// the person has turned the cloud on.
 public struct URLSessionCloudTransport: CloudTransport {
     public typealias Load = @Sendable (URLRequest) async throws -> (Data, URLResponse)
     /// Hands a URLRequest over before it returns, and gives back the wait

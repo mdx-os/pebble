@@ -85,7 +85,10 @@ chooses one.
   The server is not in this repository, so nothing here can prove how it
   behaves: what it keeps, for how long, and who runs it are up to whoever
   runs the address a build is given, and the turn on question says so.
-  The protocol is in [docs/RELAY.md](docs/RELAY.md). The app signs in to
+  Each reply is one POST to `v1/reply` under that address, with a JSON
+  body of the chat's redacted turns and a version,
+  `{"messages": [{"role": "agent" or "person", "text": "..."}], "version": 1}`,
+  and the answer is `{"reply": "..."}` (`CloudPayload`). The app signs in to
   nothing yet. A server's own promises about sign-in and what it keeps
   are said in the turn on question only for the server they were made
   for, and only once the app signs in to it (`CloudServerPolicy`); none

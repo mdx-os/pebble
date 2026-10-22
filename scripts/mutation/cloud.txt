@@ -993,6 +993,11 @@ test: aSummaryStoppedAfterTheSignInWentSaysTheSignInWent
 file: Packages/PebbleKit/Sources/PebbleModel/CloudRecon.swift
 perl: s~return onDevice\(ReconWords\.cloudSignInOnly\)~return onDevice(ReconWords.cloudWithdrawn)~
 
+# Forget everything before the summary's request went never says it may have gone.
+test: aSummaryForgottenBeforeItsRequestWentNeverSaysItMayHaveGone
+file: Packages/PebbleKit/Sources/PebbleModel/CloudRecon.swift
+perl: s~\} catch CloudModelError\.ended \{\n(?:\s*//.*\n)*\s*return onDevice\(ReconWords\.cloudEnded\)\n\s*~~
+
 test: eachFailureHasItsOwnLine
 file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
 perl: s~case \.stoppedAfterSignIn: CloudWords\.stoppedAfterSignIn~case .stoppedAfterSignIn: CloudWords.withdrawn~

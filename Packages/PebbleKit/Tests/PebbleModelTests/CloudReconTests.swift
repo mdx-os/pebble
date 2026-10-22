@@ -207,6 +207,27 @@ struct CloudReconTests {
         #expect(summary.note == ReconWords.cloudSignInOnly)
     }
 
+    /// Forget everything that ends the summary's request before it is
+    /// handed over, with nothing gone or only a sign-in hop, says so, and
+    /// never that what was read may have gone.
+    @Test func aSummaryForgottenBeforeItsRequestWentNeverSaysItMayHaveGone() async {
+        for whileSignIn in [false, true] {
+            let session = CloudChatSession()
+            if !whileSignIn { session.end() }
+            let transport = EndingTransport { session.end() }
+            let auth = SampleAuth(signIn: CloudSignIn(path: "v1/sign-in", body: Data("{}".utf8)))
+            let model = CloudModel(endpoint: endpoint, transport: transport, reviewer: RecordingReviewer(answer: .send),
+                                   auth: auth, session: session)
+            let summary = await CloudReconSummarizer(model: model)
+                .summarize(task, id: "task:1", sources: sources, gatheredAt: readOn)
+            #expect(transport.sends == (whileSignIn ? 1 : 0), "the summary's request never went")
+            #expect(summary.madeOnDevice)
+            #expect(summary.note == ReconWords.cloudEnded)
+            #expect(summary.note?.contains("may already have gone") != true)
+            #expect(summary.note?.contains("Nothing went") != true)
+        }
+    }
+
     @Test func aChatModelOnTheDeviceNeverMayLeaveIt() {
         #expect(!CloudReconSummarizer(model: LocalStubModel()).mayUseCloud)
         #expect(CloudReconSummarizer(model: cloud(RecordingTransport(), RecordingReviewer(answer: .send))).mayUseCloud)

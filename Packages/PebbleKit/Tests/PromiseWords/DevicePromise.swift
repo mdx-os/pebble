@@ -335,6 +335,10 @@ public enum DevicePromise {
                 reason: reconCloudNote + " ReconWords.cloudSignInOnly follows a sign-in hop that went before the "
                     + "summary's request didn't, and says plainly that something left."),
         Allowed(file: "PebbleCore/Recon.swift",
+                literal: "Forget everything stopped this before any of what I read went to the cloud, so I put this together without it.",
+                reason: reconCloudNote + " ReconWords.cloudEnded follows a Forget everything that ended the summary's "
+                    + "request before it was handed over, and never says nothing went."),
+        Allowed(file: "PebbleCore/Recon.swift",
                 literal: "It was stopped after you said send, so some of what I read may already have gone to the cloud. I put this together without it.",
                 reason: reconCloudNote + " ReconWords.cloudStopped follows a Stop after a yes, and says plainly "
                     + "that words may have left."),
@@ -424,6 +428,7 @@ public enum DevicePromise {
         ReconWords.cloudWithdrawn,
         ReconWords.cloudOff,
         ReconWords.cloudSignInOnly,
+        ReconWords.cloudEnded,
         ReconWords.cloudStopped,
         ReconWords.cloudFailedAfterSend,
         ReconWords.stoppedAfterSend,

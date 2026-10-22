@@ -68,6 +68,12 @@ public struct CloudReconSummarizer: ReconSummarizer {
             // Off before a preview was shown, or by the time a yes came:
             // nothing was asked, or the yes couldn't be used.
             return onDevice(ReconWords.cloudOff)
+        } catch CloudModelError.ended {
+            // Forget everything ended the chat before the request was
+            // handed over: once it has been, a stop comes back as
+            // `stoppedAfterSend` or a cancelled load instead. A sign-in hop
+            // may have gone, so it never says nothing did.
+            return onDevice(ReconWords.cloudEnded)
         } catch CloudModelError.staysHere {
             return onDevice(ReconWords.keptForCare)
         } catch CloudModelError.notRecorded, CloudModelError.notesUnreadable {
