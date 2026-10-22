@@ -1030,6 +1030,11 @@ test: eachFailureHasItsOwnLine
 file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
 perl: s~return error is URLError && place\?\.staysOnDevice == false~return error is URLError~
 
+# An answer the app can't read came from the server, so the message went.
+test: eachFailureHasItsOwnLine aFailureAfterTheHandOverSaysTheMessageMayHaveGone
+file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
+perl: s~\n\s*if case \.unreadableReply\? = error as\? CloudModelError \{ return true \}~~
+
 test: aFailureAfterTheHandOverSaysTheMessageMayHaveGone
 file: Packages/PebbleKit/Sources/PebbleUI/ChatView.swift
 perl: s~\} else if let error, Self\.mayHaveGone\(error, place: privacyPlace\) \{~} else if false {~

@@ -77,8 +77,9 @@ public struct CloudRequest: Sendable, Equatable {
             + "\n\n" + String(decoding: body, as: UTF8.self)
     }
 
-    /// The URLRequest that carries exactly this and nothing more: no
-    /// cookies, no cache, and only these headers.
+    /// The URLRequest the app builds from this: no cookies, no cache, and
+    /// no header the app sets but these. The system may add lines of its
+    /// own on the way out, as `systemLines` says.
     public var urlRequest: URLRequest {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 60)
         request.httpMethod = method

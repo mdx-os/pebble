@@ -909,7 +909,9 @@ final class ChatController: ObservableObject {
 
     /// True when the message was handed to the cloud and then no reply
     /// came, so it may have gone: a stop once it was on the wire
-    /// (`stoppedAfterSend`), or a `URLError`, which in a chat only the
+    /// (`stoppedAfterSend`), an answer the app couldn't read
+    /// (`unreadableReply`), which comes only once the server has answered
+    /// it, so the message went, or a `URLError`, which in a chat only the
     /// cloud's transport throws, once it has a request in hand. A failed
     /// sign-in hop says so too, which is cautious but never says nothing
     /// went. The chat says it plainly (`CloudWords.stoppedAfterSend`), as a
@@ -918,6 +920,7 @@ final class ChatController: ObservableObject {
     /// on this device that throws one never says anything reached the cloud.
     nonisolated static func mayHaveGone(_ error: Error, place: PrivacyPlace?) -> Bool {
         if case .stoppedAfterSend? = error as? CloudModelError { return true }
+        if case .unreadableReply? = error as? CloudModelError { return true }
         return error is URLError && place?.staysOnDevice == false
     }
 

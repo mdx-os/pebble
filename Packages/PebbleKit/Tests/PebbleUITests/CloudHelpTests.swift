@@ -2421,7 +2421,8 @@ struct CloudHelpTests {
         #expect(ChatController.failureLine(for: CloudModelError.off) == CloudWords.turnedOff)
         #expect(ChatController.failureLine(for: CloudModelError.staysHere) == CloudWords.staysHere)
         #expect(ChatController.failureLine(for: CloudModelError.notesUnreadable) == CloudWords.notesUnreadable)
-        #expect(ChatController.failureLine(for: CloudModelError.unreadableReply) == FirstConversation.couldNotAnswer)
+        // The server answered, so the message went.
+        #expect(ChatController.failureLine(for: CloudModelError.unreadableReply) == CloudWords.stoppedAfterSend)
         #expect(ChatController.failureLine(for: CloudModelError.ended) == CloudWords.chatEnded)
         #expect(ChatController.failureLine(for: CloudModelError.endedByOff) == CloudWords.chatEndedByOff)
         #expect(ChatController.failureLine(for: CloudModelError.notRecorded) == CloudWords.notRecorded)
@@ -2457,20 +2458,27 @@ struct CloudHelpTests {
     }
 
     /// A cloud chat whose message was handed over and then got no reply, as
-    /// with a server error, says it may have reached the cloud, whether or
-    /// not something new was typed meanwhile. The line stays in the chat.
-    @Test func aFailureAfterTheHandOverSaysTheMessageMayHaveGone() async throws {
+    /// with a server error or an answer the app can't read, says it may
+    /// have reached the cloud, whether or not something new was typed
+    /// meanwhile. The line stays in the chat.
+    @Test(arguments: [false, true])
+    func aFailureAfterTheHandOverSaysTheMessageMayHaveGone(unreadable: Bool) async throws {
+        let load: URLSessionCloudTransport.Load = { request in
+            guard unreadable else { throw URLError(.badServerResponse) }
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [:])!
+            return (Data("not a reply".utf8), response)
+        }
         for typed in ["", "and the weekend"] {
             let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)),
                                   endpoint: endpoint, memory: scratchMemory(),
-                                  transport: { URLSessionCloudTransport(load: { _ in throw URLError(.badServerResponse) }) })
+                                  transport: { URLSessionCloudTransport(load: load) })
             let controller = chat(cloud)
             let review = try #require(controller.review)
             controller.submit("Plan my week")
             controller.draft = typed
             review.answer(.send, for: await review.shown().id)
             await controller.settled()
-            #expect(controller.failure == CloudWords.stoppedAfterSend, "typed \"\(typed)\"")
+            #expect(controller.failure == CloudWords.stoppedAfterSend, "unreadable \(unreadable), typed \"\(typed)\"")
             #expect(personTurns(controller).last == "Plan my week")
             #expect(cloud.anythingSent)
         }
