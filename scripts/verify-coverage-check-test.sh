@@ -13,14 +13,17 @@
 # -$(MAKE) archive, $(MAKE) archive || true, $(MAKE) -i archive,
 # MAKEFLAGS += -i, -/usr/bin/xcodebuild, -$(XB) with XB := xcodebuild,
 # .ONESHELL, SHELL set, and an include this check can't read, and so do
-# SHELL, .SHELLFLAGS, MAKEFLAGS or MFLAGS set for archive alone or on a
+# SHELL, .SHELLFLAGS, MAKE, MAKEFLAGS or MFLAGS set for archive alone or on a
 # $(MAKE) archive line, $(IGN)xcodebuild and @${IGN}xcodebuild with
 # IGN := -, .IGNORE naming archive through a variable, and a prerequisite
 # of verify given through a variable whose recipe ignores errors, an
 # .IGNORE or an archive rule written after spaces, a double-colon rule
 # with its errors ignored, a .RECIPEPREFIX, the macOS archive inside
 # ifeq and endif with its errors ignored, and `define MAKEFLAGS` or
-# `override define MFLAGS` holding -i. So do a new
+# `override define MFLAGS` holding -i, and any MAKE, MAKEFLAGS or MFLAGS
+# assignment: MAKE := make -i with $(MAKE) archive in verify,
+# verify: MAKE := make -i, MAKEFLAGS := -ij2, MFLAGS = -ki and
+# override MAKEFLAGS += -i. So do a new
 # Release build with its action after the options or with none, the macOS
 # archive turned into -showBuildSettings, given an option the check
 # doesn't know, or of another scheme. An archive with no -configuration
@@ -176,7 +179,7 @@ expect fail "archive run as \$(MAKE) -i archive" "make verify runs a sub-make th
 
 fresh
 change "s~(\n\.PHONY:)~\nMAKEFLAGS += -i\$1~"
-expect fail "MAKEFLAGS += -i" "the Makefile sets MAKEFLAGS to ignore errors"
+expect fail "MAKEFLAGS += -i" "the Makefile sets MAKE, MAKEFLAGS or MFLAGS"
 
 fresh
 change "s~\txcodebuild archive ([^\n]*\\\\\n[^\n]*'generic/platform=macOS')~\t-/usr/bin/xcodebuild archive \$1~"
@@ -223,9 +226,9 @@ fresh
 change "s~(xcodebuild archive [^\n]*-scheme )Pebble([^\n]*\\\\\n[^\n]*'generic/platform=macOS')~\$1Other\$2~"
 expect fail "the macOS archive of another scheme" "make verify runs xcodebuild on another scheme or project"
 
-for name in SHELL .SHELLFLAGS MAKEFLAGS MFLAGS; do
+for name in SHELL .SHELLFLAGS MAKE MAKEFLAGS MFLAGS; do
   case "$name" in
-    SHELL) value=/usr/bin/true ;;
+    SHELL | MAKE) value=/usr/bin/true ;;
     .SHELLFLAGS) value=-c ;;
     *) value=-i ;;
   esac
@@ -292,6 +295,20 @@ for opener in "define MAKEFLAGS" "override define MFLAGS"; do
   fresh
   change "s~(\n\.PHONY:)~\n$opener\n-i\nendef\$1~"
   expect fail "$opener holding -i" "the Makefile uses a conditional or define"
+done
+
+sets_make="the Makefile sets MAKE, MAKEFLAGS or MFLAGS"
+
+fresh
+change "$drop_archive"
+change "s~(\n\.PHONY:)~\nMAKE := make -i\$1~"
+change "s~(\n\t\\\$\(MAKE\) graph-check\n)~\$1\t\\\$(MAKE) archive\n~"
+expect fail "MAKE := make -i, with archive run as \$(MAKE) archive" "$sets_make"
+
+for assignment in "verify: MAKE := make -i" "MAKEFLAGS := -ij2" "MFLAGS = -ki" "override MAKEFLAGS += -i"; do
+  fresh
+  change "s~(\n\.PHONY:)~\n$assignment\$1~"
+  expect fail "$assignment" "$sets_make"
 done
 
 if [ "$failures" -ne 0 ]; then

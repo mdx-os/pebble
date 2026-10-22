@@ -172,15 +172,18 @@ xcodebuilds() {
 # `.IGNORE` naming none, which covers them all), and a `$(MAKE)` line that
 # is more than `$(MAKE)`, a few plain flags, NAME=value words and targets,
 # such as `$(MAKE) archive || true` or `$(MAKE) -i archive`, or that sets
-# SHELL, MAKEFLAGS, MFLAGS or a name starting with a dot, such as
+# SHELL, MAKE, MAKEFLAGS, MFLAGS or a name starting with a dot, such as
 # .SHELLFLAGS. Make reads a line's -, @ and + after expanding it, so a
 # recipe line there that starts with a variable other than `$(MAKE)`, as
 # `$(IGN)xcodebuild` with IGN := -, fails too, and so does a prerequisite
 # given through a variable, which this check can't follow. In the whole
-# Makefile: MAKEFLAGS or MFLAGS given -i or --ignore-errors, or anything
-# through a variable, `.ONESHELL` (one shell for a recipe, which goes on
-# past a failed line), SHELL or .SHELLFLAGS set, SHELL, .SHELLFLAGS,
-# MAKEFLAGS or MFLAGS set for one target, an `.IGNORE` or a rule's targets
+# Makefile: any line that sets MAKE, MAKEFLAGS or MFLAGS, by any of =, :=,
+# ::=, :::=, +=, ?= or !=, after export, unexport, override or private or
+# for one target as `verify: MAKE := make -i`, since flags such as -ij2
+# are too many ways to spell -i to read one by one, and the Makefile needs
+# none of them, `.ONESHELL` (one shell for a recipe, which goes on
+# past a failed line), SHELL or .SHELLFLAGS set, SHELL or .SHELLFLAGS
+# set for one target, an `.IGNORE` or a rule's targets
 # named through a variable, a variable named through another, an eval,
 # .RECIPEPREFIX, a conditional (ifeq, ifneq, ifdef, ifndef, else, endif),
 # whose lines make keeps adding to the rule above it, a define or endef,
@@ -207,8 +210,8 @@ problems="$(perl -e '
     if ($l =~ /^-?s?include\s/) {
       print "global the Makefile includes another file, which this check never reads: $l\n";
     }
-    if ($l =~ /\b(?:MAKEFLAGS|MFLAGS)\b[^=]*=(.*)/ && ($ignores->(split " ", $1) || $1 =~ /\$/)) {
-      print "global the Makefile sets MAKEFLAGS to ignore errors, or through a variable: $l\n";
+    if ($l =~ /(?:^|[\s:;])(?:MAKE|MAKEFLAGS|MFLAGS)\s*(?::{1,3}|[+?!])?=/) {
+      print "global the Makefile sets MAKE, MAKEFLAGS or MFLAGS, which could make a sub-make or the whole run ignore a failed build: $l\n";
     }
     if ($l =~ /^(?:(?:export|unexport|override|private|define)\s+)*(?:SHELL|\.SHELLFLAGS)\b/) {
       print "global the Makefile sets SHELL or .SHELLFLAGS, so this check cannot tell how a failed line ends: $l\n";
@@ -236,7 +239,7 @@ problems="$(perl -e '
       }
       if ($prereqs =~ /^(?:(?:export|unexport|override|private)\s+)*([^\s:=#]+)\s*[:+?!]?=/) {
         my $name = $1;
-        if ($name =~ /^(?:SHELL|\.SHELLFLAGS|MAKEFLAGS|MFLAGS)\z/ || $name =~ /\$/) {
+        if ($name =~ /^(?:SHELL|\.SHELLFLAGS|MAKE|MAKEFLAGS|MFLAGS)\z/ || $name =~ /\$/) {
           print "global the Makefile sets $name for one target, so this check cannot tell how a failed line there ends: $l\n";
         }
         next;
@@ -274,7 +277,7 @@ problems="$(perl -e '
       my @words = split " ", $rest // "";
       my $plain = defined $rest && $rest !~ /[;&|()<>`#"\x27\\\$]/
         && !(grep { /^-/ && !/^-(?:s|j\d*|-silent|-no-print-directory)\z/ } @words)
-        && !(grep { /^(?:SHELL|MAKEFLAGS|MFLAGS|\.[^=]*)=/ } @words)
+        && !(grep { /^(?:SHELL|MAKE|MAKEFLAGS|MFLAGS|\.[^=]*)=/ } @words)
         && !$ignores->(@words);
       print "submake $t $body\n" unless $plain;
       push @todo, grep { !/^-/ && !/=/ } @words;
