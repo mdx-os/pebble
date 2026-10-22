@@ -116,6 +116,15 @@ test: privacyRulesCatchEveryWrongCase
 file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
 perl: s~Rule\("privacy\.encryption", encryption\),~~
 
+# A sign-in challenge is let by in the cloud client only, never elsewhere.
+test: privacyRulesCatchEveryWrongCase
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\|\| \(\$0 == "URLAuthenticationChallenge" && file != cloud\)~|| false~
+
+test: privacyRulesAllowReviewedContexts
+file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
+perl: s~\(\$0 == "URLAuthenticationChallenge" && file != cloud\)~\$0 == "URLAuthenticationChallenge"~
+
 # Accept a code under any category.
 test: privacyReasonCodesBelongToTheirCategories
 file: Tools/GuardKit/Sources/GuardScan/PrivacyAudit.swift
@@ -131,7 +140,7 @@ test: privacyRulesCatchEveryWrongCase
 file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
 perl: s~Rule\("privacy\.gateTests", gateTestsPresent\),~~
 
-# Round 3. SwiftUI's web view and page and Multipeer sessions let by.
+# SwiftUI's web view and page and Multipeer sessions let by.
 test: privacyRulesCatchEveryWrongCase
 file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift
 perl: s~\n\s*"WebView", "WebPage", "MCSession", "MCBrowserViewController",~~
@@ -231,7 +240,7 @@ test: privacyProjectFailsOnFormsItCannotRead
 file: Tools/GuardKit/Sources/GuardScan/PrivacyProject.swift
 perl: s~\} else \{\n\s*throw Unreadable\("target \\\(name\) has a dependency on [^\n]*\n\s*\}~}~
 
-# Round 4. A bare call read by its case, so a lowercase alias from another
+# A bare call read by its case, so a lowercase alias from another
 # file, bytes(contentsOf:), is let by.
 test: privacyRulesCatchEveryWrongCase
 file: Tools/GuardKit/Sources/GuardScan/PrivacyRules.swift

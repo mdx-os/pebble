@@ -8,9 +8,6 @@ import SwiftUI
 @main
 struct PebbleApp: App {
     private let brand: Brand
-    /// The one notes store, shared by the memory screen and the cloud
-    /// redactor, so both always see the same notes.
-    private let memory: MemoryStore?
     /// The model that runs here. The task engine takes its place from it.
     private let model = LocalStubModel()
     /// The real task engine: on this device only, reading the same notes,
@@ -44,37 +41,46 @@ struct PebbleApp: App {
     @State private var voice = VoiceCapture(listener: DeviceSpeech())
     #endif
 
+    /// The one notes store, shared by the memory screen and the cloud
+    /// redactor. Read from `cloud`, so the two are always the same store.
+    /// This assumes `init` runs once, as it does for an app's entry point.
+    /// Were it run again, `State` would keep only the first setting, but
+    /// that run's task engine would read the new run's notes store, and
+    /// opening the setting again can rewrite its file.
+    private var memory: MemoryStore? { cloud.memory }
+
     init() {
         guard let brand = Brand(infoDictionary: Bundle.main.infoDictionary) else {
             preconditionFailure("\(Brand.infoKey) is missing from Info.plist. Set BRAND_NAME in Config/Brand.xcconfig.")
         }
         self.brand = brand
-        // Before launch finishes, so a nudge opened from the lock screen
-        // reaches Today even when it starts the app. Asks for nothing.
-        LocalQuestionNotifier.shared.install()
-        let memory = try? MemoryStore.onDevice()
-        self.memory = memory
-        let kept = (try? TaskStore.onDevice()) ?? TaskStore.forgetOnly()
-        self.kept = kept
-        let model = self.model
-        let tasks = memory.map { OnDeviceTasks.engine(model: model, notes: $0, store: kept) }
-        self.tasks = tasks
-        let endpoint = CloudEndpoint.url(infoDictionary: Bundle.main.infoDictionary)
-        // The setting is kept next to the notes. If either can't be opened,
-        // nothing typed into the setting could be kept, so it reads as off,
-        // can't be turned on, and says so plainly.
-        let cloud: CloudHelp
-        if memory != nil, let store = try? CloudHelpFileStore.onDevice() {
-            cloud = CloudHelp(store: store, endpoint: endpoint, memory: memory)
-        } else {
-            // It can still erase private words kept from an earlier launch.
-            cloud = CloudHelp.couldNotOpen(endpoint: endpoint, memory: memory,
-                                           file: { try CloudHelpFileStore.onDevice() })
-        }
-        _cloud = State(initialValue: cloud)
+        // Before any real store is opened, so a snapshot run reads and
+        // writes nothing of the person's. It ends the process once it has
+        // written its picture; it returns only when no snapshot was asked
+        // for, and then nothing below has run yet.
         #if os(macOS)
         SnapshotMode.runIfRequested(brand: brand)
         #endif
+        // The setting is kept next to the notes. If either can't be opened,
+        // nothing typed into the setting could be kept, so it reads as off,
+        // can't be turned on, and says so plainly. The notes store is held
+        // either way, with or without a cloud address.
+        let cloud = CloudHelp.forApp(
+            memory: try? MemoryStore.onDevice(),
+            endpoint: CloudEndpoint.url(infoDictionary: Bundle.main.infoDictionary),
+            openStore: { try CloudHelpFileStore.onDevice() }
+        )
+        _cloud = State(initialValue: cloud)
+        // Before launch finishes, so a nudge opened from the lock screen
+        // reaches Today even when it starts the app. Asks for nothing.
+        LocalQuestionNotifier.shared.install()
+        let kept = (try? TaskStore.onDevice()) ?? TaskStore.forgetOnly()
+        self.kept = kept
+        let model = self.model
+        // The engine reads the notes from the setting, so it and the
+        // redactor read one store.
+        let tasks = cloud.memory.map { OnDeviceTasks.engine(model: model, notes: $0, store: kept) }
+        self.tasks = tasks
         // The person's grants, read only while the device is unlocked. The
         // rule consults them before it asks; only the question sheet adds one.
         AskFirst.shared.keepGrants(in: GrantBook.onDevice())

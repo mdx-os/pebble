@@ -16,6 +16,11 @@ public enum PlatformGate {
         "NSNotFound", "NSNull", "NSNumber", "NSObject", "NSPredicate", "NSRange", "NSRecursiveLock",
         "NSRegularExpression", "NSSet", "NSString", "NSTemporaryDirectory", "NSTextCheckingResult",
         "NSURL", "NSUUID",
+        // Foundation's names for the ways a server may ask to sign in.
+        "NSURLAuthenticationMethodClientCertificate", "NSURLAuthenticationMethodDefault",
+        "NSURLAuthenticationMethodHTMLForm", "NSURLAuthenticationMethodHTTPBasic",
+        "NSURLAuthenticationMethodHTTPDigest", "NSURLAuthenticationMethodNegotiate",
+        "NSURLAuthenticationMethodNTLM", "NSURLAuthenticationMethodServerTrust",
     ]
 
     /// Mac-only names that don't start with `NS`: Foundation's process and

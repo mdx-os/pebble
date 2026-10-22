@@ -308,12 +308,18 @@ public final class MemoryStore: @unchecked Sendable {
     public let fileURL: URL
     private let writer: ProtectedWriter
     private let lock = NSLock()
+    /// Held for every write to the notes, and by the cloud setting for
+    /// every write to the private words, so neither changes while a cloud
+    /// request is checked against them and handed over.
+    public let privacyChanges: PrivacyChanges
 
     /// Package access: the app uses `onDevice()` so there is one store per
-    /// file. Tests and screenshots point a store at a scratch file.
-    package init(fileURL: URL, writer: ProtectedWriter = .disk) {
+    /// file. Tests and screenshots point a store at a scratch file, and a
+    /// test may pass `privacyChanges` to see a write held back by it.
+    package init(fileURL: URL, writer: ProtectedWriter = .disk, privacyChanges: PrivacyChanges = PrivacyChanges()) {
         self.fileURL = fileURL
         self.writer = writer
+        self.privacyChanges = privacyChanges
     }
 
     /// The only other file this store ever writes: the next version of the
@@ -525,10 +531,14 @@ public final class MemoryStore: @unchecked Sendable {
         for watcher in all { watcher() }
     }
 
+    /// Every write takes `privacyChanges` first, so a note saved while a
+    /// cloud request is checked and handed over waits until it has gone.
     private func locked<T>(_ body: () throws -> T) rethrows -> T {
-        lock.lock()
-        defer { lock.unlock() }
-        return try body()
+        try privacyChanges.change {
+            lock.lock()
+            defer { lock.unlock() }
+            return try body()
+        }
     }
 
     // MARK: Storage

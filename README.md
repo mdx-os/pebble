@@ -24,7 +24,7 @@ Requirements: macOS 26 or later, Xcode 26, and [XcodeGen](https://github.com/yon
 (`brew install xcodegen`).
 
 ```sh
-make verify       # brand and privacy checks, tests, builds, archives, and screenshots on iPhone, iPad and Mac
+make verify       # brand and privacy checks, tests, mutation check, builds, archives, and screenshots on iPhone, iPad and Mac
 make test         # unit tests only
 make archive      # unsigned Release archives for iOS and macOS, checked for TestFlight
 make pulse        # fetch public sources, snapshot them, write pulse/digest.json
@@ -81,17 +81,67 @@ chooses one.
 
 - Cloud: `CloudModel` sends to the address in `Config/Cloud.local.xcconfig`,
   which git ignores and which doesn't exist by default, so the setting can't
-  be turned on. Turning it on (What I remember, then Help from the cloud)
-  asks first and counts from the next new chat. Every request is redacted on
-  the device by `Redactor` and shown to the person in full, method, address,
-  headers and body, before it is sent. Redirects are refused. Words of crisis
-  and chats that promised to stay on the device are never sent, and nothing
-  is sent when the notes or private words can't be read. The setting and the
-  private words are kept next to the notes, out of backups. Sign-in is a
-  `CloudAuth` hook that adds nothing by default and may only use the network
-  after the person says yes; no keys live in the repo. `CloudModel` reports
-  `PrivacyPlace.mayLeaveDevice`, so a chat started with the cloud on makes
-  no device promise anywhere.
+  be turned on.
+  The server is not in this repository, so nothing here can prove how it
+  behaves: what it keeps, for how long, and who runs it are up to whoever
+  runs the address a build is given, and the turn on question says so.
+  Each reply is one POST to `v1/reply` under that address, with a JSON
+  body of the chat's redacted turns and a version,
+  `{"messages": [{"role": "agent" or "person", "text": "..."}], "version": 1}`,
+  and the answer is `{"reply": "..."}` (`CloudPayload`). The app signs in to
+  nothing yet. A server's own promises about sign-in and what it keeps
+  are said in the turn on question only for the server they were made
+  for, and only once the app signs in to it (`CloudServerPolicy`); none
+  are published yet. The setting is still for Debug builds only: every
+  build with an address fails unless it is Debug and not an archive,
+  whatever the configuration is called, and outside a Debug build the app
+  reads no address at all, even if those checks were skipped. Turning it on (What I
+  remember, then Help from the cloud) asks first, holds only for that
+  address, and counts from the next new chat. Every request is redacted on
+  the device by `Redactor` and shown to the person before it is sent:
+  method, address, body, every header we set, and the Host,
+  Content-Length, Cache-Control and Connection lines the system adds. A
+  test against a listener on the Mac's own loopback address holds the
+  lines that arrive over HTTP/1.1 up against the card's, so every line
+  that goes over HTTP/1.1 is on the card. That is the only protocol
+  tested. Over HTTP/2 the system leaves out the Connection line and may
+  add lines of its own that the card doesn't show, so there the card is
+  shown to hold only every header we set. Redirects, plain http and the header
+  names URLSession reserves are refused. Words of crisis and chats that promised to stay on
+  the device are never sent, and nothing is sent when the notes or private
+  words can't be read. Each request is checked against them once more as
+  it is handed over, under the same lock their saves take, so a word saved
+  in another window just then waits for it or stops it. The setting and the private words are kept next to
+  the notes, out of backups, and Forget everything ends every open cloud
+  chat first. Sign-in is a `CloudAuth` hook that adds nothing by default; a
+  sign-in the cloud needs is a hop shown in the same preview, its values
+  covered on screen, and sent only by its yes, so no request of ours goes
+  unshown. Its values are covered, though not their combined length,
+  which the hop's Content-Length still shows. Since its values are
+  covered, sign-in may carry only a credential or a device token: a name
+  or value with a name, a private word or another personal detail in it,
+  a name that isn't a short token, or a body that isn't a flat object of
+  short strings, is refused before anything is shown or sent. What goes is those
+  checked values, written again, never the body sign-in handed over. The
+  check knows only what the redactor knows, so the rest rests on the
+  `CloudAuth` contract. The transport keeps and
+  sets no cookie, cache or saved password. Turning the cloud off and
+  Forget everything stop every open cloud chat from sending, then tell
+  sign-in to forget what it kept. No keys live in the
+  repo. `CloudModel` reports `PrivacyPlace.mayLeaveDevice`, so a chat
+  started with the cloud on makes no device promise anywhere.
+- What the cloud setting leaves on the device: the setting and the private
+  words, kept beside the notes with the same protection. When a switch
+  off can't be saved, as on a locked device, an empty file is left to mark
+  it off. It is left unprotected so it can be written while locked, and it
+  holds nothing personal; its only tell, to someone already reading the
+  app's folder, is that the cloud was switched off. Once anything is sent,
+  another empty file marks that it was, so Forget everything at a later
+  launch still says what went can't be erased from here. It is made just
+  before the first request goes, and if it can't be made nothing is sent. It holds no
+  words, is left unprotected the same way, and stays through Forget
+  everything, since erasing the device's copy can't call back what was
+  sent; its only tell is that something was once sent to the cloud.
 
 ## Looking into things
 

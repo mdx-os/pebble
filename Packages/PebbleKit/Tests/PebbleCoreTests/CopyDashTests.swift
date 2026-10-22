@@ -56,7 +56,7 @@ struct CopyDashTests {
       + HomeWords.all
       + FeedWords.all
       + CloudWords.all
-      + Redaction.Kind.allCases.flatMap { [$0.mask, $0.counted(1), $0.counted(2)] }
+      + Redaction.Kind.allCases.flatMap { [$0.mask, $0.counted(1), $0.counted(2), $0.spoken] }
       + TaskWords.all
       + LedgerWords.all
       + ReconWords.all
@@ -72,6 +72,40 @@ struct CopyDashTests {
     @Test func noScreenWordsUseADash() throws {
         for line in Self.copy + (try DigestWords.all()) {
             #expect(!line.contains(where: Self.dashes.contains), "dash in: \(line)")
+        }
+    }
+
+    /// The cloud lines added most recently, and samples of every line built
+    /// by a function, are in `CloudWords.all`, so the dash test above and
+    /// the device promise sweep over the copy lists both read them.
+    @Test func everyCloudLineIsInTheCopyLists() {
+        let lines = [
+            CloudWords.chatEnded, CloudWords.offSavedLater, CloudWords.offAtLaunchNotSaved,
+            CloudWords.sentCantBeErased, CloudWords.forgotAfterSending, CloudWords.forgotAndCloudOffAfterSending,
+            CloudWords.previewTitle, CloudWords.previewDetail, CloudWords.previewSignInFirst,
+            CloudWords.previewThenMessage, CloudWords.previewSignInCovered, CloudWords.signInRefused,
+            CloudWords.privateOnlyPunctuation,
+            CloudWords.spokenSignIn("X-Sample"), CloudWords.spokenSignInBody([]),
+            CloudWords.spokenSignInBody(["device"]), CloudWords.spokenMessage(role: "person", text: "Hi"),
+            CloudWords.spokenMessage(role: "agent", text: "Hi"),
+        ] + CloudWords.askPoints
+        for line in lines {
+            #expect(Self.copy.contains(line), "not in the copy lists: \(line)")
+        }
+        // Each newer line is in `CloudWords.all` itself, the one list the
+        // dash and "only once" checks and the device sweep all read.
+        for line in [CloudWords.previewSignInCovered, CloudWords.previewSignInFirst, CloudWords.previewThenMessage,
+                     CloudWords.signInRefused, CloudWords.chatEnded, CloudWords.privateLocked,
+                     CloudWords.offUntilUnlocked, CloudWords.offSavedLater, CloudWords.privateOnlyPunctuation,
+                     CloudWords.forgotAfterSending, CloudWords.forgotAndCloudOffAfterSending,
+                     CloudWords.sentCantBeErased, CloudWords.offAtLaunchNotSaved,
+                     CloudWords.spokenSignInBody([]), CloudWords.spokenSignInBody(["device"])] {
+            #expect(CloudWords.all.contains(line), "not in CloudWords.all: \(line)")
+        }
+        // Built with other words too, each stays free of dashes.
+        for built in [CloudWords.spokenSignIn("X-Device"), CloudWords.spokenSignInBody(["code", "device"]),
+                      CloudWords.spokenMessage(role: "other", text: "Hi")] {
+            #expect(!built.contains(where: Self.dashes.contains), "dash in: \(built)")
         }
     }
 

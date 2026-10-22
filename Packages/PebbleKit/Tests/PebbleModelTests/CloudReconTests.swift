@@ -191,6 +191,43 @@ struct CloudReconTests {
         #expect(summary.note != ReconWords.declinedCloud)
     }
 
+    /// Once the sign-in hop has gone, a summary whose request then didn't
+    /// go says only the sign-in went, never that nothing did.
+    @Test func aSummaryStoppedAfterTheSignInWentSaysTheSignInWent() async {
+        let words = Words()
+        let transport = SignInAddsAWordTransport(words: words, word: "Riverside")
+        let model = CloudModel(endpoint: URL(string: "https://cloud.example.com")!, transport: transport,
+                               reviewer: ScriptedReviewer(answers: [.send, .withdrawn]),
+                               auth: SampleAuth(signIn: CloudSignIn(path: "v1/sign-in", body: Data(#"{"device":"made-up"}"#.utf8))),
+                               redactor: { Redactor(privateWords: words.list) })
+        let summary = await CloudReconSummarizer(model: model)
+            .summarize(task, id: "task:1", sources: sources, gatheredAt: readOn)
+        #expect(transport.sent.map(\.url.path) == ["/v1/sign-in"])
+        #expect(summary.madeOnDevice)
+        #expect(summary.note == ReconWords.cloudSignInOnly)
+    }
+
+    /// Forget everything that ends the summary's request before it is
+    /// handed over, with nothing gone or only a sign-in hop, says so, and
+    /// never that what was read may have gone.
+    @Test func aSummaryForgottenBeforeItsRequestWentNeverSaysItMayHaveGone() async {
+        for whileSignIn in [false, true] {
+            let session = CloudChatSession()
+            if !whileSignIn { session.end() }
+            let transport = EndingTransport { session.end() }
+            let auth = SampleAuth(signIn: CloudSignIn(path: "v1/sign-in", body: Data("{}".utf8)))
+            let model = CloudModel(endpoint: endpoint, transport: transport, reviewer: RecordingReviewer(answer: .send),
+                                   auth: auth, session: session)
+            let summary = await CloudReconSummarizer(model: model)
+                .summarize(task, id: "task:1", sources: sources, gatheredAt: readOn)
+            #expect(transport.sends == (whileSignIn ? 1 : 0), "the summary's request never went")
+            #expect(summary.madeOnDevice)
+            #expect(summary.note == ReconWords.cloudEnded)
+            #expect(summary.note?.contains("may already have gone") != true)
+            #expect(summary.note?.contains("Nothing went") != true)
+        }
+    }
+
     @Test func aChatModelOnTheDeviceNeverMayLeaveIt() {
         #expect(!CloudReconSummarizer(model: LocalStubModel()).mayUseCloud)
         #expect(CloudReconSummarizer(model: cloud(RecordingTransport(), RecordingReviewer(answer: .send))).mayUseCloud)
@@ -326,6 +363,55 @@ struct CloudReconTests {
         }
     }
 
+    /// The request was handed over and the server answered with an error.
+    /// It went, so the card never says the cloud couldn't be reached, as if
+    /// nothing did.
+    @Test func aServerErrorAfterTheSendNeverSaysNothingWent() async {
+        let loads = Count()
+        let transport = URLSessionCloudTransport(load: { request in
+            _ = loads.next()
+            return (Data(), HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!)
+        })
+        let notes = notes
+        let model = CloudModel(endpoint: endpoint, transport: transport, reviewer: RecordingReviewer(answer: .send),
+                               redactor: { Redactor(memory: notes, privateWords: []) })
+        let summary = await CloudReconSummarizer(model: model).summarize(task, id: "task:1", sources: sources, gatheredAt: readOn)
+        #expect(loads.next() == 2, "the request never reached the transport")
+        #expect(summary.madeOnDevice)
+        #expect(summary.note == ReconWords.cloudFailedAfterSend)
+        #expect(summary.note != ReconWords.cloudUnavailable)
+        #expect(summary.note?.contains("may already have gone") == true)
+    }
+
+    /// A send the system cut short after the hand over, as a chat ended
+    /// while it was on the wire, reads as a stop, never as nothing went.
+    @Test func aSendCancelledOnTheWireSaysItWasStopped() async {
+        let transport = HopThenThrowsTransport(error: URLError(.cancelled), hops: 0)
+        let model = CloudModel(endpoint: endpoint, transport: transport, reviewer: RecordingReviewer(answer: .send))
+        let summary = await CloudReconSummarizer(model: model).summarize(task, id: "task:1", sources: sources, gatheredAt: readOn)
+        #expect(transport.paths == ["/v1/reply"])
+        #expect(summary.note == ReconWords.cloudStopped)
+    }
+
+    /// Refused on this device before anything was handed over: the notes
+    /// couldn't be read, or the send couldn't be noted. Nothing went, and
+    /// the card says so.
+    @Test func aRefusalOnTheDeviceSaysNothingWent() async {
+        struct Unreadable: Error {}
+        let unread = RecordingTransport(reply: Self.goodReply)
+        let unreadable = CloudModel(endpoint: endpoint, transport: unread, reviewer: RecordingReviewer(answer: .send),
+                                    redactor: { throw Unreadable() })
+        let first = await CloudReconSummarizer(model: unreadable).summarize(task, id: "task:1", sources: sources, gatheredAt: readOn)
+        #expect(unread.sent.isEmpty)
+        #expect(first.note == ReconWords.cloudWithdrawn)
+        let unnoted = RecordingTransport(reply: Self.goodReply)
+        let notRecorded = CloudModel(endpoint: endpoint, transport: unnoted, reviewer: RecordingReviewer(answer: .send),
+                                     session: CloudChatSession(handingOver: { throw Unreadable() }))
+        let second = await CloudReconSummarizer(model: notRecorded).summarize(task, id: "task:1", sources: sources, gatheredAt: readOn)
+        #expect(unnoted.sent.isEmpty)
+        #expect(second.note == ReconWords.cloudWithdrawn)
+    }
+
     /// Both lines for a yes that couldn't be used, word for word, so a
     /// change to either is a choice someone made.
     @Test func theYesPathLinesAreTheseExactly() {
@@ -454,11 +540,25 @@ struct CloudReconTests {
     }
 
     @Test func theCloudIsUsedOnlyWhenItIsOn() {
-        let on = ModelChoice.model(settings: CloudHelpSettings(isOn: true), endpoint: endpoint, local: LocalStubModel()) { _ in
+        let on = ModelChoice.model(settings: CloudHelpSettings(isOn: true, for: endpoint), endpoint: endpoint, local: LocalStubModel()) { _ in
             cloud(RecordingTransport(), RecordingReviewer(answer: .send))
         }
         #expect(ReconSummarizers.choose(for: on) is CloudReconSummarizer)
         #expect(ReconSummarizers.choose(for: LocalStubModel()) is LocalReconSummarizer)
+    }
+
+    /// A yes given for another address is no yes here, so a summary is put
+    /// together on this device and no cloud model is made for it.
+    @Test func aSummaryUsesTheCloudOnlyWithTheYesForThisAddress() {
+        let elsewhere = URL(string: "https://other.example.com")!
+        var made = 0
+        let model = ModelChoice.model(settings: CloudHelpSettings(isOn: true, for: elsewhere), endpoint: endpoint,
+                                      local: LocalStubModel()) { _ in
+            made += 1
+            return cloud(RecordingTransport(), RecordingReviewer(answer: .send))
+        }
+        #expect(ReconSummarizers.choose(for: model) is LocalReconSummarizer)
+        #expect(made == 0)
     }
 
     @Test func thePromptReadsPlainlyAndHasNoDashes() {
@@ -502,6 +602,8 @@ final class HeldTransport: CloudTransport, @unchecked Sendable {
     let reply: String
     init(reply: String) { self.reply = reply }
     var sentCount: Int { lock.withLock { count } }
+
+    func start(_ request: CloudRequest) -> Task<Data, Error> { Task { try await send(request) } }
 
     func send(_ request: CloudRequest) async throws -> Data {
         let waiting: CheckedContinuation<Void, Never>? = lock.withLock {

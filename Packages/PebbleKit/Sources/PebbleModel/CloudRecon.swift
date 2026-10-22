@@ -58,20 +58,43 @@ public struct CloudReconSummarizer: ReconSummarizer {
             return onDevice(ReconWords.declinedCloud)
         } catch CloudModelError.withdrawn {
             // Taken away before the person answered. They didn't choose
-            // this, so the note doesn't say they did. Only a preview with
-            // no answer is withdrawn, so no yes was ever given.
+            // this, so the note doesn't say they did. An earlier preview
+            // may have had a yes, but nothing it sent went: once a sign-in
+            // hop has gone, the model says `stoppedAfterSignIn` instead.
             return onDevice(ReconWords.cloudWithdrawn)
-        } catch CloudModelError.off {
+        } catch CloudModelError.stoppedAfterSignIn {
+            return onDevice(ReconWords.cloudSignInOnly)
+        } catch CloudModelError.off, CloudModelError.endedByOff {
             // Off before a preview was shown, or by the time a yes came:
             // nothing was asked, or the yes couldn't be used.
             return onDevice(ReconWords.cloudOff)
+        } catch CloudModelError.ended {
+            // Forget everything ended the chat before the request was
+            // handed over: once it has been, a stop comes back as
+            // `stoppedAfterSend` or a cancelled load instead. A sign-in hop
+            // may have gone, so it never says nothing did.
+            return onDevice(ReconWords.cloudEnded)
         } catch CloudModelError.staysHere {
             return onDevice(ReconWords.keptForCare)
+        } catch CloudModelError.notRecorded, CloudModelError.notesUnreadable {
+            // Refused on this device before anything was handed over.
+            return onDevice(ReconWords.cloudWithdrawn)
+        } catch is CloudTransportError {
+            // Refused by the transport, so the request never went.
+            return onDevice(ReconWords.cloudUnavailable)
         } catch is CancellationError {
             // Stopped after the yes. Never "nothing went": that isn't known.
             return onDevice(ReconWords.cloudStopped)
+        } catch CloudModelError.unreadableReply {
+            return onDevice(ReconWords.cloudUnreadable)
+        } catch CloudModelError.stoppedAfterSend {
+            return onDevice(ReconWords.cloudStopped)
+        } catch let error as URLError where error.code == .cancelled {
+            return onDevice(ReconWords.cloudStopped)
         } catch {
-            return onDevice(ReconWords.cloudUnavailable)
+            // A server error, a dropped connection or anything else that
+            // came once the request was handed over: it may have gone.
+            return onDevice(ReconWords.cloudFailedAfterSend)
         }
         return Self.parse(reply, task: task, id: id, sources: sources, gatheredAt: gatheredAt)
             ?? onDevice(ReconWords.cloudUnreadable)

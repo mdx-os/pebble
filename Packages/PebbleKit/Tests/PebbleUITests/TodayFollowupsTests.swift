@@ -734,13 +734,13 @@ struct TodayFollowupsTests {
     /// flag of where the question came from: Today's `isSample(request)`
     /// reads the questions' and the tasks' own `isSample`, and the
     /// showcase's sample sheet is made with `isExample: true`.
-    static let sheetExamples: [String: (request: String, isExample: String)] = [
+    nonisolated static let sheetExamples: [String: (request: String, isExample: String)] = [
         "PebbleUI/HomeView.swift": ("request: request", "isExample: feed.isSample(request)"),
         "PebbleUI/ShowcaseScene.swift": ("request: sheet.request", "isExample: sheet.isExample"),
     ]
 
     /// The problems with every `ConfirmationSheet(` call in `files`.
-    static func sheetProblems(in files: [(name: String, text: String)]) -> [String] {
+    nonisolated static func sheetProblems(in files: [(name: String, text: String)]) -> [String] {
         var problems: [String] = []
         for file in files {
             let source = SwiftSource(file.text)
@@ -771,8 +771,9 @@ struct TodayFollowupsTests {
     /// PERMANENT GUARD. Every `ConfirmationSheet(` in the package sources
     /// and the app is passed an `isExample:` that is the sample flag of
     /// the very question it shows, rather than trusting each source's
-    /// `isSample` to reach the sheet on its own.
-    @Test func everySheetIsToldWhetherItIsAnExample() throws {
+    /// `isSample` to reach the sheet on its own. Off the main actor, since
+    /// it sweeps every source file.
+    @Test nonisolated func everySheetIsToldWhetherItIsAnExample() throws {
         let root = SwiftSource.repositoryRoot(from: #filePath)
         let package = try SwiftSource.files(under: root.appendingPathComponent("Packages/PebbleKit/Sources"))
         let app = try SwiftSource.files(under: root.appendingPathComponent("App")).map { ("App/\($0.name)", $0.text) }

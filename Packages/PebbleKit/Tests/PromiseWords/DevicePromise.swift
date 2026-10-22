@@ -103,7 +103,7 @@ public enum DevicePromise {
     /// place, and each is true with the cloud on and off.
     public static let cloud: [Allowed] = [
         Allowed(file: "PebbleCore/CloudHelp.swift",
-                literal: "On for new chats. Before anything from a chat leaves this device, I show you exactly what goes, and you decide.",
+                literal: "On for new chats. Before anything from a chat leaves this device, I show you what goes, and you decide.",
                 reason: "CloudWords.onDetail, shown only while the cloud is on. It says words do leave, the opposite of a "
                     + "device promise, and the preview it describes gates every cloud request (CloudReview)."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
@@ -121,8 +121,10 @@ public enum DevicePromise {
                 literal: "I try to take out names from your notes, emails, phone numbers, addresses, card numbers and your private words first. Check what I show you, since I can miss things.",
                 reason: privateWordsName),
         Allowed(file: "PebbleCore/CloudHelp.swift",
-                literal: "If that computer needs me to sign in, I do it right after your yes. Signing in never carries your chats, notes or private words.",
-                reason: privateWordsName + " That sign in carries none of them is CloudAuth.signIn's contract."),
+                literal: "Signing in never carries your chats, notes or private words.",
+                reason: "True whatever the model is: CloudAuth's contract allows only credentials or a device token, and "
+                    + "CloudModel.preview refuses any sign-in value Redactor would change, and any sign-in body that "
+                    + "isn't a flat object of short values, before anything is shown or sent. " + privateWordsName),
         Allowed(file: "PebbleCore/CloudHelp.swift",
                 literal: "Your notes themselves never leave this device.",
                 reason: "True even with the cloud on: the notes file is only read on the device, by Redactor, to find what "
@@ -132,9 +134,11 @@ public enum DevicePromise {
                 reason: "A disclosure before turning the cloud on: it says what the cloud does see. \"This device\" names "
                     + "whose address it is, and promises nothing stays."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
-                literal: "Anything here is taken out before anything is sent. These words are kept only on this device, and Forget everything erases them too.",
-                reason: "CloudWords.privateDetail is about where the private words are kept, CloudHelpFileStore beside the "
-                    + "notes, and Redactor takes them out of every request, so they never leave even with the cloud on."),
+                literal: "I take these out of anything I send, but I can miss another spelling, so check what I show you. These words are kept only on this device, and Forget everything erases them too.",
+                reason: "CloudWords.privateDetail is about where the list itself is kept, CloudHelpFileStore beside the "
+                    + "notes, true whatever the model is. It promises no word stays out of a request: matching is whole "
+                    + "word, so it says another spelling can slip by and points at the preview. Forget everything "
+                    + "erases the file and ends every open cloud chat, so no copy is left in one."),
         Allowed(file: "PebbleCore/CloudHelp.swift", literal: "A word or name to keep private",
                 reason: "The private words field's placeholder. Redactor takes every one out of every cloud request before "
                     + "it is sent, and with the cloud off nothing is sent, so it is kept out either way."),
@@ -147,11 +151,18 @@ public enum DevicePromise {
         Allowed(file: "PebbleCore/CloudHelp.swift",
                 literal: "Sorry, I couldn't save that. Help from the cloud is off, and to make sure it stays off I cleared the cloud setting, along with your private words. You can add them again anytime.",
                 reason: privateWordsName + " \"Stays off\" is the setting."),
-        Allowed(file: "PebbleCore/CloudHelp.swift", literal: "Here is exactly what leaves your device",
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "I can't reach your private words while this device is locked, so I've left them as they are. Unlock it and try again.",
+                reason: privateWordsName + " \"This device\" is the one that is locked, not where a chat goes."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Help from the cloud is off. I'll finish saving that once this device is unlocked.",
+                reason: "CloudWords.offUntilUnlocked. \"This device\" is the one that is locked; the line says the setting "
+                    + "is off and promises nothing about where a chat went."),
+        Allowed(file: "PebbleCore/CloudHelp.swift", literal: "Here is what leaves your device",
                 reason: "The cloud preview's title, shown only over a cloud request about to go. It says words leave, the "
                     + "opposite of a device promise."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
-                literal: "This is the whole request for this message: where it goes, the labels sent with it, and the words. I took out the personal details I found. Earlier messages in this chat go again with each new one. Like any website, the computer it goes to also sees this device's internet address.",
+                literal: "This shows where your message goes, the labels sent with it, and the words. I took out the personal details I found. Earlier messages in this chat go again with each new one. Like any website, the computer it goes to also sees this device's internet address.",
                 reason: "The cloud preview's detail, shown only over a cloud request. \"This device\" names whose address "
                     + "the cloud sees, a disclosure, not a promise."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
@@ -231,9 +242,46 @@ public enum DevicePromise {
                 reason: cloudSettingName + " CloudWords.turnedOff: its only \"cloud\" is the setting's name, Help from "
                     + "the cloud, and \"still here\" is the composer, where the words go back."),
         Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "This chat stopped when help from the cloud was turned off, so I didn't send that. A new chat starts fresh. What you wrote is still here.",
+                reason: cloudSettingName + " CloudWords.chatEndedByOff: its only \"cloud\" is the setting's name, said "
+                    + "of a chat a switch off ended, and \"still here\" is the composer, where the words go back."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
                 literal: "Your tasks are forgotten, and so are any words you asked me to hide. To be sure of that I cleared the cloud setting too, so help from the cloud is off.",
                 reason: cloudSettingName + " CloudWords.tasksAndWordsAndCloudForgotten: the setting was erased, so it reads "
                     + "as off, which is what it says."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Help from the cloud is off. I couldn't finish saving that just now, so I'll try again the next time you open this.",
+                reason: cloudSettingName + " CloudWords.offSavedLater: the setting is off now and its write is retried "
+                    + "at the next read, so it says only what the setting is."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Help from the cloud is off. I couldn't save that it's off, so I'll try again when you open the cloud setting.",
+                reason: cloudSettingName + " CloudWords.offAtLaunchNotSaved: the setting is off in memory and its write "
+                    + "is retried when the setting opens, so it says only what the setting is."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "I didn't send that. Signing in to the cloud asked to carry more than a sign-in should, so I stopped before anything left.",
+                reason: cloudSettingName + " CloudWords.signInRefused, said as CloudModel.preview refuses a sign-in "
+                    + "that would carry personal words, before anything is shown or sent. It explains a refusal, not "
+                    + "where other chats go."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "I didn't send that. Only the sign-in went to the cloud, none of what you wrote, and what you wrote is still here.",
+                reason: cloudSettingName + " CloudWords.stoppedAfterSignIn, said when a sign-in hop went and then the "
+                    + "message didn't (CloudModelError.stoppedAfterSignIn). It says something did go, the opposite of "
+                    + "a device promise, and is about that one message, which is back in the composer."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "I didn't get a reply. Your message may already have reached the cloud, and that can't be called back. What you sent is still in the chat.",
+                reason: cloudSettingName + " CloudWords.stoppedAfterSend, said when a chat's message was handed to "
+                    + "the cloud and no reply came (CloudModelError.stoppedAfterSend, or a URLError from the "
+                    + "transport). It says words may have left, the opposite of a device promise."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "Everything I kept is gone. To be sure the words you asked me to hide were gone too, I cleared the cloud setting, so help from the cloud is off. You can turn it on again anytime.",
+                reason: cloudSettingName + " CloudWords.forgotAndCloudOffAfterSending: the setting was erased, so it "
+                    + "reads as off, which is what it says. It is said only after something was sent, at this launch or an "
+                    + "earlier one, and "
+                    + "MemoryModel.forgotLine follows it with CloudWords.sentCantBeErased."),
+        Allowed(file: "PebbleCore/CloudHelp.swift",
+                literal: "What I already sent to the cloud can't be erased from here.",
+                reason: cloudSettingName + " CloudWords.sentCantBeErased says words did leave and a copy may be kept "
+                    + "there, the opposite of a device promise."),
         Allowed(file: "PebbleCore/CloudHelp.swift", literal: "cloud-help.json",
                 reason: "The name of the file the cloud setting is kept in, beside the notes. Never shown to anyone."),
         Allowed(file: "PebbleUI/CloudHelpView.swift", literal: "cloud.fill",
@@ -283,9 +331,21 @@ public enum DevicePromise {
                 literal: "Help from the cloud was off by then, so I put this together without it.",
                 reason: cloudSettingName + " ReconWords.cloudOff names the setting, which was off."),
         Allowed(file: "PebbleCore/Recon.swift",
+                literal: "Only the sign-in went to the cloud, none of what I read, so I put this together without it.",
+                reason: reconCloudNote + " ReconWords.cloudSignInOnly follows a sign-in hop that went before the "
+                    + "summary's request didn't, and says plainly that something left."),
+        Allowed(file: "PebbleCore/Recon.swift",
+                literal: "Forget everything stopped this before any of what I read went to the cloud, so I put this together without it.",
+                reason: reconCloudNote + " ReconWords.cloudEnded follows a Forget everything that ended the summary's "
+                    + "request before it was handed over, and never says nothing went."),
+        Allowed(file: "PebbleCore/Recon.swift",
                 literal: "It was stopped after you said send, so some of what I read may already have gone to the cloud. I put this together without it.",
                 reason: reconCloudNote + " ReconWords.cloudStopped follows a Stop after a yes, and says plainly "
                     + "that words may have left."),
+        Allowed(file: "PebbleCore/Recon.swift",
+                literal: "The cloud didn't finish after you said send, so some of what I read may already have gone to it. I put this together without it.",
+                reason: reconCloudNote + " ReconWords.cloudFailedAfterSend follows an error once the request was "
+                    + "handed over, and says plainly that words may have left."),
         Allowed(file: "PebbleCore/Recon.swift",
                 literal: "I stopped, as you asked. You'd already said send, so some of what I read may already have gone to the cloud, and that can't be called back.",
                 reason: reconCloudNote + " ReconWords.stoppedAfterSend is a stopped card's step once a yes let a "
@@ -325,15 +385,25 @@ public enum DevicePromise {
         CloudWords.offForNow,
         CloudWords.onNotSaved,
         CloudWords.turnedOff,
+        CloudWords.chatEndedByOff,
         CloudWords.tasksAndWordsAndCloudForgotten,
+        CloudWords.offSavedLater,
+        CloudWords.offAtLaunchNotSaved,
+        CloudWords.signInRefused,
+        CloudWords.stoppedAfterSignIn,
+        CloudWords.stoppedAfterSend,
+        CloudWords.forgotAndCloudOffAfterSending,
+        CloudWords.sentCantBeErased,
         CloudWords.onDetail,
         CloudWords.unavailable,
         CloudWords.couldNotOpen,
         CloudWords.privateDetail,
         CloudWords.privatePlaceholder,
         CloudWords.privateUnreadable,
+        CloudWords.privateLocked,
         CloudWords.privateNotSaved,
         CloudWords.offButCleared,
+        CloudWords.offUntilUnlocked,
         CloudWords.previewTitle,
         CloudWords.previewDetail,
         CloudWords.staysHere,
@@ -357,7 +427,10 @@ public enum DevicePromise {
         ReconWords.cloudUnavailable,
         ReconWords.cloudWithdrawn,
         ReconWords.cloudOff,
+        ReconWords.cloudSignInOnly,
+        ReconWords.cloudEnded,
         ReconWords.cloudStopped,
+        ReconWords.cloudFailedAfterSend,
         ReconWords.stoppedAfterSend,
         ReconWords.keptForCare,
         ReconWords.wordedInCloud,

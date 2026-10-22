@@ -83,6 +83,13 @@ keys that never enter the repo.
   signatures (`docs/RELAY.md`) and encrypts nothing. Its export review
   answer is still open: answer it, and keep or change
   `ITSAppUsesNonExemptEncryption`, before any store upload.
+  The cloud client alone may name `URLAuthenticationChallenge`, which its
+  transport's delegate uses only to cancel every sign-in challenge, so
+  the system never signs a request in on its own, and to leave the
+  server's certificate to the system's own check. That pins nothing and
+  encrypts nothing beyond the system's HTTPS. Every name that reads a
+  trust or pins (`serverTrust`, `SecTrust...`, `pinned...`) still fails
+  there, and the type still fails in any other file.
 - **Mac sandbox:** Release asks for `com.apple.security.network.client`
   (outgoing connections) and nothing else. `release-check` reads
   `ENABLE_APP_SANDBOX` and the entitlements from the Release build settings,

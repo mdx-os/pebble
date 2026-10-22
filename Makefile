@@ -1,13 +1,19 @@
 DERIVED := build/DerivedData
 
-.PHONY: verify generate test repeat-test mutation-check mutation-manifest-check mutation-manifest-check-test build build-release build-release-simulator archive screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check privacy-check privacy-check-test local-config-check graph-check graph-check-test secrets-check pulse clean private-check hash-private-words
+.PHONY: verify verify-ci generate test release-test repeat-test mutation-check mutation-manifest-check mutation-manifest-check-test build build-release build-release-simulator archive screenshots screenshots-check screenshots-check-test ui-screenshots device-screenshots ui-test brand-check privacy-check privacy-check-test local-config-check private-check hash-private-words graph-check graph-check-test comment-lint secrets-check pulse clean
 
-## verify: everything CI runs. Run this before every PR. The graph check
-## runs once the builds have made the project, so it reads that too. The
-## screenshots are made after every other step and then checked against the
-## working tree. Both are the recipe, so even with -j nothing runs beside
-## them that could change the tree between the stamp and the check.
-verify: brand-check privacy-check privacy-check-test local-config-check mutation-manifest-check mutation-manifest-check-test screenshots-check-test graph-check-test test build build-release-simulator archive private-check
+## verify: everything CI runs. Run this before every PR. It is verify-ci and
+## then the full mutation check, which CI runs as a job of its own beside
+## it, so neither has to fit in the other's time limit.
+verify: verify-ci mutation-check
+
+## verify-ci: every step of verify but the mutation check, as CI's Verify
+## job runs it. The graph check runs once the builds have made the project,
+## so it reads that too. The screenshots are made after every other step
+## and then checked against the working tree. Both are the recipe, so even
+## with -j nothing runs beside them that could change the tree between the
+## stamp and the check.
+verify-ci: brand-check privacy-check privacy-check-test local-config-check private-check mutation-manifest-check mutation-manifest-check-test comment-lint screenshots-check-test graph-check-test test release-test build build-release-simulator archive
 	$(MAKE) graph-check
 	$(MAKE) screenshots
 	sh scripts/screenshot-stamp.sh check build/screenshots
@@ -21,6 +27,12 @@ generate:
 test:
 	swift test --package-path Packages/PebbleKit --quiet
 	swift test --package-path Tools/GuardKit --quiet
+
+## release-test: run the promise that a shipped build reads no cloud
+## address in a Release build of PebbleCore, so what it checks is the code
+## that ships, not a Debug stand-in
+release-test:
+	sh scripts/release-probe.sh
 
 ## repeat-test: run the package tests N times (default 30) to catch a flaky
 ## test. FILTER= narrows the run; without it the whole suite runs each time.
@@ -58,10 +70,13 @@ build: generate
 ## code kept to Debug (the showcase screens) can never break a shipped build.
 ## verify runs only build-release-simulator: its macOS archive is the same
 ## Release build for the Mac, on arm64 and x86_64, so it stands in for the line below.
+## Both fail first if any configuration but Debug has a cloud address; every
+## build checks again, and fails an archive with one even in Debug.
 build-release: generate build-release-simulator
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath $(DERIVED)
 
 build-release-simulator: generate
+	sh scripts/release-endpoint-check.sh
 	xcodebuild build -quiet -project Pebble.xcodeproj -scheme Pebble -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath $(DERIVED) CODE_SIGNING_ALLOWED=NO
 
 ## archive: unsigned Release archives for iOS and macOS in build/archives,
@@ -148,9 +163,17 @@ graph-check:
 graph-check-test:
 	sh scripts/graph-check-test.sh
 
-## local-config-check: fail if Config/Cloud.local.xcconfig is tracked by git
+## local-config-check: fail if Config/Cloud.local.xcconfig is tracked by git,
+## or any tracked config sets a cloud address
 local-config-check:
 	sh scripts/local-config-check.sh
+
+## comment-lint: no review history or personal names in code comments. The
+## names are checked only when COMMENT_LINT_NAMES names a list kept outside
+## the repository; without one the lint says so and checks the rest
+comment-lint:
+	sh scripts/comment-lint.sh --self-test
+	sh scripts/comment-lint.sh
 
 ## private-check: fail on any file in git with a word whose hash is in
 ## Config/private-words.sha256, printing the file and line, never the word.

@@ -305,14 +305,20 @@ public enum PrivacyRules {
                 || $0 == "forUbiquityContainerIdentifier" || $0 == "ubiquityIdentityToken"
         }
     }
+    /// The cloud client may name `URLAuthenticationChallenge`, as its
+    /// transport's delegate does to cancel every sign-in challenge and
+    /// leave the server's certificate to the system. Holding a challenge
+    /// pins nothing; reading its trust does, and every name for that
+    /// still fails there, as the type does in any other file.
     static func encryption(_ source: SyntaxSource, _ file: String) -> [Finding] {
         matches(source, rule: "privacy.encryption", message: "encryption or certificate pinning needs a fresh export review") {
             ["CryptoKit", "CommonCrypto", "Crypto", "_CryptoExtras", "NIOSSL", "BoringSSL", "CNIOBoringSSL",
              "SecKeyCreateEncryptedData", "SecKeyEncrypt", "serverTrust", "SecTrustSetAnchorCertificates",
-             "SecCertificateCopyData", "SecTrustCopyKey", "SecTrustCopyCertificateChain", "URLAuthenticationChallenge",
+             "SecCertificateCopyData", "SecTrustCopyKey", "SecTrustCopyCertificateChain",
              "pinnedCertificates", "pinnedKeys", "pinnedDomains"].contains($0)
+                || ($0 == "URLAuthenticationChallenge" && file != cloud)
                 || $0.hasPrefix("CCCrypt") || $0.hasPrefix("CCHmac") || $0.hasPrefix("CCKeyDerivation")
-                || $0.hasPrefix("SecTrustEvaluate")
+                || $0.hasPrefix("SecTrustEvaluate") || $0.hasPrefix("SecTrustCopy")
         }
     }
     static func gateTestsPresent(_ source: SyntaxSource, _ file: String) -> [Finding] {

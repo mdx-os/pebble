@@ -1,4 +1,3 @@
-AppUITests/CloudUITests.swift: XCTAssertTrue(labels.label.contains("User-Agent, pebble"))
 AppUITests/CloudUITests.swift: app.launchArguments = ["-pebble.onboarding.finished", "YES", "-pebble.agent.displayName", "Pip"]
 AppUITests/DigestUITests.swift: app.launchArguments = ["-pebble.onboarding.finished", "YES", "-pebble.agent.displayName", "Pip"]
 AppUITests/HomeLayoutUITests.swift: "-pebble.onboarding.finished", "YES", "-pebble.agent.displayName", "Pip"]
@@ -8,7 +7,6 @@ Packages/PebbleKit/Sources/PebbleCore/AgentName.swift: public static let storage
 Packages/PebbleKit/Sources/PebbleCore/Memory.swift: var folder = base.appendingPathComponent("pebble", isDirectory: true)
 Packages/PebbleKit/Sources/PebbleCore/Onboarding.swift: public static let finished = "pebble.onboarding.finished"
 Packages/PebbleKit/Sources/PebbleCore/Onboarding.swift: public static let storageKey = "pebble.agent.proactivity"
-Packages/PebbleKit/Sources/PebbleModel/CloudModel.swift: "User-Agent": "pebble",
 Packages/PebbleKit/Sources/PebblePulse/PageFetch.swift: request.setValue("pebble-pulse/0.1", forHTTPHeaderField: "User-Agent")
 Packages/PebbleKit/Sources/PebblePulse/XSearch.swift: request.setValue("pebble-pulse/0.1", forHTTPHeaderField: "User-Agent")
 Packages/PebbleKit/Tests/PebbleCoreTests/AgentLookTests.swift: let suite = "pebble.look.\(UUID().uuidString)"
@@ -27,11 +25,7 @@ Packages/PebbleKit/Tests/PebbleCoreTests/OnboardingTests.swift: let suite = "peb
 Packages/PebbleKit/Tests/PebbleCoreTests/OnboardingTests.swift: let suite = "pebble.onboarding.over.\(UUID().uuidString)"
 Packages/PebbleKit/Tests/PebbleCoreTests/OnboardingTests.swift: let suite = "pebble.onboarding.reset.\(UUID().uuidString)"
 Packages/PebbleKit/Tests/PebbleCoreTests/OnboardingTests.swift: let suite = "pebble.onboarding.unoffered.\(UUID().uuidString)"
-Packages/PebbleKit/Tests/PebbleModelTests/CloudModelTests.swift: #expect(preview.request.headers["User-Agent"] == "pebble")
-Packages/PebbleKit/Tests/PebbleModelTests/CloudModelTests.swift: #expect(wire.value(forHTTPHeaderField: "User-Agent") == "pebble")
-Packages/PebbleKit/Tests/PebbleModelTests/CloudModelTests.swift: User-Agent: pebble
-Packages/PebbleKit/Tests/PebbleUITests/CloudHelpTests.swift: #expect(shown.contains("User-Agent: pebble"))
-Packages/PebbleKit/Tests/PebbleUITests/CloudHelpTests.swift: #expect(spoken.contains("User-Agent, pebble"))
+Packages/PebbleKit/Tests/PebbleUITests/CloudHelpTests.swift: #expect(!name.contains("pebble"), "\(name)")
 Packages/PebbleKit/Tests/PebbleUITests/FirstRunScreensTests.swift: let suite = "pebble.ui.onboarding.\(UUID().uuidString)"
 Packages/PebbleKit/Tests/PebbleUITests/FirstRunScreensTests.swift: let suite = "pebble.ui.skip.\(UUID().uuidString)"
 Packages/PebbleKit/Tests/PebbleUITests/FirstRunScreensTests.swift: let url = FileManager.default.temporaryDirectory.appendingPathComponent("pebble-ui-\(UUID().uuidString).json")

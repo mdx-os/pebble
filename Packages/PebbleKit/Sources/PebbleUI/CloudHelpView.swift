@@ -2,7 +2,11 @@ import Foundation
 import PebbleCore
 import PebbleModel
 #if canImport(SwiftUI)
+import Combine
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 /// The person's cloud setting, and the model each new chat gets from it.
 ///
@@ -15,11 +19,72 @@ public final class CloudHelp: ObservableObject {
     @Published var newPrivateWord = ""
     /// What to say about the last change that couldn't be made. Every new
     /// line, even one the same as before, bumps statusCount so it is spoken
-    /// again.
-    @Published private(set) var status: String? {
-        didSet { if status != nil { statusCount += 1 } }
+    /// again, in the window that asked for the change (`statusWindow`).
+    @Published private(set) var state: Status? {
+        didSet {
+            fromLaunch = false
+            if state != nil {
+                statusWindow = speaker
+                statusCount += 1
+            }
+        }
     }
+    /// The words of `state`.
+    var status: String? { state?.line }
+    /// True while `state` is still the one set at launch. Cleared by every
+    /// later change.
+    private var fromLaunch = false
     @Published private(set) var statusCount = 0
+
+    /// A status line, and whether it says a switch off is still to be
+    /// saved, decided where it is set rather than by its words.
+    enum Status: Equatable {
+        /// Each says a switch off waits to be saved, so it goes once that
+        /// save is made (`refresh`).
+        case offForNow, offUntilUnlocked, offSavedLater, offAtLaunchNotSaved
+        /// Any other line.
+        case said(String)
+
+        var line: String {
+            switch self {
+            case .offForNow: CloudWords.offForNow
+            case .offUntilUnlocked: CloudWords.offUntilUnlocked
+            case .offSavedLater: CloudWords.offSavedLater
+            case .offAtLaunchNotSaved: CloudWords.offAtLaunchNotSaved
+            case .said(let line): line
+            }
+        }
+
+        var waitsForASave: Bool {
+            if case .said = self { false } else { true }
+        }
+    }
+
+    /// The line for the home screen when launch couldn't save a stale yes
+    /// off, nor mark it off. The person asked for nothing, so they would
+    /// never open the setting to hear it. Gone once the save is made or
+    /// anything else is said.
+    var launchNotice: String? {
+        fromLaunch && state == .offAtLaunchNotSaved ? state?.line : nil
+    }
+    /// True once the launch line has been announced.
+    private var launchAnnounced = false
+
+    /// True the first time it is asked while there is a launch line, so
+    /// the home screen announces it once per launch, however often it
+    /// comes back to the front.
+    func claimLaunchAnnouncement() -> Bool {
+        guard launchNotice != nil, !launchAnnounced else { return false }
+        launchAnnounced = true
+        return true
+    }
+    /// The window whose action the status answers. One setting serves every
+    /// window, so only that one speaks it. Nil when no window acted, as for
+    /// a line from launch or from the memory screen: then every window
+    /// showing the setting speaks it. See `CloudHelpView.speaks`.
+    private(set) var statusWindow: UUID?
+    /// The window acting now, set only for the length of `act`.
+    private(set) var speaker: UUID?
     /// True while private words may be kept that `settings` doesn't show:
     /// the file couldn't be read, or couldn't be opened at launch but can
     /// still be erased. Forget everything names them then too.
@@ -34,8 +99,13 @@ public final class CloudHelp: ObservableObject {
     /// the setting stays off and says so.
     public let storeOpened: Bool
     /// The same store the memory screen uses, so the redactor always reads
-    /// the notes as they are now.
-    let memory: MemoryStore?
+    /// the notes as they are now. The app reads its notes store from here,
+    /// so the two can never be different stores.
+    public let memory: MemoryStore?
+    /// The notes store's (`MemoryStore.privacyChanges`), taken to save
+    /// private words and given to every cloud chat, so neither the notes
+    /// nor the words change while a request is checked and handed over.
+    private let privacyChanges: PrivacyChanges
     private let store: any CloudHelpStoring
     private let auth: any CloudAuth
     private let makeTransport: (@Sendable () -> any CloudTransport)?
@@ -43,17 +113,46 @@ public final class CloudHelp: ObservableObject {
     private let unopenedFile: (@Sendable () throws -> any CloudHelpStoring)?
     /// Every chat's preview gate, so turning the cloud off closes them all.
     private let reviews = NSHashTable<CloudReview>.weakObjects()
+    /// Every cloud chat's session and every cloud chat on screen, so Forget
+    /// everything can end them all (`endOpenCloudChats`).
+    private let sessions = NSHashTable<CloudChatSession>.weakObjects()
+    private let openChats = NSHashTable<ChatController>.weakObjects()
     /// How many chats have asked for a model, so tests can see that a
     /// rebuilt home screen asks for none.
     private(set) var chatModelsAsked = 0
-    /// Sign-in after the person's yes. Tests wait on it. Cancelled when the
-    /// cloud goes off, so a sign-in under way never finishes after that.
-    private(set) var signingIn: Task<Void, Never>?
     /// Set when the person turns the cloud off, and cleared only by their
     /// yes to turning it on again. While set, nothing is sent from any
     /// chat whatever the saved file says, so a save that fails can never
-    /// leave it on.
-    private let switchedOff = SwitchedOff()
+    /// leave it on. Also set at launch when a stale on could be neither
+    /// saved off nor erased.
+    private let switchedOff = SessionFlag()
+    /// Set once anything has been handed to the cloud this session, so
+    /// Forget everything never claims a copy that already left is gone.
+    /// The store's sent mark (`CloudHelpStoring.markSent`) carries the same
+    /// to later launches.
+    private let sent = SessionFlag()
+    /// Reads the settings again once a locked device is unlocked, so a
+    /// switch off that couldn't be saved is saved then.
+    private var unlockWatch: AnyCancellable?
+
+    /// True once anything has been handed to the cloud, at this launch or
+    /// an earlier one.
+    public var anythingSent: Bool { sent.value || sentAtAnEarlierLaunch }
+
+    /// The turn on question's points for this build's address: a server's
+    /// own promises only where they hold (`CloudServerPolicy`).
+    var askPoints: [String] {
+        CloudWords.askPoints(serverPolicy: CloudServerPolicy.points(for: endpoint, signsIn: auth.signsIn))
+    }
+
+    /// The sent mark, read from the store, or from the file a setting that
+    /// couldn't be opened would have read. A file that can't be reached
+    /// can't say nothing went, so it counts as sent.
+    private var sentAtAnEarlierLaunch: Bool {
+        if storeOpened { return store.wasSent }
+        guard let unopenedFile else { return false }
+        return (try? unopenedFile())?.wasSent ?? true
+    }
 
     public convenience init(
         store: any CloudHelpStoring,
@@ -79,19 +178,90 @@ public final class CloudHelp: ObservableObject {
         self.endpoint = endpoint
         self.storeOpened = storeOpened
         self.memory = memory
+        // With no notes store, nothing is ever sent (the redactor throws),
+        // so a lock of its own serves.
+        privacyChanges = memory?.privacyChanges ?? PrivacyChanges()
         self.auth = auth
         self.makeTransport = transport
         self.unopenedFile = unopenedFile
-        var read = storeOpened ? try? store.load() : nil
-        // Saved on, but this build has no address: it is off, and saved
-        // off, so a later build with an address never turns it back on
-        // without a fresh yes.
-        if endpoint == nil, read?.isOn == true {
-            read?.isOn = false
-            if let off = read { try? store.save(off) }
+        // The file keeps the private words too, so it is read and written
+        // under the lock every other writer of them takes.
+        let launch = privacyChanges.change {
+            Self.reconciled(storeOpened ? try? store.load() : nil, endpoint: endpoint, store: store)
         }
+        let read = launch.read
+        let holdsOff = launch.holdsOff
+        let launchStatus = launch.status
         settings = read ?? .off
         mayKeepUnseenWords = storeOpened ? read == nil : unopenedFile != nil
+        if holdsOff { switchedOff.value = true }
+        // Set once every stored property is in place, so `didSet` runs and
+        // the line is counted like any other. Marked as launch's after, as
+        // `didSet` clears that.
+        state = launchStatus
+        fromLaunch = launchStatus != nil
+        // The system posts it on the main thread; anything else hops there.
+        unlockWatch = NotificationCenter.default.publisher(for: Self.unlocked).sink { [weak self] _ in
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { self?.refresh() }
+            } else {
+                Task { @MainActor in self?.refresh() }
+            }
+        }
+    }
+
+    /// A saved on counts only for the address it was said yes to. With no
+    /// address in this build, another one, or none saved with it, it is
+    /// off, and saved off, so no build turns it back on without a fresh
+    /// yes. If that can't be saved, the private words are kept (nothing is
+    /// erased behind the person's back), every send is held off until the
+    /// app closes, the file is marked off if it can be, and the person is
+    /// told; `refresh` tries the save again. Run at launch and again by
+    /// `refresh`, since a launch that couldn't read the file, as on a
+    /// locked device, could do none of this then.
+    private static func reconciled(_ loaded: CloudHelpSettings?, endpoint: URL?, store: any CloudHelpStoring)
+        -> (read: CloudHelpSettings?, holdsOff: Bool, status: Status?) {
+        var read = loaded
+        var holdsOff = false
+        var launchStatus: Status?
+        if var stale = read, stale.isOn, !stale.isOn(for: endpoint) {
+            stale.turnOff()
+            read = stale
+            if (try? store.save(stale)) == nil {
+                holdsOff = true
+                launchStatus = (try? store.markOff()) != nil ? .offSavedLater : .offAtLaunchNotSaved
+            }
+        }
+        return (read, holdsOff, launchStatus)
+    }
+
+    /// Posted when a locked device is unlocked and its protected files can
+    /// be read again.
+    static var unlocked: Notification.Name {
+        #if os(iOS)
+        UIApplication.protectedDataDidBecomeAvailableNotification
+        #else
+        // Nothing posts this on a Mac, which keeps no file locked away
+        // while the app runs, so there the watch never fires; only tests
+        // post it, to stand in for the iPhone's. A plain name, with no
+        // product or code name in it.
+        Notification.Name("CloudHelp.unlocked")
+        #endif
+    }
+
+    /// The one setting the app holds, made the way the app makes it: kept
+    /// next to the notes when both open, or else the setting that couldn't
+    /// be opened, which can still erase words kept from an earlier launch.
+    /// `memory` is carried either way, with or without an address, so the
+    /// memory screen always reads the same notes store the redactor does.
+    /// `auth` is carried either way too, so Forget everything tells sign-in
+    /// to forget even when the setting couldn't be opened.
+    public static func forApp(memory: MemoryStore?, endpoint: URL?, auth: any CloudAuth = NoCloudAuth(),
+                              openStore: @escaping @Sendable () throws -> any CloudHelpStoring) -> CloudHelp {
+        if memory != nil, let store = try? openStore() {
+            return CloudHelp(store: store, endpoint: endpoint, memory: memory, auth: auth)
+        }
+        return couldNotOpen(endpoint: endpoint, memory: memory, auth: auth, file: openStore)
     }
 
     /// The setting when its file couldn't be opened at launch. It reads as
@@ -100,10 +270,12 @@ public final class CloudHelp: ObservableObject {
     ///
     /// `file` reaches the file it would have read, so private words kept
     /// there from an earlier launch can still be erased. See
-    /// `forgetPrivateWords`.
-    public static func couldNotOpen(endpoint: URL?, memory: MemoryStore?,
+    /// `forgetPrivateWords`. `auth` is never asked to sign in from here,
+    /// since no chat uses the cloud, but it is told to forget, in case it
+    /// kept something from an earlier launch.
+    public static func couldNotOpen(endpoint: URL?, memory: MemoryStore?, auth: any CloudAuth = NoCloudAuth(),
                                     file: (@Sendable () throws -> any CloudHelpStoring)? = nil) -> CloudHelp {
-        CloudHelp(store: InMemoryCloudHelpStore(), endpoint: endpoint, memory: memory, auth: NoCloudAuth(),
+        CloudHelp(store: InMemoryCloudHelpStore(), endpoint: endpoint, memory: memory, auth: auth,
                   transport: nil, storeOpened: false, unopenedFile: file)
     }
 
@@ -178,6 +350,12 @@ public final class CloudHelp: ObservableObject {
             let store = self.store
             let memory = self.memory
             let switchedOff = self.switchedOff
+            let sent = self.sent
+            // Marked in the store first, so a later launch still knows. A
+            // mark that can't be made sends nothing (`notRecorded`), so
+            // Forget everything never says no copy left when one did.
+            let session = CloudChatSession(handingOver: { try store.markSent(); sent.value = true })
+            sessions.add(session)
             return CloudModel(
                 endpoint: url, transport: madeOnSend ? MadeOnSend(make: makeTransport) : makeTransport(),
                 reviewer: review, auth: auth,
@@ -192,24 +370,162 @@ public final class CloudHelp: ObservableObject {
                     case .unavailable: throw MemoryStore.Unavailable()
                     }
                 },
-                // On only when the file says so and the person hasn't
-                // switched it off since. A file that can't be read throws,
-                // so the chat says so rather than that it was turned off.
-                isOn: { try !switchedOff.value && store.load().isOn }
+                // On only when the file says so for this very address and
+                // the person hasn't switched it off since. A file that
+                // can't be read throws, so the chat says so rather than
+                // that it was turned off.
+                isOn: { try !switchedOff.value && store.load().isOn(for: url) },
+                privacyChanges: privacyChanges,
+                session: session
             )
         }
     }
 
-    /// Reads the settings again, as after the device was locked at launch.
-    /// A switch off that couldn't be saved before is saved now, if it can be.
-    func refresh() {
-        guard storeOpened, var fresh = try? store.load() else { return }
-        if switchedOff.value, fresh.isOn {
-            fresh.isOn = false
-            try? store.save(fresh)
+    /// A cloud chat now on screen, so Forget everything can end it too.
+    /// Watched from here on, so `chatsHoldAnything` follows what it holds.
+    func opened(_ chat: ChatController) {
+        openChats.add(chat)
+        chatWatches[ObjectIdentifier(chat)] = chat.objectWillChange.sink { [weak self] _ in
+            // Told before the change, so it looks once the change is made.
+            Task { @MainActor in self?.recountHeldChats() }
         }
+        recountHeldChats()
+    }
+
+    /// True while a cloud chat on screen in any window, or a cloud chat's
+    /// session, holds something Forget everything would let go of: words
+    /// said or typed and not yet sent, a reply under way, or anything it
+    /// hid. The memory screen shows Forget everything then, even with
+    /// nothing else kept.
+    @Published private(set) var chatsHoldAnything = false
+    private var chatWatches: [ObjectIdentifier: AnyCancellable] = [:]
+
+    /// Reads `chatsHoldAnything` again, and stops watching chats gone.
+    func recountHeldChats() {
+        let open = openChats.allObjects
+        let live = Set(open.map(ObjectIdentifier.init))
+        chatWatches = chatWatches.filter { live.contains($0.key) }
+        let holds = open.contains { $0.holdsAnything } || sessions.allObjects.contains { $0.holdsAnything }
+        if holds != chatsHoldAnything { chatsHoldAnything = holds }
+    }
+
+    /// What Forget everything does first, before anything is erased: every
+    /// open cloud chat ends. A reply under way and any send still on the
+    /// wire are cancelled, waiting previews close unsent, and each chat
+    /// drops its turns and everything it hid so far, so none of the words
+    /// being erased are left in a chat. The home screen then starts a
+    /// fresh chat in its place.
+    ///
+    /// True when something was handed to the cloud, this session or at an
+    /// earlier launch, a send cancelled here included: that copy may
+    /// already have left, and nothing here can erase it, so Forget
+    /// everything must say so.
+    ///
+    /// A chat that holds nothing yet, such as the fresh one started in an
+    /// ended chat's place, has nothing to let go of and is left open.
+    ///
+    /// While a Forget everything is under way (`holdingRestarts`), an
+    /// ended chat's screen starts its fresh chat only once all of it is
+    /// done, so that chat is made with the settings Forget everything
+    /// left, never with a cloud setting about to be erased.
+    @discardableResult
+    func endOpenCloudChats() -> Bool {
+        for chat in openChats.allObjects where chat.holdsAnything {
+            if restartHolds > 0 {
+                chat.end(restarting: false)
+                heldRestarts.append(chat)
+            } else {
+                chat.end()
+            }
+        }
+        for session in sessions.allObjects where session.holdsAnything { session.end() }
+        withdrawPreviews()
+        recountHeldChats()
+        return anythingSent
+    }
+
+    /// Forget everything's first step: `endOpenCloudChats`, with every
+    /// fresh chat held back until `CloudChatsEnded.restart`, which the
+    /// memory screen calls once everything else has gone.
+    func endChatsToForget() -> CloudChatsEnded {
+        restartHolds += 1
+        let sent = endOpenCloudChats()
+        return CloudChatsEnded(sent: sent, restart: { [weak self] in self?.releaseRestarts() },
+                               sentSince: { [weak self] in self?.anythingSent ?? true })
+    }
+
+    /// Runs `body` with the fresh chats of every chat it ends held back
+    /// until it is done.
+    private func holdingRestarts<T>(_ body: () throws -> T) rethrows -> T {
+        restartHolds += 1
+        defer { releaseRestarts() }
+        return try body()
+    }
+
+    /// How many Forget everything steps are holding fresh chats back, and
+    /// the chats ended meanwhile, whose screens start one once none is.
+    private var restartHolds = 0
+    private var heldRestarts: [ChatController] = []
+
+    private func releaseRestarts() {
+        restartHolds -= 1
+        guard restartHolds == 0 else { return }
+        let ended = heldRestarts
+        heldRestarts = []
+        for chat in ended { chat.restart() }
+    }
+
+    /// True while every send is held off for this session, as after a
+    /// switch off, or a stale yes that could be neither saved off nor
+    /// erased at launch.
+    var holdsSendsOff: Bool { switchedOff.value }
+
+    /// Reads the settings again, as after the device was locked at launch,
+    /// or once it is unlocked (`unlocked`). A switch off that couldn't be
+    /// saved before is saved now, if it can be, and the line that said it
+    /// would be goes. A yes for another address, or none, is settled as
+    /// launch settles it (`reconciled`), since a launch that couldn't read
+    /// the file left it as it was.
+    func refresh() {
+        guard storeOpened else { return }
+        let waiting = state?.waitsForASave ?? false
+        let heldOff = switchedOff.value
+        // Read and written under the lock every writer of the private
+        // words takes, since the file keeps them too.
+        let read = privacyChanges.change { () -> (fresh: CloudHelpSettings, holdsOff: Bool, status: Status?, saved: Bool)? in
+            guard let loaded = try? store.load() else { return nil }
+            let settled = Self.reconciled(loaded, endpoint: endpoint, store: store)
+            var fresh = settled.read ?? loaded
+            var saved = false
+            // A marked off reads as off, so the line says whether it waits.
+            if heldOff || settled.holdsOff, fresh.isOn || waiting {
+                fresh.turnOff()
+                saved = (try? store.save(fresh)) != nil
+            }
+            return (fresh, settled.holdsOff, settled.status, saved)
+        }
+        guard let read else { return }
+        let fresh = read.fresh
+        let settled = read
+        if settled.holdsOff { switchedOff.value = true }
+        if read.saved, waiting { state = nil }
         settings = fresh
         mayKeepUnseenWords = false
+        // Said as launch says it, and on the home screen too, since the
+        // person asked for nothing. Said once, not at every refresh.
+        if let status = settled.status, state != status {
+            state = status
+            fromLaunch = true
+        }
+    }
+
+    /// Does `action` on the shared setting as `window`, so a line it sets
+    /// is spoken there. The speaker is cleared after, so a line set any
+    /// other way is never pinned to the last window that acted.
+    func act(as window: UUID, _ action: (CloudHelp) -> Void) {
+        speaker = window
+        defer { speaker = nil }
+        action(self)
     }
 
     /// The toggle. Turning on asks first; turning off never does. True
@@ -217,55 +533,57 @@ public final class CloudHelp: ObservableObject {
     /// only, so it never opens in every window with the setting open.
     @discardableResult
     func setOn(_ on: Bool) -> Bool {
-        if on { return isAvailable && !settings.isOn }
+        if on { return isAvailable && !usesCloudForNewChats }
         turnOff()
         return false
     }
 
-    /// The yes to the turn on question. Sign-in, if there is any, starts
-    /// only now, after the yes.
+    /// The yes to the turn on question, for this build's address only.
+    /// Nothing reaches the network here: a sign-in, if the cloud needs one,
+    /// is a hop in the first preview, sent only by that preview's yes.
     func confirmTurnOn() {
-        guard isAvailable else { return }
+        guard isAvailable, let endpoint else { return }
         let wasSwitchedOff = switchedOff.value
         switchedOff.value = false
-        guard update({ $0.isOn = true }).isDone else {
+        guard update({ $0.turnOn(for: endpoint) }).isDone else {
             // Still off, and still off for chats already open.
             switchedOff.value = wasSwitchedOff
-            settings.isOn = false
-            status = CloudWords.onNotSaved
+            settings.turnOff()
+            state = .said(CloudWords.onNotSaved)
             return
         }
-        status = nil
-        let auth = auth
-        signingIn?.cancel()
-        signingIn = Task { await auth.signIn() }
+        state = nil
     }
 
-    /// Off at once for every chat, before anything is saved. Then it is
-    /// saved, tried twice; if that fails the file is erased, since no file
-    /// reads as off on the next launch. Only if even that fails could it
-    /// read as on next time, and the person is told so.
+    /// Off at once for every chat, before anything is saved: every cloud
+    /// chat's session ends (`CloudChatSession.end(because: .off)`), which
+    /// cancels any send on the wire and refuses a sign-in answer that lands
+    /// later, and only then does sign-in let go of whatever it kept, so no
+    /// late answer is kept after it. Then it is saved, tried twice. If the
+    /// device is only locked the words are kept, and the file is marked off
+    /// (`CloudHelpStoring.markOff`), so it reads as off even after a
+    /// relaunch; `refresh` saves the rest once the file opens again. If the
+    /// save fails because the file is damaged, or the disk, it is erased,
+    /// since no file reads as off on the next launch; if that fails too it
+    /// is marked off. Only when nothing holds could it read as on next
+    /// time, and the person is told so, locked or not.
     func turnOff() {
         switchedOff.value = true
-        settings.isOn = false
-        stopEverythingUnderWay()
-        if update({ $0.isOn = false }).isDone || update({ $0.isOn = false }).isDone {
-            status = nil
+        settings.turnOff()
+        for session in sessions.allObjects { session.end(because: .off) }
+        withdrawPreviews()
+        auth.forget()
+        let first = update { $0.turnOff() }
+        if first.isDone || update({ $0.turnOff() }).isDone {
+            state = nil
+        } else if first == .locked {
+            state = (try? store.markOff()) != nil ? .offUntilUnlocked : .offForNow
         } else if (try? store.erase()) != nil {
             settings = .off
-            status = CloudWords.offButCleared
+            state = .said(CloudWords.offButCleared)
         } else {
-            status = CloudWords.offForNow
+            state = (try? store.markOff()) != nil ? .offSavedLater : .offForNow
         }
-    }
-
-    /// Anything a cloud chat has under way stops: every preview waiting for
-    /// a yes is not sent, and a sign-in still going is cancelled (see
-    /// `CloudAuth.signIn`).
-    private func stopEverythingUnderWay() {
-        for review in reviews.allObjects { review.cancelPending() }
-        signingIn?.cancel()
-        signingIn = nil
     }
 
     /// A preview waiting for a yes was redacted with the private words as
@@ -286,23 +604,25 @@ public final class CloudHelp: ObservableObject {
             // Said out loud, so a refused word is never met with silence.
             // One already hidden needs nothing more, so the field clears.
             if refusal == .alreadyThere { newPrivateWord = "" }
-            status = CloudWords.privateRefused(refusal)
+            state = CloudWords.privateRefused(refusal).map(Status.said)
             return
         }
         switch outcome {
-        case .saved: newPrivateWord = ""; status = nil; withdrawPreviews()
+        case .saved: newPrivateWord = ""; state = nil; withdrawPreviews()
         case .unchanged: break
-        case .unreadable: status = CloudWords.privateUnreadable
-        case .notSaved: status = CloudWords.privateNotSaved
+        case .unreadable: state = .said(CloudWords.privateUnreadable)
+        case .locked: state = .said(CloudWords.privateLocked)
+        case .notSaved: state = .said(CloudWords.privateNotSaved)
         }
     }
 
     func removePrivateWord(_ word: String) {
         switch update({ $0.removePrivateWord(word) }) {
-        case .saved: status = nil; withdrawPreviews()
+        case .saved: state = nil; withdrawPreviews()
         case .unchanged: break
-        case .unreadable: status = CloudWords.privateUnreadable
-        case .notSaved: status = CloudWords.privateNotSaved
+        case .unreadable: state = .said(CloudWords.privateUnreadable)
+        case .locked: state = .said(CloudWords.privateLocked)
+        case .notSaved: state = .said(CloudWords.privateNotSaved)
         }
     }
 
@@ -325,14 +645,30 @@ public final class CloudHelp: ObservableObject {
     /// it erases the whole file it would have read, the only place words
     /// from an earlier launch can be. It throws if that can't be reached or
     /// erased, so Forget everything never says they went when they didn't.
+    ///
+    /// The chats end and the words go under `privacyChanges`, the lock a
+    /// cloud reply reads the words and adds them to its chat under, so no
+    /// reply can read the words before they go and keep them after its
+    /// chat ended. A chat ended here starts its fresh one only once the
+    /// words and the setting are as this leaves them.
     @discardableResult
     func forgetPrivateWords() throws -> Forgot {
+        try holdingRestarts {
+            try privacyChanges.change { try forgetPrivateWordsNow() }
+        }
+    }
+
+    private func forgetPrivateWordsNow() throws -> Forgot {
+        // First, whatever happens to the file: no open chat keeps a copy,
+        // and sign-in keeps nothing it learned.
+        endOpenCloudChats()
+        auth.forget()
         newPrivateWord = ""
         guard storeOpened else { return try eraseUnopenedFile() }
         let current = try? store.load()
         if var current {
             current.privateWords = []
-            if switchedOff.value { current.isOn = false }
+            if switchedOff.value { current.turnOff() }
             if (try? store.save(current)) != nil {
                 let hadWords = !settings.privateWords.isEmpty
                 settings = current
@@ -351,9 +687,12 @@ public final class CloudHelp: ObservableObject {
             withdrawPreviews()
             return .privateWords
         }
-        // Off for chats already open, as a switch off is.
+        // Off for chats already open, as a switch off is: every cloud
+        // chat's session ends as `turnOff` ends it, those that held
+        // nothing too.
         switchedOff.value = true
-        stopEverythingUnderWay()
+        for session in sessions.allObjects { session.end(because: .off) }
+        withdrawPreviews()
         return .privateWordsAndCloud
     }
 
@@ -375,19 +714,34 @@ public final class CloudHelp: ObservableObject {
     }
 
     enum Outcome {
-        case saved, unchanged, unreadable, notSaved
+        /// `unreadable` is damaged. `locked` can't be opened now, as on a
+        /// locked device, and may open later.
+        case saved, unchanged, unreadable, locked, notSaved
         /// The file now says what was asked.
         var isDone: Bool { self == .saved || self == .unchanged }
     }
 
     /// Changes the saved settings, read fresh so words saved elsewhere or
     /// unreadable at launch are never written over. A switch off made in
-    /// this session is kept in whatever is saved.
+    /// this session is kept in whatever is saved. Read and saved under
+    /// `privacyChanges`, so a private word added while a cloud request is
+    /// checked and handed over waits until it has gone.
     private func update(_ change: (inout CloudHelpSettings) -> Void) -> Outcome {
-        guard let before = try? store.load() else { return .unreadable }
+        privacyChanges.change { updateNow(change) }
+    }
+
+    private func updateNow(_ change: (inout CloudHelpSettings) -> Void) -> Outcome {
+        let before: CloudHelpSettings
+        do {
+            before = try store.load()
+        } catch is MemoryStore.Unavailable {
+            return .locked
+        } catch {
+            return .unreadable
+        }
         mayKeepUnseenWords = false
         var next = before
-        if switchedOff.value { next.isOn = false }
+        if switchedOff.value { next.turnOff() }
         change(&next)
         guard next != before else {
             settings = next
@@ -404,17 +758,18 @@ public final class CloudHelp: ObservableObject {
 }
 
 /// A transport made only when a request is sent, which `CloudModel` does
-/// only after the person's yes.
+/// only after the person's yes. Made and handed the request in one step,
+/// so the request is handed over before `start` returns.
 struct MadeOnSend: CloudTransport {
     let make: @Sendable () -> any CloudTransport
 
-    func send(_ request: CloudRequest) async throws -> Data {
-        try await make().send(request)
+    func start(_ request: CloudRequest) -> Task<Data, Error> {
+        make().start(request)
     }
 }
 
-/// The session's switch off, read by every chat off the main actor.
-final class SwitchedOff: @unchecked Sendable {
+/// A flag for this launch, read by every chat off the main actor.
+final class SessionFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var _value = false
 
@@ -528,8 +883,13 @@ public final class CloudReview: ObservableObject, CloudReviewing {
 
     /// Puts a preview on screen with nothing waiting on it, for screenshots.
     package func show(_ preview: CloudPreview) {
+        assert(self !== Self.none, "the gate no model asks through never shows anything")
         pending = preview
     }
+
+    /// The gate a screen with no cloud chat watches. No model asks through
+    /// it, so it never has anything to show.
+    static let none = CloudReview()
 }
 
 /// The cloud setting: off by default, with the words always hidden.
@@ -540,6 +900,8 @@ public struct CloudHelpView: View {
     let place: PrivacyPlace
     /// The turn on question, for this window only.
     @State private var asksToTurnOn: Bool
+    /// This window, so a status line is spoken only where it was asked for.
+    @State private var window = UUID()
 
     public init(help: CloudHelp, place: PrivacyPlace = .mayLeaveDevice) {
         self.init(help: help, place: place, asking: false)
@@ -579,14 +941,28 @@ public struct CloudHelpView: View {
             }
         }
         .onAppear { help.refresh() }
-        // Counted, so the same line twice in a row is spoken twice.
+        // Counted, so the same line twice in a row is spoken twice. Only in
+        // the window that acted, so a Mac or iPad with the setting open in
+        // two windows hears it once.
         .onChange(of: help.statusCount) {
-            if let status = help.status { AccessibilityNotification.Announcement(status).post() }
+            if let status = help.status, Self.speaks(help.statusWindow, in: window) {
+                AccessibilityNotification.Announcement(status).post()
+            }
         }
         .sheet(isPresented: $asksToTurnOn) {
-            CloudTurnOnSheet(onYes: { asksToTurnOn = false; help.confirmTurnOn() },
+            CloudTurnOnSheet(points: help.askPoints, onYes: { asksToTurnOn = false; act { $0.confirmTurnOn() } },
                              onNo: { asksToTurnOn = false })
         }
+    }
+
+    /// Whether the window `window` speaks a status line that answers
+    /// `origin`'s action. With no origin, no window acted, so every window
+    /// showing the setting speaks it rather than none.
+    static func speaks(_ origin: UUID?, in window: UUID) -> Bool { origin == nil || origin == window }
+
+    /// Does `action` on the shared setting as this window.
+    private func act(_ action: (CloudHelp) -> Void) {
+        help.act(as: window, action)
     }
 
     /// What the setting says under its switch, in the window whose flag
@@ -601,10 +977,11 @@ public struct CloudHelpView: View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             // What new chats get, so a saved on with nowhere to go never
             // reads as on.
-            Toggle(isOn: Binding(get: { help.usesCloudForNewChats }, set: { asksToTurnOn = help.setOn($0) })) {
+            Toggle(isOn: Binding(get: { help.usesCloudForNewChats }, set: { on in act { asksToTurnOn = $0.setOn(on) } })) {
                 Label(CloudWords.toggleTitle, systemImage: help.usesCloudForNewChats ? "cloud.fill" : "lock.fill")
                     .font(Theme.TypeScale.body.weight(.semibold))
             }
+            .toggleStyle(.switch)
             .tint(Theme.accentText)
             .disabled(!help.isAvailable)
             .accessibilityIdentifier("cloudToggle")
@@ -629,8 +1006,8 @@ public struct CloudHelpView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: Theme.Space.s) {
-                PrivateWordField(word: $help.newPrivateWord) { help.addPrivateWord() }
-                AddPrivateWordButton(size: Self.addButtonSize) { help.addPrivateWord() }
+                PrivateWordField(word: $help.newPrivateWord) { act { $0.addPrivateWord() } }
+                AddPrivateWordButton(size: Self.addButtonSize) { act { $0.addPrivateWord() } }
                     .disabled(!Self.canAdd(help.newPrivateWord))
             }
             // Nothing typed here could be kept when the file didn't open.
@@ -639,7 +1016,7 @@ public struct CloudHelpView: View {
             .padding(.trailing, Theme.Space.xxs)
             .padding(.vertical, Theme.Space.xxs)
             .background(Color.primary.opacity(Theme.fieldTint), in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
-            PrivateWordList(words: help.settings.privateWords) { help.removePrivateWord($0) }
+            PrivateWordList(words: help.settings.privateWords) { word in act { $0.removePrivateWord(word) } }
         }
         .padding(Theme.Space.m)
         .cardSurface()
@@ -648,6 +1025,30 @@ public struct CloudHelpView: View {
     /// Only words can be added, not blank space.
     static func canAdd(_ word: String) -> Bool {
         !word.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+/// The launch line (`CloudHelp.launchNotice`) at the top of Today, so a
+/// person who never opens the setting still hears it. Announced the first
+/// time it appears in this launch, and gone once the save is made.
+struct CloudLaunchNotice: View {
+    @ObservedObject var help: CloudHelp
+
+    var body: some View {
+        if let line = help.launchNotice {
+            GentleNotice(text: line)
+                .padding(.horizontal, Theme.gutter)
+                .padding(.top, Theme.Space.xs)
+                .frame(maxWidth: Theme.readableWidth)
+                .frame(maxWidth: .infinity)
+                // One element that reads the line, nothing else.
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(line)
+                .accessibilityIdentifier("cloudLaunchNotice")
+                // Today comes back to the front often; the line is said
+                // the first time only.
+                .onAppear { if help.claimLaunchAnnouncement() { AccessibilityNotification.Announcement(line).post() } }
+        }
     }
 }
 
@@ -791,6 +1192,8 @@ struct CloudHelpRow: View {
 /// The question before the cloud is turned on, saying in plain words what
 /// changes.
 struct CloudTurnOnSheet: View {
+    /// `CloudHelp.askPoints`, for the address it would turn on.
+    var points: [String] = CloudWords.askPoints
     let onYes: () -> Void
     let onNo: () -> Void
 
@@ -808,7 +1211,7 @@ struct CloudTurnOnSheet: View {
                     .multilineTextAlignment(.center)
                     .accessibilityAddTraits(.isHeader)
                 VStack(alignment: .leading, spacing: Theme.Space.m) {
-                    ForEach(Array(CloudWords.askPoints.enumerated()), id: \.offset) { index, point in
+                    ForEach(Array(points.enumerated()), id: \.offset) { index, point in
                         Label {
                             Text(point)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -840,12 +1243,12 @@ struct CloudTurnOnSheet: View {
     }
 
     private static let symbols = ["cloud", "eye", "eye.slash", "arrow.triangle.2.circlepath", "person.crop.circle",
-                                  "key", "lock", "network", "heart", "arrow.uturn.backward"]
+                                  "key", "lock.shield", "lock", "network", "heart", "arrow.uturn.backward"]
 }
 
-/// "Here is exactly what leaves your device": the whole request, its
-/// address, headers and body, with what was taken out marked, and a choice
-/// to send it or not.
+/// "Here is what leaves your device": the request, its address, headers and
+/// body, with what was taken out marked and every sign-in value covered,
+/// and a choice to send it or not.
 struct CloudPreviewSheet: View {
     let preview: CloudPreview
     /// What the request is for, when it isn't the chat's own message, as
@@ -854,6 +1257,75 @@ struct CloudPreviewSheet: View {
     let onSend: () -> Void
     let onCancel: () -> Void
 
+    /// Everything that will be sent, as it goes: any sign-in hop, then the
+    /// request, Host and Content-Length included.
+    static func shownText(_ preview: CloudPreview) -> String { preview.shownText }
+
+    /// What the payload card draws: `shownText`, with every sign-in value
+    /// covered, so a screenshot or a shared screen never catches a secret.
+    /// What is covered, the same way on the card and aloud
+    /// (`spokenLines`):
+    /// - in every hop, the value of each sign-in label (`isSignIn`); the
+    ///   method, address, fixed labels, Host and Content-Length show;
+    /// - the sign-in hop's whole body, but for the name of each part when
+    ///   it is a JSON object (`maskedSignInBody`);
+    /// - nothing of the message's body, which is the redacted chat.
+    /// The names still show, so the person sees that a value goes and
+    /// under what name. The sheet says the values are covered
+    /// (`CloudWords.previewSignInCovered`). The sign-in hop's
+    /// Content-Length shows too, and it is the length of the body that
+    /// goes, so it tells how long the covered values are put together.
+    static func displayedText(_ preview: CloudPreview) -> String {
+        func shown(_ request: CloudRequest, isSignInHop: Bool) -> String {
+            let lines = CloudRequest.shownHeaders(url: request.url, headers: request.headers, body: request.body).map {
+                "\($0.name): " + (isSignIn($0.name, $0.value) ? signInMask : $0.value)
+            }
+            return ([request.method + " " + request.url.absoluteString] + lines).joined(separator: "\n")
+                + "\n\n" + (isSignInHop ? maskedSignInBody(request.body) : request.text)
+        }
+        guard let signIn = preview.signIn else { return shown(preview.request, isSignInHop: false) }
+        return CloudWords.previewSignInFirst + "\n" + shown(signIn, isSignInHop: true) + "\n\n"
+            + CloudWords.previewThenMessage + "\n" + shown(preview.request, isSignInHop: false)
+    }
+
+    /// What covers a sign-in value on the card. Always the same length, so
+    /// the mask itself says nothing of the value's length. The sign-in
+    /// hop's Content-Length line still gives the length of its whole body.
+    static let signInMask = String(repeating: "\u{2022}", count: 8)
+
+    /// The names of a sign-in body's parts, in name order, when it is a
+    /// JSON object whose names are all tokens (`CloudSignIn.isToken`). Nil
+    /// for any other body, so a name is never drawn that could make a line
+    /// of its own. `CloudModel.preview` already refuses such a body; this
+    /// keeps the card safe without leaning on that.
+    static func signInBodyNames(_ body: Data) -> [String]? {
+        guard let names = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?.keys.sorted(),
+              names.allSatisfy(CloudSignIn.isToken) else { return nil }
+        return names
+    }
+
+    /// A sign-in body as the card shows it: each part's name with its value
+    /// covered, or one mask for a body that isn't a JSON object. Empty
+    /// stays empty, since nothing is hidden.
+    static func maskedSignInBody(_ body: Data) -> String {
+        guard !body.isEmpty else { return "" }
+        guard let names = signInBodyNames(body) else { return signInMask }
+        return "{\n" + names.map { "  \"\($0)\" : " + signInMask }.joined(separator: ",\n") + "\n}"
+    }
+
+    /// A label that is neither fixed nor one the system adds is sign-in,
+    /// and its value is a secret.
+    static func isSignIn(_ name: String, _ value: String) -> Bool {
+        CloudHeaders.fixed[name] != value && CloudRequest.systemLines[name] != value
+            && name != "Host" && name != "Content-Length"
+    }
+
+    /// True when the card covers anything: a sign-in hop, or a sign-in
+    /// label on the message. The sheet then says what is covered.
+    static func coversAnything(_ preview: CloudPreview) -> Bool {
+        preview.signIn != nil || preview.request.headers.contains { isSignIn($0.key, $0.value) }
+    }
+
     /// The purpose line for one of Today's summary previews: the topic it
     /// asks about, as it is sent, and that it is Today's. None for a
     /// request a summary didn't make.
@@ -861,9 +1333,6 @@ struct CloudPreviewSheet: View {
         guard preview.forSummary else { return nil }
         return ReconWords.previewForSummary(CloudReconSummarizer.topic(asked: preview))
     }
-
-    /// What the payload card shows: the very request that will be sent.
-    static func shownText(_ preview: CloudPreview) -> String { preview.request.shownText }
 
     static func hiddenLine(_ preview: CloudPreview) -> String {
         let parts = Redaction.Kind.allCases.compactMap { kind in
@@ -875,18 +1344,35 @@ struct CloudPreviewSheet: View {
     /// What VoiceOver reads instead of the raw text: where it goes, the
     /// labels, then each message by who said it, with masks read as
     /// "hidden name" and the like.
+    /// Whenever the card covers anything, VoiceOver hears that it does, as
+    /// the sheet's line says: under "First, to sign in" with a hop, or
+    /// first of all when only the message has a sign-in label.
     static func spokenLines(_ preview: CloudPreview) -> [String] {
-        let request = preview.request
+        guard let signIn = preview.signIn else {
+            let covered = coversAnything(preview) ? [CloudWords.previewSignInCovered] : []
+            return covered + spokenLines(preview.request, isSignInHop: false)
+        }
+        return [CloudWords.previewSignInFirst, CloudWords.previewSignInCovered]
+            + spokenLines(signIn, isSignInHop: true)
+            + [CloudWords.previewThenMessage] + spokenLines(preview.request, isSignInHop: false)
+    }
+
+    private static func spokenLines(_ request: CloudRequest, isSignInHop: Bool) -> [String] {
         var lines = [CloudWords.spokenAddress(request.url.absoluteString)]
-        // A fixed label is read in full. Any other is sign-in, whose value
-        // is a secret: VoiceOver says only how long it is, so it is never
-        // spoken aloud.
-        let labels = request.headers.sorted { $0.key.lowercased() < $1.key.lowercased() }.map { name, value in
-            CloudHeaders.fixed[name] == value
-                ? "\(name), \(value)" : CloudWords.spokenSignIn(name, characters: value.count)
+        // A fixed label, or one the system adds, is read in full. Any other
+        // is sign-in, whose value is a secret: VoiceOver says only that it
+        // is hidden, so the value is never spoken aloud. The sign-in hop's
+        // Content-Length is a line the system adds, read in full, so the
+        // length of its whole body is said.
+        let labels = CloudRequest.shownHeaders(url: request.url, headers: request.headers, body: request.body).map {
+            isSignIn($0.name, $0.value) ? CloudWords.spokenSignIn($0.name) : "\($0.name), \($0.value)"
         }
         if !labels.isEmpty { lines.append(CloudWords.spokenLabels(labels)) }
-        if let payload = try? JSONDecoder().decode(CloudPayload.self, from: request.body) {
+        // Every body is read, never skipped. A sign-in body is read as the
+        // card covers it: the name of each part, each value hidden.
+        if isSignInHop {
+            if !request.body.isEmpty { lines.append(CloudWords.spokenSignInBody(signInBodyNames(request.body) ?? [])) }
+        } else if let payload = try? JSONDecoder().decode(CloudPayload.self, from: request.body) {
             lines += payload.messages.map {
                 CloudWords.spokenMessage(role: $0.role, text: Redaction.Kind.spoken($0.text))
             }
@@ -917,6 +1403,10 @@ struct CloudPreviewSheet: View {
                 VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     Label(CloudWords.previewDestination(preview.request.url.host ?? ""), systemImage: "arrow.up.forward.circle")
                     Label(Self.hiddenLine(preview), systemImage: "eye.slash")
+                    if Self.coversAnything(preview) {
+                        Label(CloudWords.previewSignInCovered, systemImage: "key")
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .font(Theme.TypeScale.subheadline.weight(.medium))
                 CloudPayloadCard(preview: preview)
@@ -942,9 +1432,10 @@ struct CloudPreviewSheet: View {
 /// The request itself, as plain text, with what was taken out marked.
 /// VoiceOver reads it message by message instead of as raw text.
 ///
-/// The text can't be selected or copied. A sign-in label's value is shown
-/// so the person sees everything that goes, but it is one long press from
-/// the clipboard, and from there Universal Clipboard, if it can be selected.
+/// The text can't be selected or copied, and a sign-in label's value is
+/// covered (`CloudPreviewSheet.displayedText`), so the secret is neither one
+/// long press from the clipboard, and from there Universal Clipboard, nor
+/// in a screenshot.
 struct CloudPayloadCard: View {
     let preview: CloudPreview
     @Environment(\.colorScheme) private var scheme
@@ -973,7 +1464,7 @@ struct CloudPayloadCard: View {
 
     /// The request with each mask tinted, so what was taken out stands out.
     private var highlighted: AttributedString {
-        var text = AttributedString(CloudPreviewSheet.shownText(preview))
+        var text = AttributedString(CloudPreviewSheet.displayedText(preview))
         for kind in Redaction.Kind.allCases {
             var start = text.startIndex
             while let range = text[start...].range(of: kind.mask) {
@@ -995,16 +1486,17 @@ extension View {
     /// closes. `waiting` is told whenever a preview is pending, shown or
     /// not, so `HomeCover` can count it as covering the screen.
     ///
+    /// Always the same modifier, with or without a review, so a chat
+    /// changing between the device and the cloud never gives the screen
+    /// under it a new identity, and its state, such as the memory screen's,
+    /// survives.
+    ///
     /// `purpose` says what a preview is for, when it isn't the chat's own
     /// message (see `CloudPreviewSheet.purpose`).
-    @ViewBuilder
     func cloudPreview(_ review: CloudReview?, blocked: Bool = false, waiting: Binding<Bool>? = nil,
-                      purpose: ((CloudPreview) -> String?)? = nil) -> some View {
-        if let review {
-            modifier(CloudPreviewPresenter(review: review, blocked: blocked, waiting: waiting, purpose: purpose))
-        } else {
-            self.onAppear { waiting?.wrappedValue = false }
-        }
+                      purpose: ((CloudPreview) -> String?)? = nil) -> ModifiedContent<Self, CloudPreviewPresenter> {
+        modifier(CloudPreviewPresenter(review: review ?? CloudReview.none, blocked: blocked, waiting: waiting,
+                                       purpose: purpose))
     }
 }
 

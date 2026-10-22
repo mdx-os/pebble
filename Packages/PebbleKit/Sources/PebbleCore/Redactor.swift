@@ -437,15 +437,33 @@ public struct Redactor: Sendable, Equatable {
     }
 
     /// `word` as a whole word in any case and without its accents, with
-    /// straight and curly apostrophes alike, and any whitespace between its
-    /// parts: two spaces, a line break or a non-breaking space.
-    fileprivate static func wholeWord(_ word: String) -> NSRegularExpression {
-        let escaped = FoldedText.fold(word)
-            .split(whereSeparator: { $0.isWhitespace || $0.isNewline })
+    /// straight and curly apostrophes alike. Between its parts any run of
+    /// whitespace or hyphens matches: two spaces, a line break, a
+    /// non-breaking space, or "lemon-cake" for "lemon cake". A plural s on
+    /// the end is taken too, so "lemon cakes" goes; "Sam's" already ends the
+    /// word at its apostrophe. Joined or other spellings still slip by,
+    /// which is why the preview is the real safeguard.
+    fileprivate static func wholeWord(_ word: String) -> NSRegularExpression? {
+        let parts = wordParts(word)
+        // Nothing but hyphens would match the empty text everywhere.
+        guard !parts.isEmpty else { return nil }
+        let escaped = parts
             .map { NSRegularExpression.escapedPattern(for: String($0)) }
-            .joined(separator: #"\s+"#)
+            .joined(separator: #"[\s\-]+"#)
             .replacingOccurrences(of: "'", with: "['\u{2019}\u{2018}\u{02BC}]")
-        return regex(#"(?<![\p{L}\p{N}])"# + escaped + #"(?![\p{L}\p{N}])"#, caseInsensitive: true)
+        return regex(#"(?<![\p{L}\p{N}])"# + escaped + #"s?(?![\p{L}\p{N}])"#, caseInsensitive: true)
+    }
+
+    /// The parts `wholeWord` matches, split where any whitespace or hyphen
+    /// may stand between them.
+    private static func wordParts(_ word: String) -> [Substring] {
+        FoldedText.fold(word).split(whereSeparator: { $0.isWhitespace || $0.isNewline || $0 == "-" })
+    }
+
+    /// False for a word this redactor would hide nothing for, one of only
+    /// hyphens and spaces, which it leaves out of its patterns.
+    public static func canHide(_ word: String) -> Bool {
+        !wordParts(word).isEmpty
     }
 
     private static func find(_ expression: NSRegularExpression, in text: String) -> [NSRange] {
@@ -512,8 +530,25 @@ final class WordPatterns: @unchecked Sendable {
     let names: [NSRegularExpression]
     let privateWords: [NSRegularExpression]
 
+    #if DEBUG
+    /// Counts what is built while a test is watching, so it can see that
+    /// redacting builds nothing. Nil, and so free, everywhere else, and
+    /// left out of Release builds.
+    @TaskLocal static var builds: BuildCount?
+
+    final class BuildCount: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _value = 0
+        var value: Int { lock.withLock { _value } }
+        func add(_ count: Int) { lock.withLock { _value += count } }
+    }
+    #endif
+
     init(names: [String], privateWords: [String]) {
-        self.names = names.map(Redactor.wholeWord)
-        self.privateWords = privateWords.map(Redactor.wholeWord)
+        #if DEBUG
+        Self.builds?.add(names.count + privateWords.count)
+        #endif
+        self.names = names.compactMap(Redactor.wholeWord)
+        self.privateWords = privateWords.compactMap(Redactor.wholeWord)
     }
 }

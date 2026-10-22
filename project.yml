@@ -36,7 +36,8 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         PebbleBrandName: $(BRAND_NAME)
-        # Empty unless set in Config/Cloud.xcconfig. Empty means no cloud model.
+        # Empty unless set in Config/Cloud.local.xcconfig, which git ignores.
+        # Empty means no cloud model, and every build but Debug must keep it empty.
         PebbleCloudEndpoint: $(PEBBLE_CLOUD_ENDPOINT)
         LSApplicationCategoryType: public.app-category.productivity
         # No encryption of the app's own. The system's file protection is
@@ -71,6 +72,14 @@ targets:
         # hold, the Talk shortcut or VoiceOver), never at launch. Speech is heard on the device only (DeviceSpeech).
         NSMicrophoneUsageDescription: So you can talk instead of typing. I listen only while you're talking to me, and I keep no recording.
         NSSpeechRecognitionUsageDescription: So I can turn what you say into words. That happens on this device, and what you say is never sent anywhere to be understood.
+    # Every build checks first, so any build with a cloud address fails
+    # unless it is Debug and not an archive, wherever the address came from.
+    preBuildScripts:
+      - name: No cloud address in Release
+        script: sh "$SRCROOT/scripts/release-endpoint-check.sh"
+        basedOnDependencyAnalysis: false
+        inputFiles:
+          - $(SRCROOT)/scripts/release-endpoint-check.sh
     scheme:
       testTargets: [PebbleAppUITests]
     settings:

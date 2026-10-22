@@ -15,13 +15,16 @@ in lint, a skill, or CI.
 
 ## Commands
 
-- `make verify`: everything CI runs (brand and privacy checks, tests, builds, unsigned archives, screenshots)
+- `make verify`: everything CI runs (brand, privacy and comment checks, tests, mutation check, builds, unsigned archives, screenshots). It is `make verify-ci` and then `make mutation-check`. CI runs those as two jobs side by side on every pull request and every push to main: "Verify on Mac, iPhone and iPad" (60 minutes) and "Mutation check" (150 minutes, the full manifest; about 45 minutes on a recent Mac). Never move the mutation check back into the Verify job, or cut the manifest to fit a limit
 - `make test`: package unit tests (Swift Testing), PebbleKit's and then the source guards' in `Tools/GuardKit`
-- `make graph-check`: fail if swift-syntax can reach PebbleKit or the app project, named or through a dependency (part of verify). `make graph-check-test` is its self-test
-- `make build-release`: Release builds for macOS and the iOS Simulator. Verify runs only the Simulator one (`build-release-simulator`), since the macOS archive is the same Release build for the Mac. Anything behind `#if DEBUG`, like the showcase, must only be used behind it too
+- `make mutation-check`: breaks the code each test in `scripts/mutation-manifest.txt` covers, on a copy in `build/mutation`, and requires the test to fail. Every new package behavior test gets a manifest entry; a test that passes with its code broken protects nothing. The check runs `swift test` in both packages, so a UI test that guards a promise needs a package twin pinning the same thing, with entries, listed at the top of `scripts/mutation/cloud.txt`
+- `make release-test`: runs the "a shipped build reads no cloud address" promise in a Release build of PebbleCore (part of verify). Package tests run in Debug, so they can't see that code
+- `make comment-lint`: no review history ("fix round", "item 11", "round 4") or personal names in code comments, project.yml, the Makefile or the mutation manifest. Say what the code or test protects. The names it blocks are never in the repository, in plain text or hashed: a hash of a short name is undone by trying every name. The names part runs only when `COMMENT_LINT_NAMES` names a plain list kept outside the repository (one inside it is refused, ignored by git or not); without one the lint says the names were not checked and still checks review history, as in CI. A match prints the file and line, never the name. Never print, copy or quote the list
+- `make build-release`: Release builds for macOS and the iOS Simulator. Verify runs only the Simulator one (`build-release-simulator`), since the macOS archive is the same Release build for the Mac. Anything behind `#if DEBUG`, like the showcase, must only be used behind it too. Every build with a cloud address fails unless it is Debug and not an archive, whatever the configuration is called
 - `make archive`: unsigned Release archives for iOS and macOS, checked for App Store Connect. `docs/RELEASE.md` covers signing and upload
 - `make privacy-check`: fails when code uses a required-reason API that `App/Resources/PrivacyInfo.xcprivacy` does not list, or network code outside the opt-in cloud client's files named in `scripts/privacy-check.sh`. `make privacy-check-test` runs it on `scripts/privacy-fixtures`
 - `make pulse`: fetch the public source watch, write `pulse/snapshots/` and `pulse/digest.json`. Real changes also write `build/pulse/notify.md` and `build/pulse/summary.json`
+- `make graph-check`: fail if swift-syntax can reach PebbleKit or the app project, named or through a dependency (part of verify). `make graph-check-test` is its self-test
 - `make screenshots`: `build/screenshots/{iphone,ipad,mac}.png`, Today listening on iPhone, plus dark shots of the
   blue fill that `scripts/check-screenshots.sh` checks. Worktrees share simulators and
   the bundle ID, so when another session runs at once pass free ones:
@@ -45,7 +48,9 @@ in lint, a skill, or CI.
   or `Packages/` (part of verify). A camel case name is also read in its parts and in
   every run of up to 8 parts joined, within that one name only. The owner fills the plain list in the git ignored
   `Config/private-words.local.txt` and runs `make hash-private-words`; the hash file
-  committed now is built from a made up placeholder word
+  committed now is built from a made up placeholder word. Never put a real word in it:
+  the salt is committed beside the hashes, so anyone can hash every name or short
+  word and find a match in minutes. A real word there is as good as public
 
 ## Layout and layers
 
@@ -113,6 +118,11 @@ in lint, a skill, or CI.
   keys were seen in `UserDefaults`, so they never move over again. It holds
   no data and stays through Forget everything, so it is the one sign left
   that the switch was set; people who never had those keys get none.
+  The cloud setting leaves a second empty file that stays through Forget
+  everything: its sent mark (`CloudHelpFileStore.sentMarkURL`), made just
+  before the first request leaves, so a later Forget everything can say
+  what went can't be erased. It is the one sign left that the cloud was
+  ever used.
 - A switch write that fails is tried again at the next read, and an off
   that hasn't gone in makes the switch unknown. While the switch is
   unknown the runner never reads or writes its own file and shows no cards:
@@ -220,10 +230,29 @@ in lint, a skill, or CI.
   with no limit turns a regression into a hung run instead of a failure.
   `TaskLedgerRunTests` follows this. `TaskLedgerCardTests` never blocks at
   all: it holds the hops back with `FeedModel.hopEverySnapshot`.
+- To test what happens while a mutation is held, run the other caller inside
+  the hook (`beforeNextPublication`), on the same thread, never from a test
+  that waits for it on a clock. Getting a pool thread back took 12 s on a
+  quiet Mac and over 60 s on CI. `TaskLedgerRunTests` does this.
+- Every main actor test in a run shares one main thread, so work a test
+  awaits there can wait 15 seconds or more behind the others. A test that
+  sweeps the sources is `nonisolated`, never on the main actor, and a
+  limit on work that needs the main actor is about 60 s, never 20.
+  `BackgroundServiceTests` and `finishes` in `CloudHelpTests` follow this.
+- A test whose question crosses an `await` never puts its `AskFirst` on the
+  wall clock: a turn on the main actor can take minutes on CI, and a
+  question with under `NeedsYouFlow.leastTimeLeft` left never nudges.
+  `NeedsYouFlowModelTests` uses `AskFirst.steady()`, a clock that moves only
+  when the test moves it.
 - A check made off the main actor can go stale before the main actor acts on
   it. A cloud preview asks whether the cloud is on again where it goes on
   screen, on the main actor, where the switch is turned off.
   `aSwitchOffJustAfterTheCheckNeverShowsAPreview` guards this.
+- A test never awaits `CloudReview.shown()` for a preview the code may
+  withdraw unshown, as for a chat Forget everything or a switch off has
+  ended: the wait has no limit, and the whole run hangs. Await the reply,
+  and close any preview that does show from a task beside it.
+  `forgetEverythingWaitsForAReplyReadingTheWords` does this.
 - The Recon UI tests' `eventually` waits up to 60 s and their suites allow 3
   minutes: main-actor tests queue behind each other, about 16 s on a fast Mac
   and past 30 s on CI.

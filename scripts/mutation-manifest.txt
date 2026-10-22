@@ -590,7 +590,7 @@ test: clearingACardTakesItsLedger
 file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
 perl: s~        ledger\?\.remove\(task\.id\)\n~~
 
-# Round-one ledger regressions: deletion is owed independently of marker creation.
+# Ledger erasing: deletion is owed independently of marker creation.
 test: forgetTriesDeletionWhenItsMarkerCannotBeWritten
 file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
 perl: s~(private func erased\(\) -> Bool \{)\n        pendingErase = true~$1~
@@ -639,11 +639,6 @@ perl: s~\n            \.sorted \{ \(kept\[\$0\]\.end!\.at, \$0\) < \(kept\[\$1\]
 test: anEvictedEndIsNotRecreatedByAnUnchangedSnapshot aLongTaskOutlastsSixtyEarlierFinishes
 file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
 perl: s~        guard last\[key\]\?\.state\.isFinished != true else \{ return \}\n~~
-
-# Every simultaneous completion reaches observers before the engine's trim.
-test: thirteenTasksFinishingTogetherAllReachTheirLedgers
-file: Packages/PebbleKit/Sources/PebbleCore/LocalFakeEngine.swift
-perl: s~        lockRuns\(\)\n        let after = runs~        lockRuns()\n        dropOldEnded()\n        let after = runs~
 
 # Folder proofs cannot traverse a symlink out of the root.
 test: aFolderRejectsSymlinksOutsideItsRoot
@@ -737,11 +732,6 @@ perl: s~ \|\| hadLedgers,~,~
 test: aFolderRejectsSymlinksOutsideItsRoot
 file: Packages/PebbleKit/Sources/PebbleCore/TaskLedger.swift
 perl: s~let resolvedRoot = root\.resolvingSymlinksInPath\(\)~let resolvedRoot = root~
-
-# The initial observation records restored outcomes before the launch sweep.
-test: finalQuestionExpiringWhileClosedKeepsItsFinish
-file: Packages/PebbleKit/Sources/PebbleUI/FeedView.swift
-perl: s~        let hops = pendingRefreshes\n        watching = tasks\?\.observe~        launchLedger()\n        let hops = pendingRefreshes\n        watching = tasks?.observe~
 
 # Terminal tasks in the reconciled snapshot are present, never orphans.
 test: reconciledTerminalTaskIsNotAnOrphan

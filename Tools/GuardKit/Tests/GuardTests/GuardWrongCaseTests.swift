@@ -1209,7 +1209,12 @@ extension GuardWrongCaseTests {
         WrongCase(rule: "privacy.speech", text: "func unrestricted() {\n    let other = SFSpeechAudioBufferRecognitionRequest()\n    SFSpeechRecognizer()?.recognitionTask(with: other) { _, _ in }\n}", file: PrivacyRules.speechHelper),
         WrongCase(rule: "privacy.upload", text: "let x = MKLocalSearch(request: request)", file: "App/Sources/Wrong.swift"),
         WrongCase(rule: "privacy.encryption", text: "import CryptoKit", file: PrivacyRules.cloud),
-        // Round 3: remote readers with no flagged name.
+        // A sign-in challenge outside the cloud client, and a trust read inside it.
+        WrongCase(rule: "privacy.encryption", text: "func answer(_ challenge: URLAuthenticationChallenge) {}",
+                  file: "App/Sources/Wrong.swift"),
+        WrongCase(rule: "privacy.encryption", text: "let trust = challenge.protectionSpace.serverTrust", file: PrivacyRules.cloud),
+        WrongCase(rule: "privacy.encryption", text: "let chain = SecTrustCopyCertificateChain(trust)", file: PrivacyRules.cloud),
+        // Remote readers with no flagged name.
         WrongCase(rule: "privacy.network", text: "var body: some View { WebView(url: url) }", file: "App/Sources/Wrong.swift"),
         WrongCase(rule: "privacy.network", text: "let page = WebPage()", file: "App/Sources/Wrong.swift"),
         WrongCase(rule: "privacy.network", text: "let x = MCSession(peer: peer)", file: "App/Sources/Wrong.swift"),
@@ -1233,7 +1238,7 @@ extension GuardWrongCaseTests {
         WrongCase(rule: "privacy.urlRead", text: "let x = type(of: data).init(contentsOf:options:)", file: "App/Sources/Wrong.swift"),
         WrongCase(rule: "privacy.urlRead", text: "try FileManager.default.copyItem(at: remote, to: local)", file: "App/Sources/Wrong.swift"),
         WrongCase(rule: "privacy.urlRead", text: "let x = FileManager.default.copyItem(at:to:)", file: "App/Sources/Wrong.swift"),
-        // Round 4. An alias of any case, from this file or another.
+        // An alias of any case, from this file or another.
         WrongCase(rule: "privacy.urlRead", text: "typealias bytes = Data\nlet x = try bytes(contentsOf: remote)", file: "App/Sources/Wrong.swift"),
         WrongCase(rule: "privacy.urlRead", text: "let x = try bytes(contentsOf: remote)", file: "App/Sources/Wrong.swift"),
         WrongCase(rule: "privacy.urlRead", text: "enum Kinds { typealias bytes = Data }\nlet x = try Kinds.bytes(contentsOf: remote)", file: "App/Sources/Wrong.swift"),
@@ -1284,6 +1289,10 @@ extension GuardWrongCaseTests {
         // The cloud client may hand its request a url:.
         #expect(!PrivacyRules.findings(in: SyntaxSource("let x = URLRequest(url: url)"), file: PrivacyRules.cloud).contains { $0.rule == "privacy.urlRead" })
         #expect(!PrivacyRules.findings(in: SyntaxSource("static func makeSession() {}"), file: PrivacyRules.cloud).contains { $0.rule == "privacy.sessionFactory" })
+        // The cloud client may hold a sign-in challenge to cancel it.
+        let declines = "func urlSession(_ s: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge)"
+            + " async -> (URLSession.AuthChallengeDisposition, URLCredential?) { (.cancelAuthenticationChallenge, nil) }"
+        #expect(!PrivacyRules.findings(in: SyntaxSource(declines), file: PrivacyRules.cloud).contains { $0.rule == "privacy.encryption" })
         // The voice adapter may hear speech, every request on the device.
         let adapter = "func start() {\n    let request = SFSpeechAudioBufferRecognitionRequest()\n    request.requiresOnDeviceRecognition = true\n"
             + "    task = SFSpeechRecognizer()?.recognitionTask(with: request) { _, _ in }\n}"

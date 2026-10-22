@@ -43,50 +43,22 @@ struct TaskLedgerRunTests {
         }
     }
 
-    /// How long any wait in these tests holds on before it gives up and
-    /// fails. Far longer than the work needs, so a busy runner never trips
-    /// it, but finite, so a regression fails the test instead of hanging
-    /// the run.
-    private static let patience: DispatchTimeInterval = .seconds(60)
-
-    /// Starts `engine.advance(by: 2)` and returns once its mutation has
-    /// unlocked and is held before it publishes. Every blocking wait runs on
-    /// a thread of its own, never on a pool the other tests share, and the
-    /// test only ever awaits it, so however many tests run beside it neither
-    /// side can starve. The held mutation waits only for the release, never
-    /// for a clock: the test may resume long after it unlocked on a busy
-    /// runner, and a hold that let go by itself would publish too soon.
-    /// It holds no lock while it waits, so nothing else blocks on it. The
-    /// test's own waits have a limit: if the mutation never reaches its
-    /// publication, the held worker is released and the test fails rather
-    /// than hangs. The returned release lets it publish, and returns once it
-    /// has, or fails once the limit passes.
-    private func heldAdvance(_ engine: LocalFakeEngine) async throws -> () async -> Void {
-        let unlocked = DispatchSemaphore(value: 0)
-        let publish = DispatchSemaphore(value: 0)
-        let finished = DispatchSemaphore(value: 0)
-        engine.beforeNextPublication {
-            unlocked.signal()
-            publish.wait()
-        }
-        Thread.detachNewThread {
-            engine.advance(by: 2)
-            finished.signal()
-        }
-        let release: () async -> Void = {
-            publish.signal()
-            let ended = await onOwnThread { finished.wait(timeout: .now() + Self.patience) == .success }
-            #expect(ended, "the held mutation never finished publishing")
-        }
-        let reached = await onOwnThread { unlocked.wait(timeout: .now() + Self.patience) == .success }
-        if !reached {
-            await release()
-        }
-        try #require(reached, "the mutation never reached its publication")
-        return release
+    /// Runs `engine.advance(by: 2)` and, once its mutation has unlocked and
+    /// before it publishes, runs `whileHeld` right there, on the same
+    /// thread, as another caller coming in at that moment would. No thread
+    /// waits on another and nothing reads a clock, so the order is the same
+    /// on any runner however busy. Returns what `whileHeld` returned, or nil
+    /// with a failure if the mutation never reached its publication.
+    @discardableResult
+    private func advance<T>(_ engine: LocalFakeEngine, whileHeld: @escaping @Sendable () -> T) -> T? {
+        let held = Held<T>()
+        engine.beforeNextPublication { held.value = whileHeld() }
+        engine.advance(by: 2)
+        #expect(held.value != nil, "the mutation never reached its publication")
+        return held.value
     }
 
-    @Test func concurrentRefreshCannotTrimUnpublishedCompletions() async throws {
+    @Test func concurrentRefreshCannotTrimUnpublishedCompletions() throws {
         let engine = LocalFakeEngine(rule: .isolated(), scripts: [])
         let book = TaskLedgerBook(store: InMemoryTaskLedgerStore(), clock: { engine.currentDate })
         let following = book.follow(engine)
@@ -96,13 +68,13 @@ struct TaskLedgerRunTests {
                                     steps: [.init("Reading", duration: 1, todo: "read")],
                                     doneLine: "Ready.", proofs: [.check("Read the note")]))
         }
-        let release = try await heldAdvance(engine)
-        // The completing mutation has unlocked but has not published.
-        // This unchanged mutation must neither publish nor trim its ends.
-        engine.refresh()
-        #expect(engine.tasks.count == 13)
-        #expect(ids.allSatisfy { book.ledger($0)?.end == nil })
-        await release()
+        advance(engine) {
+            // The completing mutation has unlocked but has not published.
+            // This unchanged mutation must neither publish nor trim its ends.
+            engine.refresh()
+            #expect(engine.tasks.count == 13)
+            #expect(ids.allSatisfy { book.ledger($0)?.end == nil })
+        }
         #expect(engine.tasks.count == LocalFakeEngine.endedLimit)
         for id in ids {
             #expect(try #require(book.ledger(id)).end?.kind == .done(proofs: [.check("Read the note")]))
@@ -113,28 +85,29 @@ struct TaskLedgerRunTests {
     /// more tasks end. Each later snapshot carries every task, the held end
     /// too, so once it is delivered retention lets the oldest go at once
     /// rather than wait for the held mutation to finish.
-    @Test func retentionDoesNotWaitForAQuietMoment() async throws {
+    @Test func retentionDoesNotWaitForAQuietMoment() throws {
         let engine = LocalFakeEngine(rule: .isolated(), scripts: [])
         let book = TaskLedgerBook(store: InMemoryTaskLedgerStore(), clock: { engine.currentDate })
         let following = book.follow(engine)
         defer { following.cancel() }
-        func short(_ title: String) -> TaskScript {
+        @Sendable func short(_ title: String) -> TaskScript {
             TaskScript(title: title, steps: [.init("Reading", duration: 1, todo: "read")],
                        doneLine: "Ready.", proofs: [.check("Read the note")])
         }
         let held = engine.start(short("Held"))
-        let release = try await heldAdvance(engine)
-        // The held task has ended but its own snapshot hasn't gone out.
-        // Twenty more start and end while it waits.
-        #expect(book.ledger(held)?.end == nil)
-        let told = (0..<20).map { engine.start(short("Told \($0)")) }
-        engine.advance(by: 2)
-        #expect(engine.tasks.filter { !$0.isActive }.count == LocalFakeEngine.endedLimit,
-                "trimmed while the held mutation is still going")
-        for id in [held] + told {
-            #expect(book.ledger(id)?.end?.kind == .done(proofs: [.check("Read the note")]), "\(id)")
-        }
-        await release()
+        let told = try #require(advance(engine) { () -> [String] in
+            // The held task has ended but its own snapshot hasn't gone out.
+            // Twenty more start and end while it waits.
+            #expect(book.ledger(held)?.end == nil)
+            let told = (0..<20).map { engine.start(short("Told \($0)")) }
+            engine.advance(by: 2)
+            #expect(engine.tasks.filter { !$0.isActive }.count == LocalFakeEngine.endedLimit,
+                    "trimmed while the held mutation is still going")
+            for id in [held] + told {
+                #expect(book.ledger(id)?.end?.kind == .done(proofs: [.check("Read the note")]), "\(id)")
+            }
+            return told
+        })
         #expect(engine.tasks.filter { !$0.isActive }.count == LocalFakeEngine.endedLimit)
         for id in [held] + told {
             #expect(book.ledger(id)?.end?.kind == .done(proofs: [.check("Read the note")]), "\(id)")
@@ -332,10 +305,8 @@ struct TaskLedgerRunTests {
     }
 }
 
-/// Runs `body` on a thread of its own and awaits its answer, so a blocking
-/// wait never holds a thread of a pool other tests share.
-private func onOwnThread<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
-    await withCheckedContinuation { done in
-        Thread.detachNewThread { done.resume(returning: body()) }
-    }
+/// What a held mutation's hook returned. Set and read only on the thread
+/// that runs the mutation.
+private final class Held<T>: @unchecked Sendable {
+    var value: T?
 }

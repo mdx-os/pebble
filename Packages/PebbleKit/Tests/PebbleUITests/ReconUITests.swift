@@ -230,14 +230,14 @@ struct ReconUITests {
         let maker = TransportMaker()
         let notes = scratchMemory()
         defer { discard(notes) }
-        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let (model, _, runner) = feed(memory: nil)
         let review = model.cloudReview
         model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel(), review: review)) }
         let settings = PassthroughSubject<CloudHelpSettings, Never>()
         model.follow(cloudSettings: settings.eraseToAnyPublisher())
-        settings.send(CloudHelpSettings(isOn: true))
+        settings.send(CloudHelpSettings(isOn: true, for: endpoint))
         #expect(model.lookInto(SampleSources.poolTopic))
         let id = try #require(runner.tasks.first?.id)
         runner.advance(by: 12)
@@ -272,14 +272,14 @@ struct ReconUITests {
         let maker = TransportMaker()
         let notes = scratchMemory()
         defer { discard(notes) }
-        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let (model, _, runner) = feed(memory: nil)
         let review = model.cloudReview
         model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel(), review: review)) }
         let settings = PassthroughSubject<CloudHelpSettings, Never>()
         model.follow(cloudSettings: settings.eraseToAnyPublisher())
-        settings.send(CloudHelpSettings(isOn: true))
+        settings.send(CloudHelpSettings(isOn: true, for: endpoint))
         #expect(model.lookInto(SampleSources.poolTopic))
         let id = try #require(runner.tasks.first?.id)
         runner.advance(by: 12)
@@ -301,19 +301,19 @@ struct ReconUITests {
         let maker = TransportMaker()
         let notes = scratchMemory()
         defer { discard(notes) }
-        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let (model, _, runner) = feed(memory: nil)
         let review = model.cloudReview
         model.summarizer = { ReconSummarizers.choose(for: cloud.chatModel(local: LocalStubModel(), review: review)) }
         let settings = PassthroughSubject<CloudHelpSettings, Never>()
         model.follow(cloudSettings: settings.eraseToAnyPublisher())
-        settings.send(CloudHelpSettings(isOn: true))
+        settings.send(CloudHelpSettings(isOn: true, for: endpoint))
         #expect(model.lookInto(SampleSources.poolTopic))
         runner.advance(by: 12)
         await eventually { review.pending != nil }
         let preview = try #require(review.pending)
-        settings.send(CloudHelpSettings(isOn: true))
+        settings.send(CloudHelpSettings(isOn: true, for: endpoint))
         #expect(review.pending == preview)
         // The control: a real change still withdraws it.
         settings.send(CloudHelpSettings(isOn: false))
@@ -330,7 +330,7 @@ struct ReconUITests {
         let maker = TransportMaker()
         let notes = scratchMemory()
         defer { discard(notes) }
-        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let (model, engine, runner) = feed(memory: notes)
         let review = model.cloudReview
@@ -544,7 +544,7 @@ struct ReconUITests {
         let notes = scratchMemory()
         defer { discard(notes) }
         _ = try notes.remember("Coach Priya teaches the Saturday lessons.", source: .toldMe)
-        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let (model, engine, runner) = feed(memory: nil, provider: PagesNamingSomeone())
         // Today's own gate, as the home screen wires it.
@@ -576,7 +576,7 @@ struct ReconUITests {
         let maker = TransportMaker()
         let notes = scratchMemory()
         defer { discard(notes) }
-        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let (model, _, runner) = feed(memory: nil)
         let review = model.cloudReview
@@ -609,7 +609,7 @@ struct ReconUITests {
             """)
         let notes = scratchMemory()
         defer { discard(notes) }
-        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)), endpoint: endpoint,
                               memory: notes, transport: { URLSessionCloudTransport(load: wire.load) })
         let (model, _, runner) = feed(memory: nil)
         let review = model.cloudReview
@@ -649,7 +649,7 @@ struct ReconUITests {
             """)
         let notes = scratchMemory()
         defer { discard(notes) }
-        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)), endpoint: endpoint,
                               memory: notes, transport: { URLSessionCloudTransport(load: wire.load) })
         let (model, _, runner) = feed(memory: nil)
         let review = model.cloudReview
@@ -674,7 +674,7 @@ struct ReconUITests {
         let maker = TransportMaker()
         let notes = scratchMemory()
         defer { discard(notes) }
-        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true)), endpoint: endpoint,
+        let cloud = CloudHelp(store: InMemoryCloudHelpStore(CloudHelpSettings(isOn: true, for: endpoint)), endpoint: endpoint,
                               memory: notes, transport: { maker.make() })
         let (model, _, runner) = feed(memory: nil)
         let review = model.cloudReview
