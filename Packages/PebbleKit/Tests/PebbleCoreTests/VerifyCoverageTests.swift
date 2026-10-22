@@ -30,6 +30,9 @@ struct VerifyCoverageTests {
         }
         let ended = await onOwnThread { finished.wait(timeout: .now() + 60) == .success }
         guard ended else {
+            // This stops only the shell. A `make -n` it started may run on
+            // and hold the pipe, leaving the reading thread blocked until
+            // the run ends; the test has already failed by then.
             process.terminate()
             Issue.record("scripts/verify-coverage-check.sh ran past 60 s and was stopped")
             return

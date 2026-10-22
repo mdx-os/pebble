@@ -182,7 +182,10 @@ xcodebuilds() {
 # past a failed line), SHELL or .SHELLFLAGS set, SHELL, .SHELLFLAGS,
 # MAKEFLAGS or MFLAGS set for one target, an `.IGNORE` or a rule's targets
 # named through a variable, a variable named through another, an eval,
-# and an include, whose file this never reads. Where it can't be sure
+# .RECIPEPREFIX, and an include, whose file this never reads. A line
+# starting with a tab is a recipe line; any other line is read as make
+# reads it, after its leading spaces, so ` .IGNORE: archive` is an
+# .IGNORE, and a rule may end in : or ::. Where it can't be sure
 # what a variable holds, it fails. -k is fine: make still fails at the
 # end.
 problems="$(perl -e '
@@ -197,7 +200,8 @@ problems="$(perl -e '
       next;
     }
     next if $l =~ /^\s*(#|$)/;
-    if ($l =~ /^\s*-?s?include\s/) {
+    $l =~ s/^\s+//;
+    if ($l =~ /^-?s?include\s/) {
       print "global the Makefile includes another file, which this check never reads: $l\n";
     }
     if ($l =~ /\b(?:MAKEFLAGS|MFLAGS)\b[^=]*=(.*)/ && ($ignores->(split " ", $1) || $1 =~ /\$/)) {
@@ -215,7 +219,10 @@ problems="$(perl -e '
     if ($l =~ /^\.ONESHELL\s*:/) {
       print "global the Makefile sets .ONESHELL, so a failed line in a recipe would not stop it\n";
     }
-    if ($l =~ /^([^\s:=#][^:=#]*?)\s*:(?![=:])\s*([^;#]*)(?:;(.*))?/) {
+    if ($l =~ /\.RECIPEPREFIX\b/) {
+      print "global the Makefile sets .RECIPEPREFIX, so this check cannot tell which lines are recipes: $l\n";
+    }
+    if ($l =~ /^([^\s:=#][^:=#]*?)\s*::?(?![=:])\s*([^;#]*)(?:;(.*))?/) {
       my ($names, $prereqs, $inline) = ($1, $2, $3);
       @current = split " ", $names;
       if ($names =~ /\$/) {

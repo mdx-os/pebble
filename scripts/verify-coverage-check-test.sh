@@ -16,7 +16,9 @@
 # SHELL, .SHELLFLAGS, MAKEFLAGS or MFLAGS set for archive alone or on a
 # $(MAKE) archive line, $(IGN)xcodebuild and @${IGN}xcodebuild with
 # IGN := -, .IGNORE naming archive through a variable, and a prerequisite
-# of verify given through a variable whose recipe ignores errors. So do a new
+# of verify given through a variable whose recipe ignores errors, an
+# .IGNORE or an archive rule written after spaces, a double-colon rule
+# with its errors ignored, and a .RECIPEPREFIX. So do a new
 # Release build with its action after the options or with none, the macOS
 # archive turned into -showBuildSettings, given an option the check
 # doesn't know, or of another scheme. An archive with no -configuration
@@ -260,6 +262,24 @@ change "s~(\n\.PHONY:)~\nSIMULATOR := build-release-simulator\$1~"
 change "s~($verify_line)\n~\$1 \\\$(SIMULATOR)\n~"
 change "s~(\nbuild-release-simulator:[^\n]*\n\t)xcodebuild~\$1-xcodebuild~"
 expect fail "build-release-simulator reached only through \$(SIMULATOR), with its errors ignored" "make verify names a prerequisite through a variable"
+
+fresh
+change "s~(\n\.PHONY:)~\n  .IGNORE: archive\$1~"
+expect fail "archive named in an .IGNORE written after spaces" "$ignored_errors"
+
+fresh
+change "s~\narchive:~\n  archive:~"
+change "s~\txcodebuild archive ([^\n]*\\\\\n[^\n]*'generic/platform=macOS')~\t-xcodebuild archive \$1~"
+expect fail "an archive rule written after spaces, with its errors ignored" "make archive runs a recipe line with its errors ignored"
+
+fresh
+change "s~\nbuild-release-simulator:~\nbuild-release-simulator::~"
+change "s~(\nbuild-release-simulator::[^\n]*\n\t)xcodebuild~\$1-xcodebuild~"
+expect fail "build-release-simulator as a double-colon rule with its errors ignored" "make build-release-simulator runs a recipe line with its errors ignored"
+
+fresh
+change "s~(\n\.PHONY:)~\n.RECIPEPREFIX := >\$1~"
+expect fail ".RECIPEPREFIX set, which make 3.82 and later read as a new recipe prefix" "the Makefile sets .RECIPEPREFIX"
 
 if [ "$failures" -ne 0 ]; then
   echo "verify-coverage-check-test: $failures case(s) went the wrong way"
